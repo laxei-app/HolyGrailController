@@ -1,0 +1,12 @@
+# Android / Gradle ビルド成果物と機械固有ファイル
+*.iml
+.gradle/
+/local.properties
+.idea/
+.DS_Store
+build/
+/captures
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
