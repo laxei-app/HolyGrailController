@@ -31,6 +31,12 @@
         {
             "name": "90_testGen",
             "path": "../90_testGen"
+        },
+        {
+            "path": "../../../../20_designe"
+        },
+        {
+            "path": "../../../../25_forClaude"
         }
     ],
 	"settings": {}
