@@ -34,29 +34,7 @@ void dbg::trace(const char* fmt, ...)
 	__android_log_write(ANDROID_LOG_DEBUG, HGE_LOG_TAG, buf);
 }
 
-std::string dbg::escSeq(col /*c*/)
-{
-	return std::string();	// Android(logcat)では色エスケープは使わない
-}
-
-void dbg::dump(uint32_t addr, const void* mem, uint32_t size)
-{
-	const unsigned char* p = static_cast<const unsigned char*>(mem);
-	std::string line;
-	char tmp[16];
-	for (uint32_t i = 0; i < size; ++i)
-	{
-		if ((i % 16) == 0)
-		{
-			if (!line.empty()) { __android_log_write(ANDROID_LOG_DEBUG, HGE_LOG_TAG, line.c_str()); }
-			snprintf(tmp, sizeof(tmp), "%08X: ", addr + i);
-			line = tmp;
-		}
-		snprintf(tmp, sizeof(tmp), "%02X ", p[i]);
-		line += tmp;
-	}
-	if (!line.empty()) { __android_log_write(ANDROID_LOG_DEBUG, HGE_LOG_TAG, line.c_str()); }
-}
+// escSeq / dump は共通の debugOut.cpp が実装するためここでは定義しない。
 
 // ---------------- cons (Android ではスタブ) ----------------
 int cons::keyVal = 0;

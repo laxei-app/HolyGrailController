@@ -26,10 +26,10 @@ protected:
 	};
 	static inline std::vector<definitionIntereface> definitionIntereface =
 	{
-		{definitionIntereface({"ICPO-CameraControlAPIService","schemas-canon-com"}, 
-									device::apiClass::CANON_CCAPI)},
-		{definitionIntereface({"DigitalImaging","schemas-sony-com"}, 
-									device::apiClass::CANON_CCAPI)},	// まだ sony の interface は作っていないのでとりあえず canon 。
+		// 型名(definitionIntereface)が同名変数に隠れるため初期化子では型名を書かず
+		// 波括弧初期化でコンストラクタを呼ぶ(clang対応)。
+		{ {"ICPO-CameraControlAPIService","schemas-canon-com"}, device::apiClass::CANON_CCAPI },
+		{ {"DigitalImaging","schemas-sony-com"},                device::apiClass::CANON_CCAPI },	// まだ sony の interface は作っていないのでとりあえず canon 。
 		// sony のサービス名が一般的すぎるので他の要素で and の確認ができるように改造した方が良い。
 	};
 

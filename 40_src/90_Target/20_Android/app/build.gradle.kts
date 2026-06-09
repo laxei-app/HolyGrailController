@@ -7,6 +7,10 @@ android {
     namespace = "app.laxei.holygrail"
     compileSdk = 34
 
+    // インストール済みNDK(29.0.14206865)を使う。未指定だとAGP既定版を探し
+    // 「NDK not installed」になるため固定する。
+    ndkVersion = "29.0.14206865"
+
     defaultConfig {
         applicationId = "app.laxei.holygrail"
         minSdk = 26

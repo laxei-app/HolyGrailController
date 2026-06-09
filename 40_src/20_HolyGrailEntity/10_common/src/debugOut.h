@@ -8,7 +8,7 @@
 
 #else
 #define DBGLN(col, fmt, ...) ((void)0)
-#define DUMP(adr, buf, len) ((void)0))
+#define DUMP(adr, buf, len) ((void)0)
 #endif
 
 enum class col
