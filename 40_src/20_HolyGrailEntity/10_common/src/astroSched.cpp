@@ -118,15 +118,15 @@ namespace astro
 			}
 		}
 
-		// 日の出/日没(高度0,大気差込み)を範囲内で探してイベント追加する。
-		void addRiseSetEvents(hgc::cs& plan, astro_observer_t obs, hgc::csEvent ev,
+		// 天体の出/没(高度0,大気差込み)を範囲内で探してイベント追加する。
+		void addRiseSetEvents(hgc::cs& plan, astro_observer_t obs, astro_body_t body, hgc::csEvent ev,
 		                      astro_direction_t dir, astro_time_t tStart, astro_time_t tEnd, int off)
 		{
 			astro_time_t cursor = tStart;
 			double limit = (tEnd.ut - tStart.ut) + 1e-6;
 			for (int guard = 0; guard < 32 && limit > 0.0; ++guard)
 			{
-				astro_search_result_t r = Astronomy_SearchRiseSet(BODY_SUN, obs, dir, cursor, limit);
+				astro_search_result_t r = Astronomy_SearchRiseSet(body, obs, dir, cursor, limit);
 				if (r.status != ASTRO_SUCCESS || r.time.ut > tEnd.ut + 1e-9) { break; }
 				plan.events.push_back({ ev, fromAstro(r.time, off) });
 				cursor = Astronomy_AddDays(r.time, 1.0 / 1440.0);
@@ -211,8 +211,10 @@ namespace astro
 
 		// --- イベント(時刻)算出 ---
 		plan.events.push_back({ hgc::csEvent::start, plan.start });
-		addRiseSetEvents(plan, obs, hgc::csEvent::sunset,  DIRECTION_SET,  tStart, tEnd, off);
-		addRiseSetEvents(plan, obs, hgc::csEvent::sunrise, DIRECTION_RISE, tStart, tEnd, off);
+		addRiseSetEvents(plan, obs, BODY_SUN,  hgc::csEvent::sunset,  DIRECTION_SET,  tStart, tEnd, off);
+		addRiseSetEvents(plan, obs, BODY_SUN,  hgc::csEvent::sunrise, DIRECTION_RISE, tStart, tEnd, off);
+		addRiseSetEvents(plan, obs, BODY_MOON, hgc::csEvent::moonset, DIRECTION_SET,  tStart, tEnd, off);
+		addRiseSetEvents(plan, obs, BODY_MOON, hgc::csEvent::moonrise,DIRECTION_RISE, tStart, tEnd, off);
 		addAltitudeEvents(plan, obs, hgc::csEvent::civilDusk,        DIRECTION_SET,   -6.0,  tStart, tEnd, off);
 		addAltitudeEvents(plan, obs, hgc::csEvent::nauticalDusk,     DIRECTION_SET,  -12.0,  tStart, tEnd, off);
 		addAltitudeEvents(plan, obs, hgc::csEvent::astronomicalDusk, DIRECTION_SET,  -18.0,  tStart, tEnd, off);
