@@ -76,6 +76,27 @@ namespace hgc
 		double   hysteresis    = 1.0;	// ヒステリシス[段]。範囲 1/3～3
 		uint16_t movingAverage = 5;		// 移動平均フレーム数。範囲 1～10
 	};
+
+	// --- 時刻ユーティリティ(プラットフォーム非依存) ---
+	// 1970-01-01 からの日数(Howard Hinnant の civil アルゴリズム)。
+	inline long long daysFromCivil(int y, unsigned m, unsigned d)
+	{
+		y -= (m <= 2);
+		const int era = (y >= 0 ? y : y - 399) / 400;
+		const unsigned yoe = static_cast<unsigned>(y - era * 400);
+		const unsigned mp = (m > 2) ? (m - 3u) : (m + 9u);	// 3月起点の月(0..11)
+		const unsigned doy = (153u * mp + 2u) / 5u + d - 1u;
+		const unsigned doe = yoe * 365u + yoe / 4u - yoe / 100u + doy;
+		return static_cast<long long>(era) * 146097 + static_cast<long long>(doe) - 719468;
+	}
+
+	// ローカル日時 + UTCオフセット[分] → Unix時刻(UTC秒)。
+	inline long long toUnixUtc(const dateTime& t, int utcOffsetMin)
+	{
+		long long days = daysFromCivil(t.year, t.month, t.day);
+		long long localSec = days * 86400LL + t.hour * 3600LL + t.min * 60LL + t.sec;
+		return localSec - static_cast<long long>(utcOffsetMin) * 60LL;
+	}
 }
 
 #endif // _HGC_COMMON_H_
