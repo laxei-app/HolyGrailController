@@ -28,6 +28,9 @@ target_include_directories(holygrail PRIVATE
 
 # 端末時刻に依存しない(時刻は自前で渡す)。fast-math は付けない(astronomy.c が #error)。
 target_compile_definitions(holygrail PRIVATE ASTRONOMY_ENGINE_NO_CURRENT_TIME)
+# 注: Debug で _DEBUG を定義すると DBGLN(logcat)が有効になるが、既存コードに
+#     std::string/std::exception を可変長引数へ渡す箇所(clangでエラー)があるため現状は無効。
+#     状態/進捗/エラー/スケジュールは通知CB経由でUIに届くので観測には支障なし。
 
 find_library(log-lib log)
 target_link_libraries(holygrail ${log-lib})
