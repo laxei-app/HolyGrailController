@@ -94,19 +94,35 @@ int cons::kbhit(void)
 {
     M5.update(); // ボタン状態の更新（Core2のタッチもこれで判定）
     if(M5.BtnA.wasPressed())
-    { 
+    {
         keyVal = 'a';
         return 1;
     }
     if(M5.BtnB.wasPressed())
-    { 
+    {
         keyVal = 'b';
         return 1;
     }
     if(M5.BtnC.wasPressed())
-    { 
+    {
         keyVal = 'c';
         return 1;
+    }
+
+    // CoreS3 等、画面外ボタン領域の無い機種向け。
+    // Core2 は LCD 下のタッチ領域が BtnA/B/C に割り当たるが、
+    // CoreS3 はタッチが画面内のみのため、画面を左右3分割して A/B/C を代替する。
+    if(M5.Touch.isEnabled())
+    {
+        auto t = M5.Touch.getDetail();
+        if(t.wasPressed())
+        {
+            int w = M5.Display.width();
+            if     (t.x <  w / 3)      { keyVal = 'a'; }   // 左：実行
+            else if (t.x < (w * 2) / 3) { keyVal = 'b'; }  // 中：選択移動
+            else                        { keyVal = 'c'; }  // 右：終了
+            return 1;
+        }
     }
     return 0;
 }
