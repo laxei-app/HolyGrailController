@@ -39,7 +39,13 @@ enum errCode : uint32_t
 	ERR_HGC_TIMEOUT,			// タイムアウト
 	ERR_HGC_NET_THREAD,			// 同期エラー
 
-	// 
+	// UI インターフェース
+	ERR_HGC_BUF_SHORT,			// 取得用バッファの容量不足(必要バイト数を返す)
+	ERR_HGC_INVALID_ARG,		// 引数不正
+	ERR_HGC_INVALID_STATE,		// 状態不正(その操作が許されない状態)
+	ERR_HGC_JSON_PARSE,			// JSON 解析失敗
+
+	//
 };
 
 
