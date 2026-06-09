@@ -37,6 +37,24 @@ errCode apiCanonCCAPI::init(class device& device)
     return err;
 }
 
+// 手動初期化。device.urlAccess(例: http://<ip>:8080/ccapi)を呼び出し側で設定済みとし、
+// UPnP記述子の取得をスキップしてCCAPIカタログから機能URLを構築する。
+// SSDPマルチキャストが使えない環境(エミュレータ等)でIP直指定接続するために使う。
+errCode apiCanonCCAPI::initManual(class device& device)
+{
+    if (device.urlAccess.length() == 0) { return ERR_HGC_NET_URL_FAIL; }
+
+    std::string catlog;
+    auto success = netThread::httpGet(device.urlAccess, catlog);
+    if (!success)               { return ERR_HGC_API_LIST; }
+    if (catlog.length() == 0)   { return ERR_HGC_API_LIST; }
+
+    errCode err = analizeUseFunction(device, catlog);
+    this->device = device;
+    liveViewInfo.resize(1024 * 8);
+    return err;
+}
+
 // DeviceDescriptor の内容を取得する。
 // device : location が入っていること。
 // return : ERR_HGC_OK:成功、それ以外:失敗

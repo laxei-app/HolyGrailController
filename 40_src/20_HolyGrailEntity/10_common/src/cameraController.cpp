@@ -79,6 +79,28 @@ size_t cameraController::detectTarget(std::vector<class device> & devices)
 	return devices.size();
 }
 
+// IP直指定でカメラに接続する(SSDP不使用)。
+size_t cameraController::connectManual(std::vector<class device>& devices, const std::string& host)
+{
+	devices.clear();
+	class device dev;
+	dev.apiClass = device::apiClass::CANON_CCAPI;
+	dev.location = host;
+	dev.urlAccess = "http://" + host + ":8080/ccapi";	// CCAPI のアクセスURL
+	dev.model = "Canon CCAPI (manual)";
+	devices.push_back(dev);								// 先に格納してから apiBase を設定する
+
+	auto* api = new apiCanonCCAPI();
+	if (api->initManual(devices.back()) != ERR_HGC_OK)
+	{
+		delete api;
+		devices.pop_back();
+		return 0;
+	}
+	devices.back().apiBase = api;
+	return devices.size();
+}
+
 // シャッター準備
 // shotSet : シャッター設定値
 // return  : ERR_HGC_OK:成功

@@ -35,6 +35,30 @@
         android:layout_marginTop="4dp"
         android:text="" />
 
+    <!-- 手動接続(SSDPが使えないエミュレータ用)。IP直指定で接続する。 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:orientation="horizontal">
+
+        <EditText
+            android:id="@+id/ipInput"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:hint="カメラIP (例 192.168.1.4)"
+            android:inputType="text"
+            android:text="192.168.1.4" />
+
+        <Button
+            android:id="@+id/connectButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:text="接続" />
+    </LinearLayout>
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

@@ -2,6 +2,7 @@ package app.laxei.holygrail
 
 import android.os.Bundle
 import android.widget.Button
+import android.widget.EditText
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import org.json.JSONObject
@@ -16,6 +17,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private lateinit var scheduleText: TextView
     private lateinit var startButton: Button
     private lateinit var stopButton: Button
+    private lateinit var ipInput: EditText
+    private lateinit var connectButton: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -27,6 +30,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         scheduleText = findViewById(R.id.scheduleText)
         startButton = findViewById(R.id.startButton)
         stopButton = findViewById(R.id.stopButton)
+        ipInput = findViewById(R.id.ipInput)
+        connectButton = findViewById(R.id.connectButton)
 
         findViewById<TextView>(R.id.titleText).text = HgeNative.nativeVersion()
 
@@ -44,6 +49,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         stopButton.setOnClickListener {
             HgeNative.nativeCaptureStop()
+        }
+        // 手動接続(SSDP不使用)。HTTP通信のためバックグラウンドスレッドで実行する。
+        connectButton.setOnClickListener {
+            val host = ipInput.text.toString().trim()
+            stateText.text = "connecting $host ..."
+            Thread { HgeNative.nativeConnectManual(host) }.start()
         }
     }
 

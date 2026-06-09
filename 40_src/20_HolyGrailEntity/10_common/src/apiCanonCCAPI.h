@@ -95,7 +95,8 @@ protected:
 public:
 	apiCanonCCAPI(void);
 	virtual ~apiCanonCCAPI(void);
-	errCode init(class device & device);	// 初期化
+	errCode init(class device & device);	// 初期化(SSDP/UPnP記述子経由)
+	errCode initManual(class device & device);	// 手動初期化(device.urlAccessを直接使用。記述子取得をスキップ)
 
 	// カメラとの直接の指示
 public:

@@ -37,6 +37,7 @@ object HgeNative {
     external fun nativeGetState(): Int
     external fun nativeScheduleJson(): String
     external fun nativeSetListener(listener: HgeListener?)
+    external fun nativeConnectManual(host: String): Int
 
     fun stateName(s: Int): String = when (s) {
         ST_IDLE -> "IDLE"

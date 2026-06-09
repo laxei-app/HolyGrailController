@@ -13,6 +13,11 @@ public:
 	// カメラの検出
 	static size_t detectTarget(std::vector<class device>& device);
 
+	// IP直指定でカメラに接続する(SSDPを使わない。エミュレータ等での手動接続用)。
+	//  host : カメラのIPアドレス(例 "192.168.1.4")。CCAPIは http://<host>:8080/ccapi を使用。
+	//  return : 接続できたデバイス数(0 or 1)
+	static size_t connectManual(std::vector<class device>& device, const std::string& host);
+
 	// カメラへのアクセス
 	static errCode startShooting(const class device& device);
 	static errCode rdyShutter(const class device& device, const cmdt::shotSet& shotSet);

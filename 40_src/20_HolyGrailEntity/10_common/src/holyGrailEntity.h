@@ -45,6 +45,12 @@ const char* hge_version(void);		// バージョン文字列
 // --- 通知登録 ---
 int32_t hge_setNotify(hgeNotifyCb cb, void* user);
 
+// --- デバイス接続 ---
+// IP直指定でカメラに接続する(SSDP不使用。エミュレータ等での手動接続用)。
+// 成功すると以降の hge_captureStart は検索を省略してこのカメラを使う。
+// host : カメラのIPアドレス(例 "192.168.1.4")。
+int32_t hge_connectManual(const char* host);
+
 // --- 撮影計画(MVP は固定データ) ---
 int32_t hge_loadFixedPlan(void);	// 固定データの撮影計画を生成し保持する
 

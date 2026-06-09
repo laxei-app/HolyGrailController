@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <cctype>
+#include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -99,18 +100,51 @@ namespace net
 			return true;
 		}
 
-		// Connection: close でレスポンス全体を EOF まで受信する。
-		bool recvAll(int fd, std::string& raw)
+		// レスポンスを受信する。Content-Length / chunked を解析し本文完了時点で読み終える。
+		// カメラが Connection: close を無視して keep-alive を保つ場合でも、
+		// 受信タイムアウト(数秒)待ちにならず素早く返す。
+		bool recvResponse(int fd, std::string& raw)
 		{
 			raw.clear();
 			char buf[4096];
+			size_t    headerEnd = std::string::npos;
+			long long contentLen = -1;	// -1: 不明
+			bool      chunked = false;
 			for (;;)
 			{
 				if (g_break.load()) { g_break.store(false); return false; }
+
+				// ヘッダ受信後、完了したか判定する
+				if (headerEnd == std::string::npos)
+				{
+					headerEnd = raw.find("\r\n\r\n");
+					if (headerEnd != std::string::npos)
+					{
+						std::string h = raw.substr(0, headerEnd);
+						for (auto& c : h) { c = static_cast<char>(::tolower(c)); }
+						if (h.find("transfer-encoding: chunked") != std::string::npos) { chunked = true; }
+						size_t cl = h.find("content-length:");
+						if (cl != std::string::npos) { contentLen = std::atoll(h.c_str() + cl + 15); }
+					}
+				}
+				if (headerEnd != std::string::npos)
+				{
+					size_t bodyStart = headerEnd + 4;
+					if (chunked)
+					{	// 終端チャンク "0\r\n\r\n" を受信したら完了
+						if (raw.find("\r\n0\r\n\r\n", bodyStart) != std::string::npos ||
+						    raw.compare(bodyStart, 5, "0\r\n\r\n") == 0) { break; }
+					}
+					else if (contentLen >= 0)
+					{	// Content-Length 分受信したら完了
+						if (static_cast<long long>(raw.size() - bodyStart) >= contentLen) { break; }
+					}
+					// 長さ不明(Content-Lengthもchunkedも無い)時は EOF まで読む
+				}
+
 				ssize_t n = recv(fd, buf, sizeof(buf), 0);
-				if (n > 0)      { raw.append(buf, static_cast<size_t>(n)); }
-				else if (n == 0){ break; }		// EOF
-				else            { break; }		// エラー/タイムアウト
+				if (n > 0) { raw.append(buf, static_cast<size_t>(n)); }
+				else       { break; }	// EOF / エラー / タイムアウト
 			}
 			return true;
 		}
@@ -145,7 +179,13 @@ namespace net
 			if (!parseUrl(url, host, port, path)) { return 0; }
 
 			int fd = tcpConnect(host, port);
-			if (fd < 0) { return 0; }
+			if (fd < 0)
+			{
+				__android_log_print(ANDROID_LOG_WARN, HGE_LOG_TAG,
+				                    "net: connect failed host=%s port=%d errno=%d(%s)",
+				                    host.c_str(), port, errno, std::strerror(errno));
+				return 0;
+			}
 
 			std::string req = method + " " + path + " HTTP/1.1\r\n";
 			req += "Host: " + host + ":" + std::to_string(port) + "\r\n";
@@ -161,7 +201,7 @@ namespace net
 			if (!sendAll(fd, req.c_str(), req.size())) { close(fd); return 0; }
 
 			std::string raw;
-			recvAll(fd, raw);
+			recvResponse(fd, raw);
 			close(fd);
 
 			// ヘッダと本体を分離

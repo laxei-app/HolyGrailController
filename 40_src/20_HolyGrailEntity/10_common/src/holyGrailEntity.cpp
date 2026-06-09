@@ -33,6 +33,7 @@ namespace
 	captureRunner         g_runner;
 	void*                 g_startThread = nullptr;
 	bool                  g_inited = false;
+	bool                  g_manualConnected = false;	// IP直指定で接続済みか
 
 	const char* const     VERSION = "HolyGrailEntity 0.1 (MVP step2.1)";
 
@@ -215,14 +216,17 @@ namespace
 		}
 		notify(HGE_EV_SCHEDULE, g_schedJson);
 
-		// カメラ検索
-		g_devices.clear();
-		size_t n = cameraController::detectTarget(g_devices);
-		if (n == 0 || g_devices.empty())
+		// カメラ検索(手動接続済みなら検索を省略してそのカメラを使う)
+		if (!(g_manualConnected && !g_devices.empty() && g_devices[0].apiBase != nullptr))
 		{
-			notifyError(ERR_HGC_NOT_FOUND, "no camera found");
-			setState(HGE_ST_ERROR);
-			return ERR_HGC_NOT_FOUND;
+			g_devices.clear();
+			size_t n = cameraController::detectTarget(g_devices);
+			if (n == 0 || g_devices.empty())
+			{
+				notifyError(ERR_HGC_NOT_FOUND, "no camera found");
+				setState(HGE_ST_ERROR);
+				return ERR_HGC_NOT_FOUND;
+			}
 		}
 
 		// デバイス一覧を通知
@@ -296,6 +300,29 @@ int32_t hge_setNotify(hgeNotifyCb cb, void* user)
 {
 	std::lock_guard<std::mutex> lk(g_mutex);
 	g_cb = cb; g_user = user;
+	return ERR_HGC_OK;
+}
+
+int32_t hge_connectManual(const char* host)
+{
+	if (host == nullptr || host[0] == '\0') { return ERR_HGC_INVALID_ARG; }
+	size_t n = cameraController::connectManual(g_devices, std::string(host));
+	if (n == 0 || g_devices.empty() || g_devices[0].apiBase == nullptr)
+	{
+		g_manualConnected = false;
+		notifyError(ERR_HGC_NOT_FOUND, "manual connect failed");
+		return ERR_HGC_NOT_FOUND;
+	}
+	g_manualConnected = true;
+
+	// デバイス一覧を通知
+	const auto& d = g_devices[0];
+	std::string dj = "[{\"uuid\":\"" + jesc(d.uuid) + "\",\"model\":\"" + jesc(d.model) +
+	                 "\",\"manufacturer\":\"" + jesc(d.manufacturer) +
+	                 "\",\"serialno\":\"" + jesc(d.serialno) +
+	                 "\",\"location\":\"" + jesc(d.location) + "\"}]";
+	notify(HGE_EV_DEVICE, dj);
+	setState(HGE_ST_READY);
 	return ERR_HGC_OK;
 }
 
