@@ -1,0 +1,224 @@
+2026.02.15
+■検索の応答
+４つのパケットが送られてきている。
+機能ごとに応答があるとの事。
+
+--- 応答あり: 192.168.1.11 ---
+HTTP/1.1 200 OK
+Cache-Control: max-age=1800
+EXT:
+Location: http://192.168.1.11:49152/upnp/CameraDevDesc.xml
+Server: Camera OS/1.0 UPnP/1.0 Canon Device Discovery/1.0
+ST: upnp:rootdevice
+USN: uuid:00000000-0000-0000-0001-F8A26DB2EE0D::upnp:rootdevice
+
+
+
+--- 応答あり: 192.168.1.11 ---
+HTTP/1.1 200 OK
+Cache-Control: max-age=1800
+EXT:
+Location: http://192.168.1.11:49152/upnp/CameraDevDesc.xml
+Server: Camera OS/1.0 UPnP/1.0 Canon Device Discovery/1.0
+ST: uuid:00000000-0000-0000-0001-F8A26DB2EE0D
+USN: uuid:00000000-0000-0000-0001-F8A26DB2EE0D
+
+
+
+--- 応答あり: 192.168.1.11 ---
+HTTP/1.1 200 OK
+Cache-Control: max-age=1800
+EXT:
+Location: http://192.168.1.11:49152/upnp/CameraDevDesc.xml
+Server: Camera OS/1.0 UPnP/1.0 Canon Device Discovery/1.0
+ST: urn:schemas-canon-com:device:ICPO-CameraControlAPIService:1
+USN: uuid:00000000-0000-0000-0001-F8A26DB2EE0D::urn:schemas-canon-com:device:ICPO-CameraControlAPIService:1
+
+
+
+--- 応答あり: 192.168.1.11 ---
+HTTP/1.1 200 OK
+Cache-Control: max-age=1800
+EXT:
+Location: http://192.168.1.11:49152/upnp/CameraDevDesc.xml
+Server: Camera OS/1.0 UPnP/1.0 Canon Device Discovery/1.0
+ST: urn:schemas-canon-com:service:ICPO-CameraControlAPIService:1
+USN: uuid:00000000-0000-0000-0001-F8A26DB2EE0D::urn:schemas-canon-com:service:ICPO-CameraControlAPIService:1
+
+■sonyのマニュアルに書かれている DeviceDiscovery の Advertisement(カメラからの主導的な通知)
+NOTIFY * HTTP/1.1
+HOST: 239.255.255.250:1900
+CACHE-CONTROL: max-age=1800
+LOCATION: http://192.168.122.1:80/dd.xml
+NT: urn:schemas-sony-com:service:DigitalImaging:1
+NTS: ssdp:alive
+SERVER: UPnP/1.0 SonyImagingDevice/1.0
+USN: uuid:00000000-0000-0000-0000-000000000000::urn:schemas-sony-com:service:DigitalImaging:1
+
+※sony と canon でどのキーワードで区別すればいいんだろう？
+USNの「sevice:」かな。
+sony ：DigitalImaging:1
+canon：ICPO-CameraControlAPIService:1
+
+メーカー名が入っているキーワードも欲しいよね。
+その前の urn
+sony ：schemas-sony-com
+canon：schemas-canon-com
+
+■実際のhttp://192.168.1.11:49152/upnp/CameraDevDesc.xmlの内容
+アカウント設定をしてもここはパスワード無しで取得できる。
+
+<root xmlns="urn:schemas-upnp-org:device-1-0">
+　<specVersion>
+　　<major>1</major>
+　　<minor>0</minor>
+　</specVersion>
+　<URLBase>http://192.168.1.11:49152/upnp/</URLBase>
+　<device>
+　　<deviceType>urn:schemas-canon-com:device:ICPO-CameraControlAPIService:1</deviceType>
+　　<friendlyName>Canon EOS R10</friendlyName>
+　　<manufacturer>Canon</manufacturer>
+　　<manufacturerURL>http://www.canon.com/</manufacturerURL>
+　　<modelDescription>Canon Digital Camera</modelDescription>
+　　<modelName>Canon EOS R10</modelName>
+　　<serialNumber>011031000158</serialNumber>
+　　<UDN>uuid:00000000-0000-0000-0001-F8A26DB2EE0D</UDN>
+　　<serviceList>
+　　　<service>
+　　　　<serviceType>urn:schemas-canon-com:service:ICPO-CameraControlAPIService:1</serviceType>
+　　　　<serviceId>urn:schemas-canon-com:serviceId:ICPO-CameraControlAPIService-1</serviceId>
+　　　　<SCPDURL>CameraSvcDesc.xml</SCPDURL>
+　　　　<controlURL>control/CanonCamera/</controlURL>
+　　　　<eventSubURL/>
+　　　　<ns:X_targetId xmlns:ns="urn:schemas-canon-com:schema-upnp">uuid:E0560000-2200-0000-0000-0000E02B1600</ns:X_targetId>
+　　　　<ns:X_onService xmlns:ns="urn:schemas-canon-com:schema-upnp">0</ns:X_onService>
+　　　　<ns:X_accessURL xmlns:ns="urn:schemas-canon-com:schema-upnp">http://192.168.1.11:8080/ccapi</ns:X_accessURL>
+　　　　<ns:X_deviceUsbId xmlns:ns="urn:schemas-canon-com:schema-upnp">32f8</ns:X_deviceUsbId>
+　　　　<ns:X_deviceNickname xmlns:ns="urn:schemas-canon-com:schema-upnp">EOSR10_ES</ns:X_deviceNickname>
+　　　</service>
+　　</serviceList>
+　　<presentationURL>/</presentationURL>
+　　<pnpx:X_compatibleId xmlns:pnpx="http://schemas.microsoft.com/windows/pnpx/2005/11">urn:schemas-upnp-org:device:Basic:1</pnpx:X_compatibleId>
+　　<pnpx:X_deviceCategory xmlns:pnpx="http://schemas.microsoft.com/windows/pnpx/2005/11">Cameras</pnpx:X_deviceCategory>
+　　<df:X_deviceCategory xmlns:df="http://schemas.microsoft.com/windows/2008/09/devicefoundation">Imaging.Camera</df:X_deviceCategory>
+　</device>
+</root>
+
+■実際のhttp://192.168.1.11:8080/ccapiの内容
+アカウント設定するとユーザーIDとパスワードが求められる。
+取得できるがなんかエラーになる。
+接続は継続している。
+
+{"ver100":
+[
+    {"path":"\/ccapi\/ver100\/deviceinformation","get":true,"post":false,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver100\/devicestatus\/battery","get":true,"post":false,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver100\/devicestatus\/lens","get":true,"post":false,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver100\/devicestatus\/temperature","get":true,"post":false,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver100\/functions\/registeredname\/copyright","get":true,"post":false,"put":true,"delete":true},
+    {"path":"\/ccapi\/ver100\/functions\/registeredname\/author","get":true,"post":false,"put":true,"delete":true},
+    {"path":"\/ccapi\/ver100\/functions\/registeredname\/ownername","get":true,"post":false,"put":true,"delete":true},
+    {"path":"\/ccapi\/ver100\/functions\/registeredname\/nickname","get":true,"post":false,"put":true,"delete":true},
+    {"path":"\/ccapi\/ver100\/functions\/datetime","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/functions\/cardformat","get":false,"post":true,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver100\/functions\/sensorcleaning","get":false,"post":true,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver100\/functions\/beep","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/functions\/displayoff","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/functions\/autopoweroff","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/functions\/screendimmer","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/functions\/viewfinderoff","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/functions\/wificonnection","get":false,"post":true,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/control\/shutterbutton","get":false,"post":true,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/control\/shutterbutton\/manual","get":false,"post":true,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/control\/ignoreshootingmodedialmode","get":true,"post":true,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/control\/moviemode","get":true,"post":true,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/control\/recbutton","get":false,"post":true,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/control\/drivefocus","get":false,"post":true,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/control\/af","get":false,"post":true,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings","get":true,"post":false,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/shootingmodedial","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/shootingmodedial\/movie","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/av","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/tv","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/iso","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/exposure","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/wb","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/colortemperature","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/afoperation","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/afmethod","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/stillimageaspectratio","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/flash","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/metering","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/drive","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/aeb","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/wbshift","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/wbbracket","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/colorspace","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/picturestyle","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/picturestyle\/auto","get":true,"post":false,"put":true,"delete":true},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/picturestyle\/standard","get":true,"post":false,"put":true,"delete":true},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/picturestyle\/portrait","get":true,"post":false,"put":true,"delete":true},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/picturestyle\/landscape","get":true,"post":false,"put":true,"delete":true},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/picturestyle\/finedetail","get":true,"post":false,"put":true,"delete":true},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/picturestyle\/neutral","get":true,"post":false,"put":true,"delete":true},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/picturestyle\/faithful","get":true,"post":false,"put":true,"delete":true},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/picturestyle\/monochrome","get":true,"post":false,"put":true,"delete":true},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/picturestyle\/userdef1","get":true,"post":false,"put":true,"delete":true},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/picturestyle\/userdef2","get":true,"post":false,"put":true,"delete":true},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/picturestyle\/userdef3","get":true,"post":false,"put":true,"delete":true},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/picturestyle\/userdef1\/basepicturestyle","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/picturestyle\/userdef2\/basepicturestyle","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/picturestyle\/userdef3\/basepicturestyle","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/focusbracketing","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/focusbracketing\/numberofshots","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/focusbracketing\/focusincrement","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/focusbracketing\/exposuresmoothing","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/moviequality","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/soundrecording","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/soundrecording\/level","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/soundrecording\/windfilter","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/soundrecording\/attenuator","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/settings\/ismode","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/information\/recordable","get":true,"post":false,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/liveview","get":false,"post":true,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/liveview\/flip","get":true,"post":false,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/liveview\/flipdetail","get":true,"post":false,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/liveview\/scroll","get":true,"post":false,"put":false,"delete":true},
+    {"path":"\/ccapi\/ver100\/shooting\/liveview\/scrolldetail","get":true,"post":false,"put":false,"delete":true},
+    {"path":"\/ccapi\/ver100\/shooting\/liveview\/rtp","get":true,"post":true,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/liveview\/rtpsessiondesc","get":true,"post":false,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/liveview\/angleinformation","get":false,"post":true,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver100\/shooting\/liveview\/afframeposition","get":false,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver100\/event\/polling","get":true,"post":false,"put":false,"delete":true},
+    {"path":"\/ccapi\/ver100\/event\/monitoring","get":true,"post":false,"put":false,"delete":true}
+],
+"ver110":
+[
+    {"path":"\/ccapi\/ver110\/devicestatus\/storage","get":true,"post":false,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver110\/devicestatus\/currentstorage","get":true,"post":false,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver110\/devicestatus\/currentdirectory","get":true,"post":false,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver110\/devicestatus\/batterylist","get":true,"post":false,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver110\/functions\/wifisetting","get":true,"post":false,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver110\/functions\/wifisetting\/set1","get":true,"post":false,"put":true,"delete":true},
+    {"path":"\/ccapi\/ver110\/functions\/wifisetting\/set2","get":true,"post":false,"put":true,"delete":true},
+    {"path":"\/ccapi\/ver110\/functions\/wifisetting\/set3","get":true,"post":false,"put":true,"delete":true},
+    {"path":"\/ccapi\/ver110\/shooting\/settings","get":true,"post":false,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver110\/shooting\/settings\/stillimagequality","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver110\/shooting\/settings\/hdr","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver110\/shooting\/settings\/shuttermode","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver110\/shooting\/settings\/trackingsetting","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver110\/shooting\/settings\/highframerate","get":true,"post":false,"put":true,"delete":false},
+    {"path":"\/ccapi\/ver110\/shooting\/liveview\/clickwb","get":false,"post":true,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver110\/customfunction\/exposureincrements\/av","get":true,"post":false,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver110\/customfunction\/exposureincrements\/tv","get":true,"post":false,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver110\/customfunction\/exposureincrements\/exposure","get":true,"post":false,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver110\/customfunction\/exposureincrements\/flashexposure","get":true,"post":false,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver110\/customfunction\/isoincrements","get":true,"post":false,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver110\/shooting\/control\/flickerdetection","get":false,"post":true,"put":false,"delete":false},
+    {"path":"\/ccapi\/ver110\/shooting\/settings\/antiflickershoot","get":true,"post":false,"put":true,"delete":false}
+],
+"ver130":
+    [
+        {"path":"\/ccapi\/ver130\/contents","get":true,"post":false,"put":true,"delete":true}
+    ]
+}

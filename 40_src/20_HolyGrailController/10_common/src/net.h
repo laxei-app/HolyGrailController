@@ -1,0 +1,31 @@
+﻿#ifndef _NET_H_
+#define _NET_H_
+
+#include <string>
+#include <vector>
+
+namespace net 
+{
+
+    bool init();
+    bool deInit();
+
+    // --- 追加: 利用可能なローカルIPアドレスのリストを返す ---
+    std::vector<std::string> getLocalIpList();
+
+    // SSDP関連
+    void* ssdpStart(const std::string& query, const std::string& localIp = "");
+    bool ssdpRead(void* handle, std::string& answer);
+    void ssdpClose(void* handle);
+
+    // HTTP関連
+    void httpBreak(void);
+    bool httpGet(const std::string& url, std::string& answer);
+    bool httpPost(const std::string& url, const std::string& body, std::string& response);
+    bool httpPut(const std::string& url, const std::string& body, std::string& response);
+    bool httpDelete(const std::string& url, std::string& response);
+
+ 
+};
+
+#endif  // _NET_H_

@@ -1,0 +1,121 @@
+﻿2026.03.28
+
+■カメラ情報
+　1)SSDP からこれを読む　http://192.168.122.1:80/dd.xml
+　2)その後2)の <SCPDURL> にある/DigitalImagingDesc.xml を読む。
+　それに下のペアリングが必要か書いてある。
+
+■ペアリング操作
+　これをやらないとつながるようにならない。
+　最初の接続時にホストの GUID をカメラに覚えさせる。
+　じゃ、相手は固定？スマホ、PC、M5Stack 等接続機器ごとに必要？
+　<X_PTP_PairingNecessity> という項目が DigitalImagingDesc.xml にある。
+　これが必要、という意味になってたらやるのかな？
+　サンプルでは Unnecessary になっている。
+　Necessary だったらやるんだと。
+　SSH が使えない、または無効だとこれが必要になるそう。
+　認証の代わりかな？
+
+◎Init Command Request
+　PTPIP の標準機能なので SONY のマニュアルに書いていない。
+　ISO 15740 に仕様が規定されているとの事。
+　古い PIMA-15740(2000)には載っていない。
+　仕様を買わないと見れない様。4.5万円するんだけど…。
+
+オフセット	サイズ (Byte)	項目名	        内容
+0   	    4	        Length	            パケット全体のサイズ
+4	        4	        Packet              Type	0x00000001 (Init Command Request)
+8	        16	        GUID (UUID)	        16バイトのバイナリデータ
+24	        可変	    Friendly Name	    Null終端の Unicode (UTF-16LE) 文字列
+最後	    4	        Protocol Version	0x00010000 (通常は 1.0)
+
+　libgphoto2 や Microsoft の WIA (Windows Image Acquisition)にコードがある。
+
+
+■カメラの設定
+　ネットワーク>接続/リモート撮影>リモート撮影機能>リモート撮影 を ON にする。
+　上の「ペアリング設定」は何だ？
+
+■SDIO_ControlDevice
+　これを繰り返し送るように書いてるな。
+
+■SSH
+　TLS 通信をするような機器の場合、SSH でカメラのOS(LINUX)に
+　アクセスして証明書の設定などをやるそう。通常は不要。
+　TLS を使うハイエンド機で使うかも。対応必要なのかいまいちわからん。
+
+■コマンド送り先
+　TCP 15740 決まっている様。
+　canon は http で ipアドレス自体がコマンドだったが
+　sony は TCP でパケットを送る。
+
+■イベント
+　イベントは2019年以降のカメラは確実に使えるがそれ以前の物では
+　不正確なので古いカメラも対象とするイニシエーターは使うべきではない。
+
+■ISO-15740 仕様
+　ISO-15740 の仕様書は5万円程度する。
+
+　libgphoto2 というライブラリが ptpip を実装している様。
+　コードを見ればわかるかも。
+
+　Microsoft の WIA (Windows Image Acquisition) のヘッダーファイルも参考になるとの事。
+
+■最初にやること
+　1)SDIO_Connect　PhaseType1
+　2)SDIO_Connect　PhaseType2
+　3)SDIO_GetExtDeviceInfo   // 成功するまで繰り返す。プロトコルバージョンを確認する。
+　4)SDIO_Connect　PhaseType3
+
+　5)SDIO_SetExtDevicePropValue  // 何を設定するのか分からない。
+
+■制御コマンドについて
+　F値、ISO、SS は上下の差分値を送れる、と書いてある。
+　一発でバシッと設定できないのか？
+
+■撮影動作に必要なコマンド
+◎必須
+・0xD21E ISO Sensitivity
+・0x5007 F-Number                       // 
+・0xD20D Shutter Speed                  // 静止画カメラ用
+・0xD2C7 RequestOneShooting
+・0xD20F Color Temperature              // 色温度0:leth then 2500K、0xFFFF:grater then 9900K
+・0x1009 GetObject                      // live view 取得
+
+◎調べた過程で出てきたもの、使わないかも
+・0x5005 White balance
+・0xD00D White Balance Tint             // WB の色調補正の事？。
+・0xD016 Shutter Speed Value            // ビデオカメラ用
+・0xD2C1 Shutter Half-Release (S1) Button
+・0xD2C2 Shutter Release (S2) Button
+・0xD2E6 S1 & S2 Button                 // one-shot かな？
+・0xD210 Biaxial Fine-Tuning G-M Direction // 色調補正 G-M（古いカメラしか対応していない）
+・0xD21c Biaxial Fine-Tuning A-B Direction // 色調補正 A-B（古いカメラしか対応していない）
+
+■設定値の範囲を取得する
+◎DevicePropCode
+・0x5007 F-Number
+・ISO 見つからない
+・SS　見つからない
+
+■live view の画像の取得方法
+・dd.xmlの <X_ScalarWebAPI_LiveView_URL> かな？
+・GetObject(ObjectHandle=0xFFFFC002)で取得する
+・GetObjectInfo(ObjectHandle=0xFFFFC002)で Live View Status(0xD221) が enable になるのを待つ。
+
+◎live view 取得、PIMA15740 の説明
+・0x1007 GetObjectHandles:pull でハンドルを取得する。
+・0x1008 GetObjectInfo:pull でハンドルを指定して情報を得る
+・0x1009 GetObject:pull でハンドルを指定して画像データを得る
+
+◎Camera Controll PTP 2(sony) の説明
+・初期化で live view status を有効にしておく
+・0xD215 Shooting File Info で 0x8001 以上の場合 GetObjectInfo/GetObject を使える。
+・0x1009 GetObject で ObjectHandle を 0xFFFFC001 にすると Capture Image を取得できる。
+
+◎GetObjectInfo で得られる情報(PIMA15740-2000 P.18 Table 8: ObjectInfo Dataset)
+・フォーマット
+・読み取り専用か否か
+・Thumbnail の縦横サイズ、データサイズ
+・Image の縦横サイズ、1pix のビット数
+・ファイル名、日付、キーワード

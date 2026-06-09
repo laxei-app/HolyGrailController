@@ -1,0 +1,12 @@
+﻿2026.04.04
+vcpkg で libcurl をインストールする。
+
+■keep-alive
+　http 通信はその都度セッションを張りなおしているので時間がかかる。
+　libcurl は keep-Alive を有効にして http 通信を行うライブラリ。
+　windows, android, iPhone で使える。
+
+■vcpkg
+　vcpkgはそのライブラリをインストールすためのツール。
+　NuGet は構成が一致しなかったり問題があるとの事。
+

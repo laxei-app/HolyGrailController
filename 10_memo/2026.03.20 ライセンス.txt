@@ -1,0 +1,8 @@
+2026.03.20
+ライセンスのあるソフトウェアを記録しておく。
+
+■MIT
+商用利用可能。著作権表示が必要。
+・nlohmann-json
+・libcurl
+　Copyright (c) 1876 - 2026, Daniel Stenberg, daniel@haxx.se, and many contributors, see the THANKS file.

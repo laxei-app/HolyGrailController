@@ -1,0 +1,37 @@
+{
+	"folders": [
+        {
+            "name": "021_search",
+            "path": "021_search"
+        },
+        {
+            "name": "022_net_low",
+            "path": "022_net_low"
+        },
+        {
+            "name": "023_shutter",
+            "path": "023_shutter"
+        },
+        {
+            "name": "024_luminance",
+            "path": "024_luminance"
+        },
+        {
+            "name": "10_common",
+            "path": "../../10_common"
+        },
+        {
+            "name": "10_M5Stack",
+            "path": "../../20_platform/10_M5Stack"
+        },
+        {
+            "name": "900_m5Gen",
+            "path": "900_m5Gen"
+        },
+        {
+            "name": "90_testGen",
+            "path": "../90_testGen"
+        }
+    ],
+	"settings": {}
+}
