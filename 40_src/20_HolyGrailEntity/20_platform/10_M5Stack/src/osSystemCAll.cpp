@@ -1,72 +1,75 @@
-﻿// osSystemCall.cpp
-// M5Stack の OS 依存部分をここに集約する
+// osSystemCall.cpp
+// M5Stack の OS 依存部分をここに集約する。
+// スレッド join はバイナリセマフォで行う(どのタスクから threadEnd を呼んでも安全)。
+//
+// 旧実装は「作成元タスクへ xTaskNotifyGive」する方式だったが、
+// ネストしたスレッド生成(loopTask→startup→captureLoop)で作成元タスクが
+// 先に自タスク削除されると、削除済みハンドルへ通知してヒープを破壊していた。
+// セマフォを ThreadControl に持たせ、taskWrapper では ctrl を解放せず、
+// threadEnd 側で待ち合わせてから解放することでこの問題を解消する。
 
 #include "osSystemCall.h"
 #include <M5Unified.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#include <freertos/task.h>
 
 namespace ossc
 {
-struct ThreadControl {
-        TaskHandle_t callerHandle; // threadEndを呼び出す側のハンドル
-        void* userParm;
-        THREAD_FUNC* userFunc;
+    struct ThreadControl {
+        SemaphoreHandle_t             doneSem;   // タスク終了を通知するセマフォ
+        void*                         userParm;
+        std::function<errCode(void*)> userFunc;  // 値コピーで保持(呼び出し元のローカルが破棄されても安全)
+        TaskHandle_t                  taskHandle;
     };
 
     // 内部ラッパー
-    void taskWrapper(void* arg) {
+    static void taskWrapper(void* arg) {
         ThreadControl* ctrl = (ThreadControl*)arg;
 
         if (ctrl->userFunc) {
-            (*ctrl->userFunc)(ctrl->userParm);
+            ctrl->userFunc(ctrl->userParm);
         }
 
-        // threadEndを呼んでいるスレッド（呼び出し元）に通知を送る
-        // eNotifyAction::eIncrement (セマフォのようにカウントを増やす)
-        xTaskNotifyGive(ctrl->callerHandle);
-
-        DBGLN(col::YEL,"before delete.");
-        delete ctrl; // 構造体を自ら破棄
-        vTaskDelete(NULL); // 自滅    
-        DBGLN(col::YEL,"Thread ended and notified caller.");
+        // 終了を通知する。ctrl の解放は threadEnd 側で行う(ここでは触らない)。
+        xSemaphoreGive(ctrl->doneSem);
+        vTaskDelete(NULL); // 自滅
     }
 
-    // スレッドを起動する
+    // スレッドを起動する。
+    // return : スレッドを破棄するためのハンドル(ThreadControl*)
     void* threadNet(THREAD_FUNC& func, void* parm)
     {
-        DBGLN(col::YEL,"entry threadEnd.");
         ThreadControl* ctrl = new ThreadControl();
-        ctrl->userFunc = &func;
+        ctrl->userFunc = func;     // std::function を値コピー
         ctrl->userParm = parm;
-        // threadEndを呼び出す予定の「今のタスクハンドル」を記録しておく
-        ctrl->callerHandle = xTaskGetCurrentTaskHandle();
+        ctrl->doneSem  = xSemaphoreCreateBinary();
+        ctrl->taskHandle = NULL;
 
-        TaskHandle_t taskHandle = NULL;
         xTaskCreatePinnedToCore(
             taskWrapper,
-            __func__,
-            4096,
+            "ossNet",
+            8192,               // json/HTTPパース・撮影ループ用(4096では不足)
             ctrl,
             3,                  // 優先度
-            &taskHandle,
-            0 
+            &ctrl->taskHandle,
+            0
         );
 
-        DBGLN(col::YEL,"exit threadEnd.");
-        return (void*)taskHandle; // タスクハンドルを返す
+        return (void*)ctrl; // ハンドルとして ThreadControl* を返す
     }
 
-    // 終了を待ち合わせる
+    // 終了を待ち合わせてスレッド資源を破棄する。
+    // どのタスクから呼んでも安全。
     void threadEnd(void* handle)
     {
-        if (!handle) return;
+        if (!handle) { return; }
+        ThreadControl* ctrl = (ThreadControl*)handle;
 
-        // タスク側から通知（Notify）が来るまでブロックして待機する
-        // pdTRUE: 待機終了時に通知値を0にリセットする
-        // portMAX_DELAY: 通知が来るまで永遠に待つ
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-        
-        DBGLN(col::YEL,"threadEnd.");
-        // 注: FreeRTOSのタスクハンドルは、タスクが消滅すると無効になるため
-        // ここで delete する必要はありません（wrapper内で処理済み）。
+        // タスクが終了を通知するまでブロックして待機する
+        xSemaphoreTake(ctrl->doneSem, portMAX_DELAY);
+
+        vSemaphoreDelete(ctrl->doneSem);
+        delete ctrl;
     }
 }

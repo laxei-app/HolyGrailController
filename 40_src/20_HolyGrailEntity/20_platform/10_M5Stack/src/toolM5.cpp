@@ -16,11 +16,12 @@ uint32_t tool::getElapse(void * handle)
     return (uint32_t)millis() - (uint32_t)handle;
 }
 
-// 指定時間待つ
+// 指定時間待つ。
+// delay() は ESP32 Arduino では vTaskDelay を呼び FreeRTOS に yield する。
+// (ビジーwaitにすると撮影ループの長い待機で IDLE タスクが飢餓し Task WDT が発火する)
 void tool::sleep(uint32_t ms)
 {
-    auto handl = startElapse();
-    while(getElapse(handl) < ms);
+    delay(ms);
 }
 #include <esp_heap_caps.h>
 

@@ -3,15 +3,21 @@
 // UI は LCD 表示 + ボタン(A:開始 / B:停止)。
 
 #include <M5Unified.h>
+#include <WiFi.h>
 #include <cstdio>
 #include "common.h"
 #include "holyGrailEntity.h"
 #include "WiFi_Connect.h"
 #include "debugOut.h"
 
+// loopTask(setup/loop)のスタックを拡張する。
+// 既定8KBでは天文計算(Astronomy Engine: FindAscent 再帰 + CalcMoon)で
+// オーバーフローするため。setup() で hge_loadFixedPlan() が buildSchedule() を同期実行する。
+SET_LOOP_TASK_STACK_SIZE(16 * 1024);
+
 // 実機接続時に設定する(カメラの AP もしくは同一LANのSSID)。
-static const char* WIFI_SSID = "your-ssid";
-static const char* WIFI_PASS = "your-pass";
+static const char* WIFI_SSID = "Buffalo-G-D850";
+static const char* WIFI_PASS = "rnhcftfbk75tf";
 
 static volatile int g_state = HGE_ST_IDLE;
 static char g_prog[64] = "";
@@ -45,17 +51,24 @@ static void notifyCb(int32_t ev, const char* json, int32_t len, void* user)
 		int s = HGE_ST_IDLE;
 		std::sscanf(json, "{\"state\":%d", &s);
 		g_state = s;
+		Serial.printf("[EV] STATE: %s\n", stName(s));
 		break;
 	}
 	case HGE_EV_PROGRESS:
 		std::snprintf(g_prog, sizeof(g_prog), "%s", json);
+		Serial.printf("[EV] PROGRESS: %s\n", json);
 		break;
 	case HGE_EV_CAPTURED:
 		std::snprintf(g_shot, sizeof(g_shot), "%s", json);
+		Serial.printf("[EV] CAPTURED: %s\n", json);
 		break;
 	case HGE_EV_ERROR:
+		std::snprintf(g_msg, sizeof(g_msg), "%s", json);
+		Serial.printf("[EV] ERROR: %s\n", json);
+		break;
 	case HGE_EV_DEVICE:
 		std::snprintf(g_msg, sizeof(g_msg), "%s", json);
+		Serial.printf("[EV] DEVICE: %s\n", json);
 		break;
 	default:
 		break;
@@ -98,11 +111,40 @@ void loop(void)
 	// WiFi 切断時は再接続を試みる(実機運用時に SSID/PASS を設定する)
 	if (wifiConnect::getStatus() == wifiConnect::wifiStatus::cuttingOff)
 	{
-		wifiConnect::connect(WIFI_SSID, WIFI_PASS);
+		Serial.printf("[WIFI] connecting to %s ...\n", WIFI_SSID);
+		bool ok = wifiConnect::connect(WIFI_SSID, WIFI_PASS);
+		if (ok)
+		{
+			Serial.printf("[WIFI] connected. IP=%s RSSI=%d\n",
+			              WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
+			std::snprintf(g_msg, sizeof(g_msg), "WiFi %s",
+			              WiFi.localIP().toString().c_str());
+			g_dirty = true;
+		}
+		else
+		{
+			Serial.printf("[WIFI] connect failed.\n");
+		}
 	}
 
-	if (M5.BtnA.wasPressed()) { hge_captureStart(); }
-	if (M5.BtnB.wasPressed()) { hge_captureStop(); }
+	// タッチボタン: A=開始 / B=停止
+	if (M5.BtnA.wasPressed()) { Serial.printf("[BTN] A start\n"); hge_captureStart(); }
+	if (M5.BtnB.wasPressed()) { Serial.printf("[BTN] B stop\n");  hge_captureStop();  }
+
+	// シリアルコマンド(検証用): 's'=開始 'x'=停止 'i'=情報
+	if (Serial.available() > 0)
+	{
+		int c = Serial.read();
+		if (c == 's') { Serial.printf("[CMD] start\n"); hge_captureStart(); }
+		else if (c == 'x') { Serial.printf("[CMD] stop\n");  hge_captureStop();  }
+		else if (c == 'i')
+		{
+			Serial.printf("[INFO] state=%s wifi=%d IP=%s\n",
+			              stName(g_state),
+			              (int)(WiFi.status() == WL_CONNECTED),
+			              WiFi.localIP().toString().c_str());
+		}
+	}
 
 	if (g_dirty)
 	{
