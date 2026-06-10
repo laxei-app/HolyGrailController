@@ -9,10 +9,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # 40_src/20_HolyGrailEntity への相対パス
 set(ENTITY ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../../20_HolyGrailEntity)
 
-# 共通ライブラリ部(テストmainは含まない)
-file(GLOB COMMON_SRC ${ENTITY}/10_common/src/*.cpp)
+# 共通ライブラリ部(テストmainは含まない)。CONFIGURE_DEPENDS でファイル追加時に再評価。
+file(GLOB COMMON_SRC CONFIGURE_DEPENDS ${ENTITY}/10_common/src/*.cpp)
 # Androidプラットフォーム実装(net/ossc/tool/debugOut/jniBridge)
-file(GLOB ANDROID_SRC ${ENTITY}/20_platform/20_Android/src/*.cpp)
+file(GLOB ANDROID_SRC CONFIGURE_DEPENDS ${ENTITY}/20_platform/20_Android/src/*.cpp)
 
 add_library(holygrail SHARED
     ${COMMON_SRC}

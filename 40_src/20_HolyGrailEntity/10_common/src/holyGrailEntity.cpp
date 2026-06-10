@@ -3,6 +3,7 @@
 #include "captureRunner.h"
 #include "astroSched.h"
 #include "cameraController.h"
+#include "dataManager.h"
 #include "netThread.h"
 #include "osSystemCall.h"
 #include "cs.h"
@@ -82,44 +83,6 @@ namespace
 		return o;
 	}
 
-	// --- 出荷時設定の撮影制御方法(7.2: コード上に保持) ---
-	astro::ccmSet factoryCcmSet()
-	{
-		astro::ccmSet set;
-
-		auto night = std::make_shared<hgc::ccmNight>();
-		night->name = "night";
-		night->sunAltitude = -18.0;
-		night->autoEdge = true;
-		night->limitBright = night->limitDark = hgc::exposure{ 1600, 8.0, 1.4 };	// 固定露出(3.2)
-		set.night = night;
-
-		auto sunrise = std::make_shared<hgc::ccmSunrise>();
-		sunrise->name = "sunrise";
-		sunrise->sunAltitude = -6.0;
-		sunrise->ev = -3.0;
-		sunrise->limitBright = hgc::exposure{ 3200, 8.0,     1.4 };
-		sunrise->limitDark   = hgc::exposure{ 100,  1.0/4000, 16.0 };
-		set.sunrise = sunrise;
-
-		auto sunset = std::make_shared<hgc::ccmSunset>();
-		sunset->name = "sunset";
-		sunset->sunAltitude = -6.0;
-		sunset->ev = -3.0;
-		sunset->limitBright = hgc::exposure{ 3200, 8.0,     1.4 };
-		sunset->limitDark   = hgc::exposure{ 100,  1.0/4000, 16.0 };
-		set.sunset = sunset;
-
-		auto day = std::make_shared<hgc::ccmDay>();
-		day->name = "day";
-		day->ev = 0.0;
-		day->limitBright = hgc::exposure{ 3200, 8.0,     1.4 };
-		day->limitDark   = hgc::exposure{ 100,  1.0/4000, 16.0 };
-		set.day = day;
-
-		return set;
-	}
-
 	// --- スケジュールの JSON 生成 ---
 	void buildScheduleJson(void)
 	{
@@ -171,11 +134,15 @@ namespace
 	}
 
 	// 固定データの撮影計画を生成する。開始=現在、終了=2時間後。
+	// 機材・場所・撮影制御方法などの出荷時設定は dataManager から取得する。
 	errCode loadFixedPlanImpl(void)
 	{
 		g_plan = hgc::cs{};
-		g_plan.name = "FixedPlan";
 
+		// 出荷時設定部分(name/場所/機材/周期/方位/仰角/向き)を取得
+		dataManager::factoryFixedPlan(g_plan);
+
+		// 開始=現在(-60秒)、終了=2時間後
 		time_t now = std::time(nullptr);
 		hgc::dateTime startDt; int off = 0;
 		localFromTime(now - 60, startDt, off);
@@ -185,19 +152,7 @@ namespace
 		g_plan.start = startDt;
 		g_plan.end   = endDt;
 
-		// 場所(東京)・機材(EOS-R10 + 16mm)
-		g_plan.place.name = "Tokyo";
-		g_plan.place.latitude = 35.681; g_plan.place.longitude = 139.767; g_plan.place.altitude = 40.0;
-		g_plan.camera.maker = "Canon"; g_plan.camera.model = "EOS R10"; g_plan.camera.name = "EOS R10";
-		g_plan.camera.sensorSize = 22.3; g_plan.camera.sensorPixel = 6000;
-		g_plan.lens.maker = "Sigma"; g_plan.lens.name = "16mm F1.4 DC DN";
-		g_plan.lens.focalLength = 16.0; g_plan.lens.fn = 1.4;
-		g_plan.interval = 15.0;			// 撮影周期[秒](EOS最小)
-		g_plan.azimuth = 90.0;			// 東向き
-		g_plan.elevation = 10.0;
-		g_plan.landscape = true;
-
-		astro::ccmSet set = factoryCcmSet();
+		astro::ccmSet set = dataManager::factoryCcmSet();
 		errCode e = astro::buildSchedule(g_plan, set, g_offMin);
 		if (e != ERR_HGC_OK) { return e; }
 
@@ -261,7 +216,7 @@ namespace
 			},
 			[](errCode e, const std::string& m) { notifyError(e, m.c_str()); });
 
-		hgc::exposureSmoothing smooth;	// 出荷時設定(ヒステリシス1段, 移動平均5)
+		hgc::exposureSmoothing smooth = dataManager::factorySmoothing();	// 出荷時設定
 		errCode e = g_runner.ready(g_plan, &g_devices[0], smooth, g_offMin);
 		if (e != ERR_HGC_OK) { notifyError(e, "ready"); setState(HGE_ST_ERROR); return e; }
 		return g_runner.start();	// 撮影ループ(別スレッド)を起動。CAPTURING は runner が通知
