@@ -79,6 +79,12 @@ Java_app_laxei_holygrail_HgeNative_nativeGetState(JNIEnv* /*env*/, jobject /*thi
 }
 
 JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSearchDevices(JNIEnv* /*env*/, jobject /*thiz*/)
+{
+	return hge_searchDevices();
+}
+
+JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeConnectManual(JNIEnv* env, jobject /*thiz*/, jstring host)
 {
 	if (host == nullptr) { return -1; }

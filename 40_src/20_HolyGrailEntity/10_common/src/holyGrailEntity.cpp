@@ -33,8 +33,8 @@ namespace
 	std::vector<device>   g_devices;
 	captureRunner         g_runner;
 	void*                 g_startThread = nullptr;
+	void*                 g_searchThread = nullptr;	// カメラ自動検索ワーカー
 	bool                  g_inited = false;
-	bool                  g_manualConnected = false;	// IP直指定で接続済みか
 
 	const char* const     VERSION = "HolyGrailEntity 0.1 (MVP step2.1)";
 
@@ -113,6 +113,22 @@ namespace
 		g_schedJson = j;
 	}
 
+	// 検出済みデバイス一覧を JSON 配列にする。
+	std::string devicesJson(void)
+	{
+		std::string dj = "[";
+		for (size_t i = 0; i < g_devices.size(); ++i)
+		{
+			if (i) { dj += ","; }
+			const auto& d = g_devices[i];
+			dj += "{\"uuid\":\"" + jesc(d.uuid) + "\",\"model\":\"" + jesc(d.model) +
+			      "\",\"manufacturer\":\"" + jesc(d.manufacturer) +
+			      "\",\"serialno\":\"" + jesc(d.serialno) + "\"}";
+		}
+		dj += "]";
+		return dj;
+	}
+
 	// time_t → ローカル日時 と UTCオフセット[分]
 	void localFromTime(time_t t, hgc::dateTime& d, int& offMin)
 	{
@@ -161,6 +177,23 @@ namespace
 		return ERR_HGC_OK;
 	}
 
+	// カメラを SSDP で検索する(ワーカースレッドで実行)。
+	// 成功で g_devices に格納し HGE_EV_DEVICE を通知、状態 READY。
+	errCode searchSequence(void)
+	{
+		g_devices.clear();
+		size_t n = cameraController::detectTarget(g_devices);
+		if (n == 0 || g_devices.empty() || g_devices[0].apiBase == nullptr)
+		{
+			notifyError(ERR_HGC_NOT_FOUND, "no camera found");
+			setState(HGE_ST_IDLE);	// 再検索できるよう IDLE に戻す
+			return ERR_HGC_NOT_FOUND;
+		}
+		notify(HGE_EV_DEVICE, devicesJson());
+		setState(HGE_ST_READY);
+		return ERR_HGC_OK;
+	}
+
 	// 撮影開始シーケンス(検索→スケジュール→撮影ループ起動)。ワーカースレッドで実行。
 	errCode startupSequence(void)
 	{
@@ -171,12 +204,13 @@ namespace
 		}
 		notify(HGE_EV_SCHEDULE, g_schedJson);
 
-		// カメラ検索(手動接続済みなら検索を省略してそのカメラを使う)
-		if (!(g_manualConnected && !g_devices.empty() && g_devices[0].apiBase != nullptr))
+		// カメラ検索(検出済み=手動IP or 自動検索 のカメラがあれば再検索しない)
+		bool haveCamera = !g_devices.empty() && g_devices[0].apiBase != nullptr;
+		if (!haveCamera)
 		{
 			g_devices.clear();
 			size_t n = cameraController::detectTarget(g_devices);
-			if (n == 0 || g_devices.empty())
+			if (n == 0 || g_devices.empty() || g_devices[0].apiBase == nullptr)
 			{
 				notifyError(ERR_HGC_NOT_FOUND, "no camera found");
 				setState(HGE_ST_ERROR);
@@ -185,17 +219,7 @@ namespace
 		}
 
 		// デバイス一覧を通知
-		std::string dj = "[";
-		for (size_t i = 0; i < g_devices.size(); ++i)
-		{
-			if (i) { dj += ","; }
-			const auto& d = g_devices[i];
-			dj += "{\"uuid\":\"" + jesc(d.uuid) + "\",\"model\":\"" + jesc(d.model) +
-			      "\",\"manufacturer\":\"" + jesc(d.manufacturer) +
-			      "\",\"serialno\":\"" + jesc(d.serialno) + "\"}";
-		}
-		dj += "]";
-		notify(HGE_EV_DEVICE, dj);
+		notify(HGE_EV_DEVICE, devicesJson());
 
 		// 撮影ループの通知配線
 		g_runner.setCallbacks(
@@ -240,7 +264,8 @@ int32_t hge_init(void)
 int32_t hge_term(void)
 {
 	g_runner.stop();
-	if (g_startThread) { ossc::threadEnd(g_startThread); g_startThread = nullptr; }
+	if (g_startThread)  { ossc::threadEnd(g_startThread);  g_startThread = nullptr; }
+	if (g_searchThread) { ossc::threadEnd(g_searchThread); g_searchThread = nullptr; }
 	if (g_inited) { netThread::deInit(); g_inited = false; }
 	setState(HGE_ST_IDLE);
 	return ERR_HGC_OK;
@@ -258,25 +283,26 @@ int32_t hge_setNotify(hgeNotifyCb cb, void* user)
 	return ERR_HGC_OK;
 }
 
+int32_t hge_searchDevices(void)
+{
+	if (g_runner.isRunning()) { return ERR_HGC_INVALID_STATE; }
+	if (g_searchThread) { ossc::threadEnd(g_searchThread); g_searchThread = nullptr; }
+	setState(HGE_ST_SEARCHING);
+	ossc::THREAD_FUNC fn = [](void*) -> errCode { return searchSequence(); };
+	g_searchThread = ossc::threadNet(fn, nullptr);
+	return ERR_HGC_OK;
+}
+
 int32_t hge_connectManual(const char* host)
 {
 	if (host == nullptr || host[0] == '\0') { return ERR_HGC_INVALID_ARG; }
 	size_t n = cameraController::connectManual(g_devices, std::string(host));
 	if (n == 0 || g_devices.empty() || g_devices[0].apiBase == nullptr)
 	{
-		g_manualConnected = false;
 		notifyError(ERR_HGC_NOT_FOUND, "manual connect failed");
 		return ERR_HGC_NOT_FOUND;
 	}
-	g_manualConnected = true;
-
-	// デバイス一覧を通知
-	const auto& d = g_devices[0];
-	std::string dj = "[{\"uuid\":\"" + jesc(d.uuid) + "\",\"model\":\"" + jesc(d.model) +
-	                 "\",\"manufacturer\":\"" + jesc(d.manufacturer) +
-	                 "\",\"serialno\":\"" + jesc(d.serialno) +
-	                 "\",\"location\":\"" + jesc(d.location) + "\"}]";
-	notify(HGE_EV_DEVICE, dj);
+	notify(HGE_EV_DEVICE, devicesJson());
 	setState(HGE_ST_READY);
 	return ERR_HGC_OK;
 }

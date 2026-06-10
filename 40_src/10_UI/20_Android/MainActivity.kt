@@ -17,6 +17,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private lateinit var scheduleText: TextView
     private lateinit var startButton: Button
     private lateinit var stopButton: Button
+    private lateinit var searchButton: Button
     private lateinit var ipInput: EditText
     private lateinit var connectButton: Button
 
@@ -30,6 +31,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         scheduleText = findViewById(R.id.scheduleText)
         startButton = findViewById(R.id.startButton)
         stopButton = findViewById(R.id.stopButton)
+        searchButton = findViewById(R.id.searchButton)
         ipInput = findViewById(R.id.ipInput)
         connectButton = findViewById(R.id.connectButton)
 
@@ -50,7 +52,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
         stopButton.setOnClickListener {
             HgeNative.nativeCaptureStop()
         }
-        // 手動接続(SSDP不使用)。HTTP通信のためバックグラウンドスレッドで実行する。
+        // カメラ自動検索(SSDP)。実機ではこちら。Entity内でワーカースレッド実行のため即 return。
+        searchButton.setOnClickListener {
+            stateText.text = "カメラ検索中..."
+            HgeNative.nativeSearchDevices()
+        }
+        // 手動接続(SSDP不使用。エミュレータ用)。HTTP通信のためバックグラウンドスレッドで実行する。
         connectButton.setOnClickListener {
             val host = ipInput.text.toString().trim()
             stateText.text = "connecting $host ..."
@@ -104,6 +111,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                          st == HgeNative.ST_STOPPING)
         startButton.isEnabled = !capturing
         stopButton.isEnabled = capturing
+        searchButton.isEnabled = !capturing
+        connectButton.isEnabled = !capturing
     }
 
     private fun ccmName(type: Int): String = when (type) {
