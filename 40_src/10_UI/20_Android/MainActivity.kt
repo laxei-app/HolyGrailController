@@ -183,9 +183,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<Button>(R.id.cmenu_sunrise).setOnClickListener { openCcmEdit("sunrise") }
         findViewById<Button>(R.id.cmenu_sunset).setOnClickListener { openCcmEdit("sunset") }
         findViewById<Button>(R.id.cmenu_day).setOnClickListener { openCcmEdit("day") }
-        findViewById<Button>(R.id.cmenu_moon).setOnClickListener {
-            Toast.makeText(this, "月の影響への対処は次のスライスで対応します", Toast.LENGTH_SHORT).show()
-        }
+        findViewById<Button>(R.id.cmenu_moon).setOnClickListener { openMoonEdit() }
         findViewById<ImageView>(R.id.edit_back).setOnClickListener { flipper.displayedChild = 2 }
         findViewById<Button>(R.id.edit_save).setOnClickListener { saveCcmEdit() }
         findViewById<Button>(R.id.edit_color_btn).setOnClickListener {
@@ -198,6 +196,95 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<SeekBar>(R.id.edit_ev_seek).setOnSeekBarChangeListener(seekListener {
             findViewById<TextView>(R.id.edit_ev_val).text = String.format("%+.1f", seekToEv(it))
         })
+        // 月の影響への対処
+        findViewById<ImageView>(R.id.moon_back).setOnClickListener { flipper.displayedChild = 2 }
+        findViewById<Button>(R.id.moon_save).setOnClickListener { saveMoonEdit() }
+        findViewById<Button>(R.id.moon_color_btn).setOnClickListener {
+            showColorPicker(editColor) { c -> editColor = c; findViewById<View>(R.id.moon_color_swatch).setBackgroundColor(0xFF000000.toInt() or c) }
+        }
+        findViewById<SeekBar>(R.id.moon_startlum_seek).setOnSeekBarChangeListener(seekListener {
+            findViewById<TextView>(R.id.moon_startlum_val).text = String.format("+%.1fev", it * 0.1)
+        })
+        findViewById<SeekBar>(R.id.moon_ev_seek).setOnSeekBarChangeListener(seekListener {
+            findViewById<TextView>(R.id.moon_ev_val).text = String.format("%.1fev", -it * 0.1)
+        })
+        findViewById<SeekBar>(R.id.moon_extcoef_seek).setOnSeekBarChangeListener(seekListener {
+            findViewById<TextView>(R.id.moon_extcoef_val).text = String.format("%.2f", 0.1 + it * 0.01)
+        })
+        findViewById<SeekBar>(R.id.moon_skycoef_seek).setOnSeekBarChangeListener(seekListener {
+            findViewById<TextView>(R.id.moon_skycoef_val).text = "$it%"
+        })
+        val moonModes = arrayOf("補正しない", "画角全体の明るさで自動補正", "月に露出を合わせる")
+        val ma = ArrayAdapter(this, android.R.layout.simple_spinner_item, moonModes)
+        ma.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        val moonSpinner = findViewById<Spinner>(R.id.moon_mode)
+        moonSpinner.adapter = ma
+        moonSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                findViewById<View>(R.id.moon_auto_section).visibility = if (pos == 1) View.VISIBLE else View.GONE
+                findViewById<View>(R.id.moon_exp_section).visibility = if (pos == 2) View.VISIBLE else View.GONE
+            }
+            override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
+        }
+    }
+
+    private fun openMoonEdit() {
+        val o = ccmJson?.optJSONObject("moon") ?: return
+        editColor = o.optInt("color", 0)
+        findViewById<View>(R.id.moon_color_swatch).setBackgroundColor(0xFF000000.toInt() or editColor)
+        findViewById<Spinner>(R.id.moon_mode).setSelection(o.optInt("mode", 0))
+        val slP = (o.optDouble("startLuminance", 0.0) * 10).toInt().coerceIn(0, 30)
+        findViewById<SeekBar>(R.id.moon_startlum_seek).progress = slP
+        findViewById<TextView>(R.id.moon_startlum_val).text = String.format("+%.1fev", slP * 0.1)
+        val evP = (-o.optDouble("ev", 0.0) * 10).toInt().coerceIn(0, 100)
+        findViewById<SeekBar>(R.id.moon_ev_seek).progress = evP
+        findViewById<TextView>(R.id.moon_ev_val).text = String.format("%.1fev", -evP * 0.1)
+        val ecP = ((o.optDouble("extinctionCoef", 0.2) - 0.1) * 100).toInt().coerceIn(0, 50)
+        findViewById<SeekBar>(R.id.moon_extcoef_seek).progress = ecP
+        findViewById<TextView>(R.id.moon_extcoef_val).text = String.format("%.2f", 0.1 + ecP * 0.01)
+        val skP = o.optDouble("skyBrightnessCoef", 100.0).toInt().coerceIn(0, 100)
+        findViewById<SeekBar>(R.id.moon_skycoef_seek).progress = skP
+        findViewById<TextView>(R.id.moon_skycoef_val).text = "$skP%"
+        findViewById<CheckBox>(R.id.moon_atmext).isChecked = o.optBoolean("atmosphericExtinction", false)
+        findViewById<CheckBox>(R.id.moon_geocorr).isChecked = o.optBoolean("geocentricCorrection", false)
+        o.optJSONObject("initialExposure")?.let {
+            findViewById<EditText>(R.id.moon_init_iso).setText(it.optInt("iso").toString())
+            findViewById<EditText>(R.id.moon_init_ss).setText(it.optDouble("ss").toString())
+            findViewById<EditText>(R.id.moon_init_fn).setText(it.optDouble("fn").toString())
+        }
+        o.optJSONObject("limitBright")?.let {
+            findViewById<EditText>(R.id.moon_lb_iso).setText(it.optInt("iso").toString())
+            findViewById<EditText>(R.id.moon_lb_ss).setText(it.optDouble("ss").toString())
+            findViewById<EditText>(R.id.moon_lb_fn).setText(it.optDouble("fn").toString())
+        }
+        o.optJSONObject("limitDark")?.let {
+            findViewById<EditText>(R.id.moon_ld_iso).setText(it.optInt("iso").toString())
+            findViewById<EditText>(R.id.moon_ld_ss).setText(it.optDouble("ss").toString())
+            findViewById<EditText>(R.id.moon_ld_fn).setText(it.optDouble("fn").toString())
+        }
+        flipper.displayedChild = 4
+    }
+
+    private fun saveMoonEdit() {
+        val all = ccmJson ?: return
+        val o = all.optJSONObject("moon") ?: return
+        fun et(id: Int) = findViewById<EditText>(id).text.toString()
+        fun exp(iso: Int, ss: Int, fn: Int) = JSONObject()
+            .put("iso", et(iso).toIntOrNull() ?: 0).put("ss", et(ss).toDoubleOrNull() ?: 0.0).put("fn", et(fn).toDoubleOrNull() ?: 0.0)
+        o.put("color", editColor)
+        o.put("mode", findViewById<Spinner>(R.id.moon_mode).selectedItemPosition)
+        o.put("startLuminance", findViewById<SeekBar>(R.id.moon_startlum_seek).progress * 0.1)
+        o.put("ev", -findViewById<SeekBar>(R.id.moon_ev_seek).progress * 0.1)
+        o.put("extinctionCoef", 0.1 + findViewById<SeekBar>(R.id.moon_extcoef_seek).progress * 0.01)
+        o.put("skyBrightnessCoef", findViewById<SeekBar>(R.id.moon_skycoef_seek).progress.toDouble())
+        o.put("atmosphericExtinction", findViewById<CheckBox>(R.id.moon_atmext).isChecked)
+        o.put("geocentricCorrection", findViewById<CheckBox>(R.id.moon_geocorr).isChecked)
+        o.put("initialExposure", exp(R.id.moon_init_iso, R.id.moon_init_ss, R.id.moon_init_fn))
+        o.put("limitBright", exp(R.id.moon_lb_iso, R.id.moon_lb_ss, R.id.moon_lb_fn))
+        o.put("limitDark", exp(R.id.moon_ld_iso, R.id.moon_ld_ss, R.id.moon_ld_fn))
+        val r = HgeNative.nativeSetCcmDefaults(all.toString())
+        Toast.makeText(this, if (r == 0) "保存しました" else "保存に失敗しました", Toast.LENGTH_SHORT).show()
+        flipper.displayedChild = 2
     }
 
     // --- 撮影制御方法 初期値: メニュー + 方法別エディタ ---
@@ -231,8 +318,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<View>(R.id.edit_fixed_section).visibility = if (isNight) View.VISIBLE else View.GONE
         findViewById<View>(R.id.edit_limit_section).visibility = if (isNight) View.GONE else View.VISIBLE
 
-        if (hasAlt) findViewById<SeekBar>(R.id.edit_alt_seek).progress = altToSeek(o.optDouble("sunAltitude", -18.0))
-        if (hasEv) findViewById<SeekBar>(R.id.edit_ev_seek).progress = evToSeek(o.optDouble("ev", 0.0))
+        if (hasAlt) {
+            val p = altToSeek(o.optDouble("sunAltitude", -18.0))
+            findViewById<SeekBar>(R.id.edit_alt_seek).progress = p
+            findViewById<TextView>(R.id.edit_alt_val).text = String.format("%.1f°", seekToAlt(p))
+        }
+        if (hasEv) {
+            val p = evToSeek(o.optDouble("ev", 0.0))
+            findViewById<SeekBar>(R.id.edit_ev_seek).progress = p
+            findViewById<TextView>(R.id.edit_ev_val).text = String.format("%+.1f", seekToEv(p))
+        }
         if (isNight) {
             findViewById<CheckBox>(R.id.edit_autoEdge).isChecked = o.optBoolean("autoEdge", true)
             o.optJSONObject("limitBright")?.let { b ->

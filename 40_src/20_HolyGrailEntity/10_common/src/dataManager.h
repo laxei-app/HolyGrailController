@@ -16,6 +16,9 @@ public:
 	// 出荷時設定の撮影制御方法一式(夜間/朝日/夕日/日中)。
 	static astro::ccmSet factoryCcmSet(void);
 
+	// 出荷時設定の月の影響への対処(データ構造仕様書43 §3.6)。
+	static std::shared_ptr<hgc::ccmMoon> factoryMoon(void);
+
 	// --- 撮影制御方法の初期値(ユーザー資産。/asset/ccmDefaults.json。仕様書43 §7.6) ---
 	// 現在の初期値(ファイルがあればそれ、無ければ出荷時設定)。スケジュール生成に使う。
 	static astro::ccmSet currentCcmSet(void);

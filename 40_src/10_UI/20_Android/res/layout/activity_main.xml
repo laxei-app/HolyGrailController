@@ -9,4 +9,5 @@
     <include layout="@layout/screen_capturing" />
     <include layout="@layout/screen_ccm_menu" />
     <include layout="@layout/screen_ccm_edit" />
+    <include layout="@layout/screen_ccm_moon" />
 </ViewFlipper>

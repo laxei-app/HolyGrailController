@@ -49,13 +49,32 @@ astro::ccmSet dataManager::factoryCcmSet(void)
 	return set;
 }
 
+// 出荷時設定の月の影響への対処(データ構造仕様書43 §3.6.2)。
+std::shared_ptr<hgc::ccmMoon> dataManager::factoryMoon(void)
+{
+	auto m = std::make_shared<hgc::ccmMoon>();
+	m->name = "moon";
+	m->mode = hgc::moonMode::none;
+	m->startLuminance = 0.0;
+	m->ev = 0.0;
+	m->initialExposure = hgc::exposure{ 100, 1.0 / 125, 11.0 };	// 満月の目安(looney 11)
+	m->atmosphericExtinction = false;
+	m->extinctionCoef = 0.2;
+	m->geocentricCorrection = false;
+	m->skyBrightnessCoef = 100.0;
+	m->limitBright = hgc::exposure{ 3200, 8.0,      1.4 };
+	m->limitDark   = hgc::exposure{ 100,  1.0 / 4000, 16.0 };
+	return m;
+}
+
 // ============================================================================
 //  撮影制御方法の初期値(/asset/ccmDefaults.json。仕様書43 §7.6)
 // ============================================================================
 namespace
 {
-	astro::ccmSet g_ccmDefaults;
-	bool          g_defaultsLoaded = false;
+	astro::ccmSet                 g_ccmDefaults;
+	std::shared_ptr<hgc::ccmMoon> g_moonDefault;
+	bool                          g_defaultsLoaded = false;
 
 	std::string ccmDefaultsPath(void)
 	{
@@ -63,52 +82,65 @@ namespace
 		return d.empty() ? std::string() : (d + "/ccmDefaults.json");
 	}
 
-	// JSON文字列を ccmSet(night/sunrise/sunset/day)へ復元する。4種揃わなければ失敗。
-	bool parseCcmSet(const std::string& s, astro::ccmSet& set)
+	// JSON文字列を ccmSet(night/sunrise/sunset/day)+moon へ復元する。
+	// 4種揃わなければ失敗(false)。moon は任意(無ければ nullptr)。
+	bool parseDefaults(const std::string& s, astro::ccmSet& set, std::shared_ptr<hgc::ccmMoon>& moon)
 	{
 		json j = json::parse(s, nullptr, false);
 		if (j.is_discarded() || !j.is_object()) { return false; }
-		auto get = [&](const char* k) -> std::shared_ptr<hgc::ccmBase> {
-			return j.contains(k) ? csjson::ccmFromJson(j[k].dump()) : nullptr;
+		// ESP32 は -fno-rtti のため dynamic_cast 不可。type メンバで確認して static_cast する。
+		auto get = [&](const char* k, hgc::ccmType want) -> std::shared_ptr<hgc::ccmBase> {
+			if (!j.contains(k)) { return nullptr; }
+			auto c = csjson::ccmFromJson(j[k].dump());
+			return (c && c->type == want) ? c : nullptr;
 		};
-		set.night   = std::dynamic_pointer_cast<hgc::ccmNight>(get("night"));
-		set.sunrise = std::dynamic_pointer_cast<hgc::ccmSunrise>(get("sunrise"));
-		set.sunset  = std::dynamic_pointer_cast<hgc::ccmSunset>(get("sunset"));
-		set.day     = std::dynamic_pointer_cast<hgc::ccmDay>(get("day"));
+		set.night   = std::static_pointer_cast<hgc::ccmNight>(get("night", hgc::ccmType::night));
+		set.sunrise = std::static_pointer_cast<hgc::ccmSunrise>(get("sunrise", hgc::ccmType::sunrise));
+		set.sunset  = std::static_pointer_cast<hgc::ccmSunset>(get("sunset", hgc::ccmType::sunset));
+		set.day     = std::static_pointer_cast<hgc::ccmDay>(get("day", hgc::ccmType::day));
+		moon        = std::static_pointer_cast<hgc::ccmMoon>(get("moon", hgc::ccmType::moon));
 		return set.night && set.sunrise && set.sunset && set.day;
+	}
+
+	void ensureLoaded(void)
+	{
+		if (g_defaultsLoaded) { return; }
+		g_defaultsLoaded = true;
+		std::string path = ccmDefaultsPath();
+		std::string body;
+		bool ok = (!path.empty() && osfile::readAll(path, body) &&
+		           parseDefaults(body, g_ccmDefaults, g_moonDefault));
+		if (!ok) { g_ccmDefaults = dataManager::factoryCcmSet(); g_moonDefault.reset(); }
+		if (!g_moonDefault) { g_moonDefault = dataManager::factoryMoon(); }	// moon は常に用意
 	}
 }
 
 astro::ccmSet dataManager::currentCcmSet(void)
 {
-	if (!g_defaultsLoaded)
-	{
-		g_defaultsLoaded = true;
-		std::string path = ccmDefaultsPath();
-		std::string body;
-		bool ok = (!path.empty() && osfile::readAll(path, body) && parseCcmSet(body, g_ccmDefaults));
-		if (!ok) { g_ccmDefaults = factoryCcmSet(); }	// 無効/不在は出荷時設定でフォールバック
-	}
+	ensureLoaded();
 	return g_ccmDefaults;
 }
 
 std::string dataManager::ccmDefaultsJson(void)
 {
-	astro::ccmSet set = currentCcmSet();
+	ensureLoaded();
 	json j;
 	j["version"] = 1;
-	if (set.night)   { j["night"]   = json::parse(csjson::ccmToJson(*set.night)); }
-	if (set.sunrise) { j["sunrise"] = json::parse(csjson::ccmToJson(*set.sunrise)); }
-	if (set.sunset)  { j["sunset"]  = json::parse(csjson::ccmToJson(*set.sunset)); }
-	if (set.day)     { j["day"]     = json::parse(csjson::ccmToJson(*set.day)); }
+	if (g_ccmDefaults.night)   { j["night"]   = json::parse(csjson::ccmToJson(*g_ccmDefaults.night)); }
+	if (g_ccmDefaults.sunrise) { j["sunrise"] = json::parse(csjson::ccmToJson(*g_ccmDefaults.sunrise)); }
+	if (g_ccmDefaults.sunset)  { j["sunset"]  = json::parse(csjson::ccmToJson(*g_ccmDefaults.sunset)); }
+	if (g_ccmDefaults.day)     { j["day"]     = json::parse(csjson::ccmToJson(*g_ccmDefaults.day)); }
+	if (g_moonDefault)         { j["moon"]    = json::parse(csjson::ccmToJson(*g_moonDefault)); }
 	return j.dump();
 }
 
 bool dataManager::setCcmDefaultsJson(const std::string& jsonStr)
 {
 	astro::ccmSet set;
-	if (!parseCcmSet(jsonStr, set)) { return false; }
+	std::shared_ptr<hgc::ccmMoon> moon;
+	if (!parseDefaults(jsonStr, set, moon)) { return false; }
 	g_ccmDefaults = set;
+	g_moonDefault = moon ? moon : factoryMoon();
 	g_defaultsLoaded = true;
 	std::string path = ccmDefaultsPath();
 	if (path.empty()) { return false; }
