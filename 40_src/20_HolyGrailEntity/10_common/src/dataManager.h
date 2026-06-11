@@ -23,6 +23,20 @@ public:
 	// name/place/camera/lens/interval/azimuth/elevation/landscape を設定する。
 	// start/end と events/ccmList は呼び出し側が設定する。
 	static void factoryFixedPlan(hgc::cs& plan);
+
+	// --- 動作ログ(データ構造仕様書43 §8) ---
+	// 固定長128Bのテキストレコードを日付ごとのファイル(hg_YYYY-MM-DD.log)へ追記する。
+	// 保存は osFile 抽象を介す(M5=SD/LittleFS, Android=外部ファイル領域)。
+
+	// ログのタイムスタンプに使う UTCオフセット[分]を設定する(撮影開始時などに呼ぶ)。
+	static void setLogOffset(int utcOffsetMin);
+
+	// 露出を伴わないイベント(START/STOP/CCMSW/NET/ERR/INFO)を記録する。
+	// event: §8.3 のイベント種別(6文字以内)。detail: 補足(55文字以内)。
+	static void logEvent(const char* event, const char* detail, bool error = false);
+
+	// 1枚撮影(SHOT)を記録する。frame/iso/ss/fn/lum と適用中ccm名。
+	static void logShot(int frame, const hgc::exposure& e, double lumStops, const char* ccmName);
 };
 
 #endif // _DATA_MANAGER_H_

@@ -22,7 +22,7 @@ class captureRunner
 public:
 	// 進捗・撮影完了の通知情報
 	struct progressInfo { int frame; int total; int remainSec; int elapsedSec; };
-	struct capturedInfo { int frame; hgc::exposure exp; double luminance; };
+	struct capturedInfo { int frame; hgc::exposure exp; double luminance; std::string ccm; };
 
 	using stateCb    = std::function<void(int)>;					// hgeState 値
 	using progressCb = std::function<void(const progressInfo&)>;

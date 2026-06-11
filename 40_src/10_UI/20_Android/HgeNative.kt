@@ -29,6 +29,7 @@ object HgeNative {
     const val ST_STOPPING = 4
     const val ST_ERROR = 5
 
+    external fun nativeSetLogDir(dir: String)
     external fun nativeInit(): Int
     external fun nativeTerm(): Int
     external fun nativeVersion(): String

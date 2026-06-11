@@ -263,7 +263,7 @@ errCode captureRunner::loop(void)
 		if (onCaptured_)
 		{
 			double lum = expo::brightnessStops(target);
-			onCaptured_(capturedInfo{ frame, target, lum });
+			onCaptured_(capturedInfo{ frame, target, lum, ccm->name });
 		}
 		if (onProgress_)
 		{

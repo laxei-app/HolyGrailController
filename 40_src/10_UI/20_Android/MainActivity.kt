@@ -37,6 +37,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
         findViewById<TextView>(R.id.titleText).text = HgeNative.nativeVersion()
 
+        // ログ保存先(アプリ外部ファイル領域 .../files)を渡してから初期化する
+        HgeNative.nativeSetLogDir(getExternalFilesDir(null)?.absolutePath ?: filesDir.absolutePath)
         HgeNative.nativeInit()
         HgeNative.nativeSetListener(this)
 

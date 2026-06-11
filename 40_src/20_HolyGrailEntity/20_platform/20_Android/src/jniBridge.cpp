@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "holyGrailEntity.h"
+#include "osFile.h"
 #include "commonAndroid.h"
 
 namespace
@@ -40,6 +41,16 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/)
 {
 	g_vm = vm;
 	return JNI_VERSION_1_6;
+}
+
+// ログ保存先(アプリ外部ファイル領域)を設定する。hge_init より前に呼ぶこと。
+JNIEXPORT void JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetLogDir(JNIEnv* env, jobject /*thiz*/, jstring dir)
+{
+	if (dir == nullptr) { return; }
+	const char* d = env->GetStringUTFChars(dir, nullptr);
+	osfile::setBaseDir(d ? d : "");
+	env->ReleaseStringUTFChars(dir, d);
 }
 
 JNIEXPORT jint JNICALL

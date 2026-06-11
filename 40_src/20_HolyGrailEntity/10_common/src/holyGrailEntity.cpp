@@ -35,6 +35,8 @@ namespace
 	void*                 g_startThread = nullptr;
 	void*                 g_searchThread = nullptr;	// カメラ自動検索ワーカー
 	bool                  g_inited = false;
+	bool                  g_logCapturing = false;	// ログ用: 撮影中か(START/STOP検出)
+	std::string           g_lastCcm;				// ログ用: 直近の撮影制御方法名(CCMSW検出)
 
 	const char* const     VERSION = "HolyGrailEntity 0.1 (MVP step2.1)";
 
@@ -62,6 +64,9 @@ namespace
 		std::string j = "{\"code\":" + std::to_string(static_cast<unsigned>(code)) +
 		                ",\"msg\":\"" + (msg ? msg : "") + "\"}";
 		notify(HGE_EV_ERROR, j);
+		std::string d = "code=" + std::to_string(static_cast<unsigned>(code)) +
+		                " " + (msg ? msg : "");
+		dataManager::logEvent("ERR", d.c_str(), true);
 	}
 
 	// --- JSON 補助 ---
@@ -129,6 +134,15 @@ namespace
 		return dj;
 	}
 
+	// 接続したカメラのIP/機種をログ(NET)に残す。
+	void logCameraNet(void)
+	{
+		if (g_devices.empty()) { return; }
+		const auto& d = g_devices[0];
+		std::string detail = "camera=" + d.model + " " + d.location;
+		dataManager::logEvent("NET", detail.c_str());
+	}
+
 	// time_t → ローカル日時 と UTCオフセット[分]
 	void localFromTime(time_t t, hgc::dateTime& d, int& offMin)
 	{
@@ -165,6 +179,7 @@ namespace
 		hgc::dateTime endDt; int off2 = 0;
 		localFromTime(now + 2 * 3600, endDt, off2);
 		g_offMin = off;
+		dataManager::setLogOffset(g_offMin);	// ログのローカル時刻に反映
 		g_plan.start = startDt;
 		g_plan.end   = endDt;
 
@@ -190,6 +205,7 @@ namespace
 			return ERR_HGC_NOT_FOUND;
 		}
 		notify(HGE_EV_DEVICE, devicesJson());
+		logCameraNet();
 		setState(HGE_ST_READY);
 		return ERR_HGC_OK;
 	}
@@ -220,10 +236,27 @@ namespace
 
 		// デバイス一覧を通知
 		notify(HGE_EV_DEVICE, devicesJson());
+		logCameraNet();
 
 		// 撮影ループの通知配線
 		g_runner.setCallbacks(
-			[](int s) { setState(s); },
+			[](int s) {
+				// START/STOP をログに残す(状態遷移を監視)
+				if (s == HGE_ST_CAPTURING && !g_logCapturing)
+				{
+					g_logCapturing = true;
+					g_lastCcm.clear();
+					std::string d = "plan=" + g_plan.name +
+					                " " + dtToStr(g_plan.start) + "~" + dtToStr(g_plan.end);
+					dataManager::logEvent("START", d.c_str());
+				}
+				else if ((s == HGE_ST_IDLE || s == HGE_ST_ERROR) && g_logCapturing)
+				{
+					g_logCapturing = false;
+					dataManager::logEvent("STOP", "");
+				}
+				setState(s);
+			},
 			[](const captureRunner::progressInfo& p) {
 				char b[96];
 				std::snprintf(b, sizeof(b),
@@ -232,11 +265,19 @@ namespace
 				notify(HGE_EV_PROGRESS, b);
 			},
 			[](const captureRunner::capturedInfo& c) {
-				char b[128];
+				char b[160];
 				std::snprintf(b, sizeof(b),
 					"{\"frame\":%d,\"iso\":%u,\"ss\":%.6f,\"fn\":%.2f,\"luminance\":%.3f}",
 					c.frame, c.exp.iso, c.exp.ss, c.exp.fn, c.luminance);
 				notify(HGE_EV_CAPTURED, b);
+				// 撮影制御方法が切り替わったらログ(CCMSW)
+				if (c.ccm != g_lastCcm)
+				{
+					std::string d = (g_lastCcm.empty() ? "" : g_lastCcm + " -> ") + c.ccm;
+					dataManager::logEvent("CCMSW", d.c_str());
+					g_lastCcm = c.ccm;
+				}
+				dataManager::logShot(c.frame, c.exp, c.luminance, c.ccm.c_str());
 			},
 			[](errCode e, const std::string& m) { notifyError(e, m.c_str()); });
 
@@ -303,6 +344,7 @@ int32_t hge_connectManual(const char* host)
 		return ERR_HGC_NOT_FOUND;
 	}
 	notify(HGE_EV_DEVICE, devicesJson());
+	logCameraNet();
 	setState(HGE_ST_READY);
 	return ERR_HGC_OK;
 }
