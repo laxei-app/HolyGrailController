@@ -4,6 +4,7 @@
 #include "astroSched.h"
 #include "cameraController.h"
 #include "dataManager.h"
+#include "csJson.h"
 #include "netThread.h"
 #include "osSystemCall.h"
 #include "cs.h"
@@ -37,6 +38,10 @@ namespace
 	bool                  g_inited = false;
 	bool                  g_logCapturing = false;	// ログ用: 撮影中か(START/STOP検出)
 	std::string           g_lastCcm;				// ログ用: 直近の撮影制御方法名(CCMSW検出)
+
+	// 進捗スナップショット(progress(get) 応答・エッジ端末用)
+	int                   g_pgFrame = 0, g_pgTotal = 0, g_pgRemain = 0, g_pgElapsed = 0;
+	hgc::exposure         g_pgExp{};
 
 	const char* const     VERSION = "HolyGrailEntity 0.1 (MVP step2.1)";
 
@@ -258,6 +263,8 @@ namespace
 				setState(s);
 			},
 			[](const captureRunner::progressInfo& p) {
+				g_pgFrame = p.frame; g_pgTotal = p.total;
+				g_pgRemain = p.remainSec; g_pgElapsed = p.elapsedSec;
 				char b[96];
 				std::snprintf(b, sizeof(b),
 					"{\"frame\":%d,\"total\":%d,\"remainSec\":%d,\"elapsedSec\":%d}",
@@ -265,6 +272,7 @@ namespace
 				notify(HGE_EV_PROGRESS, b);
 			},
 			[](const captureRunner::capturedInfo& c) {
+				g_pgExp = c.exp;
 				char b[160];
 				std::snprintf(b, sizeof(b),
 					"{\"frame\":%d,\"iso\":%u,\"ss\":%.6f,\"fn\":%.2f,\"luminance\":%.3f}",
@@ -354,6 +362,28 @@ int32_t hge_loadFixedPlan(void)
 	return loadFixedPlanImpl();
 }
 
+int32_t hge_setUtcOffset(int32_t offMin)
+{
+	g_offMin = offMin;
+	dataManager::setLogOffset(g_offMin);
+	return ERR_HGC_OK;
+}
+
+int32_t hge_setPlanJson(const char* json, int32_t len)
+{
+	if (json == nullptr || len <= 0) { return ERR_HGC_INVALID_ARG; }
+	hgc::cs plan;
+	if (!csjson::fromJson(std::string(json, static_cast<size_t>(len)), plan))
+	{
+		return ERR_HGC_JSON_PARSE;
+	}
+	g_plan = plan;
+	buildScheduleJson();		// 受信した events/ccmList から表示用JSONを作る
+	g_planReady = true;
+	notify(HGE_EV_SCHEDULE, g_schedJson);
+	return ERR_HGC_OK;
+}
+
 int32_t hge_getScheduleJson(char* buf, int32_t* inoutLen)
 {
 	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
@@ -369,6 +399,26 @@ int32_t hge_getScheduleJson(char* buf, int32_t* inoutLen)
 		return ERR_HGC_BUF_SHORT;
 	}
 	std::memcpy(buf, g_schedJson.c_str(), need);
+	*inoutLen = need;
+	return ERR_HGC_OK;
+}
+
+int32_t hge_getProgressJson(char* buf, int32_t* inoutLen)
+{
+	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
+	char tmp[256];
+	std::snprintf(tmp, sizeof(tmp),
+		"{\"state\":%d,\"frame\":%d,\"total\":%d,\"remainSec\":%d,\"elapsedSec\":%d,"
+		"\"ccm\":\"%s\",\"iso\":%u,\"ss\":%.6f,\"fn\":%.2f}",
+		g_state.load(), g_pgFrame, g_pgTotal, g_pgRemain, g_pgElapsed,
+		jesc(g_lastCcm).c_str(), g_pgExp.iso, g_pgExp.ss, g_pgExp.fn);
+	int32_t need = static_cast<int32_t>(std::strlen(tmp)) + 1;
+	if (buf == nullptr || *inoutLen < need)
+	{
+		*inoutLen = need;
+		return ERR_HGC_BUF_SHORT;
+	}
+	std::memcpy(buf, tmp, need);
 	*inoutLen = need;
 	return ERR_HGC_OK;
 }

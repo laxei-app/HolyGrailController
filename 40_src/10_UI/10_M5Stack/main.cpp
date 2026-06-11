@@ -1,6 +1,8 @@
-﻿// HolyGrail Controller エッジ端末(M5Stack CoreS3) アプリ。開発ステップ2.2 MVP。
-// 固定データの撮影計画で holyGrailEntity を駆動し、開始/停止のみ行う最小実装。
-// UI は LCD 表示 + ボタン(A:開始 / B:停止)。
+﻿// HolyGrail Controller エッジ端末(M5Stack CoreS3) アプリ。
+// holyGrailEntity を駆動する。2系統で動作する:
+//  - 単独: 固定撮影計画 + ボタン(A:開始 / B:停止)。
+//  - スマホ制御: ETP(§6)でスマホから時刻同期・計画転送・開始/停止を受ける(etpEdge)。
+// UI は LCD 表示。
 
 #include <M5Unified.h>
 #include <WiFi.h>
@@ -8,6 +10,7 @@
 #include "common.h"
 #include "holyGrailEntity.h"
 #include "WiFi_Connect.h"
+#include "etpEdge.h"
 #include "debugOut.h"
 
 // loopTask(setup/loop)のスタックを拡張する。
@@ -76,11 +79,18 @@ static void notifyCb(int32_t ev, const char* json, int32_t len, void* user)
 	g_dirty = true;
 }
 
+static bool g_edgeUp = false;	// ETPサーバ起動済みか(WiFi接続後に一度)
+
 static void draw(void)
 {
 	M5.Display.fillScreen(TFT_BLACK);
 	M5.Display.setCursor(0, 0);
-	M5.Display.printf("HolyGrail Edge MVP\n");
+	M5.Display.printf("HolyGrail エッジ端末\n");
+	if (WiFi.status() == WL_CONNECTED)
+	{
+		M5.Display.printf("IP:%s %s\n", WiFi.localIP().toString().c_str(),
+		                  g_edgeUp ? "ETP" : "");
+	}
 	M5.Display.printf("state: %s\n", stName(g_state));
 	if (g_prog[0]) { M5.Display.printf("%s\n", g_prog); }
 	if (g_shot[0]) { M5.Display.printf("%s\n", g_shot); }
@@ -119,6 +129,12 @@ void loop(void)
 			              WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
 			std::snprintf(g_msg, sizeof(g_msg), "WiFi %s",
 			              WiFi.localIP().toString().c_str());
+			// WiFi 接続後に ETP サーバ(検索応答+制御)を一度だけ起動する
+			if (!g_edgeUp)
+			{
+				etpEdge::setup("エッジ端末");
+				g_edgeUp = true;
+			}
 			g_dirty = true;
 		}
 		else
@@ -126,6 +142,9 @@ void loop(void)
 			Serial.printf("[WIFI] connect failed.\n");
 		}
 	}
+
+	// ETP サーバのポーリング(スマホからの検索/制御を処理)
+	if (g_edgeUp) { etpEdge::loop(); }
 
 	// タッチボタン: A=開始 / B=停止
 	if (M5.BtnA.wasPressed()) { Serial.printf("[BTN] A start\n"); hge_captureStart(); }

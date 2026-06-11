@@ -59,9 +59,22 @@ int32_t hge_connectManual(const char* host);
 // --- 撮影計画(MVP は固定データ) ---
 int32_t hge_loadFixedPlan(void);	// 固定データの撮影計画を生成し保持する
 
+// 時刻のUTCオフセット[分]を設定する(エッジ端末がtimeコマンド受信時に呼ぶ)。
+// 受信した撮影計画(cs)のローカル時刻を Unix時刻へ変換する基準になる。
+int32_t hge_setUtcOffset(int32_t offMin);
+
+// 受信した撮影計画(cs)を JSON から投入する(エッジ端末がcapturePlan受信時に呼ぶ)。
+// cs は events/ccmList を含む自己完結形式(データ構造仕様書43 §4.5)。
+int32_t hge_setPlanJson(const char* json, int32_t len);
+
 // 撮影計画のスケジュールを JSON で取得(バッファ規約)。
 //  buf が null か容量不足なら必要バイト数を *inoutLen に格納し ERR_HGC_BUF_SHORT。
 int32_t hge_getScheduleJson(char* buf, int32_t* inoutLen);
+
+// 現在の進捗スナップショットを JSON で取得(バッファ規約)。
+//  {"state","frame","total","remainSec","elapsedSec","ccm","iso","ss","fn"}
+//  エッジ端末が progress(get) 応答に使う。
+int32_t hge_getProgressJson(char* buf, int32_t* inoutLen);
 
 // --- 撮影実行 ---
 int32_t hge_captureStart(void);		// 撮影開始(非同期)。進捗は HGE_EV_PROGRESS
