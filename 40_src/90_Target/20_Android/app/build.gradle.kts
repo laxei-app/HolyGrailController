@@ -39,6 +39,8 @@ android {
 
     // Kotlin/UI ソースは 40_src/10_UI/20_Android に置く(ユーザー指定)
     sourceSets["main"].java.srcDirs("../../../10_UI/20_Android")
+    // UI リソース(VectorDrawable等)も UI フォルダ配下に置く。既定の res にも残す(レイアウト等)。
+    sourceSets["main"].res.srcDir("../../../10_UI/20_Android/res")
 
     buildTypes {
         release {
