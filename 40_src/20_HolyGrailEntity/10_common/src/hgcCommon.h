@@ -21,11 +21,14 @@ namespace hgc
 	};
 
 	// 3.1.1 露出設定 (iso/ss/fn の三つ組)
+	// 値はカメラから取得した「設定値の文字列」で保持・通信・保存・カメラ指示する。
+	// 露出計算には文字列を直接使わず、設定可能値テーブル(expoTable)で APEX/実数へ変換する。
+	//  iso 例 "100","3200" / ss 例 "1/4000","8","Bulb" / fn 例 "1.4","16"
 	struct exposure
 	{
-		uint16_t iso = 0;	// iso感度
-		double   ss  = 0.0;	// シャッター速度[秒]
-		double   fn  = 0.0;	// F値
+		std::string iso;	// iso感度のカメラ設定値
+		std::string ss;		// シャッター速度のカメラ設定値
+		std::string fn;		// F値のカメラ設定値
 	};
 
 	// 3.1.2 露出設定項目。優先度の指定に使用する。
@@ -56,8 +59,8 @@ namespace hgc
 		std::string name;				// 表示名称
 		double   sensorSize  = 0.0;		// センサー横[mm]
 		uint32_t sensorPixel = 0;		// センサー横[pixel]
-		std::vector<uint16_t> isoList;	// 設定可能iso感度
-		std::vector<double>   ssList;	// 設定可能シャッター速度
+		std::vector<std::string> isoList;	// 設定可能iso感度(カメラ設定値の文字列)
+		std::vector<std::string> ssList;	// 設定可能シャッター速度(カメラ設定値の文字列)
 	};
 
 	// 5.3 レンズ

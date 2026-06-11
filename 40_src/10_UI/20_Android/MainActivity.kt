@@ -248,19 +248,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<CheckBox>(R.id.moon_atmext).isChecked = o.optBoolean("atmosphericExtinction", false)
         findViewById<CheckBox>(R.id.moon_geocorr).isChecked = o.optBoolean("geocentricCorrection", false)
         o.optJSONObject("initialExposure")?.let {
-            findViewById<EditText>(R.id.moon_init_iso).setText(it.optInt("iso").toString())
-            findViewById<EditText>(R.id.moon_init_ss).setText(it.optDouble("ss").toString())
-            findViewById<EditText>(R.id.moon_init_fn).setText(it.optDouble("fn").toString())
+            findViewById<EditText>(R.id.moon_init_iso).setText(it.optString("iso"))
+            findViewById<EditText>(R.id.moon_init_ss).setText(it.optString("ss"))
+            findViewById<EditText>(R.id.moon_init_fn).setText(it.optString("fn"))
         }
         o.optJSONObject("limitBright")?.let {
-            findViewById<EditText>(R.id.moon_lb_iso).setText(it.optInt("iso").toString())
-            findViewById<EditText>(R.id.moon_lb_ss).setText(it.optDouble("ss").toString())
-            findViewById<EditText>(R.id.moon_lb_fn).setText(it.optDouble("fn").toString())
+            findViewById<EditText>(R.id.moon_lb_iso).setText(it.optString("iso"))
+            findViewById<EditText>(R.id.moon_lb_ss).setText(it.optString("ss"))
+            findViewById<EditText>(R.id.moon_lb_fn).setText(it.optString("fn"))
         }
         o.optJSONObject("limitDark")?.let {
-            findViewById<EditText>(R.id.moon_ld_iso).setText(it.optInt("iso").toString())
-            findViewById<EditText>(R.id.moon_ld_ss).setText(it.optDouble("ss").toString())
-            findViewById<EditText>(R.id.moon_ld_fn).setText(it.optDouble("fn").toString())
+            findViewById<EditText>(R.id.moon_ld_iso).setText(it.optString("iso"))
+            findViewById<EditText>(R.id.moon_ld_ss).setText(it.optString("ss"))
+            findViewById<EditText>(R.id.moon_ld_fn).setText(it.optString("fn"))
         }
         flipper.displayedChild = 4
     }
@@ -269,8 +269,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val all = ccmJson ?: return
         val o = all.optJSONObject("moon") ?: return
         fun et(id: Int) = findViewById<EditText>(id).text.toString()
+        // 露出値はカメラ設定値の文字列で保存する。
         fun exp(iso: Int, ss: Int, fn: Int) = JSONObject()
-            .put("iso", et(iso).toIntOrNull() ?: 0).put("ss", et(ss).toDoubleOrNull() ?: 0.0).put("fn", et(fn).toDoubleOrNull() ?: 0.0)
+            .put("iso", et(iso)).put("ss", et(ss)).put("fn", et(fn))
         o.put("color", editColor)
         o.put("mode", findViewById<Spinner>(R.id.moon_mode).selectedItemPosition)
         o.put("startLuminance", findViewById<SeekBar>(R.id.moon_startlum_seek).progress * 0.1)
@@ -331,20 +332,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (isNight) {
             findViewById<CheckBox>(R.id.edit_autoEdge).isChecked = o.optBoolean("autoEdge", true)
             o.optJSONObject("limitBright")?.let { b ->
-                findViewById<EditText>(R.id.edit_fix_iso).setText(b.optInt("iso").toString())
-                findViewById<EditText>(R.id.edit_fix_ss).setText(b.optDouble("ss").toString())
-                findViewById<EditText>(R.id.edit_fix_fn).setText(b.optDouble("fn").toString())
+                findViewById<EditText>(R.id.edit_fix_iso).setText(b.optString("iso"))
+                findViewById<EditText>(R.id.edit_fix_ss).setText(b.optString("ss"))
+                findViewById<EditText>(R.id.edit_fix_fn).setText(b.optString("fn"))
             }
         } else {
             o.optJSONObject("limitBright")?.let { b ->
-                findViewById<EditText>(R.id.edit_lb_iso).setText(b.optInt("iso").toString())
-                findViewById<EditText>(R.id.edit_lb_ss).setText(b.optDouble("ss").toString())
-                findViewById<EditText>(R.id.edit_lb_fn).setText(b.optDouble("fn").toString())
+                findViewById<EditText>(R.id.edit_lb_iso).setText(b.optString("iso"))
+                findViewById<EditText>(R.id.edit_lb_ss).setText(b.optString("ss"))
+                findViewById<EditText>(R.id.edit_lb_fn).setText(b.optString("fn"))
             }
             o.optJSONObject("limitDark")?.let { d ->
-                findViewById<EditText>(R.id.edit_ld_iso).setText(d.optInt("iso").toString())
-                findViewById<EditText>(R.id.edit_ld_ss).setText(d.optDouble("ss").toString())
-                findViewById<EditText>(R.id.edit_ld_fn).setText(d.optDouble("fn").toString())
+                findViewById<EditText>(R.id.edit_ld_iso).setText(d.optString("iso"))
+                findViewById<EditText>(R.id.edit_ld_ss).setText(d.optString("ss"))
+                findViewById<EditText>(R.id.edit_ld_fn).setText(d.optString("fn"))
             }
         }
         flipper.displayedChild = 3
@@ -354,10 +355,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val all = ccmJson ?: return
         val o = all.optJSONObject(editingKey) ?: return
         fun et(id: Int) = findViewById<EditText>(id).text.toString()
+        // 露出値はカメラ設定値の文字列で保存する。
         fun exp(iso: Int, ss: Int, fn: Int) = JSONObject()
-            .put("iso", et(iso).toIntOrNull() ?: 0)
-            .put("ss", et(ss).toDoubleOrNull() ?: 0.0)
-            .put("fn", et(fn).toDoubleOrNull() ?: 0.0)
+            .put("iso", et(iso)).put("ss", et(ss)).put("fn", et(fn))
 
         o.put("color", editColor)
         if (editingKey != "day") o.put("sunAltitude", seekToAlt(findViewById<SeekBar>(R.id.edit_alt_seek).progress))
@@ -466,7 +466,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 }
                 HgeNative.EV_CAPTURED -> {
                     val o = JSONObject(json)
-                    capCaptured.text = "iso ${o.optInt("iso")}  ss ${o.optDouble("ss")}  f ${o.optDouble("fn")}"
+                    capCaptured.text = "iso ${o.optString("iso")}  ss ${o.optString("ss")}  f ${o.optString("fn")}"
                 }
                 HgeNative.EV_SCHEDULE -> { latestSchedule = json; updatePlanDisplay(json) }
                 HgeNative.EV_DEVICE -> {}
@@ -598,8 +598,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                             capState.text = "エッジ端末: ${HgeNative.stateName(o.optInt("state"))}"
                             capProgress.text = "frame ${o.optInt("frame")}/${o.optInt("total")}  " +
                                 "elapsed ${o.optInt("elapsedSec")}s  remain ${o.optInt("remainSec")}s"
-                            capCaptured.text = "ccm ${o.optString("ccm")}  iso ${o.optInt("iso")}  " +
-                                "ss ${o.optDouble("ss")}  f ${o.optDouble("fn")}"
+                            capCaptured.text = "ccm ${o.optString("ccm")}  iso ${o.optString("iso")}  " +
+                                "ss ${o.optString("ss")}  f ${o.optString("fn")}"
                         } catch (_: Exception) {}
                     }
                 }

@@ -286,10 +286,10 @@ namespace
 			},
 			[](const captureRunner::capturedInfo& c) {
 				g_pgExp = c.exp;
-				char b[160];
+				char b[200];
 				std::snprintf(b, sizeof(b),
-					"{\"frame\":%d,\"iso\":%u,\"ss\":%.6f,\"fn\":%.2f,\"luminance\":%.3f}",
-					c.frame, c.exp.iso, c.exp.ss, c.exp.fn, c.luminance);
+					"{\"frame\":%d,\"iso\":\"%s\",\"ss\":\"%s\",\"fn\":\"%s\",\"luminance\":%.3f}",
+					c.frame, c.exp.iso.c_str(), c.exp.ss.c_str(), c.exp.fn.c_str(), c.luminance);
 				notify(HGE_EV_CAPTURED, b);
 				// 撮影制御方法が切り替わったらログ(CCMSW)
 				if (c.ccm != g_lastCcm)
@@ -501,9 +501,9 @@ int32_t hge_getProgressJson(char* buf, int32_t* inoutLen)
 	char tmp[256];
 	std::snprintf(tmp, sizeof(tmp),
 		"{\"state\":%d,\"frame\":%d,\"total\":%d,\"remainSec\":%d,\"elapsedSec\":%d,"
-		"\"ccm\":\"%s\",\"iso\":%u,\"ss\":%.6f,\"fn\":%.2f}",
+		"\"ccm\":\"%s\",\"iso\":\"%s\",\"ss\":\"%s\",\"fn\":\"%s\"}",
 		g_state.load(), g_pgFrame, g_pgTotal, g_pgRemain, g_pgElapsed,
-		jesc(g_lastCcm).c_str(), g_pgExp.iso, g_pgExp.ss, g_pgExp.fn);
+		jesc(g_lastCcm).c_str(), g_pgExp.iso.c_str(), g_pgExp.ss.c_str(), g_pgExp.fn.c_str());
 	int32_t need = static_cast<int32_t>(std::strlen(tmp)) + 1;
 	if (buf == nullptr || *inoutLen < need)
 	{

@@ -20,30 +20,30 @@ astro::ccmSet dataManager::factoryCcmSet(void)
 	night->name = "night";
 	night->sunAltitude = -18.0;
 	night->autoEdge = true;
-	night->limitBright = night->limitDark = hgc::exposure{ 1600, 8.0, 1.4 };	// 固定露出(3.2)
+	night->limitBright = night->limitDark = hgc::exposure{ "1600", "8", "1.4" };	// 固定露出(3.2)
 	set.night = night;
 
 	auto sunrise = std::make_shared<hgc::ccmSunrise>();
 	sunrise->name = "sunrise";
 	sunrise->sunAltitude = -6.0;
 	sunrise->ev = -3.0;
-	sunrise->limitBright = hgc::exposure{ 3200, 8.0,      1.4 };
-	sunrise->limitDark   = hgc::exposure{ 100,  1.0 / 4000, 16.0 };
+	sunrise->limitBright = hgc::exposure{ "3200", "8", "1.4" };
+	sunrise->limitDark   = hgc::exposure{ "100", "1/4000", "16" };
 	set.sunrise = sunrise;
 
 	auto sunset = std::make_shared<hgc::ccmSunset>();
 	sunset->name = "sunset";
 	sunset->sunAltitude = -6.0;
 	sunset->ev = -3.0;
-	sunset->limitBright = hgc::exposure{ 3200, 8.0,      1.4 };
-	sunset->limitDark   = hgc::exposure{ 100,  1.0 / 4000, 16.0 };
+	sunset->limitBright = hgc::exposure{ "3200", "8", "1.4" };
+	sunset->limitDark   = hgc::exposure{ "100", "1/4000", "16" };
 	set.sunset = sunset;
 
 	auto day = std::make_shared<hgc::ccmDay>();
 	day->name = "day";
 	day->ev = 0.0;
-	day->limitBright = hgc::exposure{ 3200, 8.0,      1.4 };
-	day->limitDark   = hgc::exposure{ 100,  1.0 / 4000, 16.0 };
+	day->limitBright = hgc::exposure{ "3200", "8", "1.4" };
+	day->limitDark   = hgc::exposure{ "100", "1/4000", "16" };
 	set.day = day;
 
 	return set;
@@ -57,13 +57,13 @@ std::shared_ptr<hgc::ccmMoon> dataManager::factoryMoon(void)
 	m->mode = hgc::moonMode::none;
 	m->startLuminance = 0.0;
 	m->ev = 0.0;
-	m->initialExposure = hgc::exposure{ 100, 1.0 / 125, 11.0 };	// 満月の目安(looney 11)
+	m->initialExposure = hgc::exposure{ "100", "1/125", "11" };	// 満月の目安(looney 11)
 	m->atmosphericExtinction = false;
 	m->extinctionCoef = 0.2;
 	m->geocentricCorrection = false;
 	m->skyBrightnessCoef = 100.0;
-	m->limitBright = hgc::exposure{ 3200, 8.0,      1.4 };
-	m->limitDark   = hgc::exposure{ 100,  1.0 / 4000, 16.0 };
+	m->limitBright = hgc::exposure{ "3200", "8", "1.4" };
+	m->limitDark   = hgc::exposure{ "100", "1/4000", "16" };
 	return m;
 }
 
@@ -242,12 +242,6 @@ namespace
 		osfile::append(path, rec, sizeof(rec));
 	}
 
-	// シャッター速度を読みやすい固定幅向け文字列にする(1未満は 1/N 表記)。
-	void formatSs(double ss, char* buf, size_t n)
-	{
-		if (ss > 0.0 && ss < 1.0) { std::snprintf(buf, n, "1/%ld", std::lround(1.0 / ss)); }
-		else                      { std::snprintf(buf, n, "%.6f", ss); }
-	}
 }
 
 void dataManager::setLogOffset(int utcOffsetMin)
@@ -272,11 +266,10 @@ std::string dataManager::currentLogPath(void)
 
 void dataManager::logShot(int frame, const hgc::exposure& e, double lumStops, const char* ccmName)
 {
-	char frameStr[8], isoStr[8], ssStr[16], fnStr[8], lumStr[12];
+	char frameStr[8], lumStr[12];
 	std::snprintf(frameStr, sizeof(frameStr), "%d", frame);
-	std::snprintf(isoStr,   sizeof(isoStr),   "%u", e.iso);
-	formatSs(e.ss, ssStr, sizeof(ssStr));
-	std::snprintf(fnStr,    sizeof(fnStr),    "%.1f", e.fn);
 	std::snprintf(lumStr,   sizeof(lumStr),   "%+.3f", lumStops);
-	writeRecord("INF", "SHOT", frameStr, isoStr, ssStr, fnStr, lumStr, ccmName ? ccmName : "");
+	// 露出値はカメラ設定値の文字列をそのまま記録する。
+	writeRecord("INF", "SHOT", frameStr, e.iso.c_str(), e.ss.c_str(), e.fn.c_str(),
+	            lumStr, ccmName ? ccmName : "");
 }

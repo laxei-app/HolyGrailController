@@ -113,9 +113,9 @@ public:
 protected:
 	// カメラの情報を取得する
 	errCode getDeviceDescriptor(class device& device);
-	errCode ascCanFNumber(std::vector<float>& fNumber);	// 指定可能な f 値を取得する
-	errCode ascCanSS(std::vector<float>& ss);			// 指定可能な シャッター速度を取得する
-	errCode ascCanIso(std::vector<float>& iso);			// 指定可能な ISO を取得する
+	errCode ascCanFNumber(std::vector<std::string>& fNumber);	// 指定可能な f 値(文字列)を取得する
+	errCode ascCanSS(std::vector<std::string>& ss);				// 指定可能な シャッター速度(文字列)を取得する
+	errCode ascCanIso(std::vector<std::string>& iso);			// 指定可能な ISO(文字列)を取得する
 	errCode getStrageAct(std::string& path);			// 保存先の(activeな)strage 情報を取得する
 	errCode getStrageSta(std::vector<strageInfo>& strageInfo);	// 全体のstrage 情報を取得する
 	errCode getDirAct(std::string& path);				// 保存先のディレクトリ
@@ -123,10 +123,10 @@ protected:
 //	errCode getHistoGram(cmdt::HISTOGRAM & hist);			// live view のヒストグラムを取得する
 	errCode getShotPicture(std::vector<std::byte>& jpg);
 
-	// 設定する
-	errCode setFNumber(float fNumber);					// f 値を設定する
-	errCode setSS(float ss);							// シャッター速度を設定する
-	errCode setIso(float iso);							// ISO を設定する
+	// 設定する(カメラ設定値の文字列をそのまま指示する)
+	errCode setFNumber(const std::string& fNumber);		// f 値を設定する
+	errCode setSS(const std::string& ss);				// シャッター速度を設定する
+	errCode setIso(const std::string& iso);				// ISO を設定する
 
 	// データ解析
 	errCode analizeUseFunction(class device& device, std::string& catalog);			// 使用するコマンドを探す

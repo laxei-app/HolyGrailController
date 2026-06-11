@@ -199,68 +199,40 @@ errCode apiCanonCCAPI::actShutter(void)
 	return ERR_HGC_OK;
 }
 
-// 指定可能な f 値を取得する
-// fNumber : 設定可能な f 値
-// F値は F/1.2 の「1.2」部分を10倍した整数で取得する。
-errCode apiCanonCCAPI::ascCanFNumber(std::vector<float>& fNumber)
+// 指定可能な f 値(文字列)を取得する。CCAPI の ability は先頭1文字(接頭)を除いた表示値("1.4","16")。
+errCode apiCanonCCAPI::ascCanFNumber(std::vector<std::string>& fNumber)
 {
     std::vector<std::string> abiStr;
     errCode err = getJsonAbility(funcNum::F_NUMBER, abiStr);
     if (err != ERR_HGC_OK)          { return err; }
 
-    std::vector<float> abiList;
-    for (const auto& abilitie : abiStr)
-    {   // 数値に変換する
-        auto val = static_cast<float>(std::stof(abilitie.substr(1)));
-        abiList.push_back(val);
+    std::vector<std::string> out;
+    for (const auto& a : abiStr)
+    {   // 接頭の "f" 等を1文字除いた表示値文字列
+        out.push_back(a.empty() ? a : a.substr(1));
     }
-    fNumber = abiList;
+    fNumber = out;
     return ERR_HGC_OK;
 }
 
-// 指定可能な シャッター速度を取得する
-errCode apiCanonCCAPI::ascCanSS(std::vector<float>& ss)
+// 指定可能な シャッター速度(文字列)を取得する。CCAPI の値("1/4000","8"等)をそのまま使う。
+errCode apiCanonCCAPI::ascCanSS(std::vector<std::string>& ss)
 {
-    std::vector<std::string> abiStr;
-    errCode err = getJsonAbility(funcNum::SS, abiStr);
-    if (err != ERR_HGC_OK) { return err; }
-
-    std::vector<float> abiList;
-    for (const auto& abilitie : abiStr)
-    {   // 数値に変換する
-        float val = static_cast<float>(tool::ssToReal(abilitie));
-        abiList.push_back(val);
-    }
-    ss = abiList;
-    return ERR_HGC_OK;
+    return getJsonAbility(funcNum::SS, ss);
 }
 
-// 指定可能な ISO を取得する
-errCode apiCanonCCAPI::ascCanIso(std::vector<float>& iso)
+// 指定可能な ISO(文字列)を取得する。CCAPI の値("100","3200"等)をそのまま使う。
+errCode apiCanonCCAPI::ascCanIso(std::vector<std::string>& iso)
 {
-    std::vector<std::string> abiStr;
-    errCode err = getJsonAbility(funcNum::ISO, abiStr);
-    if (err != ERR_HGC_OK) { return err; }
-
-    std::vector<float> abiList;
-    for (const auto& abilitie : abiStr)
-    {   // 数値に変換する
-        float val = static_cast<float>(tool::ssToReal(abilitie));
-        abiList.push_back(val);
-    }
-    iso = abiList;
-    return ERR_HGC_OK;
+    return getJsonAbility(funcNum::ISO, iso);
 }
 
 // 設定値を取得する
 // settings : 設定値保存場所
 errCode apiCanonCCAPI::getSettings(cmdt::shotRange& settings)
-{ 
-    std::vector<float> iso;
-    std::vector<float> ss;
-    std::vector<float> fNum;
+{
+    std::vector<std::string> iso, ss, fNum;
 
-    // 設定値を取得する
     auto err = ascCanIso(iso);
     if (err != ERR_HGC_OK) { return err; }
     err = ascCanSS(ss);
@@ -268,10 +240,9 @@ errCode apiCanonCCAPI::getSettings(cmdt::shotRange& settings)
     err = ascCanFNumber(fNum);
     if (err != ERR_HGC_OK) { return err; }
 
-    // すべて取れたので上位に設定する
     settings.fNum = fNum;
-    settings.ss = ss;
-    settings.iso = iso;
+    settings.ss   = ss;
+    settings.iso  = iso;
 
     return ERR_HGC_OK;
 }
@@ -279,59 +250,42 @@ errCode apiCanonCCAPI::getSettings(cmdt::shotRange& settings)
 // f 値を設定する
 // fNumber : 値の f/xx.x の xx.x 部
 // return  : ERR_HGC_OK:成功、それ以外は失敗
-errCode apiCanonCCAPI::setFNumber(float fNumber)
+errCode apiCanonCCAPI::setFNumber(const std::string& fNumber)
 {
     funcNum func = funcNum::F_NUMBER;
     if (!(funcList[func].verb == verb::PUT)) { return ERR_HGC_NOT_SUPPORTED; }
     json json;
-    char buff[16];
-    if (fNumber >= 10)
-    {   // 10 以上は整数部のみ
-        snprintf(buff, sizeof(buff), "f%u", static_cast<uint32_t>(std::round(fNumber)));
-    }
-    else
-    {   // 10 未満は小数点付
-        snprintf(buff, sizeof(buff), "f%1.1f", fNumber);
-    }
-    json["value"] = buff;
+    json["value"] = "f" + fNumber;	// 表示値("1.4","16")に接頭 'f' を付けてカメラへ
     std::string body = json.dump();
     std::string resp;
     if (netThread::httpPut(funcList[func].url, body, resp)) { return ERR_HGC_OK; }
 
     DBGLN(col::RED, "%s %s", body.c_str(), resp.c_str());
-
     return ERR_HGC_OK;
 }
 
-// シャッター速度を設定する
-// ss     : シャッター速度
-// return : ERR_HGC_OK:成功、それ以外は失敗
-errCode apiCanonCCAPI::setSS(float ss)
+// シャッター速度を設定する(カメラ設定値の文字列をそのまま指示)
+errCode apiCanonCCAPI::setSS(const std::string& ss)
 {
     funcNum func = funcNum::SS;
     if (!(funcList[func].verb == verb::PUT)) { return ERR_HGC_NOT_SUPPORTED; }
     json json;
-    auto buff = tool::ssToStr(ss);
-    json["value"] = buff;
+    json["value"] = ss;
     std::string body = json.dump();
     std::string resp;
     if (netThread::httpPut(funcList[func].url, body, resp)) { return ERR_HGC_OK; }
 
     DBGLN(col::RED, "%s %s", body.c_str(), resp.c_str());
-
     return ERR_HGC_OK;
 }
 
-// ISO を設定する
-// iso    : iso 感度
-// return : ERR_HGC_OK:成功、それ以外は失敗
-errCode apiCanonCCAPI::setIso(float iso)
+// ISO を設定する(カメラ設定値の文字列をそのまま指示)
+errCode apiCanonCCAPI::setIso(const std::string& iso)
 {
     funcNum func = funcNum::ISO;
     if (!(funcList[func].verb == verb::PUT)) { return ERR_HGC_NOT_SUPPORTED; }
     json json;
-    auto buff = std::to_string(static_cast<uint32_t>(std::round(iso)));
-    json["value"] = buff;
+    json["value"] = iso;
     std::string body = json.dump();
     std::string resp;
     if (netThread::httpPut(funcList[func].url, body, resp)) { return ERR_HGC_OK; }

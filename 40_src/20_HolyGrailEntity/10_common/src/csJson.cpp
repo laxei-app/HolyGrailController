@@ -30,12 +30,21 @@ namespace csjson
 		{
 			return json{ {"iso", e.iso}, {"ss", e.ss}, {"fn", e.fn} };
 		}
+		// 文字列フィールドを安全に取り出す(型不一致や旧形式の数値でも例外を投げない)。
+		std::string getStr(const json& j, const char* key)
+		{
+			auto it = j.find(key);
+			if (it == j.end()) { return std::string(); }
+			if (it->is_string()) { return it->get<std::string>(); }
+			return std::string();	// 数値等(旧形式)は非互換として無視
+		}
+
 		hgc::exposure expFromJson(const json& j)
 		{
 			hgc::exposure e;
-			e.iso = j.value("iso", 0);
-			e.ss  = j.value("ss", 0.0);
-			e.fn  = j.value("fn", 0.0);
+			e.iso = getStr(j, "iso");
+			e.ss  = getStr(j, "ss");
+			e.fn  = getStr(j, "fn");
 			return e;
 		}
 
@@ -69,8 +78,8 @@ namespace csjson
 			c.name        = j.value("name", std::string());
 			c.sensorSize  = j.value("sensorSize", 0.0);
 			c.sensorPixel = j.value("sensorPixel", 0u);
-			if (j.contains("isoList")) { c.isoList = j["isoList"].get<std::vector<uint16_t>>(); }
-			if (j.contains("ssList"))  { c.ssList  = j["ssList"].get<std::vector<double>>(); }
+			if (j.contains("isoList")) { c.isoList = j["isoList"].get<std::vector<std::string>>(); }
+			if (j.contains("ssList"))  { c.ssList  = j["ssList"].get<std::vector<std::string>>(); }
 			return c;
 		}
 

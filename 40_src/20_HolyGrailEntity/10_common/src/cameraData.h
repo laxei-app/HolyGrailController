@@ -1,9 +1,13 @@
 ﻿#ifndef _CAMERA_DATA_H_
 #define _CAMERA_DATA_H_
 
+#include <cstdint>
+#include <string>
+#include <vector>
+
 namespace cmdt
 {
-	// 撮影の設定可能な値
+	// 撮影の設定可能な値(カメラから取得した設定値の文字列。例 ss "1/4000","Bulb")
 	class shotRange
 	{
 	public:
@@ -14,9 +18,9 @@ namespace cmdt
 			float min;
 			float step;
 		};
-		std::vector<float> ss;
-		std::vector<float> iso;
-		std::vector<float> fNum;
+		std::vector<std::string> ss;
+		std::vector<std::string> iso;
+		std::vector<std::string> fNum;
 //		range ct;		// color temperature
 //		range cs;		// color shift
 	};
@@ -37,15 +41,15 @@ namespace cmdt
 		};
 	} HISTOGRAM;
 
-	// 撮影時の設定
+	// 撮影時の設定(カメラへ送る設定値の文字列)
 	class shotSet
 	{
 	public:
-		float ss;
-		float fNum;
-		float iso;
+		std::string ss;
+		std::string fNum;
+		std::string iso;
 	public:
-		shotSet(float ss, float fNum, float iso)
+		shotSet(const std::string& ss, const std::string& fNum, const std::string& iso)
 		{
 			this->ss = ss;
 			this->fNum = fNum;

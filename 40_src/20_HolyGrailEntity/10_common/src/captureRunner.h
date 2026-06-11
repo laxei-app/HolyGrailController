@@ -59,10 +59,8 @@ private:
 	std::atomic<bool> running_{ false };
 	void* thread_ = nullptr;
 
-	// カメラの設定可能値(開始時に取得)
-	std::vector<uint16_t> isoList_;
-	std::vector<double>   ssList_;
-	std::vector<double>   fnList_;
+	// カメラの設定可能値テーブル(開始時に取得して構築。仕様 4.2)
+	expo::expoTables tables_;
 
 	stateCb    onState_;
 	progressCb onProgress_;

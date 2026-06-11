@@ -26,7 +26,7 @@ namespace
 
 	bool validExposure(const hgc::exposure& e)
 	{
-		return e.iso > 0 && e.ss > 0.0 && e.fn > 0.0;
+		return !e.iso.empty() && !e.ss.empty() && !e.fn.empty();
 	}
 }
 
@@ -126,14 +126,19 @@ errCode captureRunner::loop(void)
 		return err;
 	}
 
-	// 設定可能値を取得して APEX ラダーの素を作る(仕様 4.2)
+	// 設定可能値を取得して設定可能値テーブルを作る(仕様 4.2)
 	cmdt::shotRange range;
-	if (cameraController::getSettings(*dev_, range) == ERR_HGC_OK)
+	if (cameraController::getSettings(*dev_, range) == ERR_HGC_OK &&
+	    !range.iso.empty() && !range.ss.empty() && !range.fNum.empty())
 	{
-		isoList_.clear(); ssList_.clear(); fnList_.clear();
-		for (auto v : range.iso)  { isoList_.push_back(static_cast<uint16_t>(std::lround(v))); }
-		for (auto v : range.ss)   { ssList_.push_back(static_cast<double>(v)); }
-		for (auto v : range.fNum) { fnList_.push_back(static_cast<double>(v)); }
+		tables_.iso = expo::buildTable(range.iso,  expo::expoKind::iso);
+		tables_.ss  = expo::buildTable(range.ss,   expo::expoKind::ss);
+		tables_.fn  = expo::buildTable(range.fNum, expo::expoKind::fn);
+	}
+	else
+	{	// 取得失敗時は標準テーブル(レンズのf範囲)でフォールバック
+		double fmin = (plan_.lens.fn > 0.0) ? plan_.lens.fn : 1.0;
+		tables_ = expo::standardTables(fmin, 32.0);
 	}
 
 	const long long startSec = hgc::toUnixUtc(plan_.start, off_);
@@ -175,13 +180,13 @@ errCode captureRunner::loop(void)
 			hgc::exposure goal = nightGoalAfter(now);
 			if (windowChanged)
 			{
-				linCtl.init(isoList_, ssList_, fnList_, hgc::exposure{}, hgc::exposure{}, ccm->priority);
+				linCtl.init(tables_, hgc::exposure{}, hgc::exposure{}, ccm->priority);
 				linCtl.setCurrent(validExposure(lastExp) ? lastExp : goal);
 			}
 			if (validExposure(goal))
 			{
-				double cur = expo::brightnessStops(linCtl.current());
-				double gl  = expo::brightnessStops(goal);
+				double cur = expo::brightnessStops(linCtl.current(), tables_);
+				double gl  = expo::brightnessStops(goal, tables_);
 				const double third = 1.0 / 3.0;
 				if (cur - gl > third / 2.0)      { linCtl.darken(); }
 				else if (gl - cur > third / 2.0) { linCtl.brighten(); }
@@ -194,7 +199,7 @@ errCode captureRunner::loop(void)
 			const double evT = targetEv(ccm);
 			if (windowChanged)
 			{
-				autoCtl.init(isoList_, ssList_, fnList_, ccm->limitBright, ccm->limitDark, ccm->priority);
+				autoCtl.init(tables_, ccm->limitBright, ccm->limitDark, ccm->priority);
 				avgBuf.clear();
 			}
 
@@ -249,8 +254,7 @@ errCode captureRunner::loop(void)
 
 		// 露出を設定して撮影(仕様 4章)。周期計測のため経過を測る。
 		void* el = tool::startElapse();
-		cmdt::shotSet shot(static_cast<float>(target.ss), static_cast<float>(target.fn),
-		                   static_cast<float>(target.iso));
+		cmdt::shotSet shot(target.ss, target.fn, target.iso);	// カメラ設定値の文字列
 		cameraController::rdyShutter(*dev_, shot);
 		err = cameraController::actShutter(*dev_);
 		if (err != ERR_HGC_OK)
@@ -262,7 +266,7 @@ errCode captureRunner::loop(void)
 
 		if (onCaptured_)
 		{
-			double lum = expo::brightnessStops(target);
+			double lum = expo::brightnessStops(target, tables_);
 			onCaptured_(capturedInfo{ frame, target, lum, ccm->name });
 		}
 		if (onProgress_)

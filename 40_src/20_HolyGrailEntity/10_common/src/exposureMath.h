@@ -10,6 +10,7 @@
 #include "hgcCommon.h"
 #include <cmath>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace expo
@@ -41,14 +42,40 @@ namespace expo
 	inline double avFromFn (double fn)  { return std::log2(fn * fn); }		// 絞り
 	inline double tvFromSs (double ss)  { return std::log2(1.0 / ss); }		// 時間
 
-	// 画像の明るさ(段)。大きいほど明るい。Sv が上がると明るく、Av/Tv が上がると暗い。
-	inline double brightnessStops(const hgc::exposure& e)
-	{
-		return svFromIso(static_cast<double>(e.iso)) - avFromFn(e.fn) - tvFromSs(e.ss);
-	}
-
 	// APEX 値を 1/3 段グリッドに量子化する(最近傍)。
 	double snapThird(double apex);
+
+	// --- 設定可能値テーブル(データ構造仕様書43 §3.1.1.1 / 仕様書10 §4.2) ---
+	enum class expoKind : uint8_t { iso, ss, fn };
+
+	// テーブルの1要素。value=カメラ設定値文字列、real=実数、apex=1/3段スナップしたAPEX。
+	struct expoEntry
+	{
+		std::string value;
+		double      real = 0.0;
+		double      apex = 0.0;
+	};
+
+	// 文字列→実数。iso:整数, fn:小数, ss:"1/4000"/"8"/"0.5"等。無効("Bulb"等)は負を返す。
+	double parseValue(const std::string& v, expoKind k);
+
+	// 値文字列群からテーブルを作る(§4.2)。apexを算出し1/3段にスナップ、apex昇順ソート。無効値は除外。
+	std::vector<expoEntry> buildTable(const std::vector<std::string>& values, expoKind k);
+
+	// 標準テーブル用の値文字列(カメラ未接続時の編集用)。
+	std::vector<std::string> standardValues(expoKind k);			// iso/ss(fnは下記)
+	std::vector<std::string> standardFn(double fnMin, double fnMax);	// レンズf範囲の1/3段F値
+
+	// iso/ss/fn 三つ分のテーブル。
+	struct expoTables
+	{
+		std::vector<expoEntry> iso, ss, fn;
+	};
+	// 標準テーブル一式(編集用)。fnはレンズの開放〜最小絞り範囲。
+	expoTables standardTables(double fnMin = 1.0, double fnMax = 32.0);
+
+	// 露出(文字列)→明るさ(段)。テーブルでapexを引く(無ければ実数から算出)。大きいほど明るい。
+	double brightnessStops(const hgc::exposure& e, const expoTables& t);
 
 	// ヒストグラム(輝度bin列)の中央値を 0.0～1.0(sRGB符号化)で返す。仕様 4.3.1。
 	//  lumBins : 輝度ヒストグラム。nBins 個。
@@ -60,18 +87,16 @@ namespace expo
 	class exposureCtl
 	{
 	public:
-		// カメラの設定可能値と撮影制御方法の限界・優先度で初期化する。
-		//  isoList/ssList/fnList : カメラから取得した設定可能値(順不同で可)
-		//  limitBright/limitDark : 明側/暗側の限界(iso/ss/fn)
+		// 設定可能値テーブルと撮影制御方法の限界・優先度で初期化する。
+		//  tables                : iso/ss/fn の設定可能値テーブル(apex昇順)
+		//  limitBright/limitDark : 明側/暗側の限界(iso/ss/fn の文字列。空="限界なし")
 		//  priority              : 変更する優先度(上位から先に変更)
-		void init(const std::vector<uint16_t>& isoList,
-		          const std::vector<double>&   ssList,
-		          const std::vector<double>&   fnList,
+		void init(const expoTables& tables,
 		          const hgc::exposure& limitBright,
 		          const hgc::exposure& limitDark,
 		          const hgc::exposureType priority[hgc::exposureTypeNum]);
 
-		// 現在値を設定する(各リストの最も近い値にスナップする)。
+		// 現在値を設定する(各テーブルの最も近い値にスナップする)。
 		void setCurrent(const hgc::exposure& e);
 		// 明側/暗側の限界を初期値にする(仕様 4.4)。
 		void setToBrightLimit();
@@ -88,10 +113,10 @@ namespace expo
 		hgc::exposure applyStops(double evStops);
 
 	private:
-		struct ladder { std::vector<double> vals; int idx = 0; }; // 昇順値と現在位置
+		struct ladder { std::vector<expoEntry> e; int idx = 0; }; // apex昇順と現在位置
 		ladder iso_, ss_, fn_;	// iso/ss は idx↑で明るい、fn は idx↑で暗い
-		hgc::exposure limitBright_{};
-		hgc::exposure limitDark_{};
+		// 限界の実数(0=限界なし)。real が 0 になる露出値は無いので 0 を番兵に使う。
+		double limBIso_ = 0, limDIso_ = 0, limBSs_ = 0, limDSs_ = 0, limBFn_ = 0, limDFn_ = 0;
 		hgc::exposureType priority_[hgc::exposureTypeNum] =
 			{ hgc::exposureType::iso, hgc::exposureType::ss, hgc::exposureType::fn };
 		hgc::exposure cur_{};
