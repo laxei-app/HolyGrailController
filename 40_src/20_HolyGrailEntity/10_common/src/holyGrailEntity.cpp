@@ -96,10 +96,23 @@ namespace
 	// --- スケジュールの JSON 生成 ---
 	void buildScheduleJson(void)
 	{
+		char num[64];
 		std::string j = "{\"name\":\"" + jesc(g_plan.name) + "\"";
 		j += ",\"interval\":" + std::to_string(static_cast<int>(g_plan.interval));
 		j += ",\"start\":\"" + dtToStr(g_plan.start) + "\"";
 		j += ",\"end\":\""   + dtToStr(g_plan.end)   + "\"";
+		// 表示用の静的フィールド(場所/機材/方向/仰角/向き)
+		j += ",\"place\":\"" + jesc(g_plan.place.name) + "\"";
+		std::snprintf(num, sizeof(num), "%.4f,%.4f", g_plan.place.latitude, g_plan.place.longitude);
+		j += ",\"latlng\":\"" + std::string(num) + "\"";
+		j += ",\"altitude\":" + std::to_string(static_cast<int>(g_plan.place.altitude));
+		j += ",\"camera\":\"" + jesc(g_plan.camera.maker + " " + g_plan.camera.model) + "\"";
+		j += ",\"lens\":\""   + jesc(g_plan.lens.name) + "\"";
+		std::snprintf(num, sizeof(num), "%.1f", g_plan.azimuth);
+		j += ",\"azimuth\":" + std::string(num);
+		std::snprintf(num, sizeof(num), "%.1f", g_plan.elevation);
+		j += ",\"elevation\":" + std::string(num);
+		j += ",\"landscape\":" + std::string(g_plan.landscape ? "true" : "false");
 		j += ",\"events\":[";
 		for (size_t i = 0; i < g_plan.events.size(); ++i)
 		{
@@ -379,6 +392,34 @@ int32_t hge_setPlanJson(const char* json, int32_t len)
 	}
 	g_plan = plan;
 	buildScheduleJson();		// 受信した events/ccmList から表示用JSONを作る
+	g_planReady = true;
+	notify(HGE_EV_SCHEDULE, g_schedJson);
+	return ERR_HGC_OK;
+}
+
+int32_t hge_setPlanTimes(const char* startIso, const char* endIso, int32_t offMin)
+{
+	if (startIso == nullptr || endIso == nullptr) { return ERR_HGC_INVALID_ARG; }
+	if (!g_planReady)	// 場所/機材など出荷時設定の基礎部を用意する
+	{
+		errCode e = loadFixedPlanImpl();
+		if (e != ERR_HGC_OK) { return e; }
+	}
+	hgc::dateTime s{}, en{};
+	if (std::sscanf(startIso, "%hu-%hu-%huT%hu:%hu:%hu",
+	                &s.year, &s.month, &s.day, &s.hour, &s.min, &s.sec) != 6) { return ERR_HGC_INVALID_ARG; }
+	if (std::sscanf(endIso, "%hu-%hu-%huT%hu:%hu:%hu",
+	                &en.year, &en.month, &en.day, &en.hour, &en.min, &en.sec) != 6) { return ERR_HGC_INVALID_ARG; }
+
+	g_offMin = offMin;
+	dataManager::setLogOffset(g_offMin);
+	g_plan.start = s;
+	g_plan.end   = en;
+
+	astro::ccmSet set = dataManager::factoryCcmSet();
+	errCode e = astro::buildSchedule(g_plan, set, g_offMin);	// 開始/終了からスケジュール自動生成
+	if (e != ERR_HGC_OK) { return e; }
+	buildScheduleJson();
 	g_planReady = true;
 	notify(HGE_EV_SCHEDULE, g_schedJson);
 	return ERR_HGC_OK;

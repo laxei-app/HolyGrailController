@@ -37,6 +37,8 @@ object HgeNative {
     external fun nativeCaptureStop(): Int
     external fun nativeGetState(): Int
     external fun nativeScheduleJson(): String
+    external fun nativeGetPlanJson(): String
+    external fun nativeSetPlanTimes(start: String, end: String, offMin: Int): Int
     external fun nativeSetListener(listener: HgeListener?)
     external fun nativeSearchDevices(): Int
     external fun nativeConnectManual(host: String): Int

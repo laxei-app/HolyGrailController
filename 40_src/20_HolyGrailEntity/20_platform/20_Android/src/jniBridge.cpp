@@ -116,6 +116,29 @@ Java_app_laxei_holygrail_HgeNative_nativeScheduleJson(JNIEnv* env, jobject /*thi
 	return env->NewStringUTF(buf.data());
 }
 
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeGetPlanJson(JNIEnv* env, jobject /*thiz*/)
+{
+	int32_t len = 0;
+	hge_getPlanJson(nullptr, &len);
+	if (len <= 0) { return env->NewStringUTF(""); }
+	std::vector<char> buf(static_cast<size_t>(len));
+	if (hge_getPlanJson(buf.data(), &len) != 0) { return env->NewStringUTF(""); }
+	return env->NewStringUTF(buf.data());
+}
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetPlanTimes(JNIEnv* env, jobject /*thiz*/,
+                                                      jstring start_, jstring end_, jint offMin)
+{
+	const char* s = env->GetStringUTFChars(start_, nullptr);
+	const char* e = env->GetStringUTFChars(end_, nullptr);
+	jint r = hge_setPlanTimes(s ? s : "", e ? e : "", offMin);
+	env->ReleaseStringUTFChars(start_, s);
+	env->ReleaseStringUTFChars(end_, e);
+	return r;
+}
+
 // listener(HgeListener) を登録/解除する。
 JNIEXPORT void JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeSetListener(JNIEnv* env, jobject /*thiz*/, jobject listener)

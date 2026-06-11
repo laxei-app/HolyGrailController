@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 430 撮影中(仕様書10 §7.3.3)。撮影中の状況のみ表示。変更不可・撮影停止のみ。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="#1565C0"
+        android:gravity="center_vertical"
+        android:padding="8dp">
+        <ImageView android:layout_width="32dp" android:layout_height="32dp" android:src="@drawable/ic_back" />
+        <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+            android:gravity="center" android:text="撮影計画" android:textColor="#FFFFFF"
+            android:textSize="20sp" android:textStyle="bold" />
+        <ImageView android:layout_width="32dp" android:layout_height="32dp" android:src="@drawable/ic_menu" />
+    </LinearLayout>
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="12dp">
+
+            <TextView android:id="@+id/cap_nameText" android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:drawableStart="@drawable/ic_camera" android:drawablePadding="6dp"
+                android:gravity="center_vertical" android:text="FixedPlan"
+                android:textSize="18sp" android:textStyle="bold" />
+
+            <TextView android:id="@+id/cap_gearText" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:layout_marginTop="8dp"
+                android:textSize="13sp" android:text="Canon EOS R10 / 16mm" />
+            <TextView android:id="@+id/cap_dirText" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:textSize="13sp"
+                android:text="撮影方向: 90.0°   仰角: 10.0°" />
+
+            <!-- 状況 -->
+            <TextView android:id="@+id/cap_stateText" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:layout_marginTop="10dp"
+                android:text="state: ―" android:textStyle="bold" />
+            <TextView android:id="@+id/cap_progressText" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:text="" />
+            <TextView android:id="@+id/cap_capturedText" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:text="" />
+
+            <!-- スケジュール(現在位置を強調) -->
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="12dp" android:text="スケジュール" android:textStyle="bold" />
+            <LinearLayout android:id="@+id/cap_scheduleContainer"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="4dp" android:orientation="vertical" />
+
+            <Button android:id="@+id/cap_stopButton"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:drawableStart="@drawable/ic_stop"
+                android:text="撮影停止" android:textSize="18sp" />
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>

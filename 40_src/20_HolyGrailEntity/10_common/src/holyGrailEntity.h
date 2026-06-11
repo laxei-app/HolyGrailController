@@ -67,6 +67,12 @@ int32_t hge_setUtcOffset(int32_t offMin);
 // cs は events/ccmList を含む自己完結形式(データ構造仕様書43 §4.5)。
 int32_t hge_setPlanJson(const char* json, int32_t len);
 
+// 撮影開始/終了時刻を設定し、スケジュール(events/ccmList)を再生成する。
+// start/end は "YYYY-MM-DDThh:mm:ss"(ローカル)、offMin はUTCオフセット[分]。
+// 出荷時設定の撮影制御方法・場所・機材を用いて astro::buildSchedule で自動生成し、
+// HGE_EV_SCHEDULE で通知する。
+int32_t hge_setPlanTimes(const char* startIso, const char* endIso, int32_t offMin);
+
 // 撮影計画のスケジュールを JSON で取得(バッファ規約)。
 //  buf が null か容量不足なら必要バイト数を *inoutLen に格納し ERR_HGC_BUF_SHORT。
 int32_t hge_getScheduleJson(char* buf, int32_t* inoutLen);

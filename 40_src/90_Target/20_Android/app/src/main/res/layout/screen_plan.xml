@@ -1,0 +1,164 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 330 撮影計画設定(仕様書10 §7.3.1)。開始/終了時刻の編集とスケジュール自動表示・撮影開始。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <!-- ヘッダ(固定) -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="#1565C0"
+        android:gravity="center_vertical"
+        android:padding="8dp">
+
+        <ImageView
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:src="@drawable/ic_back" />
+
+        <TextView
+            android:id="@+id/plan_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="撮影計画"
+            android:textColor="#FFFFFF"
+            android:textSize="20sp"
+            android:textStyle="bold" />
+
+        <ImageView
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:src="@drawable/ic_menu" />
+    </LinearLayout>
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="12dp">
+
+            <!-- 計画名 -->
+            <TextView
+                android:id="@+id/plan_nameText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:drawableStart="@drawable/ic_camera"
+                android:drawablePadding="6dp"
+                android:gravity="center_vertical"
+                android:text="FixedPlan"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <!-- 撮影開始/終了 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:background="#F0F0F0"
+                android:orientation="vertical"
+                android:padding="8dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+                    <TextView android:layout_width="64dp" android:layout_height="wrap_content"
+                        android:text="撮影開始" android:textSize="13sp" />
+                    <Button android:id="@+id/plan_startDate" style="?android:attr/buttonBarButtonStyle"
+                        android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+                        android:drawableStart="@drawable/ic_calendar" android:text="2026-06-11" />
+                    <Button android:id="@+id/plan_startTime" style="?android:attr/buttonBarButtonStyle"
+                        android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:drawableStart="@drawable/ic_clock" android:text="00:00" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+                    <TextView android:layout_width="64dp" android:layout_height="wrap_content"
+                        android:text="撮影終了" android:textSize="13sp" />
+                    <Button android:id="@+id/plan_endDate" style="?android:attr/buttonBarButtonStyle"
+                        android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+                        android:drawableStart="@drawable/ic_calendar" android:text="2026-06-11" />
+                    <Button android:id="@+id/plan_endTime" style="?android:attr/buttonBarButtonStyle"
+                        android:layout_width="wrap_content" android:layout_height="wrap_content"
+                        android:drawableStart="@drawable/ic_clock" android:text="02:00" />
+                </LinearLayout>
+
+                <Button android:id="@+id/plan_resetButton"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:layout_gravity="end" android:text="リセット" android:textSize="12sp" />
+            </LinearLayout>
+
+            <!-- 撮影場所 -->
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="10dp" android:text="撮影場所" android:textStyle="bold" />
+            <TextView android:id="@+id/plan_placeText" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:text="Tokyo" />
+            <TextView android:id="@+id/plan_latlngText" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:textSize="13sp" android:text="35.6810, 139.7670" />
+
+            <!-- エッジ端末 -->
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="10dp" android:text="エッジ端末" android:textStyle="bold" />
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal">
+                <Spinner android:id="@+id/plan_edgeSpinner" android:layout_width="0dp"
+                    android:layout_weight="1" android:layout_height="wrap_content" />
+                <Button android:id="@+id/plan_edgeSearchButton" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" android:text="検索" />
+            </LinearLayout>
+
+            <!-- カメラ/レンズ -->
+            <TextView android:id="@+id/plan_cameraText" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:layout_marginTop="8dp" android:text="カメラ: Canon EOS R10" />
+            <TextView android:id="@+id/plan_lensText" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:text="レンズ: 16mm" />
+
+            <!-- 撮影周期 / 撮影方向 / 仰角 -->
+            <TextView android:id="@+id/plan_intervalText" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:layout_marginTop="8dp" android:text="撮影周期: 15秒  横向き" />
+            <TextView android:id="@+id/plan_dirText" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:text="撮影方向: 90.0°   仰角: 10.0°" />
+
+            <!-- スケジュール -->
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="12dp" android:text="スケジュール" android:textStyle="bold" />
+            <LinearLayout android:id="@+id/plan_scheduleContainer"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="4dp" android:orientation="vertical" />
+
+            <!-- 撮影開始 -->
+            <Button android:id="@+id/plan_startButton"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:drawableStart="@drawable/ic_start"
+                android:text="撮影開始" android:textSize="18sp" />
+
+            <!-- エミュレータ用(手動IP接続。実機では不要) -->
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="16dp" android:orientation="horizontal">
+                <Button android:id="@+id/searchButton" android:layout_width="0dp" android:layout_weight="1"
+                    android:layout_height="wrap_content" android:textSize="11sp" android:text="カメラ検索(スマホ撮影)" />
+                <EditText android:id="@+id/ipInput" android:layout_width="0dp" android:layout_weight="1"
+                    android:layout_height="wrap_content" android:inputType="textVisiblePassword"
+                    android:hint="IP" android:text="192.168.1.4" android:textSize="12sp" />
+                <Button android:id="@+id/connectButton" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" android:textSize="11sp" android:text="接続" />
+            </LinearLayout>
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>
