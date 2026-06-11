@@ -107,6 +107,7 @@ namespace csjson
 			j["color"] = c.color;
 			j["limitBright"] = expToJson(c.limitBright);
 			j["limitDark"]   = expToJson(c.limitDark);
+			j["initialBright"] = c.initialBright;
 			json pr = json::array();
 			for (int i = 0; i < hgc::exposureTypeNum; ++i) { pr.push_back(static_cast<int>(c.priority[i])); }
 			j["priority"] = pr;
@@ -117,6 +118,7 @@ namespace csjson
 			c.color = j.value("color", 0u);
 			if (j.contains("limitBright")) { c.limitBright = expFromJson(j["limitBright"]); }
 			if (j.contains("limitDark"))   { c.limitDark   = expFromJson(j["limitDark"]); }
+			c.initialBright = j.value("initialBright", true);
 			if (j.contains("priority") && j["priority"].is_array())
 			{
 				const auto& pr = j["priority"];
@@ -142,13 +144,13 @@ namespace csjson
 			case hgc::ccmType::sunrise:
 			{
 				const auto& s = static_cast<const hgc::ccmSunrise&>(c);
-				j["sunAltitude"] = s.sunAltitude; j["ev"] = s.ev;
+				j["sunAltitude"] = s.sunAltitude; j["sunAltitudeEnd"] = s.sunAltitudeEnd; j["ev"] = s.ev;
 				break;
 			}
 			case hgc::ccmType::sunset:
 			{
 				const auto& s = static_cast<const hgc::ccmSunset&>(c);
-				j["sunAltitude"] = s.sunAltitude; j["ev"] = s.ev;
+				j["sunAltitude"] = s.sunAltitude; j["sunAltitudeEnd"] = s.sunAltitudeEnd; j["ev"] = s.ev;
 				break;
 			}
 			case hgc::ccmType::day:
@@ -191,15 +193,17 @@ namespace csjson
 			case hgc::ccmType::sunrise:
 			{
 				auto s = std::make_shared<hgc::ccmSunrise>();
-				s->sunAltitude = j.value("sunAltitude", -6.0);
-				s->ev          = j.value("ev", -3.0);
+				s->sunAltitude    = j.value("sunAltitude", -6.0);
+				s->sunAltitudeEnd = j.value("sunAltitudeEnd", 0.0);
+				s->ev             = j.value("ev", -3.0);
 				c = s; break;
 			}
 			case hgc::ccmType::sunset:
 			{
 				auto s = std::make_shared<hgc::ccmSunset>();
-				s->sunAltitude = j.value("sunAltitude", -6.0);
-				s->ev          = j.value("ev", -3.0);
+				s->sunAltitude    = j.value("sunAltitude", 0.0);
+				s->sunAltitudeEnd = j.value("sunAltitudeEnd", -6.0);
+				s->ev             = j.value("ev", -3.0);
 				c = s; break;
 			}
 			case hgc::ccmType::day:

@@ -171,6 +171,17 @@ Java_app_laxei_holygrail_HgeNative_nativeGetExpoValues(JNIEnv* env, jobject /*th
 	return env->NewStringUTF(buf.data());
 }
 
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSunAltitudeTimes(JNIEnv* env, jobject /*thiz*/, jint altitudeDeg)
+{
+	int32_t len = 0;
+	hge_sunAltitudeTimes(altitudeDeg, nullptr, &len);
+	if (len <= 0) { return env->NewStringUTF("{}"); }
+	std::vector<char> buf(static_cast<size_t>(len));
+	if (hge_sunAltitudeTimes(altitudeDeg, buf.data(), &len) != 0) { return env->NewStringUTF("{}"); }
+	return env->NewStringUTF(buf.data());
+}
+
 // listener(HgeListener) を登録/解除する。
 JNIEXPORT void JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeSetListener(JNIEnv* env, jobject /*thiz*/, jobject listener)

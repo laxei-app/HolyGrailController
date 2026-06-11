@@ -217,9 +217,10 @@ errCode captureRunner::loop(void)
 			{
 				if (windowChanged)
 				{
-					// 最初の補正(仕様 4.4): 暗限界から目標evへ寄せる
+					// 最初の補正(仕様 4.4): 初期値(明所限界 or 暗所限界)から目標evへ寄せる。
 					double evD = expo::evFromLinear(expo::EV0_LINEAR, linear);	// log2(linear/0.18)
-					autoCtl.setToDarkLimit();
+					if (ccm->initialBright) { autoCtl.setToDarkLimit(); }   // 明所限界(limitDark)を初期値に
+					else                    { autoCtl.setToBrightLimit(); } // 暗所限界(limitBright)を初期値に
 					autoCtl.applyStops(evT - evD);
 				}
 				else

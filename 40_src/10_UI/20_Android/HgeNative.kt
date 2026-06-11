@@ -42,6 +42,7 @@ object HgeNative {
     external fun nativeGetCcmDefaults(): String
     external fun nativeSetCcmDefaults(json: String): Int
     external fun nativeGetExpoValues(): String
+    external fun nativeSunAltitudeTimes(altitudeDeg: Int): String   // {"start":"MM/dd HH:mm","end":...}
     external fun nativeSetListener(listener: HgeListener?)
     external fun nativeSearchDevices(): Int
     external fun nativeConnectManual(host: String): Int

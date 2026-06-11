@@ -25,7 +25,8 @@ astro::ccmSet dataManager::factoryCcmSet(void)
 
 	auto sunrise = std::make_shared<hgc::ccmSunrise>();
 	sunrise->name = "sunrise";
-	sunrise->sunAltitude = -6.0;
+	sunrise->sunAltitude    = -6.0;	// 撮り始め(市民薄明)
+	sunrise->sunAltitudeEnd =  0.0;	// 終わり(日の出)
 	sunrise->ev = -3.0;
 	sunrise->limitBright = hgc::exposure{ "3200", "8", "1.4" };
 	sunrise->limitDark   = hgc::exposure{ "100", "1/4000", "16" };
@@ -33,7 +34,8 @@ astro::ccmSet dataManager::factoryCcmSet(void)
 
 	auto sunset = std::make_shared<hgc::ccmSunset>();
 	sunset->name = "sunset";
-	sunset->sunAltitude = -6.0;
+	sunset->sunAltitude    =  0.0;	// 撮り始め(日の入り)
+	sunset->sunAltitudeEnd = -6.0;	// 終わり(市民薄明)
 	sunset->ev = -3.0;
 	sunset->limitBright = hgc::exposure{ "3200", "8", "1.4" };
 	sunset->limitDark   = hgc::exposure{ "100", "1/4000", "16" };

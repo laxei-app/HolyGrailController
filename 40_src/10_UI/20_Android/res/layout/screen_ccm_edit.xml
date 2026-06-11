@@ -39,24 +39,30 @@
                 <Button android:id="@+id/edit_color_btn" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="8dp" android:text="変更" />
             </LinearLayout>
 
-            <!-- 太陽高度(スライダー) -->
+            <!-- 太陽高度(スライダー)。明暗バー下地・つまみ●・値はセンター。薄明帯ラベルはコードで生成。 -->
             <LinearLayout android:id="@+id/edit_alt_section" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="12dp">
-                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
-                    <TextView android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="固定露出/薄明 太陽高度" android:textStyle="bold" />
-                    <TextView android:id="@+id/edit_alt_val" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="-18.0°" />
-                </LinearLayout>
-                <SeekBar android:id="@+id/edit_alt_seek" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="140" />
-                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="11sp" android:textColor="#888888" android:text="-19°(天文薄明) 〜 -5°(市民薄明)" />
+                <TextView android:id="@+id/edit_alt_start" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="end" android:fontFamily="monospace" android:textSize="12sp" android:textColor="#1565C0" android:text="" />
+                <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content">
+                    <TextView android:id="@+id/edit_alt_title" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="start|center_vertical" android:text="固定露出太陽高度" android:textStyle="bold" />
+                    <TextView android:id="@+id/edit_alt_val" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="center" android:gravity="center" android:textSize="18sp" android:textStyle="bold" android:text="-18°" />
+                    <TextView android:id="@+id/edit_alt_end" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="end|center_vertical" android:fontFamily="monospace" android:textSize="12sp" android:textColor="#1565C0" android:text="" />
+                </FrameLayout>
+                <LinearLayout android:id="@+id/edit_alt_bands" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginStart="24dp" android:layout_marginEnd="24dp" />
+                <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginStart="24dp" android:layout_marginEnd="24dp">
+                    <View android:id="@+id/edit_alt_bar" android:layout_width="match_parent" android:layout_height="12dp" android:layout_gravity="center_vertical" android:background="@drawable/brightness_bar" />
+                    <com.google.android.material.slider.Slider android:id="@+id/edit_alt_seek" android:layout_width="match_parent" android:layout_height="wrap_content" />
+                    <com.google.android.material.slider.RangeSlider android:id="@+id/edit_alt_range" android:layout_width="match_parent" android:layout_height="wrap_content" android:visibility="gone" />
+                </FrameLayout>
             </LinearLayout>
 
-            <!-- 露出補正 ev(スライダー) -->
+            <!-- 露出補正(ev)(スライダー)。明暗バー下地・つまみ●・値はセンター。 -->
             <LinearLayout android:id="@+id/edit_ev_section" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="12dp">
-                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
-                    <TextView android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="露出補正 ev" android:textStyle="bold" />
-                    <TextView android:id="@+id/edit_ev_val" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="-3.0" />
-                </LinearLayout>
-                <SeekBar android:id="@+id/edit_ev_seek" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="30" />
-                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="11sp" android:textColor="#888888" android:text="-5.0 〜 +5.0 (1/3段)" />
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="露出補正(ev)" android:textStyle="bold" />
+                <TextView android:id="@+id/edit_ev_val" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:textSize="18sp" android:textStyle="bold" android:text="-3.0" />
+                <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginStart="24dp" android:layout_marginEnd="24dp">
+                    <View android:layout_width="match_parent" android:layout_height="12dp" android:layout_gravity="center_vertical" android:background="@drawable/brightness_bar" />
+                    <com.google.android.material.slider.Slider android:id="@+id/edit_ev_seek" android:layout_width="match_parent" android:layout_height="wrap_content" />
+                </FrameLayout>
             </LinearLayout>
 
             <!-- 曇り空 自動判別(夜間) -->
@@ -68,13 +74,12 @@
                 <LinearLayout android:id="@+id/edit_fix_container" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
             </LinearLayout>
 
-            <!-- 露出限界(自動露出) -->
+            <!-- 露出限界、範囲: 項目ごとに暗所限界〜明所限界の範囲スライダー。左の⇅で並べ替え。 -->
             <LinearLayout android:id="@+id/edit_limit_section" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="12dp">
-                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="露出限界" android:textStyle="bold" />
-                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="明るい側(上限)" android:textSize="12sp" />
-                <LinearLayout android:id="@+id/edit_lb_container" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
-                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="暗い側(下限)" android:textSize="12sp" android:layout_marginTop="8dp" />
-                <LinearLayout android:id="@+id/edit_ld_container" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="露出限界、範囲" android:textStyle="bold" />
+                <LinearLayout android:id="@+id/edit_limit_container" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="4dp" />
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:textSize="11sp" android:textColor="#888888"
+                    android:text="ISO感度、F値、シャッター速度は左の⇅で上下に移動できます。露出補正の際に最初に上の項目を変更して調整します。一番上の項目が限界に達すると中段の項目を変更します。さらに中段の項目も限界になると最下段の項目で調整します。" />
             </LinearLayout>
 
             <Button android:id="@+id/edit_save" android:layout_width="match_parent" android:layout_height="wrap_content"

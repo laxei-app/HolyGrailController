@@ -2,18 +2,21 @@ package app.laxei.holygrail
 
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.SeekBar
@@ -22,6 +25,9 @@ import android.widget.TextView
 import android.widget.Toast
 import android.widget.ViewFlipper
 import androidx.appcompat.app.AppCompatActivity
+import com.google.android.material.slider.LabelFormatter
+import com.google.android.material.slider.RangeSlider
+import com.google.android.material.slider.Slider
 import org.json.JSONArray
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -63,15 +69,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private var editColor = 0                    // 編集中の色(0xRRGGBB)
 
     // 露出(iso/ss/fn)はカメラ設定値の文字列配列からスライダーで選択する。
-    private var isoValues = listOf<String>()    // hge_getExpoValues の iso 配列
-    private var ssValues = listOf<String>()     // 同 ss 配列
-    private var fnValues = listOf<String>()     // 同 fn 配列(レンズf範囲)
-    private lateinit var fixEditor: ExposureEditor      // 夜間 固定露出
-    private lateinit var lbEditor: ExposureEditor       // 自動露出 明側上限
-    private lateinit var ldEditor: ExposureEditor       // 自動露出 暗側下限
-    private lateinit var moonInitEditor: ExposureEditor // 月 開始時露出
-    private lateinit var moonLbEditor: ExposureEditor   // 月 明側上限
-    private lateinit var moonLdEditor: ExposureEditor   // 月 暗側下限
+    private var isoValues = listOf<String>()    // hge_getExpoValues の iso 配列(real昇順)
+    private var ssValues = listOf<String>()     // 同 ss 配列(real昇順)
+    private var fnValues = listOf<String>()     // 同 fn 配列(レンズf範囲, 昇順)
+    // 表示順は「左=暗い時の設定 → 右=明るい時の設定」で統一する(仕様4の方針)。
+    //  iso: 左=高感度→右=低感度 / ss: 左=長秒→右=短秒 / fn: 左=開放→右=絞る。
+    private var isoDisp = listOf<String>()
+    private var ssDisp = listOf<String>()
+    private var fnDisp = listOf<String>()
+    private lateinit var fixEditor: ExposureEditor      // 夜間 固定露出(単一)
+    private lateinit var moonInitEditor: ExposureEditor // 月 開始時露出(単一)
+    private lateinit var editLimit: LimitEditor         // 自動露出 露出限界(優先度+明暗を一体化)
+    private lateinit var moonLimit: LimitEditor         // 月 露出限界(同上)
 
     // 430
     private lateinit var capName: TextView
@@ -202,31 +211,41 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<Button>(R.id.edit_color_btn).setOnClickListener {
             showColorPicker(editColor) { c -> editColor = c; findViewById<View>(R.id.edit_color_swatch).setBackgroundColor(0xFF000000.toInt() or c) }
         }
-        // スライダーの値ラベル更新
-        findViewById<SeekBar>(R.id.edit_alt_seek).setOnSeekBarChangeListener(seekListener {
-            findViewById<TextView>(R.id.edit_alt_val).text = String.format("%.1f°", seekToAlt(it))
-        })
-        findViewById<SeekBar>(R.id.edit_ev_seek).setOnSeekBarChangeListener(seekListener {
-            findViewById<TextView>(R.id.edit_ev_val).text = String.format("%+.1f", seekToEv(it))
-        })
+        // スライダーの値ラベル更新(露出スライダーと形を統一するため Material Slider・仕様8)
+        setupValueSlider(R.id.edit_alt_seek, 14, gradient = true) {
+            val deg = seekToAlt(it)
+            findViewById<TextView>(R.id.edit_alt_val).text = altLabel(deg)
+            updateAltTimes(deg.toInt())
+        }
+        setupValueSlider(R.id.edit_ev_seek, 30, gradient = true) {
+            findViewById<TextView>(R.id.edit_ev_val).text = String.format("%+.1f ev", seekToEv(it))
+        }
+        // 朝日/夕日の太陽高度=範囲スライダー(2つまみ)。明暗バー下地・つまみ●。
+        findViewById<RangeSlider>(R.id.edit_alt_range).apply {
+            valueFrom = 0f; valueTo = 24f; stepSize = 1f
+            isTickVisible = false; labelBehavior = LabelFormatter.LABEL_GONE
+            setCustomThumbDrawablesForValues(R.drawable.thumb_dot, R.drawable.thumb_dot)
+            trackActiveTintList = transparentTint; trackInactiveTintList = transparentTint
+            addOnChangeListener { _, _, _ -> updateAltRangeLabels() }
+        }
         // 月の影響への対処
         findViewById<ImageView>(R.id.moon_back).setOnClickListener { flipper.displayedChild = 2 }
         findViewById<Button>(R.id.moon_save).setOnClickListener { saveMoonEdit() }
         findViewById<Button>(R.id.moon_color_btn).setOnClickListener {
             showColorPicker(editColor) { c -> editColor = c; findViewById<View>(R.id.moon_color_swatch).setBackgroundColor(0xFF000000.toInt() or c) }
         }
-        findViewById<SeekBar>(R.id.moon_startlum_seek).setOnSeekBarChangeListener(seekListener {
+        setupValueSlider(R.id.moon_startlum_seek, 30) {
             findViewById<TextView>(R.id.moon_startlum_val).text = String.format("+%.1fev", it * 0.1)
-        })
-        findViewById<SeekBar>(R.id.moon_ev_seek).setOnSeekBarChangeListener(seekListener {
+        }
+        setupValueSlider(R.id.moon_ev_seek, 100) {
             findViewById<TextView>(R.id.moon_ev_val).text = String.format("%.1fev", -it * 0.1)
-        })
-        findViewById<SeekBar>(R.id.moon_extcoef_seek).setOnSeekBarChangeListener(seekListener {
+        }
+        setupValueSlider(R.id.moon_extcoef_seek, 50) {
             findViewById<TextView>(R.id.moon_extcoef_val).text = String.format("%.2f", 0.1 + it * 0.01)
-        })
-        findViewById<SeekBar>(R.id.moon_skycoef_seek).setOnSeekBarChangeListener(seekListener {
+        }
+        setupValueSlider(R.id.moon_skycoef_seek, 100) {
             findViewById<TextView>(R.id.moon_skycoef_val).text = "$it%"
-        })
+        }
         val moonModes = arrayOf("補正しない", "画角全体の明るさで自動補正", "月に露出を合わせる")
         val ma = ArrayAdapter(this, android.R.layout.simple_spinner_item, moonModes)
         ma.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
@@ -247,22 +266,22 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<View>(R.id.moon_color_swatch).setBackgroundColor(0xFF000000.toInt() or editColor)
         findViewById<Spinner>(R.id.moon_mode).setSelection(o.optInt("mode", 0))
         val slP = (o.optDouble("startLuminance", 0.0) * 10).toInt().coerceIn(0, 30)
-        findViewById<SeekBar>(R.id.moon_startlum_seek).progress = slP
+        setSliderProgress(R.id.moon_startlum_seek, slP)
         findViewById<TextView>(R.id.moon_startlum_val).text = String.format("+%.1fev", slP * 0.1)
         val evP = (-o.optDouble("ev", 0.0) * 10).toInt().coerceIn(0, 100)
-        findViewById<SeekBar>(R.id.moon_ev_seek).progress = evP
+        setSliderProgress(R.id.moon_ev_seek, evP)
         findViewById<TextView>(R.id.moon_ev_val).text = String.format("%.1fev", -evP * 0.1)
         val ecP = ((o.optDouble("extinctionCoef", 0.2) - 0.1) * 100).toInt().coerceIn(0, 50)
-        findViewById<SeekBar>(R.id.moon_extcoef_seek).progress = ecP
+        setSliderProgress(R.id.moon_extcoef_seek, ecP)
         findViewById<TextView>(R.id.moon_extcoef_val).text = String.format("%.2f", 0.1 + ecP * 0.01)
         val skP = o.optDouble("skyBrightnessCoef", 100.0).toInt().coerceIn(0, 100)
-        findViewById<SeekBar>(R.id.moon_skycoef_seek).progress = skP
+        setSliderProgress(R.id.moon_skycoef_seek, skP)
         findViewById<TextView>(R.id.moon_skycoef_val).text = "$skP%"
         findViewById<CheckBox>(R.id.moon_atmext).isChecked = o.optBoolean("atmosphericExtinction", false)
         findViewById<CheckBox>(R.id.moon_geocorr).isChecked = o.optBoolean("geocentricCorrection", false)
         moonInitEditor.set(o.optJSONObject("initialExposure"))
-        moonLbEditor.set(o.optJSONObject("limitBright"))
-        moonLdEditor.set(o.optJSONObject("limitDark"))
+        moonLimit.set(o.optJSONObject("limitBright"), o.optJSONObject("limitDark"),
+            o.optJSONArray("priority"), o.optBoolean("initialBright", true))
         flipper.displayedChild = 4
     }
 
@@ -271,15 +290,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val o = all.optJSONObject("moon") ?: return
         o.put("color", editColor)
         o.put("mode", findViewById<Spinner>(R.id.moon_mode).selectedItemPosition)
-        o.put("startLuminance", findViewById<SeekBar>(R.id.moon_startlum_seek).progress * 0.1)
-        o.put("ev", -findViewById<SeekBar>(R.id.moon_ev_seek).progress * 0.1)
-        o.put("extinctionCoef", 0.1 + findViewById<SeekBar>(R.id.moon_extcoef_seek).progress * 0.01)
-        o.put("skyBrightnessCoef", findViewById<SeekBar>(R.id.moon_skycoef_seek).progress.toDouble())
+        o.put("startLuminance", sliderProgress(R.id.moon_startlum_seek) * 0.1)
+        o.put("ev", -sliderProgress(R.id.moon_ev_seek) * 0.1)
+        o.put("extinctionCoef", 0.1 + sliderProgress(R.id.moon_extcoef_seek) * 0.01)
+        o.put("skyBrightnessCoef", sliderProgress(R.id.moon_skycoef_seek).toDouble())
         o.put("atmosphericExtinction", findViewById<CheckBox>(R.id.moon_atmext).isChecked)
         o.put("geocentricCorrection", findViewById<CheckBox>(R.id.moon_geocorr).isChecked)
+        o.put("priority", moonLimit.getPriority())
         o.put("initialExposure", moonInitEditor.get())
-        o.put("limitBright", moonLbEditor.get())
-        o.put("limitDark", moonLdEditor.get())
+        o.put("limitBright", moonLimit.getBright())
+        o.put("limitDark", moonLimit.getDark())
+        o.put("initialBright", moonLimit.getInitialBright())
         val r = HgeNative.nativeSetCcmDefaults(all.toString())
         Toast.makeText(this, if (r == 0) "保存しました" else "保存に失敗しました", Toast.LENGTH_SHORT).show()
         flipper.displayedChild = 2
@@ -292,12 +313,128 @@ class MainActivity : AppCompatActivity(), HgeListener {
         flipper.displayedChild = 2
     }
 
-    // 太陽高度: SeekBar 0..140 ⇔ -19.0..-5.0°(0.1刻み)
-    private fun altToSeek(v: Double) = ((v + 19.0) * 10.0).toInt().coerceIn(0, 140)
-    private fun seekToAlt(p: Int) = -19.0 + p * 0.1
+    // 太陽高度: Slider 0..14 ⇔ -19..-5°(1°刻み。分単位は将来キーボードで)
+    private fun altToSeek(v: Double) = (v + 19.0).toInt().coerceIn(0, 14)
+    private fun seekToAlt(p: Int) = -19.0 + p
     // ev: SeekBar 0..30 ⇔ -5.0..+5.0(1/3刻み)
     private fun evToSeek(v: Double) = ((v + 5.0) * 3.0).toInt().coerceIn(0, 30)
     private fun seekToEv(p: Int) = -5.0 + p / 3.0
+
+    private fun altLabel(v: Double) = String.format("%.0f°", v)
+
+    // 固定露出太陽高度の start(日没側)/end(日の出側) 時刻を天文計算で更新する(夜間のみ)。
+    // start は上の行、end は固定露出太陽高度と同じ行に右寄せ表示(ラベル文言は付けない)。
+    private fun updateAltTimes(deg: Int) {
+        val startTv = findViewById<TextView>(R.id.edit_alt_start)
+        val endTv = findViewById<TextView>(R.id.edit_alt_end)
+        if (editingKey != "night") { startTv.text = ""; endTv.text = ""; return }
+        Thread {
+            val js = HgeNative.nativeSunAltitudeTimes(deg)
+            runOnUiThread {
+                try {
+                    val o = JSONObject(js)
+                    // "MM/dd HH:mm" → 時刻だけ表示。等幅・桁揃えで縦に整列。
+                    startTv.text = "Start".padEnd(5) + " " + o.optString("start", "--").substringAfterLast(" ")
+                    endTv.text = "End".padEnd(5) + " " + o.optString("end", "--").substringAfterLast(" ")
+                } catch (_: Exception) { startTv.text = ""; endTv.text = "" }
+            }
+        }.start()
+    }
+
+    // 薄明帯ラベルと明暗バーを、スライダーのつまみ可動域(両端から trackSidePadding 内側)に
+    // 合わせる。これをしないと端の度数がつまみ位置とずれる。
+    private fun applyAltPadding(tsp: Int) {
+        findViewById<LinearLayout>(R.id.edit_alt_bands).setPadding(tsp, 0, tsp, 0)
+        val bar = findViewById<View>(R.id.edit_alt_bar)
+        val lp = bar.layoutParams as FrameLayout.LayoutParams
+        lp.setMargins(tsp, lp.topMargin, tsp, lp.bottomMargin)
+        bar.layoutParams = lp
+    }
+
+    // 朝日/夕日の太陽高度範囲スライダー: 値 0..24 ⇔ 朝日 -18..+6 / 夕日 +6..-18(1°刻み)。
+    private fun altRangeValToDeg(v: Int): Double = if (editingKey == "sunset") 6.0 - v else -18.0 + v
+    private fun altRangeDegToVal(deg: Double): Int =
+        (if (editingKey == "sunset") 6.0 - deg else deg + 18.0).toInt().coerceIn(0, 24)
+
+    // 朝日/夕日: Start/End それぞれに角度と時刻(朝日=日の出側rise、夕日=日没側set)を表示する。
+    private fun updateAltRangeLabels() {
+        val v = findViewById<RangeSlider>(R.id.edit_alt_range).values
+        if (v.size < 2) return
+        val rising = editingKey == "sunrise"
+        setAltThumbLabel(R.id.edit_alt_start, "Start", altRangeValToDeg(v[0].toInt()), rising)
+        setAltThumbLabel(R.id.edit_alt_end, "End", altRangeValToDeg(v[1].toInt()), rising)
+    }
+    private val altTimeCache = HashMap<Int, String>()   // tvId -> 直近の時刻(ちらつき防止に保持)
+
+    // 等幅・固定幅で「Start -06.0°  HH:mm」を表示。角度は符号+整数2桁+小数1桁の固定幅。
+    // 時刻は直近値を保持したまま角度だけ即時更新し、計算後に時刻を差し替える(空白化させない)。
+    private fun setAltThumbLabel(tvId: Int, label: String, deg: Double, rising: Boolean) {
+        val tv = findViewById<TextView>(tvId)
+        val lab = label.padEnd(5)                       // "Start"/"End  " で桁を揃える
+        val angleStr = String.format("%+05.1f°", deg)   // 例 -06.0° / +00.0° / -18.0°
+        val curTime = altTimeCache[tvId] ?: "--:--"
+        tv.text = "$lab $angleStr  $curTime"
+        Thread {
+            val js = HgeNative.nativeSunAltitudeTimes(deg.toInt())
+            runOnUiThread {
+                val time = try {
+                    val o = JSONObject(js)
+                    (if (rising) o.optString("end", "--") else o.optString("start", "--")).substringAfterLast(" ")
+                } catch (_: Exception) { "--:--" }
+                altTimeCache[tvId] = time
+                if (tv.text.toString().contains(angleStr)) {   // つまみがまだ同じ角度なら時刻を更新
+                    tv.text = "$lab $angleStr  $time"
+                }
+            }
+        }.start()
+    }
+
+    // 薄明帯の1区分(帯名・度幅の重み・背景色)。
+    private data class Band(val label: String, val weight: Float, val color: Int)
+
+    // 薄明帯ラベルを汎用に組む。bands=各区分、ticks=各区分の左端の度目盛り+右端(計 bands+1 個)。
+    private fun buildBands(container: LinearLayout, bands: List<Band>, ticks: List<String>) {
+        container.removeAllViews()
+        val scale = LinearLayout(this); scale.orientation = LinearLayout.HORIZONTAL
+        for (i in bands.indices) {
+            val tv = TextView(this); tv.text = ticks.getOrElse(i) { "" }; tv.textSize = 9f
+            tv.setTextColor(0xFF888888.toInt())
+            tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, bands[i].weight)
+            scale.addView(tv)
+        }
+        val end = TextView(this); end.text = ticks.getOrElse(bands.size) { "" }; end.textSize = 9f
+        end.setTextColor(0xFF888888.toInt()); end.gravity = Gravity.END
+        end.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        scale.addView(end)
+        container.addView(scale)
+        val bandRow = LinearLayout(this); bandRow.orientation = LinearLayout.HORIZONTAL
+        for (b in bands) {
+            val tv = TextView(this); tv.text = b.label; tv.textSize = 10f; tv.gravity = Gravity.CENTER
+            tv.setTextColor(0xFFFFFFFF.toInt()); tv.setBackgroundColor(b.color)
+            val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, b.weight)
+            lp.setMargins(dp(1), 0, dp(1), 0); tv.layoutParams = lp
+            bandRow.addView(tv)
+        }
+        container.addView(bandRow)
+    }
+
+    private val colAstro = 0xFF37474F.toInt(); private val colNaut = 0xFF607D8B.toInt()
+    private val colCivil = 0xFF9E9E9E.toInt(); private val colDay = 0xFFE0B96A.toInt(); private val colNight = 0xFF1A1A2E.toInt()
+
+    // 夜間: 左=-19°暗 → 右=-5°明。-19〜-18=夜(無ラベル)/-18〜-12 天文/-12〜-6 航海/-6〜-5 市民。
+    private fun buildNightBands(container: LinearLayout) = buildBands(container,
+        listOf(Band("", 1f, colNight), Band("天文薄明", 6f, colAstro), Band("航海薄明", 6f, colNaut), Band("市民", 1f, colCivil)),
+        listOf("-19°", "-18°", "-12°", "-6°", "-5°"))
+
+    // 朝日: 左=-18°暗 → 右=+6°明。天文/航海/市民/地平線上(0〜+6)。
+    private fun buildSunriseBands(container: LinearLayout) = buildBands(container,
+        listOf(Band("天文薄明", 6f, colAstro), Band("航海薄明", 6f, colNaut), Band("市民薄明", 6f, colCivil), Band("地平線上", 6f, colDay)),
+        listOf("-18°", "-12°", "-6°", "0°", "+6°"))
+
+    // 夕日: 左=+6°明 → 右=-18°暗(朝日と逆)。地平線上/市民/航海/天文。
+    private fun buildSunsetBands(container: LinearLayout) = buildBands(container,
+        listOf(Band("地平線上", 6f, colDay), Band("市民薄明", 6f, colCivil), Band("航海薄明", 6f, colNaut), Band("天文薄明", 6f, colAstro)),
+        listOf("+6°", "0°", "-6°", "-12°", "-18°"))
 
     private fun openCcmEdit(key: String) {
         val o = ccmJson?.optJSONObject(key) ?: return
@@ -317,21 +454,48 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<View>(R.id.edit_limit_section).visibility = if (isNight) View.GONE else View.VISIBLE
 
         if (hasAlt) {
-            val p = altToSeek(o.optDouble("sunAltitude", -18.0))
-            findViewById<SeekBar>(R.id.edit_alt_seek).progress = p
-            findViewById<TextView>(R.id.edit_alt_val).text = String.format("%.1f°", seekToAlt(p))
+            val isNightAlt = key == "night"
+            findViewById<TextView>(R.id.edit_alt_title).text =
+                if (isNightAlt) "固定露出太陽高度" else "太陽高度"
+            findViewById<View>(R.id.edit_alt_seek).visibility = if (isNightAlt) View.VISIBLE else View.GONE
+            findViewById<View>(R.id.edit_alt_range).visibility = if (isNightAlt) View.GONE else View.VISIBLE
+            findViewById<View>(R.id.edit_alt_val).visibility = if (isNightAlt) View.VISIBLE else View.GONE
+            val bar = findViewById<View>(R.id.edit_alt_bar)
+            if (isNightAlt) {
+                bar.setBackgroundResource(R.drawable.brightness_bar)
+                buildNightBands(findViewById(R.id.edit_alt_bands))
+                val sl = findViewById<Slider>(R.id.edit_alt_seek)
+                sl.post { applyAltPadding(sl.trackSidePadding) }
+                val p = altToSeek(o.optDouble("sunAltitude", -18.0))
+                setSliderProgress(R.id.edit_alt_seek, p)
+                findViewById<TextView>(R.id.edit_alt_val).text = altLabel(seekToAlt(p))
+                updateAltTimes(seekToAlt(p).toInt())
+            } else {
+                val reversed = key == "sunset"
+                bar.setBackgroundResource(if (reversed) R.drawable.brightness_bar_rev else R.drawable.brightness_bar)
+                if (reversed) buildSunsetBands(findViewById(R.id.edit_alt_bands))
+                else buildSunriseBands(findViewById(R.id.edit_alt_bands))
+                val rg = findViewById<RangeSlider>(R.id.edit_alt_range)
+                rg.post { applyAltPadding(rg.trackSidePadding) }
+                val startDeg = o.optDouble("sunAltitude", if (reversed) 0.0 else -6.0)
+                val endDeg = o.optDouble("sunAltitudeEnd", if (reversed) -6.0 else 0.0)
+                val v1 = altRangeDegToVal(startDeg); val v2 = altRangeDegToVal(endDeg)
+                rg.values = listOf(minOf(v1, v2).toFloat(), maxOf(v1, v2).toFloat())
+                altTimeCache.clear()   // 別画面の時刻を引きずらない
+                updateAltRangeLabels()
+            }
         }
         if (hasEv) {
             val p = evToSeek(o.optDouble("ev", 0.0))
-            findViewById<SeekBar>(R.id.edit_ev_seek).progress = p
-            findViewById<TextView>(R.id.edit_ev_val).text = String.format("%+.1f", seekToEv(p))
+            setSliderProgress(R.id.edit_ev_seek, p)
+            findViewById<TextView>(R.id.edit_ev_val).text = String.format("%+.1f ev", seekToEv(p))
         }
         if (isNight) {
             findViewById<CheckBox>(R.id.edit_autoEdge).isChecked = o.optBoolean("autoEdge", true)
             fixEditor.set(o.optJSONObject("limitBright"))
         } else {
-            lbEditor.set(o.optJSONObject("limitBright"))
-            ldEditor.set(o.optJSONObject("limitDark"))
+            editLimit.set(o.optJSONObject("limitBright"), o.optJSONObject("limitDark"),
+                o.optJSONArray("priority"), o.optBoolean("initialBright", true))
         }
         flipper.displayedChild = 3
     }
@@ -340,28 +504,54 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val all = ccmJson ?: return
         val o = all.optJSONObject(editingKey) ?: return
         o.put("color", editColor)
-        if (editingKey != "day") o.put("sunAltitude", seekToAlt(findViewById<SeekBar>(R.id.edit_alt_seek).progress))
-        if (editingKey != "night") o.put("ev", seekToEv(findViewById<SeekBar>(R.id.edit_ev_seek).progress))
+        when (editingKey) {
+            "night" -> o.put("sunAltitude", seekToAlt(sliderProgress(R.id.edit_alt_seek)))
+            "sunrise", "sunset" -> {
+                val v = findViewById<RangeSlider>(R.id.edit_alt_range).values
+                o.put("sunAltitude", altRangeValToDeg(v[0].toInt()))      // 撮り始め
+                o.put("sunAltitudeEnd", altRangeValToDeg(v[1].toInt()))   // 終わり
+            }
+        }
+        if (editingKey != "night") o.put("ev", seekToEv(sliderProgress(R.id.edit_ev_seek)))
         if (editingKey == "night") {
             o.put("autoEdge", findViewById<CheckBox>(R.id.edit_autoEdge).isChecked)
             val e = fixEditor.get()
             o.put("limitBright", e)
             o.put("limitDark", JSONObject(e.toString()))   // 固定露出は明暗同値
         } else {
-            o.put("limitBright", lbEditor.get())
-            o.put("limitDark", ldEditor.get())
+            o.put("priority", editLimit.getPriority())
+            o.put("limitBright", editLimit.getBright())
+            o.put("limitDark", editLimit.getDark())
+            o.put("initialBright", editLimit.getInitialBright())
         }
         val r = HgeNative.nativeSetCcmDefaults(all.toString())
         Toast.makeText(this, if (r == 0) "保存しました" else "保存に失敗しました", Toast.LENGTH_SHORT).show()
         flipper.displayedChild = 2
     }
 
-    // SeekBar 値変更だけ拾う簡易リスナ。
+    // SeekBar 値変更だけ拾う簡易リスナ(カラーピッカーのRGBで使用)。
     private fun seekListener(onChange: (Int) -> Unit) = object : SeekBar.OnSeekBarChangeListener {
         override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) = onChange(p)
         override fun onStartTrackingTouch(sb: SeekBar?) {}
         override fun onStopTrackingTouch(sb: SeekBar?) {}
     }
+
+    // 単純な値スライダー(太陽高度・ev・月補正等)を Material Slider で統一する(仕様8)。
+    // 内部は従来通り 0..maxStep の整数段で扱う。gradient=true で明暗バー下地用に
+    // トラックを透明化(左側の塗りつぶしを消す)。つまみは丸(●)。
+    private fun setupValueSlider(id: Int, maxStep: Int, gradient: Boolean = false,
+                                 thumbRes: Int = R.drawable.thumb_dot, onChange: (Int) -> Unit) {
+        val s = findViewById<Slider>(id)
+        s.valueFrom = 0f; s.valueTo = maxStep.toFloat(); s.stepSize = 1f
+        s.isTickVisible = false; s.labelBehavior = LabelFormatter.LABEL_GONE
+        s.setCustomThumbDrawable(thumbRes)
+        if (gradient) { s.trackActiveTintList = transparentTint; s.trackInactiveTintList = transparentTint }
+        s.addOnChangeListener { _, v, _ -> onChange(v.toInt()) }
+    }
+    private fun setSliderProgress(id: Int, p: Int) {
+        val s = findViewById<Slider>(id); s.value = p.toFloat().coerceIn(s.valueFrom, s.valueTo)
+    }
+    private fun sliderProgress(id: Int): Int = findViewById<Slider>(id).value.toInt()
 
     // --- 露出値スライダー(iso/ss/fn 文字列配列から選択) ---
 
@@ -381,58 +571,310 @@ class MainActivity : AppCompatActivity(), HgeListener {
             ssValues = jsonToList(o.optJSONArray("ss"))
             fnValues = jsonToList(o.optJSONArray("fn"))
         } catch (_: Exception) {}
+        // 表示順: 左=暗い時→右=明るい時。iso/ss は反転、fn はそのまま。
+        isoDisp = isoValues.reversed()
+        ssDisp = ssValues.reversed()
+        fnDisp = fnValues
     }
 
     private fun buildExposureEditors() {
         fixEditor = ExposureEditor(findViewById(R.id.edit_fix_container))
-        lbEditor = ExposureEditor(findViewById(R.id.edit_lb_container))
-        ldEditor = ExposureEditor(findViewById(R.id.edit_ld_container))
         moonInitEditor = ExposureEditor(findViewById(R.id.moon_init_container))
-        moonLbEditor = ExposureEditor(findViewById(R.id.moon_lb_container))
-        moonLdEditor = ExposureEditor(findViewById(R.id.moon_ld_container))
+        editLimit = LimitEditor(findViewById(R.id.edit_limit_container))
+        moonLimit = LimitEditor(findViewById(R.id.moon_limit_container))
     }
 
-    // iso/ss/fn の3行スライダーをコンテナに動的生成し、文字列配列から選択させる。
-    // 保存時は選択中の文字列(カメラ設定値)をそのまま JSON に書く。
-    private inner class ExposureEditor(container: LinearLayout) {
-        private val isoRow = Row(container, "ISO", isoValues)
-        private val ssRow = Row(container, "SS", ssValues)
-        private val fnRow = Row(container, "F", fnValues)
+    // 左=暗(月)→右=明(太陽) を示す明暗バー(仕様5)。スライダーの下地に敷く。
+    private fun brightnessBar(): android.graphics.drawable.GradientDrawable {
+        val d = android.graphics.drawable.GradientDrawable(
+            android.graphics.drawable.GradientDrawable.Orientation.LEFT_RIGHT,
+            intArrayOf(0xFF263238.toInt(), 0xFF90A4AE.toInt(), 0xFFFFF9C4.toInt())
+        )
+        d.cornerRadius = dp(5).toFloat()
+        return d
+    }
 
-        private inner class Row(container: LinearLayout, label: String, val vals: List<String>) {
-            val seek = SeekBar(this@MainActivity)
-            val valTv = TextView(this@MainActivity)
-            init {
-                val row = LinearLayout(this@MainActivity)
-                row.orientation = LinearLayout.HORIZONTAL
-                row.gravity = Gravity.CENTER_VERTICAL
-                val lab = TextView(this@MainActivity)
-                lab.text = label
-                lab.layoutParams = LinearLayout.LayoutParams(dp(40), ViewGroup.LayoutParams.WRAP_CONTENT)
-                seek.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                seek.max = (vals.size - 1).coerceAtLeast(0)
-                valTv.layoutParams = LinearLayout.LayoutParams(dp(64), ViewGroup.LayoutParams.WRAP_CONTENT)
-                valTv.gravity = Gravity.END
-                seek.setOnSeekBarChangeListener(seekListener { valTv.text = vals.getOrElse(it) { "" } })
-                row.addView(lab); row.addView(seek); row.addView(valTv)
-                container.addView(row)
-            }
-            fun set(value: String) {
-                val idx = vals.indexOf(value).let { if (it < 0) 0 else it }
-                seek.progress = idx
-                valTv.text = vals.getOrElse(idx) { "" }   // 同値でリスナが発火しない場合に備え明示
-            }
-            fun get(): String = vals.getOrElse(seek.progress) { "" }
+    // 露出スライダーの行コンテナ(薄いカード)を作る。
+    private fun sliderColumn(parent: LinearLayout): LinearLayout {
+        val col = LinearLayout(this)
+        col.orientation = LinearLayout.VERTICAL
+        val colLp = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        colLp.setMargins(0, dp(4), 0, dp(4)); col.layoutParams = colLp
+        col.setPadding(dp(4), dp(2), dp(4), dp(4))
+        parent.addView(col)
+        return col
+    }
+
+    // Material スライダーのトラックを透明にし、明暗バーの上に重ねた行を作る。
+    // showIcons=true で両端に月/太陽を置く。端のつまみが画面端に来ないよう左右に余白(仕様8)。
+    private fun sliderWithIcons(parent: LinearLayout, slider: View, showIcons: Boolean = true) {
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER_VERTICAL
+        row.setPadding(dp(16), 0, dp(16), 0)
+        if (showIcons) {
+            val moon = TextView(this); moon.text = "🌙"; moon.textSize = 16f
+            moon.layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            row.addView(moon)
         }
+        val frame = FrameLayout(this)
+        frame.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        val bar = View(this); bar.background = brightnessBar()
+        val barLp = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(10))
+        barLp.gravity = Gravity.CENTER_VERTICAL; barLp.setMargins(dp(10), 0, dp(10), 0)
+        bar.layoutParams = barLp
+        frame.addView(bar)
+        slider.layoutParams = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        frame.addView(slider)
+        row.addView(frame)
+        if (showIcons) {
+            val sun = TextView(this); sun.text = "☀"; sun.textSize = 16f
+            sun.layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            row.addView(sun)
+        }
+        parent.addView(row)
+    }
+
+    private val transparentTint get() = ColorStateList.valueOf(0x00000000)
+
+    // 単一露出を選ぶ1本スライダー行。タイトルは左寄せ(仕様7)、値は右に表示。
+    // 夜間固定露出・月の開始時露出に使う。
+    private inner class SingleRow(parent: LinearLayout, title: String, private val vals: List<String>) {
+        private val slider = Slider(this@MainActivity)
+        private val valTv: TextView
+        init {
+            val col = sliderColumn(parent)
+            // タイトル(左)と値(センター)を同じ行に。タイトルが値を表す形「ISO感度  1600」。
+            val head = FrameLayout(this@MainActivity)
+            head.layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            head.setPadding(dp(2), 0, dp(2), 0)
+            val titleTv = TextView(this@MainActivity)
+            titleTv.text = title; titleTv.textSize = 14f; titleTv.setTypeface(null, Typeface.BOLD)
+            titleTv.layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.START or Gravity.CENTER_VERTICAL)
+            valTv = TextView(this@MainActivity)
+            valTv.textSize = 18f; valTv.setTypeface(null, Typeface.BOLD); valTv.gravity = Gravity.CENTER
+            valTv.layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER)
+            head.addView(titleTv); head.addView(valTv); col.addView(head)
+
+            slider.valueFrom = 0f
+            slider.valueTo = (vals.size - 1).coerceAtLeast(1).toFloat()
+            slider.stepSize = 1f
+            slider.isTickVisible = false
+            slider.labelBehavior = LabelFormatter.LABEL_GONE
+            slider.trackActiveTintList = transparentTint
+            slider.trackInactiveTintList = transparentTint
+            slider.setCustomThumbDrawable(R.drawable.thumb_dot)
+            slider.addOnChangeListener { _, value, _ -> valTv.text = vals.getOrElse(value.toInt()) { "" } }
+            sliderWithIcons(col, slider, showIcons = false)   // 夜間固定露出・月の開始時露出は外側アイコン無し
+        }
+        fun set(value: String) {
+            val idx = vals.indexOf(value).let { if (it < 0) 0 else it }
+            slider.value = idx.toFloat().coerceIn(slider.valueFrom, slider.valueTo)
+            valTv.text = vals.getOrElse(idx) { "" }
+        }
+        fun get(): String = vals.getOrElse(slider.value.toInt()) { "" }
+    }
+
+    // 単一露出(iso/ss/fn)を3スライダーで編集する。夜間固定露出・月の開始時露出に使う。
+    private inner class ExposureEditor(container: LinearLayout) {
+        private val isoRow = SingleRow(container, "ISO感度", isoDisp)
+        private val ssRow = SingleRow(container, "シャッター速度", ssDisp)
+        private val fnRow = SingleRow(container, "F値", fnDisp)
 
         fun set(o: JSONObject?) {
             isoRow.set(o?.optString("iso") ?: "")
             ssRow.set(o?.optString("ss") ?: "")
             fnRow.set(o?.optString("fn") ?: "")
         }
-
         fun get(): JSONObject = JSONObject()
             .put("iso", isoRow.get()).put("ss", ssRow.get()).put("fn", fnRow.get())
+    }
+
+    // 露出限界エディタ(仕様7 / §7.4.3): 項目(ISO/SS/F)ごとに「暗所限界〜明所限界の範囲スライダー」
+    // を1枚のカードに置く。カードの並び順 = 優先度(上ほど先に変化)。
+    // 並べ替えは左端のドラッグハンドルを上下に動かし、挿入位置バーを離した所へ移動(仕様3)。
+    // priority値は exposureType(iso=0,ss=1,fn=2)。bright=limitBright=暗所限界 / dark=limitDark=明所限界。
+    private inner class LimitEditor(private val container: LinearLayout) {
+        private val order = mutableListOf(0, 1, 2)
+        private val darkPlace = HashMap<Int, String>()    // 暗所限界 = limitBright(高ISO側・左つまみ)
+        private val brightPlace = HashMap<Int, String>()  // 明所限界 = limitDark(低ISO側・右つまみ)
+        private val keys = listOf("iso", "ss", "fn")
+        private var initialBright = true                  // 初期値=明所限界か(仕様4d)
+        private val cards = mutableListOf<View>()
+        private val dividers = mutableListOf<View>()
+        private val darkTvs = HashMap<Int, TextView>(); private val brightTvs = HashMap<Int, TextView>()
+        private val initTvs = HashMap<Int, TextView>()
+        private var dragFrom = -1
+
+        fun set(brightObj: JSONObject?, darkObj: JSONObject?, prio: JSONArray?, initBright: Boolean) {
+            order.clear()
+            if (prio != null) for (i in 0 until prio.length()) order.add(prio.optInt(i))
+            if (order.sorted() != listOf(0, 1, 2)) { order.clear(); order.addAll(listOf(0, 1, 2)) }
+            for (t in 0..2) {
+                darkPlace[t] = brightObj?.optString(keys[t]) ?: ""     // limitBright = 暗所限界
+                brightPlace[t] = darkObj?.optString(keys[t]) ?: ""     // limitDark = 明所限界
+            }
+            initialBright = initBright
+            render()
+        }
+        fun getBright(): JSONObject = JSONObject().put("iso", darkPlace[0]).put("ss", darkPlace[1]).put("fn", darkPlace[2])
+        fun getDark(): JSONObject = JSONObject().put("iso", brightPlace[0]).put("ss", brightPlace[1]).put("fn", brightPlace[2])
+        fun getPriority(): JSONArray { val a = JSONArray(); order.forEach { a.put(it) }; return a }
+        fun getInitialBright(): Boolean = initialBright
+
+        private fun valsFor(t: Int) = when (t) { 0 -> isoDisp; 1 -> ssDisp; else -> fnDisp }
+        private fun nameFor(t: Int) = when (t) { 0 -> "ISO感度"; 1 -> "シャッター速度"; else -> "F値" }
+        private fun updateVals(t: Int) {
+            darkTvs[t]?.text = darkPlace[t]; brightTvs[t]?.text = brightPlace[t]
+            initTvs[t]?.text = if (initialBright) brightPlace[t] else darkPlace[t]
+        }
+        private fun refreshInit() { for (t in 0..2) initTvs[t]?.text = if (initialBright) brightPlace[t] else darkPlace[t] }
+        private fun makeValTv(color: Int): TextView {
+            val tv = TextView(this@MainActivity); tv.textSize = 15f; tv.setTypeface(null, Typeface.BOLD)
+            tv.gravity = Gravity.CENTER; tv.setTextColor(color)
+            tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            return tv
+        }
+
+        // 上部に「初期値チェック」と列見出し(一か所)、続けて divider 挟みのカード(並べ替え対象)。
+        private fun render() {
+            container.removeAllViews()
+            cards.clear(); dividers.clear(); darkTvs.clear(); brightTvs.clear(); initTvs.clear()
+            val cb = CheckBox(this@MainActivity)
+            cb.text = "明所限界を初期値にする"; cb.isChecked = initialBright
+            cb.setOnCheckedChangeListener { _, c -> initialBright = c; refreshInit() }
+            container.addView(cb)
+            container.addView(headerRow())
+            for (i in 0..order.size) {
+                val div = View(this@MainActivity)
+                div.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(4))
+                div.setBackgroundColor(0x00000000)
+                dividers.add(div); container.addView(div)
+                if (i < order.size) { val card = buildCard(i); cards.add(card); container.addView(card) }
+            }
+        }
+
+        private fun headerRow(): View {
+            val row = LinearLayout(this@MainActivity); row.orientation = LinearLayout.HORIZONTAL
+            row.setPadding(dp(4), dp(2), dp(4), 0)
+            fun col(text: String, weight: Float) {
+                val tv = TextView(this@MainActivity); tv.text = text; tv.textSize = 11f
+                tv.setTextColor(0xFF666666.toInt()); tv.gravity = Gravity.CENTER
+                tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, weight)
+                row.addView(tv)
+            }
+            col("", 1.5f); col("暗所限界", 1f); col("初期値", 1f); col("明所限界", 1f); col("", 1f)
+            return row
+        }
+
+        private fun buildCard(i: Int): LinearLayout {
+            val t = order[i]; val vals = valsFor(t)
+            val card = LinearLayout(this@MainActivity); card.orientation = LinearLayout.VERTICAL
+            card.layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            card.setBackgroundColor(0xFFF2EEFA.toInt())
+            card.setPadding(dp(4), dp(2), dp(4), dp(4))
+
+            // 行1: 名称(左) + 暗所限界/初期値/明所限界 の3数値(仕様4g)
+            val valRow = LinearLayout(this@MainActivity); valRow.orientation = LinearLayout.HORIZONTAL
+            valRow.gravity = Gravity.CENTER_VERTICAL
+            val name = TextView(this@MainActivity); name.text = nameFor(t); name.textSize = 14f; name.setTypeface(null, Typeface.BOLD)
+            name.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.5f)
+            val darkTv = makeValTv(0xFF222222.toInt()); val initTv = makeValTv(0xFF1565C0.toInt()); val brightTv = makeValTv(0xFF222222.toInt())
+            val rspacer = View(this@MainActivity); rspacer.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            valRow.addView(name); valRow.addView(darkTv); valRow.addView(initTv); valRow.addView(brightTv); valRow.addView(rspacer)
+            card.addView(valRow)
+            darkTvs[t] = darkTv; brightTvs[t] = brightTv; initTvs[t] = initTv
+
+            // 行2: ドラッグハンドル(左) + 範囲スライダー(右へ・少し短く)(仕様4f)
+            val slRow = LinearLayout(this@MainActivity); slRow.orientation = LinearLayout.HORIZONTAL; slRow.gravity = Gravity.CENTER_VERTICAL
+            val handle = TextView(this@MainActivity)
+            handle.text = "⇅"; handle.textSize = 22f; handle.gravity = Gravity.CENTER
+            handle.setBackgroundColor(0xFFD1C4E9.toInt()); handle.setPadding(dp(4), dp(2), dp(4), dp(2))
+            handle.layoutParams = LinearLayout.LayoutParams(dp(40), dp(36))
+            handle.setOnTouchListener(dragTouch(i))
+            slRow.addView(handle)
+            val frame = FrameLayout(this@MainActivity)
+            val frameLp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f); frameLp.setMargins(dp(6), 0, dp(4), 0)
+            frame.layoutParams = frameLp
+            val bar = View(this@MainActivity); bar.setBackgroundResource(R.drawable.brightness_bar)
+            val barLp = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(10)); barLp.gravity = Gravity.CENTER_VERTICAL; barLp.setMargins(dp(10), 0, dp(10), 0)
+            bar.layoutParams = barLp; frame.addView(bar)
+            val rs = RangeSlider(this@MainActivity)
+            rs.layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            rs.valueFrom = 0f; rs.valueTo = (vals.size - 1).coerceAtLeast(1).toFloat(); rs.stepSize = 1f
+            rs.isTickVisible = false; rs.labelBehavior = LabelFormatter.LABEL_GONE
+            rs.trackActiveTintList = transparentTint; rs.trackInactiveTintList = transparentTint
+            rs.setCustomThumbDrawablesForValues(R.drawable.ic_moon, R.drawable.ic_sun)  // 左=月(暗所)/右=太陽(明所)
+            val di = vals.indexOf(darkPlace[t]).let { if (it < 0) 0 else it }
+            val bi = vals.indexOf(brightPlace[t]).let { if (it < 0) vals.size - 1 else it }
+            rs.values = listOf(minOf(di, bi).toFloat(), maxOf(di, bi).toFloat())
+            rs.addOnChangeListener { _, _, _ ->
+                val v = rs.values
+                darkPlace[t] = vals.getOrElse(v[0].toInt()) { "" }
+                brightPlace[t] = vals.getOrElse(v[1].toInt()) { "" }
+                updateVals(t)
+            }
+            frame.addView(rs); slRow.addView(frame)
+            card.addView(slRow)
+            updateVals(t)
+            rs.post {   // 明暗バーをつまみ可動域に合わせる
+                val tsp = rs.trackSidePadding
+                val lp = bar.layoutParams as FrameLayout.LayoutParams
+                lp.setMargins(tsp, lp.topMargin, tsp, lp.bottomMargin); bar.layoutParams = lp
+            }
+            return card
+        }
+
+        // ドラッグハンドルのタッチ処理。挿入位置(divider)を色で示し、離した位置へ並べ替える。
+        private fun dragTouch(index: Int) = View.OnTouchListener { v, ev ->
+            when (ev.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    v.parent?.requestDisallowInterceptTouchEvent(true)   // ScrollView のスクロールを抑止
+                    dragFrom = index; highlightGap(ev.rawY); true
+                }
+                MotionEvent.ACTION_MOVE -> { highlightGap(ev.rawY); true }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { dropAt(ev.rawY); true }
+                else -> false
+            }
+        }
+
+        // 指のY座標から挿入位置(0..order.size)を求める。
+        private fun gapFor(rawY: Float): Int {
+            val loc = IntArray(2); container.getLocationOnScreen(loc)
+            val y = rawY - loc[1]
+            var g = 0
+            for (c in cards) { if (c.top + c.height / 2f < y) g++ }
+            return g.coerceIn(0, order.size)
+        }
+        private fun highlightGap(rawY: Float) {
+            val g = gapFor(rawY)
+            for (k in dividers.indices) {
+                dividers[k].setBackgroundColor(if (k == g) 0xFF1565C0.toInt() else 0x00000000)
+            }
+        }
+        private fun dropAt(rawY: Float) {
+            val g = gapFor(rawY)
+            val from = dragFrom
+            dragFrom = -1
+            // タッチ処理中にツリーを作り替えると描画が壊れるので、次フレームへ遅延する。
+            container.post {
+                if (from in order.indices) {
+                    val item = order.removeAt(from)
+                    val insertAt = (if (g > from) g - 1 else g).coerceIn(0, order.size)
+                    order.add(insertAt, item)
+                }
+                render()
+            }
+        }
     }
 
     // 簡易カラーピッカー(R/G/B スライダー + プレビュー)。

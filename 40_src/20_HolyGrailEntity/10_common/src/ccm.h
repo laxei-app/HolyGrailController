@@ -31,6 +31,9 @@ namespace hgc
 		exposure     limitDark;					// 暗い側の限界(iso/ss/fn 下限)
 		// 露出設定を変更する優先度(上位から先に変更)
 		exposureType priority[exposureTypeNum] = { exposureType::iso, exposureType::ss, exposureType::fn };
+		// 撮影開始時の初期値を「明所限界(limitDark)」にするか。false なら「暗所限界(limitBright)」。
+		// §4.4 最初の補正の起点。優先でなかった露出設定がどちら寄りになるかに影響する。
+		bool         initialBright = true;
 
 		ccmBase() = default;
 		explicit ccmBase(ccmType t) : type(t) {}
@@ -49,10 +52,11 @@ namespace hgc
 		std::unique_ptr<ccmBase> clone() const override { return std::make_unique<ccmNight>(*this); }
 	};
 
-	// 3.3 朝日撮影 (自動露出)
+	// 3.3 朝日撮影 (自動露出)。太陽高度は撮り始め〜終わりの範囲で指定する。
 	struct ccmSunrise : ccmBase
 	{
-		double sunAltitude = -6.0;	// 薄明の太陽高度[°]
+		double sunAltitude    = -6.0;	// 撮り始めの太陽高度[°]
+		double sunAltitudeEnd =  0.0;	// 終わりの太陽高度[°](朝日は昇るので終わりが明るい)
 		double ev = -3.0;			// 露出補正。範囲 -5.0～+5.0、1/3刻み
 
 		ccmSunrise() : ccmBase(ccmType::sunrise) {}
@@ -62,7 +66,8 @@ namespace hgc
 	// 3.4 夕日撮影 (朝日撮影と時系列が逆。構成は同等)
 	struct ccmSunset : ccmBase
 	{
-		double sunAltitude = -6.0;	// 薄明の太陽高度[°]
+		double sunAltitude    =  0.0;	// 撮り始めの太陽高度[°](夕日は沈むので始まりが明るい)
+		double sunAltitudeEnd = -6.0;	// 終わりの太陽高度[°]
 		double ev = -3.0;			// 露出補正
 
 		ccmSunset() : ccmBase(ccmType::sunset) {}

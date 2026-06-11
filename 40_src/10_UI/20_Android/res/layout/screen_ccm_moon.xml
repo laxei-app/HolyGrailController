@@ -38,13 +38,13 @@
                     <TextView android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="補正開始輝度" android:textStyle="bold" />
                     <TextView android:id="@+id/moon_startlum_val" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="+2.0ev" />
                 </LinearLayout>
-                <SeekBar android:id="@+id/moon_startlum_seek" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="30" />
+                <com.google.android.material.slider.Slider android:id="@+id/moon_startlum_seek" android:layout_width="match_parent" android:layout_height="wrap_content" />
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="11sp" android:textColor="#888888" android:text="0 〜 +3ev" />
                 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginTop="6dp">
                     <TextView android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="露出補正 ev" android:textStyle="bold" />
                     <TextView android:id="@+id/moon_ev_val" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="-3.0ev" />
                 </LinearLayout>
-                <SeekBar android:id="@+id/moon_ev_seek" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="100" />
+                <com.google.android.material.slider.Slider android:id="@+id/moon_ev_seek" android:layout_width="match_parent" android:layout_height="wrap_content" />
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:textSize="11sp" android:textColor="#888888" android:text="0 〜 -10ev" />
             </LinearLayout>
 
@@ -57,21 +57,20 @@
                     <TextView android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="大気消光係数" />
                     <TextView android:id="@+id/moon_extcoef_val" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0.20" />
                 </LinearLayout>
-                <SeekBar android:id="@+id/moon_extcoef_seek" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="50" />
+                <com.google.android.material.slider.Slider android:id="@+id/moon_extcoef_seek" android:layout_width="match_parent" android:layout_height="wrap_content" />
                 <CheckBox android:id="@+id/moon_geocorr" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="地心距離補正をおこなう" />
                 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
                     <TextView android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="空の明るさ補正係数" />
                     <TextView android:id="@+id/moon_skycoef_val" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="100%" />
                 </LinearLayout>
-                <SeekBar android:id="@+id/moon_skycoef_seek" android:layout_width="match_parent" android:layout_height="wrap_content" android:max="100" />
+                <com.google.android.material.slider.Slider android:id="@+id/moon_skycoef_seek" android:layout_width="match_parent" android:layout_height="wrap_content" />
             </LinearLayout>
 
-            <!-- 露出限界 -->
-            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:text="露出限界" android:textStyle="bold" />
-            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="明るい側(上限)" android:textSize="12sp" />
-            <LinearLayout android:id="@+id/moon_lb_container" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
-            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="暗い側(下限)" android:textSize="12sp" android:layout_marginTop="8dp" />
-            <LinearLayout android:id="@+id/moon_ld_container" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
+            <!-- 露出限界、範囲: 項目ごとに暗所限界〜明所限界の範囲スライダー。左の⇅で並べ替え。 -->
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:text="露出限界、範囲" android:textStyle="bold" />
+            <LinearLayout android:id="@+id/moon_limit_container" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="4dp" />
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:textSize="11sp" android:textColor="#888888"
+                android:text="ISO感度、F値、シャッター速度は左の⇅で上下に移動できます。露出補正の際に最初に上の項目を変更して調整します。一番上の項目が限界に達すると中段の項目を変更します。さらに中段の項目も限界になると最下段の項目で調整します。" />
 
             <Button android:id="@+id/moon_save" android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:layout_marginTop="16dp" android:text="保存" android:textSize="18sp" />

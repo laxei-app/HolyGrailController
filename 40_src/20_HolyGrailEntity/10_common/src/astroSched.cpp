@@ -146,6 +146,19 @@ namespace astro
 		return sunHorizAt(toAstro(localTime, utcOffsetMin), obs);
 	}
 
+	altTime sunAltitudeTime(const hgc::place& p, const hgc::dateTime& baseDate,
+	                        double altitude, bool rising, int utcOffsetMin)
+	{
+		astro_observer_t obs = Astronomy_MakeObserver(p.latitude, p.longitude, p.altitude);
+		hgc::dateTime noon = baseDate;	// 基準日の正午(ローカル)を起点に探索
+		noon.hour = 12; noon.min = 0; noon.sec = 0;
+		astro_time_t start = toAstro(noon, utcOffsetMin);
+		astro_direction_t dir = rising ? DIRECTION_RISE : DIRECTION_SET;
+		astro_search_result_t r = Astronomy_SearchAltitude(BODY_SUN, obs, dir, start, 2.0, altitude);
+		if (r.status != ASTRO_SUCCESS) { return { false, hgc::dateTime{} }; }
+		return { true, fromAstro(r.time, utcOffsetMin) };
+	}
+
 	fov calcFov(const hgc::camera& cam, const hgc::lens& lens, bool landscape)
 	{
 		double sw = cam.sensorSize;		// センサー横[mm]

@@ -93,6 +93,11 @@ int32_t hge_setCcmDefaultsJson(const char* json, int32_t len);
 //  iso/ss は標準1/3段、fn は計画のレンズf範囲。スライダーの選択肢に使う。
 int32_t hge_getExpoValuesJson(char* buf, int32_t* inoutLen);
 
+// 固定露出太陽高度の start(日没側で指定高度に達する時刻)/end(日の出側) を計算する(バッファ規約)。
+// altitudeDeg: 太陽高度[°]。現在の撮影計画の日付・場所で計算する。
+//  {"start":"MM/dd HH:mm","end":"MM/dd HH:mm"}(見つからなければ "--:--")
+int32_t hge_sunAltitudeTimes(int32_t altitudeDeg, char* buf, int32_t* inoutLen);
+
 // 現在の進捗スナップショットを JSON で取得(バッファ規約)。
 //  {"state","frame","total","remainSec","elapsedSec","ccm","iso","ss","fn"}
 //  エッジ端末が progress(get) 応答に使う。

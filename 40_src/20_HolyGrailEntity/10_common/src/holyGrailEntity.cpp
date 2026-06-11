@@ -517,6 +517,27 @@ int32_t hge_getExpoValuesJson(char* buf, int32_t* inoutLen)
 	return ERR_HGC_OK;
 }
 
+int32_t hge_sunAltitudeTimes(int32_t altitudeDeg, char* buf, int32_t* inoutLen)
+{
+	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
+	if (!g_planReady) { loadFixedPlanImpl(); }
+	double alt = static_cast<double>(altitudeDeg);
+	astro::altTime st = astro::sunAltitudeTime(g_plan.place, g_plan.start, alt, false, g_offMin);
+	astro::altTime en = astro::sunAltitudeTime(g_plan.place, g_plan.start, alt, true,  g_offMin);
+	auto fmt = [](const astro::altTime& a) -> std::string {
+		if (!a.valid) { return "--:--"; }
+		char t[32];
+		std::snprintf(t, sizeof(t), "%02d/%02d %02d:%02d", a.when.month, a.when.day, a.when.hour, a.when.min);
+		return std::string(t);
+	};
+	std::string j = "{\"start\":\"" + fmt(st) + "\",\"end\":\"" + fmt(en) + "\"}";
+	int32_t need = static_cast<int32_t>(j.size()) + 1;
+	if (buf == nullptr || *inoutLen < need) { *inoutLen = need; return ERR_HGC_BUF_SHORT; }
+	std::memcpy(buf, j.c_str(), need);
+	*inoutLen = need;
+	return ERR_HGC_OK;
+}
+
 int32_t hge_getProgressJson(char* buf, int32_t* inoutLen)
 {
 	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
