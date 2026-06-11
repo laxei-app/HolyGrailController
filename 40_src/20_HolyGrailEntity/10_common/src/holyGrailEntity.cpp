@@ -403,6 +403,26 @@ int32_t hge_getScheduleJson(char* buf, int32_t* inoutLen)
 	return ERR_HGC_OK;
 }
 
+int32_t hge_getPlanJson(char* buf, int32_t* inoutLen)
+{
+	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
+	if (!g_planReady)
+	{
+		errCode e = loadFixedPlanImpl();
+		if (e != ERR_HGC_OK) { return e; }
+	}
+	std::string s = csjson::toJson(g_plan);
+	int32_t need = static_cast<int32_t>(s.size()) + 1;
+	if (buf == nullptr || *inoutLen < need)
+	{
+		*inoutLen = need;
+		return ERR_HGC_BUF_SHORT;
+	}
+	std::memcpy(buf, s.c_str(), need);
+	*inoutLen = need;
+	return ERR_HGC_OK;
+}
+
 int32_t hge_getProgressJson(char* buf, int32_t* inoutLen)
 {
 	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }

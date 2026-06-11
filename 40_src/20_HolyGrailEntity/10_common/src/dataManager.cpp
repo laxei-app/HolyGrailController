@@ -158,6 +158,15 @@ void dataManager::logEvent(const char* event, const char* detail, bool error)
 	            detail ? detail : "");
 }
 
+std::string dataManager::currentLogPath(void)
+{
+	char timeStr[20], dateStr[11];
+	nowLocal(timeStr, dateStr);
+	std::string dir = osfile::logDir();
+	if (dir.empty()) { return ""; }
+	return dir + "/hg_" + dateStr + ".log";
+}
+
 void dataManager::logShot(int frame, const hgc::exposure& e, double lumStops, const char* ccmName)
 {
 	char frameStr[8], isoStr[8], ssStr[16], fnStr[8], lumStr[12];

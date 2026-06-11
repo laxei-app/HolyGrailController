@@ -11,7 +11,10 @@
 #include "holyGrailEntity.h"
 #include "WiFi_Connect.h"
 #include "etpEdge.h"
+#include "dataManager.h"
+#include "osFile.h"
 #include "debugOut.h"
+#include <string>
 
 // loopTask(setup/loop)のスタックを拡張する。
 // 既定8KBでは天文計算(Astronomy Engine: FindAscent 再帰 + CalcMoon)で
@@ -162,6 +165,18 @@ void loop(void)
 			              stName(g_state),
 			              (int)(WiFi.status() == WL_CONNECTED),
 			              WiFi.localIP().toString().c_str());
+		}
+		else if (c == 'l')	// 本日のログをシリアルへダンプ(検証用)
+		{
+			std::string path = dataManager::currentLogPath();
+			std::string body;
+			if (osfile::readAll(path, body))
+			{
+				Serial.printf("[LOG] %s (%u bytes)\n", path.c_str(), (unsigned)body.size());
+				Serial.write(reinterpret_cast<const uint8_t*>(body.data()), body.size());
+				Serial.printf("[LOG] end\n");
+			}
+			else { Serial.printf("[LOG] read failed: %s\n", path.c_str()); }
 		}
 	}
 

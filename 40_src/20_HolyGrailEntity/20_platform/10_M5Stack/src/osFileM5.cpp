@@ -74,4 +74,16 @@ namespace osfile
 		f.close();
 		return n == len;
 	}
+
+	bool readAll(const std::string& path, std::string& out)
+	{
+		ensureInit();
+		out.clear();
+		if (g_fs == nullptr) { return false; }
+		File f = g_fs->open(path.c_str(), FILE_READ);
+		if (!f) { return false; }
+		while (f.available()) { out.push_back(static_cast<char>(f.read())); }
+		f.close();
+		return true;
+	}
 }

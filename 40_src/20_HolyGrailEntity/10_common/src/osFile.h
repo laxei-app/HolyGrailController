@@ -20,6 +20,9 @@ namespace osfile
 	// path へ追記し、即 flush する。ディレクトリが無ければ作成を試みる。
 	// path はフルパス。return: 成功
 	bool append(const std::string& path, const char* data, size_t len);
+
+	// path の内容をすべて out に読み込む(検証・ログ転送用)。return: 成功
+	bool readAll(const std::string& path, std::string& out);
 }
 
 #endif // _OS_FILE_H_

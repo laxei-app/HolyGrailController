@@ -46,4 +46,16 @@ namespace osfile
 		std::fclose(f);
 		return n == len;
 	}
+
+	bool readAll(const std::string& path, std::string& out)
+	{
+		out.clear();
+		FILE* f = std::fopen(path.c_str(), "rb");
+		if (f == nullptr) { return false; }
+		char buf[1024];
+		size_t n;
+		while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) { out.append(buf, n); }
+		std::fclose(f);
+		return true;
+	}
 }

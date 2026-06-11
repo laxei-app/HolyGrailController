@@ -35,13 +35,41 @@
         android:layout_marginTop="4dp"
         android:text="" />
 
-    <!-- カメラ自動検索(SSDP)。実機ではこちらが既定。 -->
+    <!-- エッジ端末の選択。無し=スマホで撮影、選択=そのエッジ端末へ転送して撮影。 -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="エッジ端末"
+        android:textStyle="bold" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:orientation="horizontal">
+
+        <Spinner
+            android:id="@+id/edgeSpinner"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1" />
+
+        <Button
+            android:id="@+id/edgeSearchButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:text="検索" />
+    </LinearLayout>
+
+    <!-- カメラ自動検索(SSDP)。エッジ端末=無し のとき、スマホ直結カメラを検索する。 -->
     <Button
         android:id="@+id/searchButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="12dp"
-        android:text="カメラ検索 (自動)" />
+        android:text="カメラ検索 (スマホ撮影時)" />
 
     <!-- 手動接続(SSDPが使えないエミュレータ用)。IP直指定で接続する。 -->
     <TextView

@@ -71,6 +71,10 @@ int32_t hge_setPlanJson(const char* json, int32_t len);
 //  buf が null か容量不足なら必要バイト数を *inoutLen に格納し ERR_HGC_BUF_SHORT。
 int32_t hge_getScheduleJson(char* buf, int32_t* inoutLen);
 
+// 現在の撮影計画(cs)を自己完結 JSON で取得(バッファ規約)。
+// スマホがエッジ端末へ capturePlan 転送する際に使う(csjson::toJson)。
+int32_t hge_getPlanJson(char* buf, int32_t* inoutLen);
+
 // 現在の進捗スナップショットを JSON で取得(バッファ規約)。
 //  {"state","frame","total","remainSec","elapsedSec","ccm","iso","ss","fn"}
 //  エッジ端末が progress(get) 応答に使う。

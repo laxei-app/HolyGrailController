@@ -37,6 +37,9 @@ public:
 
 	// 1枚撮影(SHOT)を記録する。frame/iso/ss/fn/lum と適用中ccm名。
 	static void logShot(int frame, const hgc::exposure& e, double lumStops, const char* ccmName);
+
+	// 現在の(本日の)ログファイルのフルパスを返す(検証・ログ転送用)。
+	static std::string currentLogPath(void);
 };
 
 #endif // _DATA_MANAGER_H_
