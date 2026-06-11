@@ -51,14 +51,7 @@
             <!-- 月に露出を合わせる(moonExposure) -->
             <LinearLayout android:id="@+id/moon_exp_section" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="10dp">
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="開始時露出" android:textStyle="bold" />
-                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
-                    <TextView android:layout_width="40dp" android:layout_height="wrap_content" android:text="ISO" android:gravity="center_vertical" />
-                    <EditText android:id="@+id/moon_init_iso" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:inputType="number" />
-                    <TextView android:layout_width="32dp" android:layout_height="wrap_content" android:text="SS" android:gravity="center" />
-                    <EditText android:id="@+id/moon_init_ss" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:inputType="numberDecimal" />
-                    <TextView android:layout_width="24dp" android:layout_height="wrap_content" android:text="F" android:gravity="center" />
-                    <EditText android:id="@+id/moon_init_fn" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:inputType="numberDecimal" />
-                </LinearLayout>
+                <LinearLayout android:id="@+id/moon_init_container" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
                 <CheckBox android:id="@+id/moon_atmext" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="大気消光補正をおこなう" />
                 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
                     <TextView android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="大気消光係数" />
@@ -76,23 +69,9 @@
             <!-- 露出限界 -->
             <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:text="露出限界" android:textStyle="bold" />
             <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="明るい側(上限)" android:textSize="12sp" />
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
-                <TextView android:layout_width="40dp" android:layout_height="wrap_content" android:text="ISO" android:gravity="center_vertical" />
-                <EditText android:id="@+id/moon_lb_iso" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:inputType="number" />
-                <TextView android:layout_width="32dp" android:layout_height="wrap_content" android:text="SS" android:gravity="center" />
-                <EditText android:id="@+id/moon_lb_ss" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:inputType="numberDecimal" />
-                <TextView android:layout_width="24dp" android:layout_height="wrap_content" android:text="F" android:gravity="center" />
-                <EditText android:id="@+id/moon_lb_fn" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:inputType="numberDecimal" />
-            </LinearLayout>
-            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="暗い側(下限)" android:textSize="12sp" />
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
-                <TextView android:layout_width="40dp" android:layout_height="wrap_content" android:text="ISO" android:gravity="center_vertical" />
-                <EditText android:id="@+id/moon_ld_iso" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:inputType="number" />
-                <TextView android:layout_width="32dp" android:layout_height="wrap_content" android:text="SS" android:gravity="center" />
-                <EditText android:id="@+id/moon_ld_ss" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:inputType="numberDecimal" />
-                <TextView android:layout_width="24dp" android:layout_height="wrap_content" android:text="F" android:gravity="center" />
-                <EditText android:id="@+id/moon_ld_fn" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:inputType="numberDecimal" />
-            </LinearLayout>
+            <LinearLayout android:id="@+id/moon_lb_container" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="暗い側(下限)" android:textSize="12sp" android:layout_marginTop="8dp" />
+            <LinearLayout android:id="@+id/moon_ld_container" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
 
             <Button android:id="@+id/moon_save" android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:layout_marginTop="16dp" android:text="保存" android:textSize="18sp" />

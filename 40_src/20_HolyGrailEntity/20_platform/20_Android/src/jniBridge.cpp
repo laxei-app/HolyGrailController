@@ -160,6 +160,17 @@ Java_app_laxei_holygrail_HgeNative_nativeSetCcmDefaults(JNIEnv* env, jobject /*t
 	return r;
 }
 
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeGetExpoValues(JNIEnv* env, jobject /*thiz*/)
+{
+	int32_t len = 0;
+	hge_getExpoValuesJson(nullptr, &len);
+	if (len <= 0) { return env->NewStringUTF("{}"); }
+	std::vector<char> buf(static_cast<size_t>(len));
+	if (hge_getExpoValuesJson(buf.data(), &len) != 0) { return env->NewStringUTF("{}"); }
+	return env->NewStringUTF(buf.data());
+}
+
 // listener(HgeListener) を登録/解除する。
 JNIEXPORT void JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeSetListener(JNIEnv* env, jobject /*thiz*/, jobject listener)

@@ -88,6 +88,11 @@ int32_t hge_getCcmDefaultsJson(char* buf, int32_t* inoutLen);
 // 計画があればスケジュールを再生成して HGE_EV_SCHEDULE で通知する。
 int32_t hge_setCcmDefaultsJson(const char* json, int32_t len);
 
+// 露出編集用の設定可能値(文字列配列)を取得する(バッファ規約)。
+//  {"iso":["100",...],"ss":["1/8000",...,"30"],"fn":["1.4",...,"32"]}
+//  iso/ss は標準1/3段、fn は計画のレンズf範囲。スライダーの選択肢に使う。
+int32_t hge_getExpoValuesJson(char* buf, int32_t* inoutLen);
+
 // 現在の進捗スナップショットを JSON で取得(バッファ規約)。
 //  {"state","frame","total","remainSec","elapsedSec","ccm","iso","ss","fn"}
 //  エッジ端末が progress(get) 応答に使う。

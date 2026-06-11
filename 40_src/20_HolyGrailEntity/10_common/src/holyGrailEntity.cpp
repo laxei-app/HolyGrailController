@@ -495,6 +495,28 @@ int32_t hge_setCcmDefaultsJson(const char* json, int32_t len)
 	return ERR_HGC_OK;
 }
 
+int32_t hge_getExpoValuesJson(char* buf, int32_t* inoutLen)
+{
+	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
+	if (!g_planReady) { loadFixedPlanImpl(); }
+	double fmin = (g_plan.lens.fn > 0.0) ? g_plan.lens.fn : 1.0;
+	auto iso = expo::standardValues(expo::expoKind::iso);
+	auto ss  = expo::standardValues(expo::expoKind::ss);
+	auto fn  = expo::standardFn(fmin, 32.0);
+	auto arr = [](const std::vector<std::string>& v) {
+		std::string s = "[";
+		for (size_t i = 0; i < v.size(); ++i) { if (i) { s += ","; } s += "\"" + v[i] + "\""; }
+		s += "]";
+		return s;
+	};
+	std::string j = "{\"iso\":" + arr(iso) + ",\"ss\":" + arr(ss) + ",\"fn\":" + arr(fn) + "}";
+	int32_t need = static_cast<int32_t>(j.size()) + 1;
+	if (buf == nullptr || *inoutLen < need) { *inoutLen = need; return ERR_HGC_BUF_SHORT; }
+	std::memcpy(buf, j.c_str(), need);
+	*inoutLen = need;
+	return ERR_HGC_OK;
+}
+
 int32_t hge_getProgressJson(char* buf, int32_t* inoutLen)
 {
 	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }

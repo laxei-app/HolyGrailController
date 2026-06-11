@@ -65,37 +65,16 @@
             <!-- 固定露出(夜間) -->
             <LinearLayout android:id="@+id/edit_fixed_section" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="12dp">
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="固定露出" android:textStyle="bold" />
-                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
-                    <TextView android:layout_width="40dp" android:layout_height="wrap_content" android:text="ISO" android:gravity="center_vertical" />
-                    <EditText android:id="@+id/edit_fix_iso" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:inputType="number" />
-                    <TextView android:layout_width="32dp" android:layout_height="wrap_content" android:text="SS" android:gravity="center" />
-                    <EditText android:id="@+id/edit_fix_ss" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:inputType="numberDecimal" />
-                    <TextView android:layout_width="24dp" android:layout_height="wrap_content" android:text="F" android:gravity="center" />
-                    <EditText android:id="@+id/edit_fix_fn" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:inputType="numberDecimal" />
-                </LinearLayout>
+                <LinearLayout android:id="@+id/edit_fix_container" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
             </LinearLayout>
 
             <!-- 露出限界(自動露出) -->
             <LinearLayout android:id="@+id/edit_limit_section" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="12dp">
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="露出限界" android:textStyle="bold" />
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="明るい側(上限)" android:textSize="12sp" />
-                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
-                    <TextView android:layout_width="40dp" android:layout_height="wrap_content" android:text="ISO" android:gravity="center_vertical" />
-                    <EditText android:id="@+id/edit_lb_iso" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:inputType="number" />
-                    <TextView android:layout_width="32dp" android:layout_height="wrap_content" android:text="SS" android:gravity="center" />
-                    <EditText android:id="@+id/edit_lb_ss" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:inputType="numberDecimal" />
-                    <TextView android:layout_width="24dp" android:layout_height="wrap_content" android:text="F" android:gravity="center" />
-                    <EditText android:id="@+id/edit_lb_fn" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:inputType="numberDecimal" />
-                </LinearLayout>
-                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="暗い側(下限)" android:textSize="12sp" />
-                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
-                    <TextView android:layout_width="40dp" android:layout_height="wrap_content" android:text="ISO" android:gravity="center_vertical" />
-                    <EditText android:id="@+id/edit_ld_iso" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:inputType="number" />
-                    <TextView android:layout_width="32dp" android:layout_height="wrap_content" android:text="SS" android:gravity="center" />
-                    <EditText android:id="@+id/edit_ld_ss" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:inputType="numberDecimal" />
-                    <TextView android:layout_width="24dp" android:layout_height="wrap_content" android:text="F" android:gravity="center" />
-                    <EditText android:id="@+id/edit_ld_fn" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:inputType="numberDecimal" />
-                </LinearLayout>
+                <LinearLayout android:id="@+id/edit_lb_container" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="暗い側(下限)" android:textSize="12sp" android:layout_marginTop="8dp" />
+                <LinearLayout android:id="@+id/edit_ld_container" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
             </LinearLayout>
 
             <Button android:id="@+id/edit_save" android:layout_width="match_parent" android:layout_height="wrap_content"

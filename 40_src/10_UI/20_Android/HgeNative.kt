@@ -41,6 +41,7 @@ object HgeNative {
     external fun nativeSetPlanTimes(start: String, end: String, offMin: Int): Int
     external fun nativeGetCcmDefaults(): String
     external fun nativeSetCcmDefaults(json: String): Int
+    external fun nativeGetExpoValues(): String
     external fun nativeSetListener(listener: HgeListener?)
     external fun nativeSearchDevices(): Int
     external fun nativeConnectManual(host: String): Int

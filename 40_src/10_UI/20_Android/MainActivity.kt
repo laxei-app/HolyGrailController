@@ -62,6 +62,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private var editingKey = "night"            // 編集中の方法
     private var editColor = 0                    // 編集中の色(0xRRGGBB)
 
+    // 露出(iso/ss/fn)はカメラ設定値の文字列配列からスライダーで選択する。
+    private var isoValues = listOf<String>()    // hge_getExpoValues の iso 配列
+    private var ssValues = listOf<String>()     // 同 ss 配列
+    private var fnValues = listOf<String>()     // 同 fn 配列(レンズf範囲)
+    private lateinit var fixEditor: ExposureEditor      // 夜間 固定露出
+    private lateinit var lbEditor: ExposureEditor       // 自動露出 明側上限
+    private lateinit var ldEditor: ExposureEditor       // 自動露出 暗側下限
+    private lateinit var moonInitEditor: ExposureEditor // 月 開始時露出
+    private lateinit var moonLbEditor: ExposureEditor   // 月 明側上限
+    private lateinit var moonLdEditor: ExposureEditor   // 月 暗側下限
+
     // 430
     private lateinit var capName: TextView
     private lateinit var capGear: TextView
@@ -94,6 +105,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         HgeNative.nativeSetLogDir(getExternalFilesDir(null)?.absolutePath ?: filesDir.absolutePath)
         HgeNative.nativeInit()
         HgeNative.nativeSetListener(this)
+        loadExpoValues()
+        buildExposureEditors()
         refreshEdgeSpinner()
 
         // 初期: 開始=現在、終了=2時間後
@@ -247,31 +260,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<TextView>(R.id.moon_skycoef_val).text = "$skP%"
         findViewById<CheckBox>(R.id.moon_atmext).isChecked = o.optBoolean("atmosphericExtinction", false)
         findViewById<CheckBox>(R.id.moon_geocorr).isChecked = o.optBoolean("geocentricCorrection", false)
-        o.optJSONObject("initialExposure")?.let {
-            findViewById<EditText>(R.id.moon_init_iso).setText(it.optString("iso"))
-            findViewById<EditText>(R.id.moon_init_ss).setText(it.optString("ss"))
-            findViewById<EditText>(R.id.moon_init_fn).setText(it.optString("fn"))
-        }
-        o.optJSONObject("limitBright")?.let {
-            findViewById<EditText>(R.id.moon_lb_iso).setText(it.optString("iso"))
-            findViewById<EditText>(R.id.moon_lb_ss).setText(it.optString("ss"))
-            findViewById<EditText>(R.id.moon_lb_fn).setText(it.optString("fn"))
-        }
-        o.optJSONObject("limitDark")?.let {
-            findViewById<EditText>(R.id.moon_ld_iso).setText(it.optString("iso"))
-            findViewById<EditText>(R.id.moon_ld_ss).setText(it.optString("ss"))
-            findViewById<EditText>(R.id.moon_ld_fn).setText(it.optString("fn"))
-        }
+        moonInitEditor.set(o.optJSONObject("initialExposure"))
+        moonLbEditor.set(o.optJSONObject("limitBright"))
+        moonLdEditor.set(o.optJSONObject("limitDark"))
         flipper.displayedChild = 4
     }
 
     private fun saveMoonEdit() {
         val all = ccmJson ?: return
         val o = all.optJSONObject("moon") ?: return
-        fun et(id: Int) = findViewById<EditText>(id).text.toString()
-        // 露出値はカメラ設定値の文字列で保存する。
-        fun exp(iso: Int, ss: Int, fn: Int) = JSONObject()
-            .put("iso", et(iso)).put("ss", et(ss)).put("fn", et(fn))
         o.put("color", editColor)
         o.put("mode", findViewById<Spinner>(R.id.moon_mode).selectedItemPosition)
         o.put("startLuminance", findViewById<SeekBar>(R.id.moon_startlum_seek).progress * 0.1)
@@ -280,9 +277,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         o.put("skyBrightnessCoef", findViewById<SeekBar>(R.id.moon_skycoef_seek).progress.toDouble())
         o.put("atmosphericExtinction", findViewById<CheckBox>(R.id.moon_atmext).isChecked)
         o.put("geocentricCorrection", findViewById<CheckBox>(R.id.moon_geocorr).isChecked)
-        o.put("initialExposure", exp(R.id.moon_init_iso, R.id.moon_init_ss, R.id.moon_init_fn))
-        o.put("limitBright", exp(R.id.moon_lb_iso, R.id.moon_lb_ss, R.id.moon_lb_fn))
-        o.put("limitDark", exp(R.id.moon_ld_iso, R.id.moon_ld_ss, R.id.moon_ld_fn))
+        o.put("initialExposure", moonInitEditor.get())
+        o.put("limitBright", moonLbEditor.get())
+        o.put("limitDark", moonLdEditor.get())
         val r = HgeNative.nativeSetCcmDefaults(all.toString())
         Toast.makeText(this, if (r == 0) "保存しました" else "保存に失敗しました", Toast.LENGTH_SHORT).show()
         flipper.displayedChild = 2
@@ -331,22 +328,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         if (isNight) {
             findViewById<CheckBox>(R.id.edit_autoEdge).isChecked = o.optBoolean("autoEdge", true)
-            o.optJSONObject("limitBright")?.let { b ->
-                findViewById<EditText>(R.id.edit_fix_iso).setText(b.optString("iso"))
-                findViewById<EditText>(R.id.edit_fix_ss).setText(b.optString("ss"))
-                findViewById<EditText>(R.id.edit_fix_fn).setText(b.optString("fn"))
-            }
+            fixEditor.set(o.optJSONObject("limitBright"))
         } else {
-            o.optJSONObject("limitBright")?.let { b ->
-                findViewById<EditText>(R.id.edit_lb_iso).setText(b.optString("iso"))
-                findViewById<EditText>(R.id.edit_lb_ss).setText(b.optString("ss"))
-                findViewById<EditText>(R.id.edit_lb_fn).setText(b.optString("fn"))
-            }
-            o.optJSONObject("limitDark")?.let { d ->
-                findViewById<EditText>(R.id.edit_ld_iso).setText(d.optString("iso"))
-                findViewById<EditText>(R.id.edit_ld_ss).setText(d.optString("ss"))
-                findViewById<EditText>(R.id.edit_ld_fn).setText(d.optString("fn"))
-            }
+            lbEditor.set(o.optJSONObject("limitBright"))
+            ldEditor.set(o.optJSONObject("limitDark"))
         }
         flipper.displayedChild = 3
     }
@@ -354,22 +339,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun saveCcmEdit() {
         val all = ccmJson ?: return
         val o = all.optJSONObject(editingKey) ?: return
-        fun et(id: Int) = findViewById<EditText>(id).text.toString()
-        // 露出値はカメラ設定値の文字列で保存する。
-        fun exp(iso: Int, ss: Int, fn: Int) = JSONObject()
-            .put("iso", et(iso)).put("ss", et(ss)).put("fn", et(fn))
-
         o.put("color", editColor)
         if (editingKey != "day") o.put("sunAltitude", seekToAlt(findViewById<SeekBar>(R.id.edit_alt_seek).progress))
         if (editingKey != "night") o.put("ev", seekToEv(findViewById<SeekBar>(R.id.edit_ev_seek).progress))
         if (editingKey == "night") {
             o.put("autoEdge", findViewById<CheckBox>(R.id.edit_autoEdge).isChecked)
-            val e = exp(R.id.edit_fix_iso, R.id.edit_fix_ss, R.id.edit_fix_fn)
+            val e = fixEditor.get()
             o.put("limitBright", e)
             o.put("limitDark", JSONObject(e.toString()))   // 固定露出は明暗同値
         } else {
-            o.put("limitBright", exp(R.id.edit_lb_iso, R.id.edit_lb_ss, R.id.edit_lb_fn))
-            o.put("limitDark", exp(R.id.edit_ld_iso, R.id.edit_ld_ss, R.id.edit_ld_fn))
+            o.put("limitBright", lbEditor.get())
+            o.put("limitDark", ldEditor.get())
         }
         val r = HgeNative.nativeSetCcmDefaults(all.toString())
         Toast.makeText(this, if (r == 0) "保存しました" else "保存に失敗しました", Toast.LENGTH_SHORT).show()
@@ -381,6 +361,78 @@ class MainActivity : AppCompatActivity(), HgeListener {
         override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) = onChange(p)
         override fun onStartTrackingTouch(sb: SeekBar?) {}
         override fun onStopTrackingTouch(sb: SeekBar?) {}
+    }
+
+    // --- 露出値スライダー(iso/ss/fn 文字列配列から選択) ---
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    private fun jsonToList(a: JSONArray?): List<String> {
+        val l = mutableListOf<String>()
+        if (a != null) for (i in 0 until a.length()) l.add(a.optString(i))
+        return l
+    }
+
+    // 設定可能な露出値(カメラ設定値の文字列)を Entity から取得して保持する。
+    private fun loadExpoValues() {
+        try {
+            val o = JSONObject(HgeNative.nativeGetExpoValues())
+            isoValues = jsonToList(o.optJSONArray("iso"))
+            ssValues = jsonToList(o.optJSONArray("ss"))
+            fnValues = jsonToList(o.optJSONArray("fn"))
+        } catch (_: Exception) {}
+    }
+
+    private fun buildExposureEditors() {
+        fixEditor = ExposureEditor(findViewById(R.id.edit_fix_container))
+        lbEditor = ExposureEditor(findViewById(R.id.edit_lb_container))
+        ldEditor = ExposureEditor(findViewById(R.id.edit_ld_container))
+        moonInitEditor = ExposureEditor(findViewById(R.id.moon_init_container))
+        moonLbEditor = ExposureEditor(findViewById(R.id.moon_lb_container))
+        moonLdEditor = ExposureEditor(findViewById(R.id.moon_ld_container))
+    }
+
+    // iso/ss/fn の3行スライダーをコンテナに動的生成し、文字列配列から選択させる。
+    // 保存時は選択中の文字列(カメラ設定値)をそのまま JSON に書く。
+    private inner class ExposureEditor(container: LinearLayout) {
+        private val isoRow = Row(container, "ISO", isoValues)
+        private val ssRow = Row(container, "SS", ssValues)
+        private val fnRow = Row(container, "F", fnValues)
+
+        private inner class Row(container: LinearLayout, label: String, val vals: List<String>) {
+            val seek = SeekBar(this@MainActivity)
+            val valTv = TextView(this@MainActivity)
+            init {
+                val row = LinearLayout(this@MainActivity)
+                row.orientation = LinearLayout.HORIZONTAL
+                row.gravity = Gravity.CENTER_VERTICAL
+                val lab = TextView(this@MainActivity)
+                lab.text = label
+                lab.layoutParams = LinearLayout.LayoutParams(dp(40), ViewGroup.LayoutParams.WRAP_CONTENT)
+                seek.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                seek.max = (vals.size - 1).coerceAtLeast(0)
+                valTv.layoutParams = LinearLayout.LayoutParams(dp(64), ViewGroup.LayoutParams.WRAP_CONTENT)
+                valTv.gravity = Gravity.END
+                seek.setOnSeekBarChangeListener(seekListener { valTv.text = vals.getOrElse(it) { "" } })
+                row.addView(lab); row.addView(seek); row.addView(valTv)
+                container.addView(row)
+            }
+            fun set(value: String) {
+                val idx = vals.indexOf(value).let { if (it < 0) 0 else it }
+                seek.progress = idx
+                valTv.text = vals.getOrElse(idx) { "" }   // 同値でリスナが発火しない場合に備え明示
+            }
+            fun get(): String = vals.getOrElse(seek.progress) { "" }
+        }
+
+        fun set(o: JSONObject?) {
+            isoRow.set(o?.optString("iso") ?: "")
+            ssRow.set(o?.optString("ss") ?: "")
+            fnRow.set(o?.optString("fn") ?: "")
+        }
+
+        fun get(): JSONObject = JSONObject()
+            .put("iso", isoRow.get()).put("ss", ssRow.get()).put("fn", fnRow.get())
     }
 
     // 簡易カラーピッカー(R/G/B スライダー + プレビュー)。
