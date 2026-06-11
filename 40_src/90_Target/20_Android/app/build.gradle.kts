@@ -37,10 +37,10 @@ android {
         }
     }
 
-    // Kotlin/UI ソースは 40_src/10_UI/20_Android に置く(ユーザー指定)
+    // Kotlin/UI ソース・UIリソースは 40_src/10_UI/20_Android に置く(ユーザー指定)。
+    // ビルド対象(90_Target)には AndroidManifest.xml と cpp(CMake) のみを残す。
     sourceSets["main"].java.srcDirs("../../../10_UI/20_Android")
-    // UI リソース(VectorDrawable等)も UI フォルダ配下に置く。既定の res にも残す(レイアウト等)。
-    sourceSets["main"].res.srcDir("../../../10_UI/20_Android/res")
+    sourceSets["main"].res.setSrcDirs(listOf("../../../10_UI/20_Android/res"))
 
     buildTypes {
         release {
