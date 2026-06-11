@@ -7,5 +7,6 @@
 
     <include layout="@layout/screen_plan" />
     <include layout="@layout/screen_capturing" />
-    <include layout="@layout/screen_ccm" />
+    <include layout="@layout/screen_ccm_menu" />
+    <include layout="@layout/screen_ccm_edit" />
 </ViewFlipper>

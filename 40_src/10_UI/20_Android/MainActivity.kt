@@ -8,12 +8,15 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
@@ -53,20 +56,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private lateinit var ipInput: EditText
     private lateinit var connectButton: Button
 
-    // 撮影制御方法初期値(撮影制御方法エディタ)
+    // 撮影制御方法初期値: メニュー + 方法別エディタ
     private lateinit var planMenu: ImageView
-    private lateinit var ccmBack: ImageView
-    private lateinit var ccmSave: Button
-    private lateinit var ccmNightIso: EditText
-    private lateinit var ccmNightSs: EditText
-    private lateinit var ccmNightFn: EditText
-    private lateinit var ccmNightAlt: EditText
-    private lateinit var ccmSunriseEv: EditText
-    private lateinit var ccmSunriseAlt: EditText
-    private lateinit var ccmSunsetEv: EditText
-    private lateinit var ccmSunsetAlt: EditText
-    private lateinit var ccmDayEv: EditText
-    private var ccmJson: JSONObject? = null
+    private var ccmJson: JSONObject? = null     // /asset/ccmDefaults.json 全体
+    private var editingKey = "night"            // 編集中の方法
+    private var editColor = 0                    // 編集中の色(0xRRGGBB)
 
     // 430
     private lateinit var capName: TextView
@@ -139,17 +133,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         capSchedule = findViewById(R.id.cap_scheduleContainer)
         capStopButton = findViewById(R.id.cap_stopButton)
         planMenu = findViewById(R.id.plan_menu)
-        ccmBack = findViewById(R.id.ccm_back)
-        ccmSave = findViewById(R.id.ccm_save)
-        ccmNightIso = findViewById(R.id.ccm_night_iso)
-        ccmNightSs = findViewById(R.id.ccm_night_ss)
-        ccmNightFn = findViewById(R.id.ccm_night_fn)
-        ccmNightAlt = findViewById(R.id.ccm_night_alt)
-        ccmSunriseEv = findViewById(R.id.ccm_sunrise_ev)
-        ccmSunriseAlt = findViewById(R.id.ccm_sunrise_alt)
-        ccmSunsetEv = findViewById(R.id.ccm_sunset_ev)
-        ccmSunsetAlt = findViewById(R.id.ccm_sunset_alt)
-        ccmDayEv = findViewById(R.id.ccm_day_ev)
     }
 
     private fun wireListeners() {
@@ -193,46 +176,142 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val host = ipInput.text.toString().trim()
             Thread { HgeNative.nativeConnectManual(host) }.start()
         }
-        planMenu.setOnClickListener { openCcmEditor() }
-        ccmBack.setOnClickListener { flipper.displayedChild = 0 }
-        ccmSave.setOnClickListener { saveCcmEditor() }
+        // 初期値メニュー(plan_menu→メニュー画面)
+        planMenu.setOnClickListener { openCcmMenu() }
+        findViewById<ImageView>(R.id.cmenu_back).setOnClickListener { flipper.displayedChild = 0 }
+        findViewById<Button>(R.id.cmenu_night).setOnClickListener { openCcmEdit("night") }
+        findViewById<Button>(R.id.cmenu_sunrise).setOnClickListener { openCcmEdit("sunrise") }
+        findViewById<Button>(R.id.cmenu_sunset).setOnClickListener { openCcmEdit("sunset") }
+        findViewById<Button>(R.id.cmenu_day).setOnClickListener { openCcmEdit("day") }
+        findViewById<Button>(R.id.cmenu_moon).setOnClickListener {
+            Toast.makeText(this, "月の影響への対処は次のスライスで対応します", Toast.LENGTH_SHORT).show()
+        }
+        findViewById<ImageView>(R.id.edit_back).setOnClickListener { flipper.displayedChild = 2 }
+        findViewById<Button>(R.id.edit_save).setOnClickListener { saveCcmEdit() }
+        findViewById<Button>(R.id.edit_color_btn).setOnClickListener {
+            showColorPicker(editColor) { c -> editColor = c; findViewById<View>(R.id.edit_color_swatch).setBackgroundColor(0xFF000000.toInt() or c) }
+        }
+        // スライダーの値ラベル更新
+        findViewById<SeekBar>(R.id.edit_alt_seek).setOnSeekBarChangeListener(seekListener {
+            findViewById<TextView>(R.id.edit_alt_val).text = String.format("%.1f°", seekToAlt(it))
+        })
+        findViewById<SeekBar>(R.id.edit_ev_seek).setOnSeekBarChangeListener(seekListener {
+            findViewById<TextView>(R.id.edit_ev_val).text = String.format("%+.1f", seekToEv(it))
+        })
     }
 
-    // --- 撮影制御方法 初期値エディタ ---
-    private fun openCcmEditor() {
-        val o = try { JSONObject(HgeNative.nativeGetCcmDefaults()) } catch (e: Exception) { null } ?: return
-        ccmJson = o
-        o.optJSONObject("night")?.let { n ->
-            n.optJSONObject("limitBright")?.let { b ->
-                ccmNightIso.setText(b.optInt("iso").toString())
-                ccmNightSs.setText(b.optDouble("ss").toString())
-                ccmNightFn.setText(b.optDouble("fn").toString())
-            }
-            ccmNightAlt.setText(n.optDouble("sunAltitude").toString())
-        }
-        o.optJSONObject("sunrise")?.let { ccmSunriseEv.setText(it.optDouble("ev").toString()); ccmSunriseAlt.setText(it.optDouble("sunAltitude").toString()) }
-        o.optJSONObject("sunset")?.let { ccmSunsetEv.setText(it.optDouble("ev").toString()); ccmSunsetAlt.setText(it.optDouble("sunAltitude").toString()) }
-        o.optJSONObject("day")?.let { ccmDayEv.setText(it.optDouble("ev").toString()) }
+    // --- 撮影制御方法 初期値: メニュー + 方法別エディタ ---
+
+    private fun openCcmMenu() {
+        ccmJson = try { JSONObject(HgeNative.nativeGetCcmDefaults()) } catch (e: Exception) { null }
         flipper.displayedChild = 2
     }
 
-    private fun saveCcmEditor() {
-        val o = ccmJson ?: return
-        fun d(e: EditText, def: Double) = e.text.toString().toDoubleOrNull() ?: def
-        fun i(e: EditText, def: Int) = e.text.toString().toIntOrNull() ?: def
-        o.optJSONObject("night")?.let { n ->
-            val exp = JSONObject().put("iso", i(ccmNightIso, 1600))
-                .put("ss", d(ccmNightSs, 8.0)).put("fn", d(ccmNightFn, 1.4))
-            n.put("limitBright", exp)
-            n.put("limitDark", JSONObject(exp.toString()))  // 夜間は固定露出=明暗限界同値
-            n.put("sunAltitude", d(ccmNightAlt, -18.0))
+    // 太陽高度: SeekBar 0..140 ⇔ -19.0..-5.0°(0.1刻み)
+    private fun altToSeek(v: Double) = ((v + 19.0) * 10.0).toInt().coerceIn(0, 140)
+    private fun seekToAlt(p: Int) = -19.0 + p * 0.1
+    // ev: SeekBar 0..30 ⇔ -5.0..+5.0(1/3刻み)
+    private fun evToSeek(v: Double) = ((v + 5.0) * 3.0).toInt().coerceIn(0, 30)
+    private fun seekToEv(p: Int) = -5.0 + p / 3.0
+
+    private fun openCcmEdit(key: String) {
+        val o = ccmJson?.optJSONObject(key) ?: return
+        editingKey = key
+        val title = mapOf("night" to "夜間撮影", "sunrise" to "朝日撮影", "sunset" to "夕日撮影", "day" to "日中撮影")[key]
+        findViewById<TextView>(R.id.edit_title).text = title
+        editColor = o.optInt("color", 0)
+        findViewById<View>(R.id.edit_color_swatch).setBackgroundColor(0xFF000000.toInt() or editColor)
+
+        val hasAlt = key != "day"
+        val hasEv = key != "night"
+        val isNight = key == "night"
+        findViewById<View>(R.id.edit_alt_section).visibility = if (hasAlt) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.edit_ev_section).visibility = if (hasEv) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.edit_autoEdge).visibility = if (isNight) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.edit_fixed_section).visibility = if (isNight) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.edit_limit_section).visibility = if (isNight) View.GONE else View.VISIBLE
+
+        if (hasAlt) findViewById<SeekBar>(R.id.edit_alt_seek).progress = altToSeek(o.optDouble("sunAltitude", -18.0))
+        if (hasEv) findViewById<SeekBar>(R.id.edit_ev_seek).progress = evToSeek(o.optDouble("ev", 0.0))
+        if (isNight) {
+            findViewById<CheckBox>(R.id.edit_autoEdge).isChecked = o.optBoolean("autoEdge", true)
+            o.optJSONObject("limitBright")?.let { b ->
+                findViewById<EditText>(R.id.edit_fix_iso).setText(b.optInt("iso").toString())
+                findViewById<EditText>(R.id.edit_fix_ss).setText(b.optDouble("ss").toString())
+                findViewById<EditText>(R.id.edit_fix_fn).setText(b.optDouble("fn").toString())
+            }
+        } else {
+            o.optJSONObject("limitBright")?.let { b ->
+                findViewById<EditText>(R.id.edit_lb_iso).setText(b.optInt("iso").toString())
+                findViewById<EditText>(R.id.edit_lb_ss).setText(b.optDouble("ss").toString())
+                findViewById<EditText>(R.id.edit_lb_fn).setText(b.optDouble("fn").toString())
+            }
+            o.optJSONObject("limitDark")?.let { d ->
+                findViewById<EditText>(R.id.edit_ld_iso).setText(d.optInt("iso").toString())
+                findViewById<EditText>(R.id.edit_ld_ss).setText(d.optDouble("ss").toString())
+                findViewById<EditText>(R.id.edit_ld_fn).setText(d.optDouble("fn").toString())
+            }
         }
-        o.optJSONObject("sunrise")?.let { it.put("ev", d(ccmSunriseEv, -3.0)); it.put("sunAltitude", d(ccmSunriseAlt, -6.0)) }
-        o.optJSONObject("sunset")?.let { it.put("ev", d(ccmSunsetEv, -3.0)); it.put("sunAltitude", d(ccmSunsetAlt, -6.0)) }
-        o.optJSONObject("day")?.let { it.put("ev", d(ccmDayEv, 0.0)) }
-        val r = HgeNative.nativeSetCcmDefaults(o.toString())  // 保存→スケジュールはEV_SCHEDULEで自動更新
-        Toast.makeText(this, if (r == 0) "初期値を保存しました" else "保存に失敗しました", Toast.LENGTH_SHORT).show()
-        flipper.displayedChild = 0
+        flipper.displayedChild = 3
+    }
+
+    private fun saveCcmEdit() {
+        val all = ccmJson ?: return
+        val o = all.optJSONObject(editingKey) ?: return
+        fun et(id: Int) = findViewById<EditText>(id).text.toString()
+        fun exp(iso: Int, ss: Int, fn: Int) = JSONObject()
+            .put("iso", et(iso).toIntOrNull() ?: 0)
+            .put("ss", et(ss).toDoubleOrNull() ?: 0.0)
+            .put("fn", et(fn).toDoubleOrNull() ?: 0.0)
+
+        o.put("color", editColor)
+        if (editingKey != "day") o.put("sunAltitude", seekToAlt(findViewById<SeekBar>(R.id.edit_alt_seek).progress))
+        if (editingKey != "night") o.put("ev", seekToEv(findViewById<SeekBar>(R.id.edit_ev_seek).progress))
+        if (editingKey == "night") {
+            o.put("autoEdge", findViewById<CheckBox>(R.id.edit_autoEdge).isChecked)
+            val e = exp(R.id.edit_fix_iso, R.id.edit_fix_ss, R.id.edit_fix_fn)
+            o.put("limitBright", e)
+            o.put("limitDark", JSONObject(e.toString()))   // 固定露出は明暗同値
+        } else {
+            o.put("limitBright", exp(R.id.edit_lb_iso, R.id.edit_lb_ss, R.id.edit_lb_fn))
+            o.put("limitDark", exp(R.id.edit_ld_iso, R.id.edit_ld_ss, R.id.edit_ld_fn))
+        }
+        val r = HgeNative.nativeSetCcmDefaults(all.toString())
+        Toast.makeText(this, if (r == 0) "保存しました" else "保存に失敗しました", Toast.LENGTH_SHORT).show()
+        flipper.displayedChild = 2
+    }
+
+    // SeekBar 値変更だけ拾う簡易リスナ。
+    private fun seekListener(onChange: (Int) -> Unit) = object : SeekBar.OnSeekBarChangeListener {
+        override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) = onChange(p)
+        override fun onStartTrackingTouch(sb: SeekBar?) {}
+        override fun onStopTrackingTouch(sb: SeekBar?) {}
+    }
+
+    // 簡易カラーピッカー(R/G/B スライダー + プレビュー)。
+    private fun showColorPicker(initial: Int, onPick: (Int) -> Unit) {
+        val ctx = this
+        val pad = (16 * resources.displayMetrics.density).toInt()
+        val root = LinearLayout(ctx); root.orientation = LinearLayout.VERTICAL; root.setPadding(pad, pad, pad, pad)
+        val preview = View(ctx)
+        preview.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (40 * resources.displayMetrics.density).toInt())
+        var r = (initial shr 16) and 0xFF; var g = (initial shr 8) and 0xFF; var b = initial and 0xFF
+        fun cur() = (r shl 16) or (g shl 8) or b
+        fun refresh() { preview.setBackgroundColor(0xFF000000.toInt() or cur()) }
+        refresh(); root.addView(preview)
+        fun bar(label: String, init: Int, set: (Int) -> Unit): SeekBar {
+            val t = TextView(ctx); t.text = label; root.addView(t)
+            val s = SeekBar(ctx); s.max = 255; s.progress = init
+            s.setOnSeekBarChangeListener(seekListener { set(it); refresh() })
+            root.addView(s); return s
+        }
+        bar("赤 R", r) { r = it }; bar("緑 G", g) { g = it }; bar("青 B", b) { b = it }
+        androidx.appcompat.app.AlertDialog.Builder(ctx)
+            .setTitle("色の設定")
+            .setView(root)
+            .setPositiveButton("OK") { _, _ -> onPick(cur()) }
+            .setNegativeButton("取消", null)
+            .show()
     }
 
     private fun pickDate(cal: Calendar) {
