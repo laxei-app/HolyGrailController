@@ -13,9 +13,16 @@ namespace osfile
 	// M5Stack 等、設定不要なプラットフォームでは無視してよい。
 	void setBaseDir(const std::string& dir);
 
-	// ログ保存ディレクトリ(末尾セパレータ無し)を返す。無ければ作成を試みる。
-	// 取得・作成に失敗したら空文字を返す。
+	// 指定名のサブディレクトリ(例 "asset" "plan" "master" "log")のフルパスを返す。
+	// 無ければ作成を試みる。取得・作成に失敗したら空文字を返す(データ構造仕様書43 §7.6)。
+	std::string dir(const std::string& name);
+
+	// ログ保存ディレクトリ(= dir("log"))。
 	std::string logDir(void);
+
+	// path へアトミックに書き込む(一時ファイルへ書いて rename。§7.5)。
+	// ディレクトリが無ければ作成を試みる。return: 成功
+	bool writeAll(const std::string& path, const char* data, size_t len);
 
 	// path へ追記し、即 flush する。ディレクトリが無ければ作成を試みる。
 	// path はフルパス。return: 成功

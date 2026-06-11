@@ -201,7 +201,7 @@ namespace
 		g_plan.start = startDt;
 		g_plan.end   = endDt;
 
-		astro::ccmSet set = dataManager::factoryCcmSet();
+		astro::ccmSet set = dataManager::currentCcmSet();
 		errCode e = astro::buildSchedule(g_plan, set, g_offMin);
 		if (e != ERR_HGC_OK) { return e; }
 
@@ -461,6 +461,37 @@ int32_t hge_getPlanJson(char* buf, int32_t* inoutLen)
 	}
 	std::memcpy(buf, s.c_str(), need);
 	*inoutLen = need;
+	return ERR_HGC_OK;
+}
+
+int32_t hge_getCcmDefaultsJson(char* buf, int32_t* inoutLen)
+{
+	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
+	std::string s = dataManager::ccmDefaultsJson();
+	int32_t need = static_cast<int32_t>(s.size()) + 1;
+	if (buf == nullptr || *inoutLen < need) { *inoutLen = need; return ERR_HGC_BUF_SHORT; }
+	std::memcpy(buf, s.c_str(), need);
+	*inoutLen = need;
+	return ERR_HGC_OK;
+}
+
+int32_t hge_setCcmDefaultsJson(const char* json, int32_t len)
+{
+	if (json == nullptr || len <= 0) { return ERR_HGC_INVALID_ARG; }
+	if (!dataManager::setCcmDefaultsJson(std::string(json, static_cast<size_t>(len))))
+	{
+		return ERR_HGC_JSON_PARSE;
+	}
+	// 初期値変更を反映: 計画があればスケジュールを再生成して通知
+	if (g_planReady)
+	{
+		astro::ccmSet set = dataManager::currentCcmSet();
+		if (astro::buildSchedule(g_plan, set, g_offMin) == ERR_HGC_OK)
+		{
+			buildScheduleJson();
+			notify(HGE_EV_SCHEDULE, g_schedJson);
+		}
+	}
 	return ERR_HGC_OK;
 }
 

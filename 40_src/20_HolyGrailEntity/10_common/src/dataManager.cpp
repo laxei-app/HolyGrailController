@@ -1,10 +1,15 @@
 ﻿#include "common.h"
 #include "dataManager.h"
 #include "osFile.h"
+#include "csJson.h"
+#include <json/nlohmann/json.hpp>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
 #include <cmath>
+#include <memory>
+
+using json = nlohmann::json;
 
 // 出荷時設定の撮影制御方法一式(データ構造仕様書43 §3 / §7.2)。
 astro::ccmSet dataManager::factoryCcmSet(void)
@@ -42,6 +47,72 @@ astro::ccmSet dataManager::factoryCcmSet(void)
 	set.day = day;
 
 	return set;
+}
+
+// ============================================================================
+//  撮影制御方法の初期値(/asset/ccmDefaults.json。仕様書43 §7.6)
+// ============================================================================
+namespace
+{
+	astro::ccmSet g_ccmDefaults;
+	bool          g_defaultsLoaded = false;
+
+	std::string ccmDefaultsPath(void)
+	{
+		std::string d = osfile::dir("asset");
+		return d.empty() ? std::string() : (d + "/ccmDefaults.json");
+	}
+
+	// JSON文字列を ccmSet(night/sunrise/sunset/day)へ復元する。4種揃わなければ失敗。
+	bool parseCcmSet(const std::string& s, astro::ccmSet& set)
+	{
+		json j = json::parse(s, nullptr, false);
+		if (j.is_discarded() || !j.is_object()) { return false; }
+		auto get = [&](const char* k) -> std::shared_ptr<hgc::ccmBase> {
+			return j.contains(k) ? csjson::ccmFromJson(j[k].dump()) : nullptr;
+		};
+		set.night   = std::dynamic_pointer_cast<hgc::ccmNight>(get("night"));
+		set.sunrise = std::dynamic_pointer_cast<hgc::ccmSunrise>(get("sunrise"));
+		set.sunset  = std::dynamic_pointer_cast<hgc::ccmSunset>(get("sunset"));
+		set.day     = std::dynamic_pointer_cast<hgc::ccmDay>(get("day"));
+		return set.night && set.sunrise && set.sunset && set.day;
+	}
+}
+
+astro::ccmSet dataManager::currentCcmSet(void)
+{
+	if (!g_defaultsLoaded)
+	{
+		g_defaultsLoaded = true;
+		std::string path = ccmDefaultsPath();
+		std::string body;
+		bool ok = (!path.empty() && osfile::readAll(path, body) && parseCcmSet(body, g_ccmDefaults));
+		if (!ok) { g_ccmDefaults = factoryCcmSet(); }	// 無効/不在は出荷時設定でフォールバック
+	}
+	return g_ccmDefaults;
+}
+
+std::string dataManager::ccmDefaultsJson(void)
+{
+	astro::ccmSet set = currentCcmSet();
+	json j;
+	j["version"] = 1;
+	if (set.night)   { j["night"]   = json::parse(csjson::ccmToJson(*set.night)); }
+	if (set.sunrise) { j["sunrise"] = json::parse(csjson::ccmToJson(*set.sunrise)); }
+	if (set.sunset)  { j["sunset"]  = json::parse(csjson::ccmToJson(*set.sunset)); }
+	if (set.day)     { j["day"]     = json::parse(csjson::ccmToJson(*set.day)); }
+	return j.dump();
+}
+
+bool dataManager::setCcmDefaultsJson(const std::string& jsonStr)
+{
+	astro::ccmSet set;
+	if (!parseCcmSet(jsonStr, set)) { return false; }
+	g_ccmDefaults = set;
+	g_defaultsLoaded = true;
+	std::string path = ccmDefaultsPath();
+	if (path.empty()) { return false; }
+	return osfile::writeAll(path, jsonStr.data(), jsonStr.size());
 }
 
 // 出荷時設定の露出平滑化(データ構造仕様書43 §5.10 の出荷時設定)。

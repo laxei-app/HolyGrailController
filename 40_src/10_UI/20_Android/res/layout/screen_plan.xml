@@ -31,8 +31,11 @@
             android:textStyle="bold" />
 
         <ImageView
+            android:id="@+id/plan_menu"
             android:layout_width="32dp"
             android:layout_height="32dp"
+            android:clickable="true"
+            android:focusable="true"
             android:src="@drawable/ic_menu" />
     </LinearLayout>
 

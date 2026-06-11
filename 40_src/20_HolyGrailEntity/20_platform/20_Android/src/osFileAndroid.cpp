@@ -35,7 +35,7 @@ namespace osfile
 		g_base = dir;
 	}
 
-	std::string logDir(void)
+	std::string dir(const std::string& name)
 	{
 		std::string base;
 		{
@@ -43,9 +43,27 @@ namespace osfile
 			base = g_base;
 		}
 		if (base.empty()) { return ""; }
-		std::string dir = base + "/log";
-		mkdirs(dir);
-		return dir;
+		std::string d = base + "/" + name;
+		mkdirs(d);
+		return d;
+	}
+
+	std::string logDir(void)
+	{
+		return dir("log");
+	}
+
+	bool writeAll(const std::string& path, const char* data, size_t len)
+	{
+		std::string tmp = path + ".tmp";
+		FILE* f = std::fopen(tmp.c_str(), "wb");
+		if (f == nullptr) { return false; }
+		size_t n = std::fwrite(data, 1, len, f);
+		std::fflush(f);
+		std::fclose(f);
+		if (n != len) { std::remove(tmp.c_str()); return false; }
+		std::remove(path.c_str());
+		return std::rename(tmp.c_str(), path.c_str()) == 0;
 	}
 
 	bool append(const std::string& path, const char* data, size_t len)

@@ -12,9 +12,11 @@ import android.view.ViewGroup
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.Spinner
 import android.widget.TextView
+import android.widget.Toast
 import android.widget.ViewFlipper
 import androidx.appcompat.app.AppCompatActivity
 import org.json.JSONArray
@@ -50,6 +52,21 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private lateinit var searchButton: Button
     private lateinit var ipInput: EditText
     private lateinit var connectButton: Button
+
+    // 撮影制御方法初期値(撮影制御方法エディタ)
+    private lateinit var planMenu: ImageView
+    private lateinit var ccmBack: ImageView
+    private lateinit var ccmSave: Button
+    private lateinit var ccmNightIso: EditText
+    private lateinit var ccmNightSs: EditText
+    private lateinit var ccmNightFn: EditText
+    private lateinit var ccmNightAlt: EditText
+    private lateinit var ccmSunriseEv: EditText
+    private lateinit var ccmSunriseAlt: EditText
+    private lateinit var ccmSunsetEv: EditText
+    private lateinit var ccmSunsetAlt: EditText
+    private lateinit var ccmDayEv: EditText
+    private var ccmJson: JSONObject? = null
 
     // 430
     private lateinit var capName: TextView
@@ -121,6 +138,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
         capCaptured = findViewById(R.id.cap_capturedText)
         capSchedule = findViewById(R.id.cap_scheduleContainer)
         capStopButton = findViewById(R.id.cap_stopButton)
+        planMenu = findViewById(R.id.plan_menu)
+        ccmBack = findViewById(R.id.ccm_back)
+        ccmSave = findViewById(R.id.ccm_save)
+        ccmNightIso = findViewById(R.id.ccm_night_iso)
+        ccmNightSs = findViewById(R.id.ccm_night_ss)
+        ccmNightFn = findViewById(R.id.ccm_night_fn)
+        ccmNightAlt = findViewById(R.id.ccm_night_alt)
+        ccmSunriseEv = findViewById(R.id.ccm_sunrise_ev)
+        ccmSunriseAlt = findViewById(R.id.ccm_sunrise_alt)
+        ccmSunsetEv = findViewById(R.id.ccm_sunset_ev)
+        ccmSunsetAlt = findViewById(R.id.ccm_sunset_alt)
+        ccmDayEv = findViewById(R.id.ccm_day_ev)
     }
 
     private fun wireListeners() {
@@ -164,6 +193,46 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val host = ipInput.text.toString().trim()
             Thread { HgeNative.nativeConnectManual(host) }.start()
         }
+        planMenu.setOnClickListener { openCcmEditor() }
+        ccmBack.setOnClickListener { flipper.displayedChild = 0 }
+        ccmSave.setOnClickListener { saveCcmEditor() }
+    }
+
+    // --- 撮影制御方法 初期値エディタ ---
+    private fun openCcmEditor() {
+        val o = try { JSONObject(HgeNative.nativeGetCcmDefaults()) } catch (e: Exception) { null } ?: return
+        ccmJson = o
+        o.optJSONObject("night")?.let { n ->
+            n.optJSONObject("limitBright")?.let { b ->
+                ccmNightIso.setText(b.optInt("iso").toString())
+                ccmNightSs.setText(b.optDouble("ss").toString())
+                ccmNightFn.setText(b.optDouble("fn").toString())
+            }
+            ccmNightAlt.setText(n.optDouble("sunAltitude").toString())
+        }
+        o.optJSONObject("sunrise")?.let { ccmSunriseEv.setText(it.optDouble("ev").toString()); ccmSunriseAlt.setText(it.optDouble("sunAltitude").toString()) }
+        o.optJSONObject("sunset")?.let { ccmSunsetEv.setText(it.optDouble("ev").toString()); ccmSunsetAlt.setText(it.optDouble("sunAltitude").toString()) }
+        o.optJSONObject("day")?.let { ccmDayEv.setText(it.optDouble("ev").toString()) }
+        flipper.displayedChild = 2
+    }
+
+    private fun saveCcmEditor() {
+        val o = ccmJson ?: return
+        fun d(e: EditText, def: Double) = e.text.toString().toDoubleOrNull() ?: def
+        fun i(e: EditText, def: Int) = e.text.toString().toIntOrNull() ?: def
+        o.optJSONObject("night")?.let { n ->
+            val exp = JSONObject().put("iso", i(ccmNightIso, 1600))
+                .put("ss", d(ccmNightSs, 8.0)).put("fn", d(ccmNightFn, 1.4))
+            n.put("limitBright", exp)
+            n.put("limitDark", JSONObject(exp.toString()))  // 夜間は固定露出=明暗限界同値
+            n.put("sunAltitude", d(ccmNightAlt, -18.0))
+        }
+        o.optJSONObject("sunrise")?.let { it.put("ev", d(ccmSunriseEv, -3.0)); it.put("sunAltitude", d(ccmSunriseAlt, -6.0)) }
+        o.optJSONObject("sunset")?.let { it.put("ev", d(ccmSunsetEv, -3.0)); it.put("sunAltitude", d(ccmSunsetAlt, -6.0)) }
+        o.optJSONObject("day")?.let { it.put("ev", d(ccmDayEv, 0.0)) }
+        val r = HgeNative.nativeSetCcmDefaults(o.toString())  // 保存→スケジュールはEV_SCHEDULEで自動更新
+        Toast.makeText(this, if (r == 0) "初期値を保存しました" else "保存に失敗しました", Toast.LENGTH_SHORT).show()
+        flipper.displayedChild = 0
     }
 
     private fun pickDate(cal: Calendar) {

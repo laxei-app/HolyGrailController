@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 撮影制御方法の初期値(仕様書10 §7.4 / メニュー「撮影制御方法初期値」)。
+     夜間/朝日/夕日/日中 の初期値を編集して保存する。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="#1565C0"
+        android:gravity="center_vertical"
+        android:padding="8dp">
+        <ImageView android:id="@+id/ccm_back" android:layout_width="32dp" android:layout_height="32dp"
+            android:clickable="true" android:focusable="true" android:src="@drawable/ic_back" />
+        <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+            android:gravity="center" android:text="撮影制御方法 初期値" android:textColor="#FFFFFF"
+            android:textSize="20sp" android:textStyle="bold" />
+        <View android:layout_width="32dp" android:layout_height="32dp" />
+    </LinearLayout>
+
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="12dp">
+
+            <!-- 夜間撮影(固定露出) -->
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:background="#B39DDB" android:padding="6dp" android:text="夜間撮影(固定露出)" android:textStyle="bold" />
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginTop="4dp">
+                <TextView android:layout_width="48dp" android:layout_height="wrap_content" android:text="ISO" android:gravity="center_vertical" />
+                <EditText android:id="@+id/ccm_night_iso" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:inputType="number" />
+                <TextView android:layout_width="32dp" android:layout_height="wrap_content" android:text="SS" android:gravity="center" />
+                <EditText android:id="@+id/ccm_night_ss" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:inputType="numberDecimal" />
+                <TextView android:layout_width="24dp" android:layout_height="wrap_content" android:text="F" android:gravity="center" />
+                <EditText android:id="@+id/ccm_night_fn" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:inputType="numberDecimal" />
+            </LinearLayout>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+                <TextView android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="固定露出 太陽高度(°)" android:gravity="center_vertical" />
+                <EditText android:id="@+id/ccm_night_alt" android:layout_width="120dp" android:layout_height="wrap_content" android:inputType="numberDecimal|numberSigned" />
+            </LinearLayout>
+
+            <!-- 朝日撮影 -->
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="10dp" android:background="#FFF59D" android:padding="6dp" android:text="朝日撮影(自動露出)" android:textStyle="bold" />
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginTop="4dp">
+                <TextView android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="露出補正 ev" android:gravity="center_vertical" />
+                <EditText android:id="@+id/ccm_sunrise_ev" android:layout_width="120dp" android:layout_height="wrap_content" android:inputType="numberDecimal|numberSigned" />
+            </LinearLayout>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+                <TextView android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="薄明 太陽高度(°)" android:gravity="center_vertical" />
+                <EditText android:id="@+id/ccm_sunrise_alt" android:layout_width="120dp" android:layout_height="wrap_content" android:inputType="numberDecimal|numberSigned" />
+            </LinearLayout>
+
+            <!-- 夕日撮影 -->
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="10dp" android:background="#FFCC80" android:padding="6dp" android:text="夕日撮影(自動露出)" android:textStyle="bold" />
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginTop="4dp">
+                <TextView android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="露出補正 ev" android:gravity="center_vertical" />
+                <EditText android:id="@+id/ccm_sunset_ev" android:layout_width="120dp" android:layout_height="wrap_content" android:inputType="numberDecimal|numberSigned" />
+            </LinearLayout>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
+                <TextView android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="薄明 太陽高度(°)" android:gravity="center_vertical" />
+                <EditText android:id="@+id/ccm_sunset_alt" android:layout_width="120dp" android:layout_height="wrap_content" android:inputType="numberDecimal|numberSigned" />
+            </LinearLayout>
+
+            <!-- 日中撮影 -->
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="10dp" android:background="#90CAF9" android:padding="6dp" android:text="日中撮影(自動露出)" android:textStyle="bold" />
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginTop="4dp">
+                <TextView android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="露出補正 ev" android:gravity="center_vertical" />
+                <EditText android:id="@+id/ccm_day_ev" android:layout_width="120dp" android:layout_height="wrap_content" android:inputType="numberDecimal|numberSigned" />
+            </LinearLayout>
+
+            <Button android:id="@+id/ccm_save" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="16dp" android:text="保存" android:textSize="18sp" />
+
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="8dp" android:textSize="11sp" android:textColor="#888888"
+                android:text="※ ここで変更した初期値が新しいスケジュール生成に使われます(露出の限界値などは現状そのまま保持)。" />
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>

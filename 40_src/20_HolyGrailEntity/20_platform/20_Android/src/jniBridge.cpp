@@ -4,6 +4,7 @@
 #include <jni.h>
 #include <string>
 #include <vector>
+#include <cstring>
 
 #include "holyGrailEntity.h"
 #include "osFile.h"
@@ -136,6 +137,26 @@ Java_app_laxei_holygrail_HgeNative_nativeSetPlanTimes(JNIEnv* env, jobject /*thi
 	jint r = hge_setPlanTimes(s ? s : "", e ? e : "", offMin);
 	env->ReleaseStringUTFChars(start_, s);
 	env->ReleaseStringUTFChars(end_, e);
+	return r;
+}
+
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeGetCcmDefaults(JNIEnv* env, jobject /*thiz*/)
+{
+	int32_t len = 0;
+	hge_getCcmDefaultsJson(nullptr, &len);
+	if (len <= 0) { return env->NewStringUTF(""); }
+	std::vector<char> buf(static_cast<size_t>(len));
+	if (hge_getCcmDefaultsJson(buf.data(), &len) != 0) { return env->NewStringUTF(""); }
+	return env->NewStringUTF(buf.data());
+}
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetCcmDefaults(JNIEnv* env, jobject /*thiz*/, jstring json_)
+{
+	const char* j = env->GetStringUTFChars(json_, nullptr);
+	jint r = hge_setCcmDefaultsJson(j ? j : "", j ? static_cast<int32_t>(std::strlen(j)) : 0);
+	env->ReleaseStringUTFChars(json_, j);
 	return r;
 }
 

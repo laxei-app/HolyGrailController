@@ -81,6 +81,13 @@ int32_t hge_getScheduleJson(char* buf, int32_t* inoutLen);
 // スマホがエッジ端末へ capturePlan 転送する際に使う(csjson::toJson)。
 int32_t hge_getPlanJson(char* buf, int32_t* inoutLen);
 
+// --- 撮影制御方法の初期値(ユーザー資産。データ構造仕様書43 §7.6) ---
+// 現在の初期値(夜間/朝日/夕日/日中)を JSON で取得(バッファ規約)。
+int32_t hge_getCcmDefaultsJson(char* buf, int32_t* inoutLen);
+// 初期値を JSON で設定し /asset/ccmDefaults.json へ保存する。
+// 計画があればスケジュールを再生成して HGE_EV_SCHEDULE で通知する。
+int32_t hge_setCcmDefaultsJson(const char* json, int32_t len);
+
 // 現在の進捗スナップショットを JSON で取得(バッファ規約)。
 //  {"state","frame","total","remainSec","elapsedSec","ccm","iso","ss","fn"}
 //  エッジ端末が progress(get) 応答に使う。

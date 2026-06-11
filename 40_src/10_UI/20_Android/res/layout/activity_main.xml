@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 330撮影計画設定 と 430撮影中 を ViewFlipper で切り替える。 -->
+<!-- 330撮影計画設定 / 430撮影中 / 撮影制御方法初期値 を ViewFlipper で切り替える。 -->
 <ViewFlipper xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/flipper"
     android:layout_width="match_parent"
@@ -7,4 +7,5 @@
 
     <include layout="@layout/screen_plan" />
     <include layout="@layout/screen_capturing" />
+    <include layout="@layout/screen_ccm" />
 </ViewFlipper>

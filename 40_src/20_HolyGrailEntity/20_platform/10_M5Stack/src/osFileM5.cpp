@@ -12,7 +12,6 @@
 namespace
 {
 	fs::FS*     g_fs = nullptr;	// 採用したファイルシステム(&SD or &LittleFS)
-	std::string g_base;			// ログのベースディレクトリ
 	bool        g_inited = false;
 
 	// CoreS3 の microSD は SPI 共有(SCK=36, MISO=35, MOSI=37, CS=4)。
@@ -28,25 +27,19 @@ namespace
 		if (SD.begin(SD_CS, SPI, 25000000))
 		{
 			g_fs = &SD;
-			g_base = "/log";
 			DBGLN(col::GRN, "osfile: using SD");
 		}
 		// 2) 失敗したら内蔵フラッシュ(LittleFS)
 		else if (LittleFS.begin(true))	// true: 未フォーマットなら自動フォーマット
 		{
 			g_fs = &LittleFS;
-			g_base = "/log";
 			DBGLN(col::YEL, "osfile: SD not found, using LittleFS");
 		}
 		else
 		{
 			g_fs = nullptr;
-			g_base = "";
 			DBGLN(col::RED, "osfile: no filesystem available");
-			return;
 		}
-
-		if (g_fs && !g_fs->exists(g_base.c_str())) { g_fs->mkdir(g_base.c_str()); }
 	}
 }
 
@@ -57,10 +50,33 @@ namespace osfile
 		// M5Stack は保存先固定(SD/LittleFS)のため無視する。
 	}
 
-	std::string logDir(void)
+	std::string dir(const std::string& name)
 	{
 		ensureInit();
-		return g_base;
+		if (g_fs == nullptr) { return ""; }
+		std::string p = "/" + name;
+		if (!g_fs->exists(p.c_str())) { g_fs->mkdir(p.c_str()); }
+		return p;
+	}
+
+	std::string logDir(void)
+	{
+		return dir("log");
+	}
+
+	bool writeAll(const std::string& path, const char* data, size_t len)
+	{
+		ensureInit();
+		if (g_fs == nullptr) { return false; }
+		std::string tmp = path + ".tmp";
+		File f = g_fs->open(tmp.c_str(), FILE_WRITE);	// FILE_WRITE は新規/切詰
+		if (!f) { return false; }
+		size_t n = f.write(reinterpret_cast<const uint8_t*>(data), len);
+		f.flush();
+		f.close();
+		if (n != len) { g_fs->remove(tmp.c_str()); return false; }
+		g_fs->remove(path.c_str());	// rename先が存在すると失敗するFSがあるため消す
+		return g_fs->rename(tmp.c_str(), path.c_str());
 	}
 
 	bool append(const std::string& path, const char* data, size_t len)
