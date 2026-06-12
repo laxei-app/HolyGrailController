@@ -39,8 +39,11 @@ object HgeNative {
     external fun nativeScheduleJson(): String
     external fun nativeGetPlanJson(): String
     external fun nativeSetPlanTimes(start: String, end: String, offMin: Int): Int
+    external fun nativeSavePlan(): Int
     external fun nativeGetCcmDefaults(): String
     external fun nativeSetCcmDefaults(json: String): Int
+    external fun nativeGetPlanCcm(): String          // 計画固有ccm(初期値とは別)
+    external fun nativeSetPlanCcm(json: String): Int
     external fun nativeGetExpoValues(): String
     external fun nativeSunAltitudeTimes(altitudeDeg: Int): String   // {"start":"MM/dd HH:mm","end":...}
     external fun nativeSetListener(listener: HgeListener?)

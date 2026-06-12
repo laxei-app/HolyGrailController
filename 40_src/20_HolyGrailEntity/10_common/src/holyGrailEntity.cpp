@@ -30,6 +30,9 @@ namespace
 	bool                  g_planReady = false;
 	int                   g_offMin = 0;
 	std::string           g_schedJson;
+	// 計画固有の撮影制御方法(初期値ccmとは別管理)。計画作成時に初期値をコピーし、以後独立に編集する。
+	astro::ccmSet                 g_planCcm;
+	std::shared_ptr<hgc::ccmMoon> g_planMoon;
 
 	std::vector<device>   g_devices;
 	captureRunner         g_runner;
@@ -185,24 +188,44 @@ namespace
 	// 機材・場所・撮影制御方法などの出荷時設定は dataManager から取得する。
 	errCode loadFixedPlanImpl(void)
 	{
-		g_plan = hgc::cs{};
-
-		// 出荷時設定部分(name/場所/機材/周期/方位/仰角/向き)を取得
-		dataManager::factoryFixedPlan(g_plan);
-
-		// 開始=現在(-60秒)、終了=2時間後
+		// 端末のローカルオフセット(TZは安定)を先に求めておく。
 		time_t now = std::time(nullptr);
-		hgc::dateTime startDt; int off = 0;
-		localFromTime(now - 60, startDt, off);
-		hgc::dateTime endDt; int off2 = 0;
-		localFromTime(now + 2 * 3600, endDt, off2);
+		hgc::dateTime nowDt; int off = 0;
+		localFromTime(now, nowDt, off);
 		g_offMin = off;
-		dataManager::setLogOffset(g_offMin);	// ログのローカル時刻に反映
+		dataManager::setLogOffset(g_offMin);
+
+		// 保存済み撮影計画があれば復元する(案A 最小: 単一ファイル)。計画固有ccmも一緒に復元。
+		std::string saved, planJson, ccmJson;
+		if (dataManager::loadPlanJson(saved) &&
+		    dataManager::splitSavedPlan(saved, planJson, ccmJson) &&
+		    csjson::fromJson(planJson, g_plan))
+		{
+			if (!(ccmJson.empty() || dataManager::parseCcmSetJson(ccmJson, g_planCcm, g_planMoon)))
+			{ dataManager::parseCcmSetJson(dataManager::ccmDefaultsJson(), g_planCcm, g_planMoon); }
+			if (ccmJson.empty())
+			{ dataManager::parseCcmSetJson(dataManager::ccmDefaultsJson(), g_planCcm, g_planMoon); }
+			if (!g_planMoon) { g_planMoon = dataManager::factoryMoon(); }
+			buildScheduleJson();
+			g_planReady = true;
+			return ERR_HGC_OK;
+		}
+
+		// 無ければ出荷時の固定計画(開始=現在-60秒、終了=2時間後)。
+		g_plan = hgc::cs{};
+		dataManager::factoryFixedPlan(g_plan);
+		hgc::dateTime startDt; int o1 = 0;
+		localFromTime(now - 60, startDt, o1);
+		hgc::dateTime endDt; int o2 = 0;
+		localFromTime(now + 2 * 3600, endDt, o2);
 		g_plan.start = startDt;
 		g_plan.end   = endDt;
 
-		astro::ccmSet set = dataManager::currentCcmSet();
-		errCode e = astro::buildSchedule(g_plan, set, g_offMin);
+		// 計画固有ccm = 初期値ccmのコピー(JSON往復で深いコピー)。
+		dataManager::parseCcmSetJson(dataManager::ccmDefaultsJson(), g_planCcm, g_planMoon);
+		if (!g_planMoon) { g_planMoon = dataManager::factoryMoon(); }
+
+		errCode e = astro::buildSchedule(g_plan, g_planCcm, g_offMin);
 		if (e != ERR_HGC_OK) { return e; }
 
 		buildScheduleJson();
@@ -416,8 +439,8 @@ int32_t hge_setPlanTimes(const char* startIso, const char* endIso, int32_t offMi
 	g_plan.start = s;
 	g_plan.end   = en;
 
-	astro::ccmSet set = dataManager::factoryCcmSet();
-	errCode e = astro::buildSchedule(g_plan, set, g_offMin);	// 開始/終了からスケジュール自動生成
+	// 計画固有ccm(編集済みなら維持)を用いてスケジュールを再生成する。
+	errCode e = astro::buildSchedule(g_plan, g_planCcm, g_offMin);
 	if (e != ERR_HGC_OK) { return e; }
 	buildScheduleJson();
 	g_planReady = true;
@@ -464,6 +487,50 @@ int32_t hge_getPlanJson(char* buf, int32_t* inoutLen)
 	return ERR_HGC_OK;
 }
 
+int32_t hge_savePlan(void)
+{
+	if (!g_planReady)
+	{
+		errCode e = loadFixedPlanImpl();
+		if (e != ERR_HGC_OK) { return e; }
+	}
+	// 計画固有ccmと計画(cs)をまとめて保存する: {"planCcm":..,"plan":..}
+	std::string wrapped = "{\"planCcm\":" + dataManager::ccmSetToJson(g_planCcm, g_planMoon) +
+	                      ",\"plan\":" + csjson::toJson(g_plan) + "}";
+	return dataManager::savePlanJson(wrapped) ? ERR_HGC_OK : ERR_HGC_INVALID_STATE;
+}
+
+// 計画固有の撮影制御方法(night/sunrise/sunset/day/moon)を JSON で取得(バッファ規約)。
+int32_t hge_getPlanCcmJson(char* buf, int32_t* inoutLen)
+{
+	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
+	if (!g_planReady) { loadFixedPlanImpl(); }
+	std::string s = dataManager::ccmSetToJson(g_planCcm, g_planMoon);
+	int32_t need = static_cast<int32_t>(s.size()) + 1;
+	if (buf == nullptr || *inoutLen < need) { *inoutLen = need; return ERR_HGC_BUF_SHORT; }
+	std::memcpy(buf, s.c_str(), need);
+	*inoutLen = need;
+	return ERR_HGC_OK;
+}
+
+// 計画固有ccmを JSON で設定し、スケジュールを再生成して HGE_EV_SCHEDULE で通知する。
+int32_t hge_setPlanCcmJson(const char* json, int32_t len)
+{
+	if (json == nullptr || len <= 0) { return ERR_HGC_INVALID_ARG; }
+	if (!g_planReady) { loadFixedPlanImpl(); }
+	astro::ccmSet set;
+	std::shared_ptr<hgc::ccmMoon> moon;
+	if (!dataManager::parseCcmSetJson(std::string(json, static_cast<size_t>(len)), set, moon))
+	{ return ERR_HGC_JSON_PARSE; }
+	g_planCcm  = set;
+	g_planMoon = moon ? moon : dataManager::factoryMoon();
+	errCode e = astro::buildSchedule(g_plan, g_planCcm, g_offMin);
+	if (e != ERR_HGC_OK) { return e; }
+	buildScheduleJson();
+	notify(HGE_EV_SCHEDULE, g_schedJson);
+	return ERR_HGC_OK;
+}
+
 int32_t hge_getCcmDefaultsJson(char* buf, int32_t* inoutLen)
 {
 	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
@@ -482,16 +549,7 @@ int32_t hge_setCcmDefaultsJson(const char* json, int32_t len)
 	{
 		return ERR_HGC_JSON_PARSE;
 	}
-	// 初期値変更を反映: 計画があればスケジュールを再生成して通知
-	if (g_planReady)
-	{
-		astro::ccmSet set = dataManager::currentCcmSet();
-		if (astro::buildSchedule(g_plan, set, g_offMin) == ERR_HGC_OK)
-		{
-			buildScheduleJson();
-			notify(HGE_EV_SCHEDULE, g_schedJson);
-		}
-	}
+	// 初期値(プリセット)は計画固有ccmとは別管理。現在の計画スケジュールは変更しない。
 	return ERR_HGC_OK;
 }
 

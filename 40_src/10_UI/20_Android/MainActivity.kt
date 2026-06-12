@@ -64,8 +64,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // 撮影制御方法初期値: メニュー + 方法別エディタ
     private lateinit var planMenu: ImageView
-    private var ccmJson: JSONObject? = null     // /asset/ccmDefaults.json 全体
+    private var ccmJson: JSONObject? = null     // 編集中のccm全体(初期値 or 計画固有)
     private var editingKey = "night"            // 編集中の方法
+    private var editingPlanCcm = false          // true=計画固有ccmを編集 / false=初期値ccm
     private var editColor = 0                    // 編集中の色(0xRRGGBB)
 
     // 露出(iso/ss/fn)はカメラ設定値の文字列配列からスライダーで選択する。
@@ -118,11 +119,27 @@ class MainActivity : AppCompatActivity(), HgeListener {
         buildExposureEditors()
         refreshEdgeSpinner()
 
-        // 初期: 開始=現在、終了=2時間後
-        endCal.add(Calendar.HOUR_OF_DAY, 2)
-        updateTimeButtons()
         wireListeners()
-        pushTimesToEntity()    // スケジュール自動生成→通知で表示
+        restorePlan()    // 保存済み計画があれば復元、無ければ出荷時計画を表示(再生成しない)
+    }
+
+    // Entity が持つ計画(保存済み or 出荷時)の時刻・内容を画面に反映する。
+    private fun restorePlan() {
+        val sched = HgeNative.nativeScheduleJson()
+        var ok = false
+        try {
+            val o = JSONObject(sched)
+            fmtIso.parse(o.optString("start"))?.let { startCal.time = it; ok = true }
+            fmtIso.parse(o.optString("end"))?.let { endCal.time = it }
+        } catch (_: Exception) {}
+        if (!ok) {   // フォールバック: 現在〜2時間後で再生成
+            endCal.timeInMillis = startCal.timeInMillis
+            endCal.add(Calendar.HOUR_OF_DAY, 2)
+            updateTimeButtons(); pushTimesToEntity(); return
+        }
+        updateTimeButtons()
+        latestSchedule = sched
+        updatePlanDisplay(sched)
     }
 
     private fun bindViews() {
@@ -169,6 +186,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
             endCal.add(Calendar.HOUR_OF_DAY, 2)
             updateTimeButtons(); pushTimesToEntity()
         }
+        findViewById<Button>(R.id.plan_saveButton).setOnClickListener {
+            Thread {
+                val r = HgeNative.nativeSavePlan()
+                runOnUiThread {
+                    Toast.makeText(this, if (r == 0) "撮影計画を保存しました" else "保存に失敗しました", Toast.LENGTH_SHORT).show()
+                }
+            }.start()
+        }
         planStartButton.setOnClickListener {
             val e = selectedEdge()
             if (e == null) {
@@ -206,7 +231,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<Button>(R.id.cmenu_sunset).setOnClickListener { openCcmEdit("sunset") }
         findViewById<Button>(R.id.cmenu_day).setOnClickListener { openCcmEdit("day") }
         findViewById<Button>(R.id.cmenu_moon).setOnClickListener { openMoonEdit() }
-        findViewById<ImageView>(R.id.edit_back).setOnClickListener { flipper.displayedChild = 2 }
+        findViewById<ImageView>(R.id.edit_back).setOnClickListener { flipper.displayedChild = if (editingPlanCcm) 0 else 2 }
         findViewById<Button>(R.id.edit_save).setOnClickListener { saveCcmEdit() }
         findViewById<Button>(R.id.edit_color_btn).setOnClickListener {
             showColorPicker(editColor) { c -> editColor = c; findViewById<View>(R.id.edit_color_swatch).setBackgroundColor(0xFF000000.toInt() or c) }
@@ -229,7 +254,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             addOnChangeListener { _, _, _ -> updateAltRangeLabels() }
         }
         // 月の影響への対処
-        findViewById<ImageView>(R.id.moon_back).setOnClickListener { flipper.displayedChild = 2 }
+        findViewById<ImageView>(R.id.moon_back).setOnClickListener { flipper.displayedChild = if (editingPlanCcm) 0 else 2 }
         findViewById<Button>(R.id.moon_save).setOnClickListener { saveMoonEdit() }
         findViewById<Button>(R.id.moon_color_btn).setOnClickListener {
             showColorPicker(editColor) { c -> editColor = c; findViewById<View>(R.id.moon_color_swatch).setBackgroundColor(0xFF000000.toInt() or c) }
@@ -264,6 +289,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun openMoonEdit() {
         val o = ccmJson?.optJSONObject("moon") ?: return
+        findViewById<TextView>(R.id.moon_title).text = "月の影響への対処" + (if (editingPlanCcm) "（この計画）" else "（初期値）")
         editColor = o.optInt("color", 0)
         findViewById<View>(R.id.moon_color_swatch).setBackgroundColor(0xFF000000.toInt() or editColor)
         findViewById<Spinner>(R.id.moon_mode).setSelection(o.optInt("mode", 0))
@@ -306,16 +332,52 @@ class MainActivity : AppCompatActivity(), HgeListener {
         o.put("limitBright", moonLimit.getBright())
         o.put("limitDark", moonLimit.getDark())
         o.put("initialBright", moonLimit.getInitialBright())
-        val r = HgeNative.nativeSetCcmDefaults(all.toString())
+        val r = if (editingPlanCcm) HgeNative.nativeSetPlanCcm(all.toString()) else HgeNative.nativeSetCcmDefaults(all.toString())
         Toast.makeText(this, if (r == 0) "保存しました" else "保存に失敗しました", Toast.LENGTH_SHORT).show()
-        flipper.displayedChild = 2
+        flipper.displayedChild = if (editingPlanCcm) 0 else 2
     }
 
     // --- 撮影制御方法 初期値: メニュー + 方法別エディタ ---
 
     private fun openCcmMenu() {
+        editingPlanCcm = false   // メニュー経由は初期値ccmの編集
         ccmJson = try { JSONObject(HgeNative.nativeGetCcmDefaults()) } catch (e: Exception) { null }
         flipper.displayedChild = 2
+    }
+
+    // 撮影計画画面の色別リストから「この計画の」撮影制御方法を編集する(初期値とは別)。
+    private fun openPlanCcmEdit(key: String) {
+        editingPlanCcm = true
+        ccmJson = try { JSONObject(HgeNative.nativeGetPlanCcm()) } catch (e: Exception) { null }
+        if (ccmJson == null) return
+        if (key == "moon") openMoonEdit() else openCcmEdit(key)
+    }
+
+    // 撮影計画の右側に「この計画の撮影制御方法」を色別タップ可能リストで出す(仕様: 初期値と明確に分ける)。
+    private fun buildPlanCcmList(o: JSONObject) {
+        val list = findViewById<LinearLayout>(R.id.plan_ccmList)
+        list.removeAllViews()
+        val typeToKey = mapOf(1 to "night", 2 to "sunrise", 3 to "sunset", 4 to "day")
+        val nameMap = mapOf(1 to "夜間撮影", 2 to "朝日撮影", 3 to "夕日撮影", 4 to "日中撮影", 5 to "月の影響")
+        val seen = linkedSetOf<Int>()
+        o.optJSONArray("windows")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val t = arr.getJSONObject(i).optInt("type")
+                if (typeToKey.containsKey(t)) seen.add(t)
+            }
+        }
+        val ordered = seen.toMutableList(); ordered.add(5)   // 月の影響への対処は常に表示
+        for (t in ordered) {
+            val key = if (t == 5) "moon" else typeToKey[t]!!
+            val btn = TextView(this)
+            btn.text = nameMap[t]; btn.textSize = 13f; btn.gravity = Gravity.CENTER
+            btn.setBackgroundColor(ccmColor(t)); btn.setPadding(dp(6), dp(10), dp(6), dp(10))
+            btn.isClickable = true; btn.isFocusable = true
+            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            lp.setMargins(0, 0, 0, dp(4)); btn.layoutParams = lp
+            btn.setOnClickListener { openPlanCcmEdit(key) }
+            list.addView(btn)
+        }
     }
 
     // 太陽高度: Slider 0..14 ⇔ -19..-5°(1°刻み。分単位は将来キーボードで)
@@ -445,7 +507,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val o = ccmJson?.optJSONObject(key) ?: return
         editingKey = key
         val title = mapOf("night" to "夜間撮影", "sunrise" to "朝日撮影", "sunset" to "夕日撮影", "day" to "日中撮影")[key]
-        findViewById<TextView>(R.id.edit_title).text = title
+        findViewById<TextView>(R.id.edit_title).text = title + (if (editingPlanCcm) "（この計画）" else "（初期値）")
         editColor = o.optInt("color", 0)
         findViewById<View>(R.id.edit_color_swatch).setBackgroundColor(0xFF000000.toInt() or editColor)
 
@@ -529,9 +591,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
             o.put("limitDark", editLimit.getDark())
             o.put("initialBright", editLimit.getInitialBright())
         }
-        val r = HgeNative.nativeSetCcmDefaults(all.toString())
+        val r = if (editingPlanCcm) HgeNative.nativeSetPlanCcm(all.toString()) else HgeNative.nativeSetCcmDefaults(all.toString())
         Toast.makeText(this, if (r == 0) "保存しました" else "保存に失敗しました", Toast.LENGTH_SHORT).show()
-        flipper.displayedChild = 2
+        flipper.displayedChild = if (editingPlanCcm) 0 else 2   // 計画固有は計画画面へ、初期値はメニューへ
     }
 
     // SeekBar 値変更だけ拾う簡易リスナ(カラーピッカーのRGBで使用)。
@@ -1022,6 +1084,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             capDir.text = dirText.text
             renderSchedule(planSchedule, o, false)
             renderSchedule(capSchedule, o, true)
+            buildPlanCcmList(o)   // 右側の色別ccmリスト(この計画の撮影制御方法)
         } catch (_: Exception) {}
     }
 
@@ -1049,18 +1112,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         fun parse(s: String): Long = try { fmtIso.parse(s)?.time ?: 0L } catch (_: Exception) { 0L }
         fun hm(s: String): String = if (s.length >= 16) s.substring(5, 16).replace("T", " ") else s
 
+        // 撮影制御方法の開始マーカーは挟まず、イベント(日の出/薄明等)のみを時系列表示する。
+        // 撮影制御方法は右側の色別リスト(buildPlanCcmList)に出す。
         o.optJSONArray("events")?.let { arr ->
             for (i in 0 until arr.length()) {
                 val e = arr.getJSONObject(i)
                 val w = e.optString("when")
                 rows.add(Row(parse(w), hm(w), eventName(e.optInt("event")), ccmColor(0)))
-            }
-        }
-        o.optJSONArray("windows")?.let { arr ->
-            for (i in 0 until arr.length()) {
-                val w = arr.getJSONObject(i)
-                val st = w.optString("start")
-                rows.add(Row(parse(st), hm(st), "▼ " + w.optString("name"), ccmColor(w.optInt("type"))))
             }
         }
         rows.sortBy { it.t }

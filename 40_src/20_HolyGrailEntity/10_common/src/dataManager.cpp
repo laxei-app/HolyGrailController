@@ -123,17 +123,27 @@ astro::ccmSet dataManager::currentCcmSet(void)
 	return g_ccmDefaults;
 }
 
+std::string dataManager::ccmSetToJson(const astro::ccmSet& set, const std::shared_ptr<hgc::ccmMoon>& moon)
+{
+	json j;
+	j["version"] = 1;
+	if (set.night)   { j["night"]   = json::parse(csjson::ccmToJson(*set.night)); }
+	if (set.sunrise) { j["sunrise"] = json::parse(csjson::ccmToJson(*set.sunrise)); }
+	if (set.sunset)  { j["sunset"]  = json::parse(csjson::ccmToJson(*set.sunset)); }
+	if (set.day)     { j["day"]     = json::parse(csjson::ccmToJson(*set.day)); }
+	if (moon)        { j["moon"]    = json::parse(csjson::ccmToJson(*moon)); }
+	return j.dump();
+}
+
+bool dataManager::parseCcmSetJson(const std::string& jsonStr, astro::ccmSet& set, std::shared_ptr<hgc::ccmMoon>& moon)
+{
+	return parseDefaults(jsonStr, set, moon);
+}
+
 std::string dataManager::ccmDefaultsJson(void)
 {
 	ensureLoaded();
-	json j;
-	j["version"] = 1;
-	if (g_ccmDefaults.night)   { j["night"]   = json::parse(csjson::ccmToJson(*g_ccmDefaults.night)); }
-	if (g_ccmDefaults.sunrise) { j["sunrise"] = json::parse(csjson::ccmToJson(*g_ccmDefaults.sunrise)); }
-	if (g_ccmDefaults.sunset)  { j["sunset"]  = json::parse(csjson::ccmToJson(*g_ccmDefaults.sunset)); }
-	if (g_ccmDefaults.day)     { j["day"]     = json::parse(csjson::ccmToJson(*g_ccmDefaults.day)); }
-	if (g_moonDefault)         { j["moon"]    = json::parse(csjson::ccmToJson(*g_moonDefault)); }
-	return j.dump();
+	return ccmSetToJson(g_ccmDefaults, g_moonDefault);
 }
 
 bool dataManager::setCcmDefaultsJson(const std::string& jsonStr)
@@ -147,6 +157,46 @@ bool dataManager::setCcmDefaultsJson(const std::string& jsonStr)
 	std::string path = ccmDefaultsPath();
 	if (path.empty()) { return false; }
 	return osfile::writeAll(path, jsonStr.data(), jsonStr.size());
+}
+
+// ============================================================================
+//  撮影計画の永続化(案A /plan。当面は単一ファイル plan.json)
+// ============================================================================
+namespace
+{
+	std::string planPath(void)
+	{
+		std::string d = osfile::dir("plan");
+		return d.empty() ? std::string() : (d + "/plan.json");
+	}
+}
+
+bool dataManager::savePlanJson(const std::string& json)
+{
+	std::string p = planPath();
+	if (p.empty()) { return false; }
+	return osfile::writeAll(p, json.data(), json.size());
+}
+
+bool dataManager::loadPlanJson(std::string& out)
+{
+	std::string p = planPath();
+	return !p.empty() && osfile::readAll(p, out);
+}
+
+bool dataManager::splitSavedPlan(const std::string& wrapped, std::string& planOut, std::string& ccmOut)
+{
+	ccmOut.clear();
+	json w = json::parse(wrapped, nullptr, false);
+	if (w.is_discarded() || !w.is_object()) { return false; }
+	if (w.contains("plan"))		// ラッパー形式 {"plan":..,"planCcm":..}
+	{
+		planOut = w["plan"].dump();
+		if (w.contains("planCcm")) { ccmOut = w["planCcm"].dump(); }
+		return true;
+	}
+	planOut = wrapped;			// 旧形式: 素の cs JSON
+	return true;
 }
 
 // 出荷時設定の露出平滑化(データ構造仕様書43 §5.10 の出荷時設定)。

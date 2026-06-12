@@ -129,6 +129,12 @@ Java_app_laxei_holygrail_HgeNative_nativeGetPlanJson(JNIEnv* env, jobject /*thiz
 }
 
 JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSavePlan(JNIEnv* /*env*/, jobject /*thiz*/)
+{
+	return hge_savePlan();
+}
+
+JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeSetPlanTimes(JNIEnv* env, jobject /*thiz*/,
                                                       jstring start_, jstring end_, jint offMin)
 {
@@ -156,6 +162,26 @@ Java_app_laxei_holygrail_HgeNative_nativeSetCcmDefaults(JNIEnv* env, jobject /*t
 {
 	const char* j = env->GetStringUTFChars(json_, nullptr);
 	jint r = hge_setCcmDefaultsJson(j ? j : "", j ? static_cast<int32_t>(std::strlen(j)) : 0);
+	env->ReleaseStringUTFChars(json_, j);
+	return r;
+}
+
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeGetPlanCcm(JNIEnv* env, jobject /*thiz*/)
+{
+	int32_t len = 0;
+	hge_getPlanCcmJson(nullptr, &len);
+	if (len <= 0) { return env->NewStringUTF(""); }
+	std::vector<char> buf(static_cast<size_t>(len));
+	if (hge_getPlanCcmJson(buf.data(), &len) != 0) { return env->NewStringUTF(""); }
+	return env->NewStringUTF(buf.data());
+}
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetPlanCcm(JNIEnv* env, jobject /*thiz*/, jstring json_)
+{
+	const char* j = env->GetStringUTFChars(json_, nullptr);
+	jint r = hge_setPlanCcmJson(j ? j : "", j ? static_cast<int32_t>(std::strlen(j)) : 0);
 	env->ReleaseStringUTFChars(json_, j);
 	return r;
 }

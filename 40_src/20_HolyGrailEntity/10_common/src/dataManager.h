@@ -35,6 +35,20 @@ public:
 	// start/end と events/ccmList は呼び出し側が設定する。
 	static void factoryFixedPlan(hgc::cs& plan);
 
+	// --- 撮影計画の永続化(案A /plan、当面は単一ファイル plan.json) ---
+	// 撮影計画(cs)の自己完結JSONを /plan/plan.json へ保存する。
+	static bool savePlanJson(const std::string& json);
+	// 保存済み撮影計画JSONを読み込む。無ければ false。
+	static bool loadPlanJson(std::string& out);
+
+	// 任意の ccmSet+moon を JSON 化/復元する(初期値ccmと計画固有ccmで共用)。
+	static std::string ccmSetToJson(const astro::ccmSet& set, const std::shared_ptr<hgc::ccmMoon>& moon);
+	static bool parseCcmSetJson(const std::string& json, astro::ccmSet& set, std::shared_ptr<hgc::ccmMoon>& moon);
+
+	// 保存ラッパー {"plan":..,"planCcm":..} を分解する。plan必須、planCcmは任意(空文字)。
+	// 旧形式(素のcs JSON)もそのまま plan として返す。
+	static bool splitSavedPlan(const std::string& wrapped, std::string& planOut, std::string& ccmOut);
+
 	// --- 動作ログ(データ構造仕様書43 §8) ---
 	// 固定長128Bのテキストレコードを日付ごとのファイル(hg_YYYY-MM-DD.log)へ追記する。
 	// 保存は osFile 抽象を介す(M5=SD/LittleFS, Android=外部ファイル領域)。

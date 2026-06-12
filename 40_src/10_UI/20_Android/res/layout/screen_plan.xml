@@ -137,17 +137,32 @@
             <TextView android:id="@+id/plan_dirText" android:layout_width="match_parent"
                 android:layout_height="wrap_content" android:text="撮影方向: 90.0°   仰角: 10.0°" />
 
-            <!-- スケジュール -->
-            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:layout_marginTop="12dp" android:text="スケジュール" android:textStyle="bold" />
-            <LinearLayout android:id="@+id/plan_scheduleContainer"
+            <!-- スケジュール(左=イベント時系列) + この計画の撮影制御方法(右=色別・タップで編集) -->
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:layout_marginTop="12dp">
+                <TextView android:layout_width="0dp" android:layout_weight="2" android:layout_height="wrap_content" android:text="スケジュール" android:textStyle="bold" />
+                <TextView android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="撮影制御方法" android:textStyle="bold" />
+            </LinearLayout>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:layout_marginTop="4dp">
+                <LinearLayout android:id="@+id/plan_scheduleContainer"
+                    android:layout_width="0dp" android:layout_weight="2" android:layout_height="wrap_content"
+                    android:orientation="vertical" />
+                <LinearLayout android:id="@+id/plan_ccmList"
+                    android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+                    android:layout_marginStart="6dp" android:orientation="vertical" />
+            </LinearLayout>
+
+            <!-- 計画を保存 -->
+            <Button android:id="@+id/plan_saveButton"
                 android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:layout_marginTop="4dp" android:orientation="vertical" />
+                android:layout_marginTop="12dp"
+                android:text="この撮影計画を保存" android:textSize="16sp" />
 
             <!-- 撮影開始 -->
             <Button android:id="@+id/plan_startButton"
                 android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
+                android:layout_marginTop="8dp"
                 android:drawableStart="@drawable/ic_start"
                 android:text="撮影開始" android:textSize="18sp" />
 
