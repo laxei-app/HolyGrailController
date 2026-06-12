@@ -2,6 +2,7 @@
 #include "holyGrailEntity.h"
 #include "captureRunner.h"
 #include "astroSched.h"
+#include "osClock.h"
 #include "cameraController.h"
 #include "dataManager.h"
 #include "csJson.h"
@@ -195,24 +196,24 @@ namespace
 		dataManager::logEvent("NET", detail.c_str());
 	}
 
-	// time_t → ローカル日時 と UTCオフセット[分]
+	// UTC時刻(t) → ローカル日時 と UTCオフセット[分]。
+	// オフセットはプラットフォーム依存(osclock): Android=端末TZ / エッジ端末=受信して永続化した値。
 	void localFromTime(time_t t, hgc::dateTime& d, int& offMin)
 	{
-		std::tm lt{};
+		offMin = osclock::utcOffsetMin();
+		time_t local = t + static_cast<time_t>(offMin) * 60;	// 現地の壁時計時刻
+		std::tm g{};
 #if defined(_WIN32)
-		localtime_s(&lt, &t);
+		gmtime_s(&g, &local);
 #else
-		localtime_r(&t, &lt);
+		gmtime_r(&local, &g);	// local を UTC として分解 = 現地の年月日時分秒
 #endif
-		d.year  = static_cast<uint16_t>(lt.tm_year + 1900);
-		d.month = static_cast<uint16_t>(lt.tm_mon + 1);
-		d.day   = static_cast<uint16_t>(lt.tm_mday);
-		d.hour  = static_cast<uint16_t>(lt.tm_hour);
-		d.min   = static_cast<uint16_t>(lt.tm_min);
-		d.sec   = static_cast<uint16_t>(lt.tm_sec);
-		// ローカルを UTC とみなした時刻と実 UTC の差がオフセット
-		long long asIfUtc = hgc::toUnixUtc(d, 0);
-		offMin = static_cast<int>((asIfUtc - static_cast<long long>(t)) / 60);
+		d.year  = static_cast<uint16_t>(g.tm_year + 1900);
+		d.month = static_cast<uint16_t>(g.tm_mon + 1);
+		d.day   = static_cast<uint16_t>(g.tm_mday);
+		d.hour  = static_cast<uint16_t>(g.tm_hour);
+		d.min   = static_cast<uint16_t>(g.tm_min);
+		d.sec   = static_cast<uint16_t>(g.tm_sec);
 	}
 
 	// 固定データの撮影計画を生成する。開始=現在、終了=2時間後。
@@ -436,6 +437,7 @@ int32_t hge_loadFixedPlan(void)
 
 int32_t hge_setUtcOffset(int32_t offMin)
 {
+	osclock::setUtcOffsetMin(offMin);	// 永続化(エッジ端末)。次回起動後の固定計画でも使う。
 	g_offMin = offMin;
 	dataManager::setLogOffset(g_offMin);
 	return ERR_HGC_OK;
