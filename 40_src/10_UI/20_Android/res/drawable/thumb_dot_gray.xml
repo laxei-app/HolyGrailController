@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 固定(移動不可)を表すグレーの●。月撮影時露出限界の暗所側(夜間値)つまみ。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <solid android:color="#9E9E9E" />
+    <size android:width="20dp" android:height="20dp" />
+    <stroke android:width="2dp" android:color="#FFFFFF" />
+</shape>

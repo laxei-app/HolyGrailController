@@ -234,10 +234,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<Button>(R.id.moon_color_btn).setOnClickListener {
             showColorPicker(editColor) { c -> editColor = c; findViewById<View>(R.id.moon_color_swatch).setBackgroundColor(0xFF000000.toInt() or c) }
         }
-        setupValueSlider(R.id.moon_startlum_seek, 30) {
+        setupValueSlider(R.id.moon_startlum_seek, 30, gradient = true, thumbRes = R.drawable.ic_moon) {
             findViewById<TextView>(R.id.moon_startlum_val).text = String.format("+%.1fev", it * 0.1)
         }
-        setupValueSlider(R.id.moon_ev_seek, 100) {
+        setupValueSlider(R.id.moon_ev_seek, 100, gradient = true, thumbRes = R.drawable.ic_moon) {
             findViewById<TextView>(R.id.moon_ev_val).text = String.format("%.1fev", -it * 0.1)
         }
         setupValueSlider(R.id.moon_extcoef_seek, 50) {
@@ -253,8 +253,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         moonSpinner.adapter = ma
         moonSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                // 0=補正しない(中身なし) / 1=画角全体で自動補正 / 2=月に露出を合わせる
                 findViewById<View>(R.id.moon_auto_section).visibility = if (pos == 1) View.VISIBLE else View.GONE
                 findViewById<View>(R.id.moon_exp_section).visibility = if (pos == 2) View.VISIBLE else View.GONE
+                findViewById<View>(R.id.moon_limit_section).visibility = if (pos == 0) View.GONE else View.VISIBLE
             }
             override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
         }
@@ -280,8 +282,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<CheckBox>(R.id.moon_atmext).isChecked = o.optBoolean("atmosphericExtinction", false)
         findViewById<CheckBox>(R.id.moon_geocorr).isChecked = o.optBoolean("geocentricCorrection", false)
         moonInitEditor.set(o.optJSONObject("initialExposure"))
+        // 月撮影時露出限界: 暗所側は夜間撮影の設定値(limitBright)で固定。
+        val nightLimit = ccmJson?.optJSONObject("night")?.optJSONObject("limitBright")
         moonLimit.set(o.optJSONObject("limitBright"), o.optJSONObject("limitDark"),
-            o.optJSONArray("priority"), o.optBoolean("initialBright", true))
+            o.optJSONArray("priority"), o.optBoolean("initialBright", true),
+            moonMode = true, nightLimit = nightLimit)
         flipper.displayedChild = 4
     }
 
@@ -708,18 +713,22 @@ class MainActivity : AppCompatActivity(), HgeListener {
         private val brightPlace = HashMap<Int, String>()  // 明所限界 = limitDark(低ISO側・右つまみ)
         private val keys = listOf("iso", "ss", "fn")
         private var initialBright = true                  // 初期値=明所限界か(仕様4d)
+        private var moonMode = false                      // 月撮影時露出限界(暗所=夜間値で固定・明所のみ編集・仕様6d/e)
         private val cards = mutableListOf<View>()
         private val dividers = mutableListOf<View>()
         private val darkTvs = HashMap<Int, TextView>(); private val brightTvs = HashMap<Int, TextView>()
         private val initTvs = HashMap<Int, TextView>()
         private var dragFrom = -1
 
-        fun set(brightObj: JSONObject?, darkObj: JSONObject?, prio: JSONArray?, initBright: Boolean) {
+        fun set(brightObj: JSONObject?, darkObj: JSONObject?, prio: JSONArray?, initBright: Boolean,
+                moonMode: Boolean = false, nightLimit: JSONObject? = null) {
             order.clear()
             if (prio != null) for (i in 0 until prio.length()) order.add(prio.optInt(i))
             if (order.sorted() != listOf(0, 1, 2)) { order.clear(); order.addAll(listOf(0, 1, 2)) }
+            this.moonMode = moonMode
             for (t in 0..2) {
-                darkPlace[t] = brightObj?.optString(keys[t]) ?: ""     // limitBright = 暗所限界
+                // 月モードでは暗所限界=夜間撮影の設定値(固定)。通常は limitBright。
+                darkPlace[t] = (if (moonMode) nightLimit?.optString(keys[t]) else brightObj?.optString(keys[t])) ?: ""
                 brightPlace[t] = darkObj?.optString(keys[t]) ?: ""     // limitDark = 明所限界
             }
             initialBright = initBright
@@ -748,11 +757,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         private fun render() {
             container.removeAllViews()
             cards.clear(); dividers.clear(); darkTvs.clear(); brightTvs.clear(); initTvs.clear()
-            val cb = CheckBox(this@MainActivity)
-            cb.text = "明所限界を初期値にする"; cb.isChecked = initialBright
-            cb.setOnCheckedChangeListener { _, c -> initialBright = c; refreshInit() }
-            container.addView(cb)
-            container.addView(headerRow())
+            if (!moonMode) {   // 月モードは初期値チェックも暗所/初期値/明所の見出しも無し(明所限界のみ)
+                val cb = CheckBox(this@MainActivity)
+                cb.text = "明所限界を初期値にする"; cb.isChecked = initialBright
+                cb.setOnCheckedChangeListener { _, c -> initialBright = c; refreshInit() }
+                container.addView(cb)
+                container.addView(headerRow())
+            }
             for (i in 0..order.size) {
                 val div = View(this@MainActivity)
                 div.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(4))
@@ -783,16 +794,25 @@ class MainActivity : AppCompatActivity(), HgeListener {
             card.setBackgroundColor(0xFFF2EEFA.toInt())
             card.setPadding(dp(4), dp(2), dp(4), dp(4))
 
-            // 行1: 名称(左) + 暗所限界/初期値/明所限界 の3数値(仕様4g)
+            // 行1: 名称(左) + 数値。通常は 暗所/初期値/明所 の3値、月モードは明所限界のみ(仕様4g/6e)。
             val valRow = LinearLayout(this@MainActivity); valRow.orientation = LinearLayout.HORIZONTAL
             valRow.gravity = Gravity.CENTER_VERTICAL
             val name = TextView(this@MainActivity); name.text = nameFor(t); name.textSize = 14f; name.setTypeface(null, Typeface.BOLD)
             name.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.5f)
-            val darkTv = makeValTv(0xFF222222.toInt()); val initTv = makeValTv(0xFF1565C0.toInt()); val brightTv = makeValTv(0xFF222222.toInt())
-            val rspacer = View(this@MainActivity); rspacer.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            valRow.addView(name); valRow.addView(darkTv); valRow.addView(initTv); valRow.addView(brightTv); valRow.addView(rspacer)
+            val brightTv = makeValTv(0xFF222222.toInt())
+            valRow.addView(name)
+            if (moonMode) {
+                valRow.addView(brightTv)   // 明所限界のみ(センター付近)
+                val rspacer = View(this@MainActivity); rspacer.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.5f)
+                valRow.addView(rspacer)
+                brightTvs[t] = brightTv
+            } else {
+                val darkTv = makeValTv(0xFF222222.toInt()); val initTv = makeValTv(0xFF1565C0.toInt())
+                val rspacer = View(this@MainActivity); rspacer.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                valRow.addView(darkTv); valRow.addView(initTv); valRow.addView(brightTv); valRow.addView(rspacer)
+                darkTvs[t] = darkTv; brightTvs[t] = brightTv; initTvs[t] = initTv
+            }
             card.addView(valRow)
-            darkTvs[t] = darkTv; brightTvs[t] = brightTv; initTvs[t] = initTv
 
             // 行2: ドラッグハンドル(左) + 範囲スライダー(右へ・少し短く)(仕様4f)
             val slRow = LinearLayout(this@MainActivity); slRow.orientation = LinearLayout.HORIZONTAL; slRow.gravity = Gravity.CENTER_VERTICAL
@@ -813,14 +833,27 @@ class MainActivity : AppCompatActivity(), HgeListener {
             rs.valueFrom = 0f; rs.valueTo = (vals.size - 1).coerceAtLeast(1).toFloat(); rs.stepSize = 1f
             rs.isTickVisible = false; rs.labelBehavior = LabelFormatter.LABEL_GONE
             rs.trackActiveTintList = transparentTint; rs.trackInactiveTintList = transparentTint
-            rs.setCustomThumbDrawablesForValues(R.drawable.ic_moon, R.drawable.ic_sun)  // 左=月(暗所)/右=太陽(明所)
-            val di = vals.indexOf(darkPlace[t]).let { if (it < 0) 0 else it }
+            // 月モード: 左=グレー●(夜間値で固定)/右=月。通常: 左=月(暗所)/右=太陽(明所)。
+            if (moonMode) rs.setCustomThumbDrawablesForValues(R.drawable.thumb_dot_gray, R.drawable.ic_moon)
+            else rs.setCustomThumbDrawablesForValues(R.drawable.ic_moon, R.drawable.ic_sun)
+            val di = vals.indexOf(darkPlace[t]).let { if (it < 0) 0 else it }   // 暗所限界(月モードは夜間値=固定位置)
             val bi = vals.indexOf(brightPlace[t]).let { if (it < 0) vals.size - 1 else it }
             rs.values = listOf(minOf(di, bi).toFloat(), maxOf(di, bi).toFloat())
+            var lock = false
             rs.addOnChangeListener { _, _, _ ->
+                if (lock) return@addOnChangeListener
                 val v = rs.values
-                darkPlace[t] = vals.getOrElse(v[0].toInt()) { "" }
-                brightPlace[t] = vals.getOrElse(v[1].toInt()) { "" }
+                if (moonMode) {
+                    if (v[0].toInt() != di) {   // 左(暗所=夜間値)が動いたら固定位置へ戻す
+                        lock = true
+                        rs.values = listOf(di.toFloat(), maxOf(v[1], di.toFloat()))
+                        lock = false
+                    }
+                    brightPlace[t] = vals.getOrElse(rs.values[1].toInt()) { "" }
+                } else {
+                    darkPlace[t] = vals.getOrElse(v[0].toInt()) { "" }
+                    brightPlace[t] = vals.getOrElse(v[1].toInt()) { "" }
+                }
                 updateVals(t)
             }
             frame.addView(rs); slRow.addView(frame)
