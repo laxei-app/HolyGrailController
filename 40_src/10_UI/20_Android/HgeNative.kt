@@ -39,6 +39,7 @@ object HgeNative {
     external fun nativeScheduleJson(): String
     external fun nativeGetPlanJson(): String
     external fun nativeSetPlanTimes(start: String, end: String, offMin: Int): Int
+    external fun nativeSetPlanDirection(azimuth: Double, elevation: Double): Int  // 撮影方向/仰角を設定し再生成
     external fun nativeSavePlan(): Int
     external fun nativeGetCcmDefaults(): String
     external fun nativeSetCcmDefaults(json: String): Int

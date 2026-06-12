@@ -33,12 +33,18 @@ namespace astro
 			return d;
 		}
 
+		// 天体の地平座標(高度/方位)
+		horiz bodyHorizAt(astro_body_t body, astro_time_t t, astro_observer_t obs)
+		{
+			astro_equatorial_t eq = Astronomy_Equator(body, &t, obs, EQUATOR_OF_DATE, ABERRATION);
+			astro_horizon_t hz = Astronomy_Horizon(&t, obs, eq.ra, eq.dec, REFRACTION_NORMAL);
+			return { hz.azimuth, hz.altitude };
+		}
+
 		// 太陽の地平座標(高度/方位)
 		horiz sunHorizAt(astro_time_t t, astro_observer_t obs)
 		{
-			astro_equatorial_t eq = Astronomy_Equator(BODY_SUN, &t, obs, EQUATOR_OF_DATE, ABERRATION);
-			astro_horizon_t hz = Astronomy_Horizon(&t, obs, eq.ra, eq.dec, REFRACTION_NORMAL);
-			return { hz.azimuth, hz.altitude };
+			return bodyHorizAt(BODY_SUN, t, obs);
 		}
 
 		// 太陽が画角に入っているか
@@ -146,6 +152,12 @@ namespace astro
 		return sunHorizAt(toAstro(localTime, utcOffsetMin), obs);
 	}
 
+	horiz moonHoriz(const hgc::dateTime& localTime, int utcOffsetMin, const hgc::place& p)
+	{
+		astro_observer_t obs = Astronomy_MakeObserver(p.latitude, p.longitude, p.altitude);
+		return bodyHorizAt(BODY_MOON, toAstro(localTime, utcOffsetMin), obs);
+	}
+
 	altTime sunAltitudeTime(const hgc::place& p, const hgc::dateTime& baseDate,
 	                        double altitude, bool rising, int utcOffsetMin)
 	{
@@ -164,7 +176,7 @@ namespace astro
 		double sw = cam.sensorSize;		// センサー横[mm]
 		double fl = lens.focalLength;	// 焦点距離[mm]
 		if (sw <= 0.0 || fl <= 0.0) { return { 60.0, 40.0 }; }	// フォールバック
-		double sh = sw * 2.0 / 3.0;		// 高さは未取得のため 3:2 を仮定
+		double sh = (cam.sensorSizeV > 0.0) ? cam.sensorSizeV : sw * 2.0 / 3.0;	// 縦が未取得なら 3:2 を仮定
 		double fovW = 2.0 * std::atan2(sw / 2.0, fl) * DEG;
 		double fovH = 2.0 * std::atan2(sh / 2.0, fl) * DEG;
 		if (landscape) { return { fovW, fovH }; }

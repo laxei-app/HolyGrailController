@@ -129,13 +129,33 @@
             <TextView android:id="@+id/plan_cameraText" android:layout_width="match_parent"
                 android:layout_height="wrap_content" android:layout_marginTop="8dp" android:text="カメラ: Canon EOS R10" />
             <TextView android:id="@+id/plan_lensText" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:text="レンズ: 16mm" />
+                android:layout_height="wrap_content" android:text="レンズ: SIGMA 12mm F1.4 DC" />
+            <TextView android:id="@+id/plan_sensorText" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:textSize="13sp" android:textColor="#888888"
+                android:text="センサー 22.4×14.9mm  焦点距離 12mm" />
 
-            <!-- 撮影周期 / 撮影方向 / 仰角 -->
+            <!-- 撮影周期 -->
             <TextView android:id="@+id/plan_intervalText" android:layout_width="match_parent"
                 android:layout_height="wrap_content" android:layout_marginTop="8dp" android:text="撮影周期: 15秒  横向き" />
+
+            <!-- 開始時の撮影方向(方位磁石+矢印) / 仰角(カメラの絵を回転) -->
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:layout_marginTop="8dp">
+                <TextView android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+                    android:gravity="center" android:text="開始時の撮影方向" android:textStyle="bold" android:textSize="13sp" />
+                <TextView android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content"
+                    android:gravity="center" android:text="開始時の仰角" android:textStyle="bold" android:textSize="13sp" />
+            </LinearLayout>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal">
+                <app.laxei.holygrail.CompassView android:id="@+id/plan_compass"
+                    android:layout_width="0dp" android:layout_weight="1" android:layout_height="160dp" />
+                <app.laxei.holygrail.ElevationView android:id="@+id/plan_elevation"
+                    android:layout_width="0dp" android:layout_weight="1" android:layout_height="160dp" />
+            </LinearLayout>
             <TextView android:id="@+id/plan_dirText" android:layout_width="match_parent"
-                android:layout_height="wrap_content" android:text="撮影方向: 90.0°   仰角: 10.0°" />
+                android:layout_height="wrap_content" android:gravity="center" android:textSize="12sp" android:textColor="#888888"
+                android:text="撮影方向 90.0°   仰角 10.0°" />
 
             <!-- スケジュール(左=イベント時系列) + この計画の撮影制御方法(右=色別・タップで編集) -->
             <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"

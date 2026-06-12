@@ -116,6 +116,37 @@ namespace
 		std::snprintf(num, sizeof(num), "%.1f", g_plan.elevation);
 		j += ",\"elevation\":" + std::string(num);
 		j += ",\"landscape\":" + std::string(g_plan.landscape ? "true" : "false");
+		// 機材詳細(センサー/焦点距離)と画角[°](方位磁石・仰角ウィジェットの目安)
+		std::snprintf(num, sizeof(num), "%.1f", g_plan.camera.sensorSize);
+		j += ",\"sensorW\":" + std::string(num);
+		std::snprintf(num, sizeof(num), "%.1f", g_plan.camera.sensorSizeV);
+		j += ",\"sensorH\":" + std::string(num);
+		std::snprintf(num, sizeof(num), "%.0f", g_plan.lens.focalLength);
+		j += ",\"focalLength\":" + std::string(num);
+		astro::fov fovDeg = astro::calcFov(g_plan.camera, g_plan.lens, g_plan.landscape);
+		std::snprintf(num, sizeof(num), "%.1f", fovDeg.h);
+		j += ",\"fovH\":" + std::string(num);
+		std::snprintf(num, sizeof(num), "%.1f", fovDeg.v);
+		j += ",\"fovV\":" + std::string(num);
+		// 太陽/月の出没方位(方位磁石マーカー用)。範囲内に該当イベントがあれば付与。
+		for (const auto& ev : g_plan.events)
+		{
+			const char* key = nullptr;
+			astro::horiz hz{};
+			switch (ev.event)
+			{
+			case hgc::csEvent::sunrise: key = "sunriseAz"; hz = astro::sunHoriz(ev.when, g_offMin, g_plan.place); break;
+			case hgc::csEvent::sunset:  key = "sunsetAz";  hz = astro::sunHoriz(ev.when, g_offMin, g_plan.place); break;
+			case hgc::csEvent::moonrise:key = "moonriseAz";hz = astro::moonHoriz(ev.when, g_offMin, g_plan.place); break;
+			case hgc::csEvent::moonset: key = "moonsetAz"; hz = astro::moonHoriz(ev.when, g_offMin, g_plan.place); break;
+			default: break;
+			}
+			if (key && j.find(std::string("\"") + key + "\"") == std::string::npos)
+			{
+				std::snprintf(num, sizeof(num), "%.1f", hz.azimuth);
+				j += ",\"" + std::string(key) + "\":" + std::string(num);
+			}
+		}
 		j += ",\"events\":[";
 		for (size_t i = 0; i < g_plan.events.size(); ++i)
 		{
@@ -201,6 +232,11 @@ namespace
 		    dataManager::splitSavedPlan(saved, planJson, ccmJson) &&
 		    csjson::fromJson(planJson, g_plan))
 		{
+			// 機材(カメラ/レンズ/センサー)はMVPでは出荷時固定。古い保存値(焦点距離16mm等)へ
+			// 戻らないよう、復元後に出荷時設定で上書きする(撮影方向/仰角/時刻/場所は保存値を維持)。
+			hgc::cs fp; dataManager::factoryFixedPlan(fp);
+			g_plan.camera = fp.camera;
+			g_plan.lens   = fp.lens;
 			if (!(ccmJson.empty() || dataManager::parseCcmSetJson(ccmJson, g_planCcm, g_planMoon)))
 			{ dataManager::parseCcmSetJson(dataManager::ccmDefaultsJson(), g_planCcm, g_planMoon); }
 			if (ccmJson.empty())
@@ -444,6 +480,29 @@ int32_t hge_setPlanTimes(const char* startIso, const char* endIso, int32_t offMi
 	if (e != ERR_HGC_OK) { return e; }
 	buildScheduleJson();
 	g_planReady = true;
+	notify(HGE_EV_SCHEDULE, g_schedJson);
+	return ERR_HGC_OK;
+}
+
+int32_t hge_setPlanDirection(double azimuth, double elevation)
+{
+	if (!g_planReady)	// 場所/機材など出荷時設定の基礎部を用意する
+	{
+		errCode e = loadFixedPlanImpl();
+		if (e != ERR_HGC_OK) { return e; }
+	}
+	// 方位は 0..360 に正規化、仰角は -90..90 にクランプ
+	while (azimuth >= 360.0) { azimuth -= 360.0; }
+	while (azimuth < 0.0)    { azimuth += 360.0; }
+	if (elevation >  90.0) { elevation =  90.0; }
+	if (elevation < -90.0) { elevation = -90.0; }
+	g_plan.azimuth   = azimuth;
+	g_plan.elevation = elevation;
+
+	// 撮影方向が変わると「太陽が画角に入る時刻」が変わるためスケジュールを再生成する。
+	errCode e = astro::buildSchedule(g_plan, g_planCcm, g_offMin);
+	if (e != ERR_HGC_OK) { return e; }
+	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
 	return ERR_HGC_OK;
 }

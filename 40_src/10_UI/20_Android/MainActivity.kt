@@ -53,7 +53,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private lateinit var cameraText: TextView
     private lateinit var lensText: TextView
     private lateinit var intervalText: TextView
+    private lateinit var sensorText: TextView
     private lateinit var dirText: TextView
+    private lateinit var compass: CompassView
+    private lateinit var elevationView: ElevationView
     private lateinit var planSchedule: LinearLayout
     private lateinit var planStartButton: Button
     private lateinit var edgeSpinner: Spinner
@@ -155,7 +158,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         cameraText = findViewById(R.id.plan_cameraText)
         lensText = findViewById(R.id.plan_lensText)
         intervalText = findViewById(R.id.plan_intervalText)
+        sensorText = findViewById(R.id.plan_sensorText)
         dirText = findViewById(R.id.plan_dirText)
+        compass = findViewById(R.id.plan_compass)
+        elevationView = findViewById(R.id.plan_elevation)
         planSchedule = findViewById(R.id.plan_scheduleContainer)
         planStartButton = findViewById(R.id.plan_startButton)
         edgeSpinner = findViewById(R.id.plan_edgeSpinner)
@@ -175,6 +181,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private fun wireListeners() {
+        // 撮影方向(方位磁石)/仰角(カメラの絵)を離した時にEntityへ反映しスケジュール再生成。
+        compass.onCommit = { az -> pushDirectionToEntity(az, elevationView.angle) }
+        elevationView.onCommit = { el -> pushDirectionToEntity(compass.azimuth, el) }
         startDate.setOnClickListener { pickDate(startCal) }
         startTime.setOnClickListener { pickTime(startCal) }
         endDate.setOnClickListener { pickDate(endCal) }
@@ -1037,6 +1046,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
         Thread { HgeNative.nativeSetPlanTimes(s, e, off) }.start()
     }
 
+    // 撮影方向/仰角をEntityへ渡してスケジュールを再生成させる(結果はEV_SCHEDULEで反映)。
+    private fun pushDirectionToEntity(az: Float, el: Float) {
+        dirText.text = "撮影方向 %.1f°   仰角 %.1f°".format(az, el)
+        Thread { HgeNative.nativeSetPlanDirection(az.toDouble(), el.toDouble()) }.start()
+    }
+
     override fun onDestroy() {
         handler.removeCallbacks(edgePoll)
         HgeNative.nativeSetListener(null)
@@ -1087,9 +1102,24 @@ class MainActivity : AppCompatActivity(), HgeListener {
             latlngText.text = o.optString("latlng") + "  標高 " + o.optInt("altitude") + "m"
             cameraText.text = "カメラ: " + o.optString("camera")
             lensText.text = "レンズ: " + o.optString("lens")
+            sensorText.text = "センサー %.1f×%.1fmm  焦点距離 %d mm  画角 %.0f×%.0f°".format(
+                o.optDouble("sensorW"), o.optDouble("sensorH"), o.optInt("focalLength"),
+                o.optDouble("fovH"), o.optDouble("fovV"))
             val land = if (o.optBoolean("landscape")) "横" else "縦"
             intervalText.text = "撮影周期: ${o.optInt("interval")}秒   $land 向き"
-            dirText.text = "撮影方向: ${o.optDouble("azimuth")}°   仰角: ${o.optDouble("elevation")}°"
+            // 撮影方向/仰角ウィジェットへ反映(setterは無音=コールバックを呼ばない)
+            val az = o.optDouble("azimuth", 90.0).toFloat()
+            val el = o.optDouble("elevation", 10.0).toFloat()
+            compass.setAzimuth(az)
+            compass.setFov(o.optDouble("fovH", 80.0).toFloat())
+            compass.setMarkers(
+                o.optDouble("sunriseAz", Double.NaN).toFloat(),
+                o.optDouble("sunsetAz", Double.NaN).toFloat(),
+                o.optDouble("moonriseAz", Double.NaN).toFloat(),
+                o.optDouble("moonsetAz", Double.NaN).toFloat())
+            elevationView.setAngle(el)
+            elevationView.setFov(o.optDouble("fovV", 50.0).toFloat())
+            dirText.text = "撮影方向 %.1f°   仰角 %.1f°".format(az, el)
             capGear.text = o.optString("camera") + " / " + o.optString("lens")
             capDir.text = dirText.text
             renderSchedule(planSchedule, o, false)

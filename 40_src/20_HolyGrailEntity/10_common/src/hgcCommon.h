@@ -58,6 +58,7 @@ namespace hgc
 		std::string model;				// モデル名
 		std::string name;				// 表示名称
 		double   sensorSize  = 0.0;		// センサー横[mm]
+		double   sensorSizeV = 0.0;		// センサー縦[mm]
 		uint32_t sensorPixel = 0;		// センサー横[pixel]
 		std::vector<std::string> isoList;	// 設定可能iso感度(カメラ設定値の文字列)
 		std::vector<std::string> ssList;	// 設定可能シャッター速度(カメラ設定値の文字列)

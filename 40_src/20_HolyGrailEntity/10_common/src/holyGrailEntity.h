@@ -73,6 +73,11 @@ int32_t hge_setPlanJson(const char* json, int32_t len);
 // HGE_EV_SCHEDULE で通知する。
 int32_t hge_setPlanTimes(const char* startIso, const char* endIso, int32_t offMin);
 
+// 開始時の撮影方向(方位[°] 0=北,90=東)と仰角[°]を設定し、スケジュールを再生成する。
+// 撮影方向で「太陽が画角に入る時刻」が変わるため、朝日/夕日の区間が更新される。
+// 結果は HGE_EV_SCHEDULE で通知する。
+int32_t hge_setPlanDirection(double azimuth, double elevation);
+
 // 撮影計画のスケジュールを JSON で取得(バッファ規約)。
 //  buf が null か容量不足なら必要バイト数を *inoutLen に格納し ERR_HGC_BUF_SHORT。
 int32_t hge_getScheduleJson(char* buf, int32_t* inoutLen);

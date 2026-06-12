@@ -44,6 +44,9 @@ namespace astro
 	// 指定ローカル時刻の太陽の地平座標を求める。
 	horiz sunHoriz(const hgc::dateTime& localTime, int utcOffsetMin, const hgc::place& p);
 
+	// 指定ローカル時刻の月の地平座標を求める(方位磁石の月マーカー用)。
+	horiz moonHoriz(const hgc::dateTime& localTime, int utcOffsetMin, const hgc::place& p);
+
 	// 太陽が指定高度になる時刻を求める。rising=false で日没側(下降中)、true で日の出側(上昇中)。
 	// baseDate の日付の正午を起点に最大2日先まで探す。見つからなければ valid=false。
 	// 固定露出太陽高度の start(日没側)/end(日の出側) 時刻計算に使う。

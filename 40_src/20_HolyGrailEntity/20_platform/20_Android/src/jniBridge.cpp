@@ -146,6 +146,13 @@ Java_app_laxei_holygrail_HgeNative_nativeSetPlanTimes(JNIEnv* env, jobject /*thi
 	return r;
 }
 
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetPlanDirection(JNIEnv* /*env*/, jobject /*thiz*/,
+                                                          jdouble azimuth, jdouble elevation)
+{
+	return hge_setPlanDirection(azimuth, elevation);
+}
+
 JNIEXPORT jstring JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeGetCcmDefaults(JNIEnv* env, jobject /*thiz*/)
 {

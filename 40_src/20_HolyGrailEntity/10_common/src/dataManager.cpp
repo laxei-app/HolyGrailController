@@ -219,16 +219,17 @@ void dataManager::factoryFixedPlan(hgc::cs& plan)
 	plan.camera.maker = "Canon";
 	plan.camera.model = "EOS R10";
 	plan.camera.name  = "EOS R10";
-	plan.camera.sensorSize  = 22.3;
+	plan.camera.sensorSize  = 22.4;	// センサー横[mm](APS-C)
+	plan.camera.sensorSizeV = 14.9;	// センサー縦[mm]
 	plan.camera.sensorPixel = 6000;
 
 	plan.lens.maker = "Sigma";
-	plan.lens.name  = "16mm F1.4 DC DN";
-	plan.lens.focalLength = 16.0;
+	plan.lens.name  = "SIGMA 12mm F1.4 DC";
+	plan.lens.focalLength = 12.0;
 	plan.lens.fn = 1.4;
 
 	plan.interval  = 15.0;	// 撮影周期[秒](EOS最小)
-	plan.azimuth   = 90.0;	// 東向き
+	plan.azimuth   = 90.0;	// 東向き(日の出方向)
 	plan.elevation = 10.0;
 	plan.landscape = true;
 }
