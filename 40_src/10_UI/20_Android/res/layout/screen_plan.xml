@@ -153,6 +153,13 @@
                     android:layout_marginStart="6dp" android:orientation="vertical" />
             </LinearLayout>
 
+            <!-- スケジュールに入らなかった撮影制御方法(月の影響など)も選べる -->
+            <TextView android:id="@+id/plan_ccmExtraLabel" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="8dp" android:text="スケジュール外の撮影制御方法" android:textSize="12sp" android:textColor="#888888" />
+            <LinearLayout android:id="@+id/plan_ccmExtra"
+                android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginTop="2dp" android:orientation="horizontal" />
+
             <!-- 計画を保存 -->
             <Button android:id="@+id/plan_saveButton"
                 android:layout_width="match_parent" android:layout_height="wrap_content"

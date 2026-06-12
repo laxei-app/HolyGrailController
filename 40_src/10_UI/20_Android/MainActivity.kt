@@ -353,31 +353,41 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (key == "moon") openMoonEdit() else openCcmEdit(key)
     }
 
-    // 撮影計画の右側に「この計画の撮影制御方法」を色別タップ可能リストで出す(仕様: 初期値と明確に分ける)。
+    private val ccmTypeToKey = mapOf(1 to "night", 2 to "sunrise", 3 to "sunset", 4 to "day", 5 to "moon")
+    private val ccmTypeName = mapOf(1 to "夜間撮影", 2 to "朝日撮影", 3 to "夕日撮影", 4 to "日中撮影", 5 to "月の影響")
+
+    // 撮影計画の撮影制御方法リスト。スケジュールに入っている方法は右側(縦)に、
+    // 入らなかった方法+月(常にスケジュール外)は End の下(横並び)に色別タップ可能で出す。
     private fun buildPlanCcmList(o: JSONObject) {
         val list = findViewById<LinearLayout>(R.id.plan_ccmList)
-        list.removeAllViews()
-        val typeToKey = mapOf(1 to "night", 2 to "sunrise", 3 to "sunset", 4 to "day")
-        val nameMap = mapOf(1 to "夜間撮影", 2 to "朝日撮影", 3 to "夕日撮影", 4 to "日中撮影", 5 to "月の影響")
-        val seen = linkedSetOf<Int>()
+        val extra = findViewById<LinearLayout>(R.id.plan_ccmExtra)
+        list.removeAllViews(); extra.removeAllViews()
+        val inSched = linkedSetOf<Int>()
         o.optJSONArray("windows")?.let { arr ->
             for (i in 0 until arr.length()) {
                 val t = arr.getJSONObject(i).optInt("type")
-                if (typeToKey.containsKey(t)) seen.add(t)
+                if (t in 1..4) inSched.add(t)
             }
         }
-        val ordered = seen.toMutableList(); ordered.add(5)   // 月の影響への対処は常に表示
-        for (t in ordered) {
-            val key = if (t == 5) "moon" else typeToKey[t]!!
-            val btn = TextView(this)
-            btn.text = nameMap[t]; btn.textSize = 13f; btn.gravity = Gravity.CENTER
-            btn.setBackgroundColor(ccmColor(t)); btn.setPadding(dp(6), dp(10), dp(6), dp(10))
-            btn.isClickable = true; btn.isFocusable = true
-            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            lp.setMargins(0, 0, 0, dp(4)); btn.layoutParams = lp
-            btn.setOnClickListener { openPlanCcmEdit(key) }
-            list.addView(btn)
-        }
+        for (t in inSched) addPlanCcmButton(list, t, fullWidth = true)          // 右側=スケジュール内
+        val notIn = (1..4).filter { it !in inSched }.toMutableList()
+        notIn.add(5)                                                            // 月は常にスケジュール外
+        for (t in notIn) addPlanCcmButton(extra, t, fullWidth = false)          // End の下=スケジュール外
+    }
+
+    private fun addPlanCcmButton(parent: LinearLayout, t: Int, fullWidth: Boolean) {
+        val key = ccmTypeToKey[t] ?: return
+        val btn = TextView(this)
+        btn.text = ccmTypeName[t]; btn.textSize = 13f; btn.gravity = Gravity.CENTER
+        btn.setBackgroundColor(ccmColor(t)); btn.setPadding(dp(6), dp(10), dp(6), dp(10))
+        btn.isClickable = true; btn.isFocusable = true
+        val lp = if (fullWidth)
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, 0, 0, dp(4)) }
+        else
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(dp(2), 0, dp(2), 0) }
+        btn.layoutParams = lp
+        btn.setOnClickListener { openPlanCcmEdit(key) }
+        parent.addView(btn)
     }
 
     // 太陽高度: Slider 0..14 ⇔ -19..-5°(1°刻み。分単位は将来キーボードで)
