@@ -636,6 +636,35 @@ int32_t hge_getExpoValuesJson(char* buf, int32_t* inoutLen)
 	return ERR_HGC_OK;
 }
 
+int32_t hge_getCameraAbilityJson(char* buf, int32_t* inoutLen)
+{
+	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
+	// 接続済みカメラが無ければ検索する。
+	if (g_devices.empty() || g_devices[0].apiBase == nullptr)
+	{
+		g_devices.clear();
+		cameraController::detectTarget(g_devices);
+	}
+	if (g_devices.empty() || g_devices[0].apiBase == nullptr) { return ERR_HGC_NOT_FOUND; }
+
+	cmdt::shotRange r;
+	errCode e = cameraController::getSettings(g_devices[0], r);
+	if (e != ERR_HGC_OK) { return e; }
+
+	auto arr = [](const std::vector<std::string>& v) {
+		std::string s = "[";
+		for (size_t i = 0; i < v.size(); ++i) { if (i) { s += ","; } s += "\"" + jesc(v[i]) + "\""; }
+		s += "]";
+		return s;
+	};
+	std::string j = "{\"iso\":" + arr(r.iso) + ",\"ss\":" + arr(r.ss) + ",\"fn\":" + arr(r.fNum) + "}";
+	int32_t need = static_cast<int32_t>(j.size()) + 1;
+	if (buf == nullptr || *inoutLen < need) { *inoutLen = need; return ERR_HGC_BUF_SHORT; }
+	std::memcpy(buf, j.c_str(), need);
+	*inoutLen = need;
+	return ERR_HGC_OK;
+}
+
 int32_t hge_sunAltitudeTimes(int32_t altitudeDeg, char* buf, int32_t* inoutLen)
 {
 	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }

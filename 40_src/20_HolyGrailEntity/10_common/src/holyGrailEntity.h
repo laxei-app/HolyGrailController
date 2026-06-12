@@ -107,6 +107,11 @@ int32_t hge_setCcmDefaultsJson(const char* json, int32_t len);
 //  iso/ss は標準1/3段、fn は計画のレンズf範囲。スライダーの選択肢に使う。
 int32_t hge_getExpoValuesJson(char* buf, int32_t* inoutLen);
 
+// 接続中カメラが実際に受け付ける設定値の一覧(CCAPIのability)を取得する(バッファ規約)。
+//  {"iso":[...],"ss":[...],"fn":[...]}。露出文字列フォーマットの実機検証に使う。
+//  カメラ未接続なら検索を試み、見つからなければ ERR_HGC_NOT_FOUND。
+int32_t hge_getCameraAbilityJson(char* buf, int32_t* inoutLen);
+
 // 固定露出太陽高度の start(日没側で指定高度に達する時刻)/end(日の出側) を計算する(バッファ規約)。
 // altitudeDeg: 太陽高度[°]。現在の撮影計画の日付・場所で計算する。
 //  {"start":"MM/dd HH:mm","end":"MM/dd HH:mm"}(見つからなければ "--:--")

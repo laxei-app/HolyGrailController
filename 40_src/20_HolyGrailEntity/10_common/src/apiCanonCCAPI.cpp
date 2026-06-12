@@ -5,6 +5,48 @@
 
 using json = nlohmann::json;
 
+namespace
+{
+	// シャッター速度の文字列フォーマット変換。
+	// 内部表記(秒は "8" "0.5" "3.2"、高速は "1/4000"、バルブ "Bulb") と
+	// Canon CCAPI 表記(秒は 8" 0"5 3"2、高速は 1/4000、バルブ bulb) を相互変換する。
+	// EOS R10 の tv ability は秒を二重引用符付きで返す(例 8 秒 = 8")ため、
+	// 内部の "8" をそのまま送ると "Invalid parameter" で拒否される。
+	std::string ssToCcapi(const std::string& s)
+	{
+		if (s.empty())                          { return s; }
+		if (s.find('/') != std::string::npos)   { return s; }	// 1/4000 等はそのまま
+		if (s == "Bulb" || s == "bulb")         { return "bulb"; }
+		std::string t = s;
+		auto dot = t.find('.');
+		if (dot != std::string::npos) { t[dot] = '"'; return t; }	// 0.5 -> 0"5 / 3.2 -> 3"2
+		return t + "\"";											// 8 -> 8" / 30 -> 30"
+	}
+
+	std::string ssFromCcapi(const std::string& s)
+	{
+		if (s.find('/') != std::string::npos)   { return s; }
+		if (s == "bulb")                        { return "Bulb"; }
+		auto q = s.find('"');
+		if (q == std::string::npos)             { return s; }
+		std::string t = s;
+		t[q] = '.';											// 0"5 -> 0.5 / 8" -> 8.
+		if (!t.empty() && t.back() == '.') { t.pop_back(); }	// 整数秒 8. -> 8
+		return t;
+	}
+
+	// F値: EOS R10 の av ability は f/10 未満の整数開放値を ".0" 付きで返す(例 f/2 = "2.0")。
+	// 内部表記が整数("2")でも CCAPI が受け付けるよう、10未満の整数には ".0" を補う。
+	std::string fnToCcapi(const std::string& s)
+	{
+		if (s.empty() || s.find('.') != std::string::npos) { return s; }	// 既に小数 or 空はそのまま
+		bool allDigit = true;
+		for (char ch : s) { if (ch < '0' || ch > '9') { allDigit = false; break; } }
+		if (!allDigit) { return s; }
+		return (std::stoi(s) < 10) ? (s + ".0") : s;	// 2 -> 2.0 / 16 -> 16
+	}
+}
+
 
 // コンストラクタ
 apiCanonCCAPI::apiCanonCCAPI(void) {}
@@ -215,10 +257,16 @@ errCode apiCanonCCAPI::ascCanFNumber(std::vector<std::string>& fNumber)
     return ERR_HGC_OK;
 }
 
-// 指定可能な シャッター速度(文字列)を取得する。CCAPI の値("1/4000","8"等)をそのまま使う。
+// 指定可能な シャッター速度(文字列)を取得する。
+// CCAPI 表記(8" 等)を内部表記("8" 等)へ変換して返す。
 errCode apiCanonCCAPI::ascCanSS(std::vector<std::string>& ss)
 {
-    return getJsonAbility(funcNum::SS, ss);
+    std::vector<std::string> raw;
+    errCode err = getJsonAbility(funcNum::SS, raw);
+    if (err != ERR_HGC_OK) { return err; }
+    ss.clear();
+    for (const auto& v : raw) { ss.push_back(ssFromCcapi(v)); }
+    return ERR_HGC_OK;
 }
 
 // 指定可能な ISO(文字列)を取得する。CCAPI の値("100","3200"等)をそのまま使う。
@@ -255,28 +303,28 @@ errCode apiCanonCCAPI::setFNumber(const std::string& fNumber)
     funcNum func = funcNum::F_NUMBER;
     if (!(funcList[func].verb == verb::PUT)) { return ERR_HGC_NOT_SUPPORTED; }
     json json;
-    json["value"] = "f" + fNumber;	// 表示値("1.4","16")に接頭 'f' を付けてカメラへ
+    json["value"] = "f" + fnToCcapi(fNumber);	// 表示値に接頭 'f'。整数開放値は ".0" を補う(f2 -> f2.0)
     std::string body = json.dump();
     std::string resp;
     if (netThread::httpPut(funcList[func].url, body, resp)) { return ERR_HGC_OK; }
 
-    DBGLN(col::RED, "%s %s", body.c_str(), resp.c_str());
-    return ERR_HGC_OK;
+    DBGLN(col::RED, "setFNumber NG %s %s", body.c_str(), resp.c_str());
+    return ERR_HGC_HTTP_PUT;	// 失敗を握りつぶさず返す
 }
 
-// シャッター速度を設定する(カメラ設定値の文字列をそのまま指示)
+// シャッター速度を設定する。内部表記を CCAPI 表記("8"->8" 等)へ変換して指示する。
 errCode apiCanonCCAPI::setSS(const std::string& ss)
 {
     funcNum func = funcNum::SS;
     if (!(funcList[func].verb == verb::PUT)) { return ERR_HGC_NOT_SUPPORTED; }
     json json;
-    json["value"] = ss;
+    json["value"] = ssToCcapi(ss);	// 秒は CCAPI の二重引用符表記へ
     std::string body = json.dump();
     std::string resp;
     if (netThread::httpPut(funcList[func].url, body, resp)) { return ERR_HGC_OK; }
 
-    DBGLN(col::RED, "%s %s", body.c_str(), resp.c_str());
-    return ERR_HGC_OK;
+    DBGLN(col::RED, "setSS NG %s %s", body.c_str(), resp.c_str());
+    return ERR_HGC_HTTP_PUT;	// 失敗を握りつぶさず返す
 }
 
 // ISO を設定する(カメラ設定値の文字列をそのまま指示)
@@ -290,8 +338,8 @@ errCode apiCanonCCAPI::setIso(const std::string& iso)
     std::string resp;
     if (netThread::httpPut(funcList[func].url, body, resp)) { return ERR_HGC_OK; }
 
-    DBGLN(col::RED, "%s %s", body.c_str(), resp.c_str());
-    return ERR_HGC_OK;
+    DBGLN(col::RED, "setIso NG %s %s", body.c_str(), resp.c_str());
+    return ERR_HGC_HTTP_PUT;	// 失敗を握りつぶさず返す
 }
 
 // 撮影した画像を取得する。

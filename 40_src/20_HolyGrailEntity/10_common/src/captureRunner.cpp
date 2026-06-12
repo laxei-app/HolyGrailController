@@ -256,7 +256,12 @@ errCode captureRunner::loop(void)
 		// 露出を設定して撮影(仕様 4章)。周期計測のため経過を測る。
 		void* el = tool::startElapse();
 		cmdt::shotSet shot(target.ss, target.fn, target.iso);	// カメラ設定値の文字列
-		cameraController::rdyShutter(*dev_, shot);
+		errCode setErr = cameraController::rdyShutter(*dev_, shot);
+		if (setErr != ERR_HGC_OK && onError_)
+		{
+			// 露出設定(iso/ss/fn)がカメラに反映できなかった。握りつぶさず通知する。
+			onError_(setErr, "rdyShutter(露出設定失敗)");
+		}
 		err = cameraController::actShutter(*dev_);
 		if (err != ERR_HGC_OK)
 		{

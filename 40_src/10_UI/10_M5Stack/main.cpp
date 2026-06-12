@@ -512,6 +512,15 @@ void loop(void)
 		// 検証用: timeコマンド受信を模擬してUTCオフセットを設定・永続化し固定計画を再生成。
 		else if (c == 'j') { hge_setUtcOffset(540); hge_loadFixedPlan(); g_state = hge_getState(); g_dirty = true; }	// JST(+9h)
 		else if (c == 'u') { hge_setUtcOffset(0);   hge_loadFixedPlan(); g_state = hge_getState(); g_dirty = true; }	// UTC
+		else if (c == 'a')	// 検証用: カメラが実際に受け付ける iso/ss/fn の一覧をダンプ
+		{
+			hge_captureStop();
+			delay(1000);
+			static char b[4096]; int32_t len = sizeof(b);
+			int32_t r = hge_getCameraAbilityJson(b, &len);
+			if (r == 0) { Serial.printf("[ABILITY] %s\n", b); }
+			else        { Serial.printf("[ABILITY] failed code=%ld\n", (long)r); }
+		}
 		else if (c == 'i')
 		{
 			Serial.printf("[INFO] state=%s wifi=%d IP=%s\n", stName(g_state),
