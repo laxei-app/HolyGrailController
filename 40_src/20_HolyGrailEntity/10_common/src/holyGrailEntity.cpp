@@ -358,7 +358,7 @@ namespace
 					dataManager::logEvent("CCMSW", d.c_str());
 					g_lastCcm = c.ccm;
 				}
-				dataManager::logShot(c.frame, c.exp, c.luminance, c.ccm.c_str());
+				dataManager::logShot(c.frame, c.exp, c.luminance, c.ccm.c_str(), c.metered);
 			},
 			[](errCode e, const std::string& m) { notifyError(e, m.c_str()); });
 

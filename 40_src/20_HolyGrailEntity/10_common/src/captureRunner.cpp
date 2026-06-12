@@ -168,6 +168,7 @@ errCode captureRunner::loop(void)
 		const hgc::ccmBase* ccm = w->ccm.get();
 
 		hgc::exposure target{};
+		double meteredLinear = -1.0;	// 測光したリニア輝度(自動補正時のみ。<0=測光なし)
 
 		if (ccm->type == hgc::ccmType::night)
 		{
@@ -212,6 +213,7 @@ errCode captureRunner::loop(void)
 				double x = expo::histMedian(hist.y, cmdt::hist_bin);
 				linear = expo::srgbToLinear(x);
 			}
+			meteredLinear = linear;	// 測光値をログ用に保持(失敗時は-1)
 
 			if (linear > 0.0)
 			{
@@ -273,7 +275,7 @@ errCode captureRunner::loop(void)
 		if (onCaptured_)
 		{
 			double lum = expo::brightnessStops(target, tables_);
-			onCaptured_(capturedInfo{ frame, target, lum, ccm->name });
+			onCaptured_(capturedInfo{ frame, target, lum, ccm->name, meteredLinear });
 		}
 		if (onProgress_)
 		{

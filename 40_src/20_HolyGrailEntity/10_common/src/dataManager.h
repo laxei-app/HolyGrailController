@@ -61,7 +61,9 @@ public:
 	static void logEvent(const char* event, const char* detail, bool error = false);
 
 	// 1枚撮影(SHOT)を記録する。frame/iso/ss/fn/lum と適用中ccm名。
-	static void logShot(int frame, const hgc::exposure& e, double lumStops, const char* ccmName);
+	// meteredLinear: 測光したリニア輝度(自動補正時のみ。<0=測光なしで detail に出力しない)。
+	static void logShot(int frame, const hgc::exposure& e, double lumStops, const char* ccmName,
+	                    double meteredLinear = -1.0);
 
 	// 現在の(本日の)ログファイルのフルパスを返す(検証・ログ転送用)。
 	static std::string currentLogPath(void);

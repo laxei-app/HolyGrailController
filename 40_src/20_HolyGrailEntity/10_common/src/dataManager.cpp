@@ -317,12 +317,25 @@ std::string dataManager::currentLogPath(void)
 	return dir + "/hg_" + dateStr + ".log";
 }
 
-void dataManager::logShot(int frame, const hgc::exposure& e, double lumStops, const char* ccmName)
+void dataManager::logShot(int frame, const hgc::exposure& e, double lumStops, const char* ccmName,
+                          double meteredLinear)
 {
 	char frameStr[8], lumStr[12];
 	std::snprintf(frameStr, sizeof(frameStr), "%d", frame);
 	std::snprintf(lumStr,   sizeof(lumStr),   "%+.3f", lumStops);
+	// detail = ccm名 + 測光輝度(自動補正時のみ)。Y=リニア輝度, ev=中庸グレー(0.18)基準の段差。
+	char detail[56];
+	const char* nm = ccmName ? ccmName : "";
+	if (meteredLinear > 0.0)
+	{
+		double ev = std::log2(meteredLinear / 0.18);
+		std::snprintf(detail, sizeof(detail), "%s Y=%.4f ev%+.2f", nm, meteredLinear, ev);
+	}
+	else
+	{
+		std::snprintf(detail, sizeof(detail), "%s", nm);
+	}
 	// 露出値はカメラ設定値の文字列をそのまま記録する。
 	writeRecord("INF", "SHOT", frameStr, e.iso.c_str(), e.ss.c_str(), e.fn.c_str(),
-	            lumStr, ccmName ? ccmName : "");
+	            lumStr, detail);
 }
