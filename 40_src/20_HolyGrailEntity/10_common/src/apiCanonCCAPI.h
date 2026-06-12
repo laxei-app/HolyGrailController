@@ -90,6 +90,14 @@ protected:
 	class device			device;		// デバイス。コピーして持つ。
 	std::unordered_map<apiCanonCCAPI::funcNum, class func> funcList;	// 機能リスト
 
+	// 送信用テーブル: 撮影開始時(getSettings)にカメラの ability から作る。
+	// real(実数)→ カメラが実際に広告した設定値文字列(send)。送信時はこの文字列を
+	// そのまま PUT するため、ファーム差・機種差の書式("8" vs 8" 等)に左右されない。
+	struct sendMap { std::string send; double real = 0.0; };
+	std::vector<sendMap> ssSend_;	// シャッター速度
+	std::vector<sendMap> isoSend_;	// ISO
+	std::vector<sendMap> fnSend_;	// F値
+
 protected:
 
 public:
@@ -123,10 +131,13 @@ protected:
 //	errCode getHistoGram(cmdt::HISTOGRAM & hist);			// live view のヒストグラムを取得する
 	errCode getShotPicture(std::vector<std::byte>& jpg);
 
-	// 設定する(カメラ設定値の文字列をそのまま指示する)
+	// 設定する(送信用テーブルで real に最も近いカメラ広告値を選んで送る)
 	errCode setFNumber(const std::string& fNumber);		// f 値を設定する
 	errCode setSS(const std::string& ss);				// シャッター速度を設定する
 	errCode setIso(const std::string& iso);				// ISO を設定する
+
+	// 送信用テーブルから real に最も近い「カメラが広告した文字列」を返す。空=該当なし。
+	std::string sendFor(const std::vector<sendMap>& map, double real) const;
 
 	// データ解析
 	errCode analizeUseFunction(class device& device, std::string& catalog);			// 使用するコマンドを探す

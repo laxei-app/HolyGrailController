@@ -1,7 +1,9 @@
 ﻿#include "common.h"
 #include "apiCanonCCAPI.h"
 #include "netThread.h"
+#include "exposureMath.h"
 #include <json/nlohmann/json.hpp>
+#include <cmath>
 
 using json = nlohmann::json;
 
@@ -36,7 +38,7 @@ namespace
 	}
 
 	// F値: EOS R10 の av ability は f/10 未満の整数開放値を ".0" 付きで返す(例 f/2 = "2.0")。
-	// 内部表記が整数("2")でも CCAPI が受け付けるよう、10未満の整数には ".0" を補う。
+	// 内部表記が整数("2")でも CCAPI が受け付けるよう、10未満の整数には ".0" を補う(フォールバック用)。
 	std::string fnToCcapi(const std::string& s)
 	{
 		if (s.empty() || s.find('.') != std::string::npos) { return s; }	// 既に小数 or 空はそのまま
@@ -44,6 +46,17 @@ namespace
 		for (char ch : s) { if (ch < '0' || ch > '9') { allDigit = false; break; } }
 		if (!allDigit) { return s; }
 		return (std::stoi(s) < 10) ? (s + ".0") : s;	// 2 -> 2.0 / 16 -> 16
+	}
+
+	// av ability の接頭(例 'f')を1文字除いた表示値。"f1.4" -> "1.4"
+	std::string fnStrip(const std::string& s) { return s.empty() ? s : s.substr(1); }
+
+	// ability の生文字列 raw を内部表記(表示・計算用)へ正規化する。
+	std::string toDisp(const std::string& raw, expo::expoKind k)
+	{
+		if (k == expo::expoKind::ss) { return ssFromCcapi(raw); }	// 8" -> 8
+		if (k == expo::expoKind::fn) { return fnStrip(raw); }		// f1.4 -> 1.4
+		return raw;													// iso はそのまま
 	}
 }
 
@@ -275,22 +288,48 @@ errCode apiCanonCCAPI::ascCanIso(std::vector<std::string>& iso)
     return getJsonAbility(funcNum::ISO, iso);
 }
 
-// 設定値を取得する
-// settings : 設定値保存場所
+// 送信用テーブルから real に最も近い「カメラが広告した文字列」を返す。
+std::string apiCanonCCAPI::sendFor(const std::vector<sendMap>& map, double real) const
+{
+    if (map.empty() || real <= 0.0) { return std::string(); }
+    const sendMap* best = &map[0];
+    double bestDiff = 1e300;
+    for (const auto& e : map)
+    {
+        double d = std::fabs(e.real - real);
+        if (d < bestDiff) { bestDiff = d; best = &e; }
+    }
+    return best->send;
+}
+
+// 設定値を取得する。撮影開始時に呼ばれ、表示用(settings=正規化)と
+// 送信用テーブル(real→カメラ生文字列)の両方を ability から構築する。
 errCode apiCanonCCAPI::getSettings(cmdt::shotRange& settings)
 {
-    std::vector<std::string> iso, ss, fNum;
+    std::vector<std::string> isoRaw, ssRaw, fnRaw;
+    errCode err = getJsonAbility(funcNum::ISO, isoRaw);
+    if (err != ERR_HGC_OK) { return err; }
+    err = getJsonAbility(funcNum::SS, ssRaw);
+    if (err != ERR_HGC_OK) { return err; }
+    err = getJsonAbility(funcNum::F_NUMBER, fnRaw);
+    if (err != ERR_HGC_OK) { return err; }
 
-    auto err = ascCanIso(iso);
-    if (err != ERR_HGC_OK) { return err; }
-    err = ascCanSS(ss);
-    if (err != ERR_HGC_OK) { return err; }
-    err = ascCanFNumber(fNum);
-    if (err != ERR_HGC_OK) { return err; }
-
-    settings.fNum = fNum;
-    settings.ss   = ss;
-    settings.iso  = iso;
+    // 生文字列 raw から { 表示用 settings, 送信用テーブル } を作る。
+    auto build = [](const std::vector<std::string>& raw, expo::expoKind k,
+                    std::vector<std::string>& disp, std::vector<sendMap>& send)
+    {
+        disp.clear(); send.clear();
+        for (const auto& r : raw)
+        {
+            std::string d = toDisp(r, k);
+            disp.push_back(d);
+            double val = expo::parseValue(d, k);	// auto/Bulb 等は負
+            if (val > 0.0) { send.push_back({ r, val }); }	// send=カメラ生文字列, real=実数
+        }
+    };
+    build(isoRaw, expo::expoKind::iso, settings.iso,  isoSend_);
+    build(ssRaw,  expo::expoKind::ss,  settings.ss,   ssSend_);
+    build(fnRaw,  expo::expoKind::fn,  settings.fNum, fnSend_);
 
     return ERR_HGC_OK;
 }
@@ -302,8 +341,11 @@ errCode apiCanonCCAPI::setFNumber(const std::string& fNumber)
 {
     funcNum func = funcNum::F_NUMBER;
     if (!(funcList[func].verb == verb::PUT)) { return ERR_HGC_NOT_SUPPORTED; }
+    // 送信用テーブルからカメラ広告値(例 "f1.4")をそのまま使う。未構築時のみ規則変換。
+    std::string val = sendFor(fnSend_, expo::parseValue(fNumber, expo::expoKind::fn));
+    if (val.empty()) { val = "f" + fnToCcapi(fNumber); }
     json json;
-    json["value"] = "f" + fnToCcapi(fNumber);	// 表示値に接頭 'f'。整数開放値は ".0" を補う(f2 -> f2.0)
+    json["value"] = val;
     std::string body = json.dump();
     std::string resp;
     if (netThread::httpPut(funcList[func].url, body, resp)) { return ERR_HGC_OK; }
@@ -312,13 +354,15 @@ errCode apiCanonCCAPI::setFNumber(const std::string& fNumber)
     return ERR_HGC_HTTP_PUT;	// 失敗を握りつぶさず返す
 }
 
-// シャッター速度を設定する。内部表記を CCAPI 表記("8"->8" 等)へ変換して指示する。
+// シャッター速度を設定する。送信用テーブルからカメラ広告値(例 8")をそのまま送る。
 errCode apiCanonCCAPI::setSS(const std::string& ss)
 {
     funcNum func = funcNum::SS;
     if (!(funcList[func].verb == verb::PUT)) { return ERR_HGC_NOT_SUPPORTED; }
+    std::string val = sendFor(ssSend_, expo::parseValue(ss, expo::expoKind::ss));
+    if (val.empty()) { val = ssToCcapi(ss); }	// 未構築時のみ規則変換(フォールバック)
     json json;
-    json["value"] = ssToCcapi(ss);	// 秒は CCAPI の二重引用符表記へ
+    json["value"] = val;
     std::string body = json.dump();
     std::string resp;
     if (netThread::httpPut(funcList[func].url, body, resp)) { return ERR_HGC_OK; }
@@ -327,13 +371,15 @@ errCode apiCanonCCAPI::setSS(const std::string& ss)
     return ERR_HGC_HTTP_PUT;	// 失敗を握りつぶさず返す
 }
 
-// ISO を設定する(カメラ設定値の文字列をそのまま指示)
+// ISO を設定する。送信用テーブルからカメラ広告値をそのまま送る。
 errCode apiCanonCCAPI::setIso(const std::string& iso)
 {
     funcNum func = funcNum::ISO;
     if (!(funcList[func].verb == verb::PUT)) { return ERR_HGC_NOT_SUPPORTED; }
+    std::string val = sendFor(isoSend_, expo::parseValue(iso, expo::expoKind::iso));
+    if (val.empty()) { val = iso; }	// 未構築時はそのまま
     json json;
-    json["value"] = iso;
+    json["value"] = val;
     std::string body = json.dump();
     std::string resp;
     if (netThread::httpPut(funcList[func].url, body, resp)) { return ERR_HGC_OK; }
