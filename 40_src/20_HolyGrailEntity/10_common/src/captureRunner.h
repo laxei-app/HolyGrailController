@@ -51,6 +51,8 @@ private:
 	errCode loop(void);								// 撮影ループ本体(別スレッド)
 	const hgc::ccmWindow* activeWindow(long long nowSec) const;
 	hgc::exposure nightGoalAfter(long long nowSec) const;	// 次の夜間固定露出
+	// 最初の補正(仕様 4.4)を反復収束で行い、撮影開始直後の初期露出を決める。
+	hgc::exposure initialConverge(expo::exposureCtl& ctl, bool initialBright, double evT);
 	void interruptibleSleep(long ms);
 
 	hgc::cs plan_{};

@@ -28,6 +28,17 @@ namespace
 	{
 		return !e.iso.empty() && !e.ss.empty() && !e.fn.empty();
 	}
+
+	// --- 最初の補正(仕様 4.4)の反復収束パラメータ ---
+	// 露出を変えてからライブビューが追従するまでの待ち[ms]。実機で調整可。
+	constexpr long   kMeterSettleMs        = 700;
+	// 反復回数(初回測定 + 最大3回程度の補正。仕様の手順5/6)。
+	constexpr int    kInitConvergeTries    = 4;
+	// 目標 ev への許容[段]。これ以内に入ったら収束終了して撮影に入る。
+	constexpr double kInitConvergeTolStops = 0.5;
+	// ヒストグラム中央値がこの範囲外なら明暗に張り付き(測光値を信用しない)とみなす。
+	constexpr double kPegBright = 0.99;
+	constexpr double kPegDark   = 0.01;
 }
 
 captureRunner::~captureRunner()
@@ -112,6 +123,79 @@ hgc::exposure captureRunner::nightGoalAfter(long long nowSec) const
 	return hgc::exposure{};
 }
 
+// 最初の補正(仕様 4.4)を反復収束で行う。撮影開始直後は初期露出が不定なので、
+// 初期値(明所限界 or 暗所限界)から始め、ライブビューを測光して目標 ev へ寄せる。
+//  - 測光が信用できる(張り付いていない)ときは仕様 4.4 のニュートン段(目標との差ぶん移動)。
+//  - 明側/暗側に張り付いているときは測光値を信用せず、明限界〜暗限界のブラケットを
+//    方向で狭めて中央へ二分探索的に寄せる(張り付き解消後はニュートン段に戻る)。
+// 最大 kInitConvergeTries 回。許容内に入れば終了、ダメでも最良点で撮影に入る(手順5/6)。
+// ctl は呼び出し前に init 済みであること。戻り値=1枚目の露出(ctl もその値になる)。
+hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, bool initialBright, double evT)
+{
+	const double linT = expo::linearFromEv(evT);	// 目標リニア輝度(ev0=0.18 基準)
+
+	// 許容範囲を段で取り、ブラケットの初期値とする(明側=最も明るい/暗側=最も暗い)。
+	ctl.setToBrightLimit();
+	double hiB = expo::brightnessStops(ctl.current(), tables_);
+	ctl.setToDarkLimit();
+	double loB = expo::brightnessStops(ctl.current(), tables_);
+
+	// 仕様 4.4 の初期値から開始(明所限界=limitDark / 暗所限界=limitBright)。
+	if (initialBright) { ctl.setToDarkLimit(); } else { ctl.setToBrightLimit(); }
+
+	hgc::exposure best = ctl.current();
+	double bestAbsErr = 1e9;
+
+	for (int i = 0; i < kInitConvergeTries && running_; ++i)
+	{
+		// 現在の露出をカメラへ反映し、ライブビューが追従するのを待ってから測光する。
+		hgc::exposure cur = ctl.current();
+		cmdt::shotSet shot(cur.ss, cur.fn, cur.iso);
+		cameraController::rdyShutter(*dev_, shot);
+		interruptibleSleep(kMeterSettleMs);
+
+		double x = -1.0, linear = -1.0;
+		cmdt::HISTOGRAM hist;
+		if (cameraController::rdyMetering(*dev_) == ERR_HGC_OK &&
+		    cameraController::alzMetering(*dev_, hist) == ERR_HGC_OK)
+		{
+			x = expo::histMedian(hist.y, cmdt::hist_bin);
+			linear = expo::srgbToLinear(x);
+		}
+
+		const double curB = expo::brightnessStops(cur, tables_);
+
+		if (linear <= 0.0)
+		{	// 測光失敗 → ブラケット中央へ寄せて再試行。
+			ctl.applyStops((loB + hiB) * 0.5 - curB);
+			continue;
+		}
+
+		const double err = expo::evFromLinear(linT, linear);	// log2(linear/linT): + 明るすぎ / - 暗すぎ
+		if (std::fabs(err) < bestAbsErr) { bestAbsErr = std::fabs(err); best = cur; }
+		if (std::fabs(err) <= kInitConvergeTolStops) { break; }	// 目標 ev に十分近い(手順5)
+
+		// 方向でブラケットを更新(明るすぎ→上限を現在へ / 暗すぎ→下限を現在へ)。
+		if (err > 0.0) { hiB = curB; } else { loB = curB; }
+
+		const bool pegged = (x >= kPegBright) || (x <= kPegDark);
+		double nextB;
+		if (pegged)
+		{	// 張り付き: 測光値が信用できない → 最初の設定と今の設定の間(二分)へ寄せる(手順2/3)。
+			nextB = (loB + hiB) * 0.5;
+		}
+		else
+		{	// 仕様 4.4 のニュートン段。ブラケットの枠外に出るなら中央へ。
+			nextB = curB - err;
+			if (nextB <= loB || nextB >= hiB) { nextB = (loB + hiB) * 0.5; }
+		}
+		ctl.applyStops(nextB - curB);
+	}
+
+	ctl.setCurrent(best);	// 最良点を撮影1枚目の露出にする(手順6)。
+	return best;
+}
+
 errCode captureRunner::loop(void)
 {
 	if (onState_) { onState_(ST_CAPTURING); }
@@ -153,7 +237,6 @@ errCode captureRunner::loop(void)
 	expo::exposureCtl postCtl;		// 夜間後移行用(夜間→次の自動露出)
 	std::vector<double> avgBuf;		// リニア輝度の移動平均バッファ
 	hgc::exposure lastExp{};		// 直近の露出設定
-	bool meterInitPending = false;	// 自動露出の最初の補正(§4.4 測光ベース)を待っているか
 	int frame = 0;
 
 	// nowSec 以降で最初の自動露出窓の撮影制御方法を返す(夜間後移行の収束先)。
@@ -250,6 +333,7 @@ errCode captureRunner::loop(void)
 		else if (isAuto(ccm->type))
 		{
 			const double evT = targetEv(ccm);
+			bool didInitConverge = false;
 			if (windowChanged)
 			{
 				autoCtl.init(tables_, ccm->limitBright, ccm->limitDark, ccm->priority);
@@ -263,37 +347,30 @@ errCode captureRunner::loop(void)
 					double prevB = expo::brightnessStops(lastExp, tables_);
 					double curB  = expo::brightnessStops(autoCtl.current(), tables_);
 					autoCtl.applyStops(prevB - curB);
-					meterInitPending = false;
 				}
 				else
 				{
-					meterInitPending = true;	// 直前が無い(撮影開始直後) → §4.4 測光で初期化
+					// 最初の補正(仕様 4.4): 撮影開始直後は初期露出が不定。初期値から測光しながら
+					// 目標 ev へ反復収束させて 1 枚目の露出を決める(張り付き時は二分探索)。
+					target = initialConverge(autoCtl, ccm->initialBright, evT);
+					didInitConverge = true;
 				}
 			}
 
-			// 測光(ライブビューのヒストグラム)→ リニア輝度(仕様 4.3)
-			double linear = -1.0;
-			cmdt::HISTOGRAM hist;
-			if (cameraController::rdyMetering(*dev_) == ERR_HGC_OK &&
-			    cameraController::alzMetering(*dev_, hist) == ERR_HGC_OK)
+			if (!didInitConverge)
 			{
-				double x = expo::histMedian(hist.y, cmdt::hist_bin);
-				linear = expo::srgbToLinear(x);
-			}
-			meteredLinear = linear;	// 測光値をログ用に保持(失敗時は-1)
-
-			if (linear > 0.0)
-			{
-				if (meterInitPending)
+				// 測光(ライブビューのヒストグラム)→ リニア輝度(仕様 4.3)
+				double linear = -1.0;
+				cmdt::HISTOGRAM hist;
+				if (cameraController::rdyMetering(*dev_) == ERR_HGC_OK &&
+				    cameraController::alzMetering(*dev_, hist) == ERR_HGC_OK)
 				{
-					// 最初の補正(仕様 4.4): 初期値(明所限界 or 暗所限界)から目標evへ寄せる。
-					double evD = expo::evFromLinear(expo::EV0_LINEAR, linear);	// log2(linear/0.18)
-					if (ccm->initialBright) { autoCtl.setToDarkLimit(); }   // 明所限界(limitDark)を初期値に
-					else                    { autoCtl.setToBrightLimit(); } // 暗所限界(limitBright)を初期値に
-					autoCtl.applyStops(evT - evD);
-					meterInitPending = false;
+					double x = expo::histMedian(hist.y, cmdt::hist_bin);
+					linear = expo::srgbToLinear(x);
 				}
-				else
+				meteredLinear = linear;	// 測光値をログ用に保持(失敗時は-1)
+
+				if (linear > 0.0)
 				{
 					// 露出補正(仕様 4.5): 移動平均とヒステリシス帯
 					avgBuf.push_back(linear);
@@ -308,8 +385,8 @@ errCode captureRunner::loop(void)
 					if (avg > linU)      { autoCtl.darken(); }
 					else if (avg < linD) { autoCtl.brighten(); }
 				}
+				target = autoCtl.current();
 			}
-			target = autoCtl.current();
 		}
 		else
 		{
