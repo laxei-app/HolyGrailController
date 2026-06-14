@@ -1020,15 +1020,33 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun pickDate(cal: Calendar) {
         DatePickerDialog(this, { _, y, m, d ->
             cal.set(Calendar.YEAR, y); cal.set(Calendar.MONTH, m); cal.set(Calendar.DAY_OF_MONTH, d)
-            updateTimeButtons(); pushTimesToEntity()
+            clampPlanRange(cal === startCal); updateTimeButtons(); pushTimesToEntity()
         }, cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH)).show()
     }
 
     private fun pickTime(cal: Calendar) {
         TimePickerDialog(this, { _, h, min ->
             cal.set(Calendar.HOUR_OF_DAY, h); cal.set(Calendar.MINUTE, min); cal.set(Calendar.SECOND, 0)
-            updateTimeButtons(); pushTimesToEntity()
+            clampPlanRange(cal === startCal); updateTimeButtons(); pushTimesToEntity()
         }, cal.get(Calendar.HOUR_OF_DAY), cal.get(Calendar.MINUTE), true).show()
+    }
+
+    // 開始/終了の間隔を 最小1分〜最大24時間 に収め、逆転(終了≦開始)を防ぐ。
+    // startChanged=true(開始を編集) のときは終了を、false(終了を編集) のときは開始を動かす。
+    private fun clampPlanRange(startChanged: Boolean) {
+        val minMs = 60_000L              // 最小1分
+        val maxMs = 24L * 60L * 60_000L  // 最大24時間
+        val span = endCal.timeInMillis - startCal.timeInMillis
+        if (span in minMs..maxMs) return
+        if (startChanged) {
+            // 開始を基準に終了を範囲内へ寄せる。
+            val clamped = if (span < minMs) minMs else maxMs
+            endCal.timeInMillis = startCal.timeInMillis + clamped
+        } else {
+            // 終了を基準に開始を範囲内へ寄せる。
+            val clamped = if (span < minMs) minMs else maxMs
+            startCal.timeInMillis = endCal.timeInMillis - clamped
+        }
     }
 
     private fun updateTimeButtons() {
