@@ -232,6 +232,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val host = ipInput.text.toString().trim()
             Thread { HgeNative.nativeConnectManual(host) }.start()
         }
+        // 撮影制御方法の編集ボタン(全種・固定配置)をスケジュールの下に構築する。
+        buildCcmEditButtons()
         // 初期値メニュー(plan_menu→メニュー画面)
         planMenu.setOnClickListener { openCcmMenu() }
         findViewById<ImageView>(R.id.cmenu_back).setOnClickListener { flipper.displayedChild = 0 }
@@ -365,38 +367,38 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private val ccmTypeToKey = mapOf(1 to "night", 2 to "sunrise", 3 to "sunset", 4 to "day", 5 to "moon")
     private val ccmTypeName = mapOf(1 to "夜間撮影", 2 to "朝日撮影", 3 to "夕日撮影", 4 to "日中撮影", 5 to "月の影響")
 
-    // 撮影計画の撮影制御方法リスト。スケジュールに入っている方法は右側(縦)に、
-    // 入らなかった方法+月(常にスケジュール外)は End の下(横並び)に色別タップ可能で出す。
-    private fun buildPlanCcmList(o: JSONObject) {
-        val list = findViewById<LinearLayout>(R.id.plan_ccmList)
-        val extra = findViewById<LinearLayout>(R.id.plan_ccmExtra)
-        list.removeAllViews(); extra.removeAllViews()
-        val inSched = linkedSetOf<Int>()
-        o.optJSONArray("windows")?.let { arr ->
-            for (i in 0 until arr.length()) {
-                val t = arr.getJSONObject(i).optInt("type")
-                if (t in 1..4) inSched.add(t)
+    // 撮影制御方法の編集ボタン(全5種)を常に定位置(スケジュールの下)に並べる。タップで編集画面へ。
+    // 3列グリッド(夜間/朝日/夕日 と 日中/月)。色分けして「ボタンらしい」見た目にする。
+    private fun buildCcmEditButtons() {
+        val parent = findViewById<LinearLayout>(R.id.plan_ccmButtons)
+        parent.removeAllViews()
+        val groups = listOf(listOf(1, 2, 3), listOf(4, 5))
+        for (group in groups) {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            for (t in group) {
+                val key = ccmTypeToKey[t] ?: continue
+                val btn = Button(this)
+                btn.text = ccmTypeName[t]
+                btn.isAllCaps = false
+                btn.textSize = 13f
+                btn.setTextColor(Color.parseColor("#212121"))
+                btn.backgroundTintList = ColorStateList.valueOf(ccmColor(t))
+                btn.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    .apply { setMargins(dp(2), dp(2), dp(2), dp(2)) }
+                btn.setOnClickListener { openPlanCcmEdit(key) }
+                row.addView(btn)
             }
+            // 列数を3に揃えるための空きスペーサ(最終行の日中/月を左寄せ・同幅にする)
+            repeat(3 - group.size) {
+                val sp = android.view.View(this)
+                sp.layoutParams = LinearLayout.LayoutParams(0, 1, 1f)
+                row.addView(sp)
+            }
+            parent.addView(row)
         }
-        for (t in inSched) addPlanCcmButton(list, t, fullWidth = true)          // 右側=スケジュール内
-        val notIn = (1..4).filter { it !in inSched }.toMutableList()
-        notIn.add(5)                                                            // 月は常にスケジュール外
-        for (t in notIn) addPlanCcmButton(extra, t, fullWidth = false)          // End の下=スケジュール外
-    }
-
-    private fun addPlanCcmButton(parent: LinearLayout, t: Int, fullWidth: Boolean) {
-        val key = ccmTypeToKey[t] ?: return
-        val btn = TextView(this)
-        btn.text = ccmTypeName[t]; btn.textSize = 13f; btn.gravity = Gravity.CENTER
-        btn.setBackgroundColor(ccmColor(t)); btn.setPadding(dp(6), dp(10), dp(6), dp(10))
-        btn.isClickable = true; btn.isFocusable = true
-        val lp = if (fullWidth)
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, 0, 0, dp(4)) }
-        else
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(dp(2), 0, dp(2), 0) }
-        btn.layoutParams = lp
-        btn.setOnClickListener { openPlanCcmEdit(key) }
-        parent.addView(btn)
     }
 
     // 太陽高度: Slider 0..14 ⇔ -19..-5°(1°刻み。分単位は将来キーボードで)
@@ -1140,9 +1142,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             dirText.text = "撮影方向 %.1f°   仰角 %.1f°".format(az, el)
             capGear.text = o.optString("camera") + " / " + o.optString("lens")
             capDir.text = dirText.text
-            renderSchedule(planSchedule, o, false)
+            renderSchedule(planSchedule, o, false, withBand = true)  // 右=時間帯ごとの色別バンド(連続同種は統合)
             renderSchedule(capSchedule, o, true)
-            buildPlanCcmList(o)   // 右側の色別ccmリスト(この計画の撮影制御方法)
         } catch (_: Exception) {}
     }
 
@@ -1162,44 +1163,97 @@ class MainActivity : AppCompatActivity(), HgeListener {
         10 -> "月の出"; 11 -> "月の入り"; 12 -> "End"; else -> "?"
     }
 
-    // 時系列の行(イベント=灰、撮影制御方法の開始=色付き)を並べて描画する。
-    private fun renderSchedule(container: LinearLayout, o: JSONObject, highlightNow: Boolean) {
+    // 時系列の行(イベント=灰)を並べて描画する。withBand=true のとき、各行の右側に
+    // その時間帯の撮影制御方法を色分け表示する。連続する同じ種別は1つのバンドにまとめ、
+    // 名称を中央に1回だけ表示する(高さは左の行群に合わせて整列。表示専用)。
+    private fun renderSchedule(container: LinearLayout, o: JSONObject, highlightNow: Boolean,
+                              withBand: Boolean = false) {
         container.removeAllViews()
-        data class Row(val t: Long, val time: String, val label: String, val color: Int)
+        data class Row(val t: Long, val time: String, val label: String)
         val rows = mutableListOf<Row>()
         fun parse(s: String): Long = try { fmtIso.parse(s)?.time ?: 0L } catch (_: Exception) { 0L }
         fun hm(s: String): String = if (s.length >= 16) s.substring(5, 16).replace("T", " ") else s
 
-        // 撮影制御方法の開始マーカーは挟まず、イベント(日の出/薄明等)のみを時系列表示する。
-        // 撮影制御方法は右側の色別リスト(buildPlanCcmList)に出す。
+        // イベント(日の出/薄明等)のみを時系列表示する。撮影制御方法は右側の色別バンドに出す。
         o.optJSONArray("events")?.let { arr ->
             for (i in 0 until arr.length()) {
                 val e = arr.getJSONObject(i)
                 val w = e.optString("when")
-                rows.add(Row(parse(w), hm(w), eventName(e.optInt("event")), ccmColor(0)))
+                rows.add(Row(parse(w), hm(w), eventName(e.optInt("event"))))
             }
         }
         rows.sortBy { it.t }
-        val now = System.currentTimeMillis()
-        // 現在が含まれる行(直近で過去)を求める
-        var activeIdx = -1
-        if (highlightNow) { for (i in rows.indices) { if (rows[i].t <= now) activeIdx = i } }
 
-        for ((i, r) in rows.withIndex()) {
+        // 各時間帯 windows=[start,end) を保持し、行の時刻に有効な撮影制御方法の種別を引く。
+        data class Win(val type: Int, val s: Long, val e: Long)
+        val wins = mutableListOf<Win>()
+        o.optJSONArray("windows")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val w = arr.getJSONObject(i)
+                wins.add(Win(w.optInt("type"), parse(w.optString("start")), parse(w.optString("end"))))
+            }
+        }
+        fun activeType(t: Long): Int { for (w in wins) if (t >= w.s && t < w.e) return w.type; return 0 }
+
+        // 1イベント行の TextView を作る(現在行ハイライト対応)。
+        fun makeRowView(r: Row, active: Boolean, topMargin: Int): TextView {
             val tv = TextView(this)
-            tv.text = "${r.time}   ${r.label}"
-            tv.setBackgroundColor(r.color)
+            tv.text = if (active) "▶ ${r.time}   ${r.label}  (現在)" else "${r.time}   ${r.label}"
+            if (active) tv.setTypeface(null, Typeface.BOLD)
+            tv.setBackgroundColor(ccmColor(0))
             tv.setPadding(16, 8, 16, 8)
             tv.textSize = 13f
-            val lp = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            lp.setMargins(0, 1, 0, 0)
-            tv.layoutParams = lp
-            if (highlightNow && i == activeIdx) {
-                tv.text = "▶ ${r.time}   ${r.label}  (現在)"
-                tv.setTypeface(null, Typeface.BOLD)
-            }
-            container.addView(tv)
+            tv.layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    setMargins(0, topMargin, 0, 0)
+                }
+            return tv
+        }
+
+        if (!withBand) {
+            // 従来表示: 全幅のイベント行を縦に並べる(撮影画面用。現在行をハイライト)。
+            val now = System.currentTimeMillis()
+            var activeIdx = -1
+            if (highlightNow) { for (i in rows.indices) { if (rows[i].t <= now) activeIdx = i } }
+            for ((i, r) in rows.withIndex()) container.addView(makeRowView(r, highlightNow && i == activeIdx, 1))
+            return
+        }
+
+        // バンド付き表示: 連続する同じ種別を1区間にまとめ、区間ごとに
+        //   [左: その区間のイベント行群(weight2)] [右: 統合バンド(weight1, 中央に名称1回)]
+        // を横並びにする。右は高さ match_parent で左の行群と整列する。
+        var i = 0
+        while (i < rows.size) {
+            val ct = activeType(rows[i].t)
+            var j = i
+            while (j + 1 < rows.size && activeType(rows[j + 1].t) == ct) j++   // 連続同種をまとめる
+
+            val group = LinearLayout(this)
+            group.orientation = LinearLayout.HORIZONTAL
+            group.layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    setMargins(0, if (i > 0) 1 else 0, 0, 0)   // 区間の境目に区切り
+                }
+
+            val left = LinearLayout(this)
+            left.orientation = LinearLayout.VERTICAL
+            left.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 2f)
+            for (k in i..j) left.addView(makeRowView(rows[k], false, if (k > i) 1 else 0))
+
+            val band = TextView(this)
+            band.text = if (ct in 1..5) (ccmTypeName[ct] ?: "") else ""
+            band.setBackgroundColor(if (ct in 1..5) ccmColor(ct) else Color.TRANSPARENT)
+            band.gravity = Gravity.CENTER
+            band.textSize = 13f
+            band.maxLines = 1
+            band.ellipsize = android.text.TextUtils.TruncateAt.END
+            band.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+                .apply { setMargins(dp(6), 0, 0, 0) }
+
+            group.addView(left)
+            group.addView(band)
+            container.addView(group)
+            i = j + 1
         }
     }
 
