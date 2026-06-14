@@ -86,6 +86,13 @@ namespace
 		              d.year, d.month, d.day, d.hour, d.min, d.sec);
 		return b;
 	}
+	// ログ用の短い日時(MM-DD HH:MM)。固定長レコードの detail(55B) に収めるため。
+	std::string dtShort(const hgc::dateTime& d)
+	{
+		char b[16];
+		std::snprintf(b, sizeof(b), "%02u-%02u %02u:%02u", d.month, d.day, d.hour, d.min);
+		return b;
+	}
 	std::string jesc(const std::string& s)
 	{
 		std::string o;
@@ -327,6 +334,19 @@ namespace
 					std::string d = "plan=" + g_plan.name +
 					                " " + dtToStr(g_plan.start) + "~" + dtToStr(g_plan.end);
 					dataManager::logEvent("START", d.c_str());
+					// 撮影計画の内容もログに残す(後からどの計画で撮ったか検証するため)。
+					char pb[56];
+					std::snprintf(pb, sizeof(pb), "int=%.0fs az=%.0f el=%.0f",
+					              g_plan.interval, g_plan.azimuth, g_plan.elevation);
+					dataManager::logEvent("PLAN", pb);
+					// 各撮影制御方法の適用区間(夜間/朝日/夕日/日中 …)。
+					for (const auto& w : g_plan.ccmList)
+					{
+						if (!w.ccm) { continue; }
+						std::string wd = w.ccm->name + " " +
+						                 dtShort(w.start) + "~" + dtShort(w.end);
+						dataManager::logEvent("PLAN", wd.c_str());
+					}
 				}
 				else if ((s == HGE_ST_IDLE || s == HGE_ST_ERROR) && g_logCapturing)
 				{

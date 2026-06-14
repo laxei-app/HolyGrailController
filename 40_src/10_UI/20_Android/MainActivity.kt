@@ -1234,8 +1234,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private fun startOnEdge(e: Edge) {
-        val s = fmtIso.format(startCal.time)
-        val off = TimeZone.getDefault().getOffset(startCal.timeInMillis) / 60000
+        // 時刻同期(C_TIME)はエッジ端末の時計を「現在時刻」に合わせるためのもの。
+        // 計画開始時刻(startCal)を送るとエッジが now=開始時刻と誤認し、開始前でも即撮影してしまう。
+        // 計画の start/end は別途 C_CAPTURE_PLAN(getPlanJson)で渡るので、ここは現在時刻を送る。
+        val nowCal = Calendar.getInstance()
+        val s = fmtIso.format(nowCal.time)
+        val off = TimeZone.getDefault().getOffset(nowCal.timeInMillis) / 60000
         Thread {
             val r = HgeNative.nativeEdgeStart(e.ip, e.port, s, off)
             runOnUiThread {
