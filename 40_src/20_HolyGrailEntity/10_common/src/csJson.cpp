@@ -140,6 +140,7 @@ namespace csjson
 			{
 				const auto& n = static_cast<const hgc::ccmNight&>(c);
 				j["sunAltitude"] = n.sunAltitude; j["autoEdge"] = n.autoEdge;
+				j["postNightEv"] = n.postNightEv;
 				break;
 			}
 			case hgc::ccmType::sunrise:
@@ -189,6 +190,7 @@ namespace csjson
 				auto n = std::make_shared<hgc::ccmNight>();
 				n->sunAltitude = j.value("sunAltitude", -18.0);
 				n->autoEdge    = j.value("autoEdge", true);
+				n->postNightEv = j.value("postNightEv", 0.0);
 				c = n; break;
 			}
 			case hgc::ccmType::sunrise:
@@ -226,8 +228,10 @@ namespace csjson
 				m->skyBrightnessCoef = j.value("skyBrightnessCoef", 100.0);
 				c = m; break;
 			}
-			case hgc::ccmType::linear:
-				c = std::make_shared<hgc::ccmBase>(hgc::ccmType::linear); break;
+			case hgc::ccmType::preNight:
+				c = std::make_shared<hgc::ccmBase>(hgc::ccmType::preNight); break;
+			case hgc::ccmType::postNight:
+				c = std::make_shared<hgc::ccmBase>(hgc::ccmType::postNight); break;
 			default:
 				c = std::make_shared<hgc::ccmBase>(t); break;
 			}

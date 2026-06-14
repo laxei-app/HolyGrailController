@@ -74,6 +74,16 @@
                 <LinearLayout android:id="@+id/edit_fix_container" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
             </LinearLayout>
 
+            <!-- 夜間後露出補正(夜間)。夜間後移行の露出補正(ev)。明暗バー下地・つまみ●・値はセンター。 -->
+            <LinearLayout android:id="@+id/edit_postev_section" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="12dp">
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="夜間後露出補正(ev)" android:textStyle="bold" />
+                <TextView android:id="@+id/edit_postev_val" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:textSize="18sp" android:textStyle="bold" android:text="+0.0" />
+                <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginStart="24dp" android:layout_marginEnd="24dp">
+                    <View android:layout_width="match_parent" android:layout_height="12dp" android:layout_gravity="center_vertical" android:background="@drawable/brightness_bar" />
+                    <com.google.android.material.slider.Slider android:id="@+id/edit_postev_seek" android:layout_width="match_parent" android:layout_height="wrap_content" />
+                </FrameLayout>
+            </LinearLayout>
+
             <!-- 露出限界、範囲: 項目ごとに暗所限界〜明所限界の範囲スライダー。左の⇅で並べ替え。 -->
             <LinearLayout android:id="@+id/edit_limit_section" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="12dp">
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="露出限界、範囲" android:textStyle="bold" />

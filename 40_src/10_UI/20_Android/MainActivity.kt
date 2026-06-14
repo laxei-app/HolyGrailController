@@ -256,6 +256,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         setupValueSlider(R.id.edit_ev_seek, 30, gradient = true) {
             findViewById<TextView>(R.id.edit_ev_val).text = String.format("%+.1f ev", seekToEv(it))
         }
+        setupValueSlider(R.id.edit_postev_seek, 30, gradient = true) {
+            findViewById<TextView>(R.id.edit_postev_val).text = String.format("%+.1f ev", seekToEv(it))
+        }
         // 朝日/夕日の太陽高度=範囲スライダー(2つまみ)。明暗バー下地・つまみ●。
         findViewById<RangeSlider>(R.id.edit_alt_range).apply {
             valueFrom = 0f; valueTo = 24f; stepSize = 1f
@@ -365,7 +368,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private val ccmTypeToKey = mapOf(1 to "night", 2 to "sunrise", 3 to "sunset", 4 to "day", 5 to "moon")
-    private val ccmTypeName = mapOf(1 to "夜間撮影", 2 to "朝日撮影", 3 to "夕日撮影", 4 to "日中撮影", 5 to "月の影響")
+    private val ccmTypeName = mapOf(1 to "夜間撮影", 2 to "朝日撮影", 3 to "夕日撮影", 4 to "日中撮影",
+                                    5 to "月の影響", 6 to "夜間前移行", 7 to "夜間後移行")
 
     // 撮影制御方法の編集ボタン(全5種)を常に定位置(スケジュールの下)に並べる。タップで編集画面へ。
     // 3列グリッド(夜間/朝日/夕日 と 日中/月)。色分けして「ボタンらしい」見た目にする。
@@ -539,6 +543,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<View>(R.id.edit_ev_section).visibility = if (hasEv) View.VISIBLE else View.GONE
         findViewById<View>(R.id.edit_autoEdge).visibility = if (isNight) View.VISIBLE else View.GONE
         findViewById<View>(R.id.edit_fixed_section).visibility = if (isNight) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.edit_postev_section).visibility = if (isNight) View.VISIBLE else View.GONE
         findViewById<View>(R.id.edit_limit_section).visibility = if (isNight) View.GONE else View.VISIBLE
 
         if (hasAlt) {
@@ -580,6 +585,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         if (isNight) {
             findViewById<CheckBox>(R.id.edit_autoEdge).isChecked = o.optBoolean("autoEdge", true)
+            val pp = evToSeek(o.optDouble("postNightEv", 0.0))   // 夜間後露出補正
+            setSliderProgress(R.id.edit_postev_seek, pp)
+            findViewById<TextView>(R.id.edit_postev_val).text = String.format("%+.1f ev", seekToEv(pp))
             fixEditor.set(o.optJSONObject("limitBright"))
         } else {
             editLimit.set(o.optJSONObject("limitBright"), o.optJSONObject("limitDark"),
@@ -603,6 +611,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (editingKey != "night") o.put("ev", seekToEv(sliderProgress(R.id.edit_ev_seek)))
         if (editingKey == "night") {
             o.put("autoEdge", findViewById<CheckBox>(R.id.edit_autoEdge).isChecked)
+            o.put("postNightEv", seekToEv(sliderProgress(R.id.edit_postev_seek)))   // 夜間後露出補正
             val e = fixEditor.get()
             o.put("limitBright", e)
             o.put("limitDark", JSONObject(e.toString()))   // 固定露出は明暗同値
@@ -1153,7 +1162,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         3 -> Color.parseColor("#FFCC80")   // 夕日
         4 -> Color.parseColor("#90CAF9")   // 日中
         5 -> Color.parseColor("#CE93D8")   // 月対処
-        6 -> Color.parseColor("#A5D6A7")   // リニア移行
+        6 -> Color.parseColor("#A5D6A7")   // 夜間前移行
+        7 -> Color.parseColor("#80CBC4")   // 夜間後移行
         else -> Color.parseColor("#EEEEEE")
     }
 
@@ -1261,8 +1271,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             for (k in 1..runs.size) pos[k] = pos[k].coerceIn(pos[k - 1], n.toFloat())  // 単調・範囲内に補正
             for (k in runs.indices) {
                 val ty = runs[k].type
-                val col = if (ty in 1..5) ccmColor(ty) else 0
-                val lbl = if (ty in 1..5) ccmTypeName[ty] else null
+                val col = if (ty in 1..7) ccmColor(ty) else 0
+                val lbl = if (ty in 1..7) ccmTypeName[ty] else null
                 segs.add(BandView.Seg(pos[k], pos[k + 1], col, lbl))
             }
         }

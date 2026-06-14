@@ -67,8 +67,9 @@ namespace astro
 			if (h < nightAlt) { return hgc::ccmType::night; }
 			if (h >= twiAlt)  { return hgc::ccmType::day; }
 			// 薄明帯(nightAlt..twiAlt)で太陽が画角外:
-			//  朝(上昇)はまだ暗いので固定(夜間)、夕(下降)は夜間へリニア移行。
-			return rising ? hgc::ccmType::night : hgc::ccmType::linear;
+			//  朝(上昇)は夜間→次の自動露出への「夜間後移行」、
+			//  夕(下降)は自動露出→夜間への「夜間前移行」。
+			return rising ? hgc::ccmType::postNight : hgc::ccmType::preNight;
 		}
 
 		// 種別から区間用の撮影制御方法を生成する(プロトタイプを深いコピー)。
@@ -88,10 +89,16 @@ namespace astro
 			case hgc::ccmType::day:
 				if (set.day)     { return set.day->clone(); }
 				break;
-			case hgc::ccmType::linear:
+			case hgc::ccmType::preNight:
 			{
-				auto c = std::make_shared<hgc::ccmBase>(hgc::ccmType::linear);
-				c->name = "linear";
+				auto c = std::make_shared<hgc::ccmBase>(hgc::ccmType::preNight);
+				c->name = "preNight";
+				return c;
+			}
+			case hgc::ccmType::postNight:
+			{
+				auto c = std::make_shared<hgc::ccmBase>(hgc::ccmType::postNight);
+				c->name = "postNight";
 				return c;
 			}
 			default: break;

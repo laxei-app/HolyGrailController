@@ -87,7 +87,8 @@ static uint16_t ccmColor(int t)
 	case 3: return M5.Display.color565(0xFF, 0xCC, 0x80);	// 夕日
 	case 4: return M5.Display.color565(0x90, 0xCA, 0xF9);	// 日中
 	case 5: return M5.Display.color565(0xCE, 0x93, 0xD8);	// 月対処
-	case 6: return M5.Display.color565(0xA5, 0xD6, 0xA7);	// リニア移行
+	case 6: return M5.Display.color565(0xA5, 0xD6, 0xA7);	// 夜間前移行
+	case 7: return M5.Display.color565(0x80, 0xCB, 0xC4);	// 夜間後移行
 	default: return M5.Display.color565(0xEE, 0xEE, 0xEE);
 	}
 }
@@ -101,7 +102,8 @@ static const char* ccmName(int t)
 	case 3: return "夕日撮影";
 	case 4: return "日中撮影";
 	case 5: return "月の影響";
-	case 6: return "リニア移行";
+	case 6: return "夜間前移行";
+	case 7: return "夜間後移行";
 	default: return "?";
 	}
 }
@@ -274,7 +276,7 @@ static void renderCcm(void)
 	case 3: key = "sunset";  break;
 	case 4: key = "day";     break;
 	case 5: key = "moon";    break;
-	default: key = nullptr;  break;	// 6=リニア移行(編集項目なし)
+	default: key = nullptr;  break;	// 6=夜間前移行/7=夜間後移行(編集項目なし)
 	}
 
 	g_cv.fillScreen(TFT_BLACK);
@@ -297,6 +299,8 @@ static void renderCcm(void)
 			std::snprintf(b, sizeof(b), "固定露出 太陽高度 %.0f°", c.value("sunAltitude", 0.0));
 			y = line(y, b);
 			y = line(y, std::string("画角端で自動: ") + (c.value("autoEdge", false) ? "ON" : "OFF"));
+			std::snprintf(b, sizeof(b), "夜間後露出補正 %+.1fev", c.value("postNightEv", 0.0));
+			y = line(y, b);
 		}
 		else if (g_ccmType == 2 || g_ccmType == 3)
 		{
@@ -335,8 +339,13 @@ static void renderCcm(void)
 	}
 	else if (g_ccmType == 6)
 	{
-		y = line(y, "リニア移行");
+		y = line(y, "夜間前移行");
 		y = line(y, "夜間へ滑らかに露出を変化させます");
+	}
+	else if (g_ccmType == 7)
+	{
+		y = line(y, "夜間後移行");
+		y = line(y, "夜間から次へ滑らかに露出を戻します");
 	}
 	else
 	{

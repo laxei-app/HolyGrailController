@@ -18,7 +18,8 @@ namespace hgc
 		sunset,			// 夕日撮影(太陽直接撮影 夕)
 		day,			// 日中撮影
 		moon,			// 月の影響への対処
-		linear			// リニア移行(仕様3.7。ユーザー設定項目なし)
+		preNight,		// 夜間前移行(旧リニア移行, 仕様3.7。自動露出→夜間。ユーザー設定項目なし)
+		postNight		// 夜間後移行(仕様3.9。夜間→次の自動露出へ逆優先度で移行)
 	};
 
 	// 3.1.4 撮影制御方法 基本クラス
@@ -47,6 +48,7 @@ namespace hgc
 	{
 		double sunAltitude = -18.0;	// 開始終了の太陽高度[°]
 		bool   autoEdge    = true;	// 開始終了の自動判別
+		double postNightEv = 0.0;	// 夜間後移行(仕様3.9/7.4.10)の露出補正[ev]。範囲 -5.0〜+5.0
 
 		ccmNight() : ccmBase(ccmType::night) {}
 		std::unique_ptr<ccmBase> clone() const override { return std::make_unique<ccmNight>(*this); }

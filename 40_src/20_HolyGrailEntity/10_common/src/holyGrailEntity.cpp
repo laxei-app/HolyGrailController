@@ -250,6 +250,9 @@ namespace
 			if (ccmJson.empty())
 			{ dataManager::parseCcmSetJson(dataManager::ccmDefaultsJson(), g_planCcm, g_planMoon); }
 			if (!g_planMoon) { g_planMoon = dataManager::factoryMoon(); }
+			// 保存済みの ccmList は生成時のロジックに依存する派生データなので、
+			// 復元した start/end/方向/機材と現在の撮影制御方法で作り直す(分類仕様の更新を反映)。
+			astro::buildSchedule(g_plan, g_planCcm, g_offMin);
 			buildScheduleJson();
 			g_planReady = true;
 			return ERR_HGC_OK;
