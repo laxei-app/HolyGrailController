@@ -384,7 +384,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             for (t in group) {
                 val key = ccmTypeToKey[t] ?: continue
-                val btn = Button(this)
+                // 他のボタン(保存/撮影開始/接続/リセット)と同じ形にするため、テーマ既定の
+                // materialButtonStyle で生成し、角丸はスタイル(=他ボタンと同一)を継承する。
+                val btn = com.google.android.material.button.MaterialButton(
+                    this, null, com.google.android.material.R.attr.materialButtonStyle)
                 btn.text = ccmTypeName[t]
                 btn.isAllCaps = false
                 btn.textSize = 13f
@@ -1273,12 +1276,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 val ty = runs[k].type
                 val col = if (ty in 1..7) ccmColor(ty) else 0
                 val lbl = if (ty in 1..7) ccmTypeName[ty] else null
-                segs.add(BandView.Seg(pos[k], pos[k + 1], col, lbl))
+                segs.add(BandView.Seg(pos[k], pos[k + 1], col, lbl, ty))
             }
         }
         val band = BandView(this)
         band.segs = segs
         band.rows = n
+        // 区間タップで撮影制御方法の編集画面へ(編集可能な 1..5 のみ。移行は無反応)。
+        band.onTapType = { t -> ccmTypeToKey[t]?.let { openPlanCcmEdit(it) } }
         band.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
             .apply { setMargins(dp(6), 0, 0, 0) }
 

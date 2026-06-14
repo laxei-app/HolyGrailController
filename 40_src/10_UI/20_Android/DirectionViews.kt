@@ -10,6 +10,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.util.AttributeSet
+import android.view.GestureDetector
 import android.view.MotionEvent
 import android.view.View
 import kotlin.math.atan2
@@ -207,13 +208,33 @@ class ElevationView @JvmOverloads constructor(context: Context, attrs: Attribute
 // 区間の境目は撮影制御方法の実開始時刻から MainActivity 側で算出して渡す
 // (イベント±10分は行中心、前後ならイベントの手前/後ろ)。左のイベント列と高さが揃う。
 class BandView(context: Context) : View(context) {
-    data class Seg(val top: Float, val bottom: Float, val color: Int, val label: String?)
+    data class Seg(val top: Float, val bottom: Float, val color: Int, val label: String?, val type: Int)
     var segs: List<Seg> = emptyList()
     var rows: Int = 0
+    // タップされた区間の撮影制御方法 種別を返す(編集画面へ遷移するため)。
+    var onTapType: ((Int) -> Unit)? = null
 
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
     private val txt = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xFF212121.toInt(); textAlign = Paint.Align.CENTER
+    }
+
+    private val gd = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+        override fun onDown(e: MotionEvent): Boolean = true
+        override fun onSingleTapUp(e: MotionEvent): Boolean {
+            if (rows <= 0 || height <= 0) return false
+            val pos = e.y / height * rows
+            for (s in segs) {
+                if (pos >= s.top && pos < s.bottom) { onTapType?.invoke(s.type); return true }
+            }
+            return false
+        }
+    })
+
+    init { isClickable = true }
+
+    override fun onTouchEvent(e: MotionEvent): Boolean {
+        return gd.onTouchEvent(e) || super.onTouchEvent(e)
     }
 
     override fun onDraw(c: Canvas) {
