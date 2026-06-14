@@ -193,8 +193,11 @@ namespace astro
 
 		const fov f = calcFov(plan.camera, plan.lens, plan.landscape);
 		const double nightAlt   = set.night   ? set.night->sunAltitude   : -18.0;
-		const double twiAltRise = set.sunrise ? set.sunrise->sunAltitude : -6.0;
-		const double twiAltSet  = set.sunset  ? set.sunset->sunAltitude  : -6.0;
+		// 直接撮影の太陽高度の下限は「撮り始め/終わりのうち低い方」を使う。
+		// 朝日は sunAltitude(-6)が低く、夕日は sunAltitudeEnd(-6)が低い。sunAltitude固定だと
+		// 夕日の下限が0になり、地平線近くで沈む太陽が夕日と判定されずこぼれていた。
+		const double twiAltRise = set.sunrise ? std::min(set.sunrise->sunAltitude, set.sunrise->sunAltitudeEnd) : -6.0;
+		const double twiAltSet  = set.sunset  ? std::min(set.sunset->sunAltitude,  set.sunset->sunAltitudeEnd)  : -6.0;
 
 		plan.ccmList.clear();
 		plan.events.clear();
