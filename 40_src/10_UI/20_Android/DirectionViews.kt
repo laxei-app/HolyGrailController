@@ -201,3 +201,36 @@ class ElevationView @JvmOverloads constructor(context: Context, attrs: Attribute
         return super.onTouchEvent(e)
     }
 }
+
+// ── スケジュール右の撮影制御方法バンド ──────────────────────────────
+// 行(イベント)数 rows に対して全高を等分し、各区間(seg)を top..bottom(行単位)で塗る。
+// 区間の境目は撮影制御方法の実開始時刻から MainActivity 側で算出して渡す
+// (イベント±10分は行中心、前後ならイベントの手前/後ろ)。左のイベント列と高さが揃う。
+class BandView(context: Context) : View(context) {
+    data class Seg(val top: Float, val bottom: Float, val color: Int, val label: String?)
+    var segs: List<Seg> = emptyList()
+    var rows: Int = 0
+
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val txt = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFF212121.toInt(); textAlign = Paint.Align.CENTER
+    }
+
+    override fun onDraw(c: Canvas) {
+        super.onDraw(c)
+        if (rows <= 0 || height <= 0) return
+        val unit = height.toFloat() / rows
+        txt.textSize = resources.displayMetrics.scaledDensity * 13f
+        for (s in segs) {
+            val top = s.top * unit
+            val bot = s.bottom * unit
+            if (bot - top <= 0f) continue
+            if (s.color != 0) { fill.color = s.color; c.drawRect(0f, top, width.toFloat(), bot, fill) }
+            val lbl = s.label
+            if (lbl != null && bot - top >= txt.textSize * 1.3f) {
+                val cy = (top + bot) / 2f - (txt.descent() + txt.ascent()) / 2f
+                c.drawText(lbl, width / 2f, cy, txt)
+            }
+        }
+    }
+}

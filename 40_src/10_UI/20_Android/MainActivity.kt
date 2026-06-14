@@ -1193,7 +1193,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 wins.add(Win(w.optInt("type"), parse(w.optString("start")), parse(w.optString("end"))))
             }
         }
-        fun activeType(t: Long): Int { for (w in wins) if (t >= w.s && t < w.e) return w.type; return 0 }
 
         // 1イベント行の TextView を作る(現在行ハイライト対応)。
         fun makeRowView(r: Row, active: Boolean, topMargin: Int): TextView {
@@ -1203,6 +1202,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             tv.setBackgroundColor(ccmColor(0))
             tv.setPadding(16, 8, 16, 8)
             tv.textSize = 13f
+            tv.maxLines = 1   // 1行固定=等高(右バンドと正確に整列させるため)
             tv.layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                     setMargins(0, topMargin, 0, 0)
@@ -1219,42 +1219,62 @@ class MainActivity : AppCompatActivity(), HgeListener {
             return
         }
 
-        // バンド付き表示: 連続する同じ種別を1区間にまとめ、区間ごとに
-        //   [左: その区間のイベント行群(weight2)] [右: 統合バンド(weight1, 中央に名称1回)]
-        // を横並びにする。右は高さ match_parent で左の行群と整列する。
-        var i = 0
-        while (i < rows.size) {
-            val ct = activeType(rows[i].t)
-            var j = i
-            while (j + 1 < rows.size && activeType(rows[j + 1].t) == ct) j++   // 連続同種をまとめる
+        // バンド付き表示: 左にイベント列、右に撮影制御方法バンド(BandView)を横並びにする。
+        // バンドの境目は各撮影制御方法の実開始時刻から決める(イベント単位ではなく時刻基準):
+        //  - 最寄りイベントの ±10分以内 → そのイベント行の「中心」から
+        //  - それより前/後 → そのイベント行の手前/後ろ(行の境目)
+        val n = rows.size
+        val horiz = LinearLayout(this)
+        horiz.orientation = LinearLayout.HORIZONTAL
+        horiz.layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
 
-            val group = LinearLayout(this)
-            group.orientation = LinearLayout.HORIZONTAL
-            group.layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    setMargins(0, if (i > 0) 1 else 0, 0, 0)   // 区間の境目に区切り
-                }
+        val left = LinearLayout(this)
+        left.orientation = LinearLayout.VERTICAL
+        left.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 2f)
+        for (r in rows) left.addView(makeRowView(r, false, 0))   // 余白なし=等高(バンドと整列)
 
-            val left = LinearLayout(this)
-            left.orientation = LinearLayout.VERTICAL
-            left.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 2f)
-            for (k in i..j) left.addView(makeRowView(rows[k], false, if (k > i) 1 else 0))
-
-            val band = TextView(this)
-            band.text = if (ct in 1..5) (ccmTypeName[ct] ?: "") else ""
-            band.setBackgroundColor(if (ct in 1..5) ccmColor(ct) else Color.TRANSPARENT)
-            band.gravity = Gravity.CENTER
-            band.textSize = 13f
-            band.maxLines = 1
-            band.ellipsize = android.text.TextUtils.TruncateAt.END
-            band.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
-                .apply { setMargins(dp(6), 0, 0, 0) }
-
-            group.addView(left)
-            group.addView(band)
-            container.addView(group)
-            i = j + 1
+        // 時刻 → 行位置(行単位。整数=行の境目, k+0.5=行kの中心)。
+        fun rowPos(t: Long): Float {
+            if (n == 0) return 0f
+            var k = 0; var best = Math.abs(t - rows[0].t)
+            for (idx in 1 until n) { val d = Math.abs(t - rows[idx].t); if (d < best) { best = d; k = idx } }
+            return when {
+                best <= 600000L -> k + 0.5f          // ±10分 → イベント行の中心
+                t < rows[k].t   -> k.toFloat()       // 手前(行の上の境目)
+                else            -> (k + 1).toFloat() // 後ろ(行の下の境目)
+            }
         }
+
+        // 撮影制御方法の区間(連続同種は統合)。開始時刻順。
+        data class Run(val type: Int, val start: Long)
+        val sorted = wins.sortedBy { it.s }
+        val runs = mutableListOf<Run>()
+        for (w in sorted) { if (runs.isEmpty() || runs.last().type != w.type) runs.add(Run(w.type, w.s)) }
+
+        val segs = mutableListOf<BandView.Seg>()
+        if (n > 0 && runs.isNotEmpty()) {
+            val pos = FloatArray(runs.size + 1)
+            pos[0] = 0f
+            pos[runs.size] = n.toFloat()
+            for (k in 1 until runs.size) pos[k] = rowPos(runs[k].start)
+            for (k in 1..runs.size) pos[k] = pos[k].coerceIn(pos[k - 1], n.toFloat())  // 単調・範囲内に補正
+            for (k in runs.indices) {
+                val ty = runs[k].type
+                val col = if (ty in 1..5) ccmColor(ty) else 0
+                val lbl = if (ty in 1..5) ccmTypeName[ty] else null
+                segs.add(BandView.Seg(pos[k], pos[k + 1], col, lbl))
+            }
+        }
+        val band = BandView(this)
+        band.segs = segs
+        band.rows = n
+        band.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+            .apply { setMargins(dp(6), 0, 0, 0) }
+
+        horiz.addView(left)
+        horiz.addView(band)
+        container.addView(horiz)
     }
 
     // --- エッジ端末 ---
