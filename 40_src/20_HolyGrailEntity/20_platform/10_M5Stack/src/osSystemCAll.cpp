@@ -49,7 +49,9 @@ namespace ossc
         xTaskCreatePinnedToCore(
             taskWrapper,
             "ossNet",
-            8192,               // json/HTTPパース・撮影ループ用(4096では不足)
+            16384,              // json/HTTPパース・撮影ループ用(4096では不足)。
+                                // 最初の補正(§4.4)の反復収束は loop→initialConverge→alzMetering(json)と
+                                // 1段深くなるため 8192 ではスタック超過(canary)した。余裕を持って 16384。
             ctrl,
             3,                  // 優先度
             &ctrl->taskHandle,
