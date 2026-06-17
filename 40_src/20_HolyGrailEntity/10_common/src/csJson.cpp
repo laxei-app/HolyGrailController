@@ -274,6 +274,7 @@ namespace csjson
 			wl.push_back(wj);
 		}
 		j["ccmList"] = wl;
+		if (plan.startLeadCcm) { j["startLeadCcm"] = ccmToJsonObj(*plan.startLeadCcm); }
 
 		return j.dump();
 	}
@@ -316,6 +317,7 @@ namespace csjson
 				plan.ccmList.push_back(std::move(win));
 			}
 		}
+		if (j.contains("startLeadCcm")) { plan.startLeadCcm = ccmFromJsonObj(j["startLeadCcm"]); }
 		return true;
 	}
 

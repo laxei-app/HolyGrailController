@@ -281,7 +281,32 @@ errCode captureRunner::loop(void)
 			if (windowChanged)
 			{
 				preCtl.init(tables_, hgc::exposure{}, hgc::exposure{}, ccm->priority);
-				preCtl.setCurrent(validExposure(lastExp) ? lastExp : goal);
+				if (validExposure(lastExp)) { preCtl.setCurrent(lastExp); }
+				else if (plan_.startLeadCcm && validExposure(plan_.startLeadCcm->initial) && validExposure(goal))
+				{
+					// 撮影開始が夜間前移行の途中: 前に入るはずの制御方法(日中/夕日)のランプ途中の固定値で開始。
+					// 夜間開始までのフレーム数Nぶん夜間露出から離れた(=前制御方法側の)APEXを逆算する(測光なし)。
+					long long nightStartSec = 0;
+					for (const auto& ww : plan_.ccmList)
+					{
+						if (!ww.ccm || ww.ccm->type != hgc::ccmType::night) { continue; }
+						long long s = hgc::toUnixUtc(ww.start, off_);
+						if (s >= now && (nightStartSec == 0 || s < nightStartSec)) { nightStartSec = s; }
+					}
+					if (nightStartSec > now)
+					{
+						const hgc::ccmBase* lead = plan_.startLeadCcm.get();
+						int N = static_cast<int>((nightStartSec - now) / ((interval > 0.0) ? interval : 15.0));
+						double startB = expo::brightnessStops(goal, tables_) - static_cast<double>(N) / 3.0;
+						expo::exposureCtl seed;
+						seed.init(tables_, lead->limitBright, lead->limitDark, lead->priority);
+						seed.setCurrent(lead->initial);
+						seed.applyStops(startB - expo::brightnessStops(lead->initial, tables_));	// 初期値から離れる向き(優先度順)
+						preCtl.setCurrent(seed.current());
+					}
+					else { preCtl.setCurrent(goal); }
+				}
+				else { preCtl.setCurrent(goal); }
 			}
 			if (validExposure(goal))
 			{
@@ -321,8 +346,14 @@ errCode captureRunner::loop(void)
 				// 上限(暗所限界=最も露出の多い側)=夜間露出にクランプ。下限(明所限界)・優先度は次ccm。
 				postCtl.init(tables_, nightExp, nextC ? nextC->limitDark : hgc::exposure{},
 				             nextC ? nextC->priority : ccm->priority);
-				postCtl.setCurrent(validExposure(lastExp) ? lastExp : nightExp);	// 夜間露出から開始
 				avgBuf.clear();
+				if (validExposure(lastExp)) { postCtl.setCurrent(lastExp); }	// 夜間から継続
+				else
+				{
+					// 撮影開始が夜間後移行の途中: 他の自動露出と同様、開始前に露出補正(§4.4)してから入る。
+					hgc::exposure seed = (nextC && validExposure(nextC->initial)) ? nextC->initial : nightExp;
+					initialConverge(postCtl, seed, postEv);	// 測光しながら目標ev=postEv へ収束
+				}
 			}
 			// home(往復対称の基準)=次ccmの初期値(=goal)。
 			const bool   haveHome = validExposure(goal);

@@ -244,6 +244,30 @@ namespace astro
 		}
 		flushRun(tEnd);
 
+		// 開始(plan.start)直前に効いていたはずの撮影制御方法を求める(移行中開始の1枚目シード用)。
+		// 最初の窓と異なる種別が出るまで tStart から後方へ走査する(夜間前→日中/夕日, 夜間後→夜間)。
+		plan.startLeadCcm.reset();
+		if (!plan.ccmList.empty() && plan.ccmList.front().ccm)
+		{
+			hgc::ccmType firstType = plan.ccmList.front().ccm->type;
+			for (int i = 1; i <= 6 * 60; ++i)	// 最大6時間ぶん遡る
+			{
+				astro_time_t t  = Astronomy_AddDays(tStart, -stepDays * i);
+				astro_time_t tp = Astronomy_AddDays(t, -stepDays);
+				horiz s  = sunHorizAt(t,  obs);
+				horiz sp = sunHorizAt(tp, obs);
+				bool rising = (s.altitude - sp.altitude) >= 0.0;
+				double twiAlt = rising ? twiAltRise : twiAltSet;
+				hgc::ccmType ct = classify(s.altitude, rising,
+				                           inFrame(s, plan.azimuth, plan.elevation, f), nightAlt, twiAlt);
+				if (ct != firstType && ct != hgc::ccmType::invalid)
+				{
+					plan.startLeadCcm = makeCcm(set, ct);
+					break;
+				}
+			}
+		}
+
 		// --- イベント(時刻)算出 ---
 		plan.events.push_back({ hgc::csEvent::start, plan.start });
 		addRiseSetEvents(plan, obs, BODY_SUN,  hgc::csEvent::sunset,  DIRECTION_SET,  tStart, tEnd, off);

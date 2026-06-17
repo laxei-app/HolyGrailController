@@ -58,6 +58,9 @@ namespace hgc
 		bool        landscape = true;	// 横向きで撮る(ランドスケープ)
 		std::vector<eventItem> events;	// 撮影計画のイベント
 		std::vector<ccmWindow> ccmList;	// 撮影制御方法(実体をコピー)
+		// 撮影開始(start)直前に効いていたはずの撮影制御方法。開始が移行(夜間前/後)の途中のとき、
+		// 1枚目の初期露出のシードに使う(夜間前=日中/夕日, 夜間後=夜間)。無ければ null。
+		std::shared_ptr<ccmBase> startLeadCcm;
 	};
 
 	// 4.6 撮影計画プリセット (実体は持たず名称で関連付ける)
