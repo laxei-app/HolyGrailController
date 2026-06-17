@@ -368,8 +368,8 @@ namespace
 					{
 						if (!w.ccm) { continue; }
 						const hgc::ccmBase* pc = w.ccm.get();
-						// 初期値(§4.4の起点): initialBright=true→明所限界(limitDark) / false→暗所限界(limitBright)
-						const hgc::exposure& pInit = pc->initialBright ? pc->limitDark : pc->limitBright;
+						// 初期値(§4.4の起点)= ccm の initial(exposure)。
+						const hgc::exposure& pInit = pc->initial;
 						char pev[16];
 						if (isAutoCcm(pc->type))                  { std::snprintf(pev, sizeof(pev), "%+.1f", ccmTargetEv(pc)); }
 						else if (pc->type == hgc::ccmType::night) { std::snprintf(pev, sizeof(pev), "fix"); }

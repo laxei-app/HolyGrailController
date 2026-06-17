@@ -301,10 +301,12 @@ namespace expo
 		return false;
 	}
 
-	bool exposureCtl::stepOne(bool bright)
+	bool exposureCtl::stepOne(bool bright, bool reverse)
 	{
-		for (int i = 0; i < hgc::exposureTypeNum; ++i)
+		for (int k = 0; k < hgc::exposureTypeNum; ++k)
 		{
+			// reverse=true なら優先度の低い軸(配列末尾)から先に動かす(§4.5 往復対称)。
+			int i = reverse ? (hgc::exposureTypeNum - 1 - k) : k;
 			bool ok = false;
 			switch (priority_[i])
 			{
@@ -318,8 +320,34 @@ namespace expo
 		return false;
 	}
 
-	bool exposureCtl::brighten() { return stepOne(true); }
-	bool exposureCtl::darken()   { return stepOne(false); }
+	bool exposureCtl::brighten(bool reverse) { return stepOne(true, reverse); }
+	bool exposureCtl::darken(bool reverse)   { return stepOne(false, reverse); }
+
+	bool exposureCtl::stepHome(bool bright, const hgc::exposure& home)
+	{
+		// home の各軸を設定可能値テーブルの最近傍 index に合わせる。
+		double ri = parseValue(home.iso, expoKind::iso);
+		double rs = parseValue(home.ss,  expoKind::ss);
+		double rf = parseValue(home.fn,  expoKind::fn);
+		int hi = (!iso_.e.empty() && ri > 0) ? nearestIndexReal(iso_.e, ri) : iso_.idx;
+		int hs = (!ss_.e.empty()  && rs > 0) ? nearestIndexReal(ss_.e,  rs) : ss_.idx;
+		int hf = (!fn_.e.empty()  && rf > 0) ? nearestIndexReal(fn_.e,  rf) : fn_.idx;
+		// 優先度の逆順(低い軸が先)で、home からずれている軸を1つだけ戻す。
+		for (int k = 0; k < hgc::exposureTypeNum; ++k)
+		{
+			int i = hgc::exposureTypeNum - 1 - k;
+			bool ok = false;
+			switch (priority_[i])
+			{
+			case hgc::exposureType::iso: if (iso_.idx != hi) { ok = stepIso(bright); } break;
+			case hgc::exposureType::ss:  if (ss_.idx  != hs) { ok = stepSs(bright);  } break;
+			case hgc::exposureType::fn:  if (fn_.idx  != hf) { ok = stepFn(bright);  } break;
+			default: break;
+			}
+			if (ok) { rebuildCurrent(); return true; }
+		}
+		return stepOne(bright, false);	// ずれた軸が無い/動かせない → 通常の優先度順で1段
+	}
 
 	hgc::exposure exposureCtl::applyStops(double evStops)
 	{

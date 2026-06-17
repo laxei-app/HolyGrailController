@@ -325,7 +325,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 月撮影時露出限界: 暗所側は夜間撮影の設定値(limitBright)で固定。
         val nightLimit = ccmJson?.optJSONObject("night")?.optJSONObject("limitBright")
         moonLimit.set(o.optJSONObject("limitBright"), o.optJSONObject("limitDark"),
-            o.optJSONArray("priority"), o.optBoolean("initialBright", true),
+            o.optJSONArray("priority"), o.optJSONObject("initial"),
             moonMode = true, nightLimit = nightLimit)
         flipper.displayedChild = 4
     }
@@ -345,7 +345,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         o.put("initialExposure", moonInitEditor.get())
         o.put("limitBright", moonLimit.getBright())
         o.put("limitDark", moonLimit.getDark())
-        o.put("initialBright", moonLimit.getInitialBright())
+        o.put("initial", moonLimit.getInitial())
         val r = if (editingPlanCcm) HgeNative.nativeSetPlanCcm(all.toString()) else HgeNative.nativeSetCcmDefaults(all.toString())
         Toast.makeText(this, if (r == 0) "保存しました" else "保存に失敗しました", Toast.LENGTH_SHORT).show()
         flipper.displayedChild = if (editingPlanCcm) 0 else 2
@@ -594,7 +594,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             fixEditor.set(o.optJSONObject("limitBright"))
         } else {
             editLimit.set(o.optJSONObject("limitBright"), o.optJSONObject("limitDark"),
-                o.optJSONArray("priority"), o.optBoolean("initialBright", true))
+                o.optJSONArray("priority"), o.optJSONObject("initial"), dayMode = (key == "day"))
         }
         flipper.displayedChild = 3
     }
@@ -622,7 +622,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             o.put("priority", editLimit.getPriority())
             o.put("limitBright", editLimit.getBright())
             o.put("limitDark", editLimit.getDark())
-            o.put("initialBright", editLimit.getInitialBright())
+            o.put("initial", editLimit.getInitial())
         }
         val r = if (editingPlanCcm) HgeNative.nativeSetPlanCcm(all.toString()) else HgeNative.nativeSetCcmDefaults(all.toString())
         Toast.makeText(this, if (r == 0) "保存しました" else "保存に失敗しました", Toast.LENGTH_SHORT).show()
@@ -807,7 +807,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         private val darkPlace = HashMap<Int, String>()    // 暗所限界 = limitBright(高ISO側・左つまみ)
         private val brightPlace = HashMap<Int, String>()  // 明所限界 = limitDark(低ISO側・右つまみ)
         private val keys = listOf("iso", "ss", "fn")
-        private var initialBright = true                  // 初期値=明所限界か(仕様4d)
+        private var initMode = 0                          // 初期値: 0=明所限界 1=中間点 2=暗所限界(仕様4d)
+        private var dayMode = false                       // 日中=3択ピッカー(明所/中間/暗所)。他=チェックボックス
         private var moonMode = false                      // 月撮影時露出限界(暗所=夜間値で固定・明所のみ編集・仕様6d/e)
         private val cards = mutableListOf<View>()
         private val dividers = mutableListOf<View>()
@@ -815,8 +816,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         private val initTvs = HashMap<Int, TextView>()
         private var dragFrom = -1
 
-        fun set(brightObj: JSONObject?, darkObj: JSONObject?, prio: JSONArray?, initBright: Boolean,
-                moonMode: Boolean = false, nightLimit: JSONObject? = null) {
+        fun set(brightObj: JSONObject?, darkObj: JSONObject?, prio: JSONArray?, initialObj: JSONObject?,
+                moonMode: Boolean = false, nightLimit: JSONObject? = null, dayMode: Boolean = false) {
             order.clear()
             if (prio != null) for (i in 0 until prio.length()) order.add(prio.optInt(i))
             if (order.sorted() != listOf(0, 1, 2)) { order.clear(); order.addAll(listOf(0, 1, 2)) }
@@ -826,21 +827,43 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 darkPlace[t] = (if (moonMode) nightLimit?.optString(keys[t]) else brightObj?.optString(keys[t])) ?: ""
                 brightPlace[t] = darkObj?.optString(keys[t]) ?: ""     // limitDark = 明所限界
             }
-            initialBright = initBright
+            this.dayMode = dayMode
+            initMode = resolveInitMode(initialObj)
             render()
         }
         fun getBright(): JSONObject = JSONObject().put("iso", darkPlace[0]).put("ss", darkPlace[1]).put("fn", darkPlace[2])
         fun getDark(): JSONObject = JSONObject().put("iso", brightPlace[0]).put("ss", brightPlace[1]).put("fn", brightPlace[2])
         fun getPriority(): JSONArray { val a = JSONArray(); order.forEach { a.put(it) }; return a }
-        fun getInitialBright(): Boolean = initialBright
+        fun getInitial(): JSONObject = JSONObject().put("iso", initVal(0)).put("ss", initVal(1)).put("fn", initVal(2))
 
         private fun valsFor(t: Int) = when (t) { 0 -> isoDisp; 1 -> ssDisp; else -> fnDisp }
         private fun nameFor(t: Int) = when (t) { 0 -> "ISO感度"; 1 -> "シャッター速度"; else -> "F値" }
         private fun updateVals(t: Int) {
             darkTvs[t]?.text = darkPlace[t]; brightTvs[t]?.text = brightPlace[t]
-            initTvs[t]?.text = if (initialBright) brightPlace[t] else darkPlace[t]
+            initTvs[t]?.text = initVal(t)
         }
-        private fun refreshInit() { for (t in 0..2) initTvs[t]?.text = if (initialBright) brightPlace[t] else darkPlace[t] }
+        private fun refreshInit() { for (t in 0..2) initTvs[t]?.text = initVal(t) }
+        // 初期値の各軸の値: 0=明所限界(limitDark=brightPlace) 2=暗所限界(limitBright=darkPlace) 1=中間点(index中点=APEX中点)。
+        private fun initVal(t: Int): String {
+            val vals = valsFor(t)
+            return when (initMode) {
+                0 -> brightPlace[t] ?: ""
+                2 -> darkPlace[t] ?: ""
+                else -> {
+                    val di = vals.indexOf(darkPlace[t]).let { if (it < 0) 0 else it }
+                    val bi = vals.indexOf(brightPlace[t]).let { if (it < 0) vals.size - 1 else it }
+                    vals.getOrElse((di + bi + 1) / 2) { brightPlace[t] ?: "" }
+                }
+            }
+        }
+        // 保存済み initial(exposure) から 3択モードを復元(明所/暗所のどちらでもなければ中間点扱い)。
+        private fun resolveInitMode(o: JSONObject?): Int {
+            if (o == null) return 0
+            val iso = o.optString("iso"); val ss = o.optString("ss"); val fn = o.optString("fn")
+            if (iso == brightPlace[0] && ss == brightPlace[1] && fn == brightPlace[2]) return 0
+            if (iso == darkPlace[0] && ss == darkPlace[1] && fn == darkPlace[2]) return 2
+            return 1
+        }
         private fun makeValTv(color: Int): TextView {
             val tv = TextView(this@MainActivity); tv.textSize = 15f; tv.setTypeface(null, Typeface.BOLD)
             tv.gravity = Gravity.CENTER; tv.setTextColor(color)
@@ -853,10 +876,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
             container.removeAllViews()
             cards.clear(); dividers.clear(); darkTvs.clear(); brightTvs.clear(); initTvs.clear()
             if (!moonMode) {   // 月モードは初期値チェックも暗所/初期値/明所の見出しも無し(明所限界のみ)
-                val cb = CheckBox(this@MainActivity)
-                cb.text = "明所限界を初期値にする"; cb.isChecked = initialBright
-                cb.setOnCheckedChangeListener { _, c -> initialBright = c; refreshInit() }
-                container.addView(cb)
+                if (dayMode) {   // 日中: 明所限界→中間点→暗所限界 をタップで巡回
+                    val tv = TextView(this@MainActivity)
+                    fun lbl() = "初期値(タップで切替): " + when (initMode) { 0 -> "明所限界"; 1 -> "中間点"; else -> "暗所限界" }
+                    tv.text = lbl(); tv.textSize = 14f; tv.setPadding(dp(8), dp(8), dp(8), dp(8))
+                    tv.setBackgroundColor(0xFFD1C4E9.toInt()); tv.setTextColor(0xFF222222.toInt())
+                    tv.setOnClickListener { initMode = (initMode + 1) % 3; tv.text = lbl(); refreshInit() }
+                    container.addView(tv)
+                } else {   // 朝日/夕日: 明所限界 or 暗所限界 のチェックボックス(従来どおり)
+                    val cb = CheckBox(this@MainActivity)
+                    cb.text = "明所限界を初期値にする"; cb.isChecked = (initMode == 0)
+                    cb.setOnCheckedChangeListener { _, c -> initMode = if (c) 0 else 2; refreshInit() }
+                    container.addView(cb)
+                }
                 container.addView(headerRow())
             }
             for (i in 0..order.size) {

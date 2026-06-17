@@ -108,7 +108,7 @@ namespace csjson
 			j["color"] = c.color;
 			j["limitBright"] = expToJson(c.limitBright);
 			j["limitDark"]   = expToJson(c.limitDark);
-			j["initialBright"] = c.initialBright;
+			j["initial"] = expToJson(c.initial);
 			json pr = json::array();
 			for (int i = 0; i < hgc::exposureTypeNum; ++i) { pr.push_back(static_cast<int>(c.priority[i])); }
 			j["priority"] = pr;
@@ -119,7 +119,10 @@ namespace csjson
 			c.color = j.value("color", 0u);
 			if (j.contains("limitBright")) { c.limitBright = expFromJson(j["limitBright"]); }
 			if (j.contains("limitDark"))   { c.limitDark   = expFromJson(j["limitDark"]); }
-			c.initialBright = j.value("initialBright", true);
+			// 初期値(iso/ss/fn)。後方互換: 旧 initialBright(bool) しか無ければ限界から派生する
+		// (true=明所限界=limitDark / false=暗所限界=limitBright)。limit は上で読み込み済み。
+		if (j.contains("initial")) { c.initial = expFromJson(j["initial"]); }
+		else { c.initial = j.value("initialBright", true) ? c.limitDark : c.limitBright; }
 			if (j.contains("priority") && j["priority"].is_array())
 			{
 				const auto& pr = j["priority"];

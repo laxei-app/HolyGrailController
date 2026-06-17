@@ -5,7 +5,7 @@
 //  - 夜間撮影: 固定露出
 //  - 朝日/夕日/日中: 測光→露出決定の自動露出(初期補正・移動平均・ヒステリシス)
 //  - 夜間前移行: 自動露出→夜間の固定露出へ 1/3 段ずつ収束
-//  - 夜間後移行: 夜間→次の自動露出へ逆優先度で 1/3 段ずつ収束
+//  - 夜間後移行: 夜間露出を上限にクランプし、次の自動露出の初期値/限界/優先度で測光自動露出(目標=postNightEv)
 // カメラ I/O は cameraController(CCAPI) を使用する。
 
 #include "common.h"
@@ -52,7 +52,7 @@ private:
 	const hgc::ccmWindow* activeWindow(long long nowSec) const;
 	hgc::exposure nightGoalAfter(long long nowSec) const;	// 次の夜間固定露出
 	// 最初の補正(仕様 4.4)を反復収束で行い、撮影開始直後の初期露出を決める。
-	hgc::exposure initialConverge(expo::exposureCtl& ctl, bool initialBright, double evT);
+	hgc::exposure initialConverge(expo::exposureCtl& ctl, const hgc::exposure& initial, double evT);
 	void interruptibleSleep(long ms);
 
 	hgc::cs plan_{};

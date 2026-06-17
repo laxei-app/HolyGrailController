@@ -104,9 +104,15 @@ namespace expo
 
 		hgc::exposure current() const { return cur_; }
 
-		// 1/3 段 明るく/暗くする。優先度順に限界まで変更。変更できなければ false。
-		bool brighten();
-		bool darken();
+		// 1/3 段 明るく/暗くする。優先度順(reversePriority=true で逆順)に限界まで変更。変更不可なら false。
+		// 逆順は §4.5 の往復対称(初期値へ近づくときは優先度の逆で戻す)に使う。
+		bool brighten(bool reversePriority = false);
+		bool darken(bool reversePriority = false);
+
+		// home(初期値)へ戻る向きの 1/3 段。home からずれている軸を優先度の逆順で先に戻し、
+		// home にある軸は飛び越えない(離れたときと逆順に巻き戻す=往復で同じ組合せ。§4.5)。
+		// bright=戻る向き(home が現在より明るければ true)。
+		bool stepHome(bool bright, const hgc::exposure& home);
 
 		// evStops 段ぶん露出を変更する(正=明るく)。1/3段刻みで反映。
 		// 戻り値: 反映後の露出設定。
@@ -125,7 +131,7 @@ namespace expo
 		bool stepIso(bool bright);
 		bool stepSs(bool bright);
 		bool stepFn(bool bright);
-		bool stepOne(bool bright);
+		bool stepOne(bool bright, bool reverse = false);
 	};
 }
 

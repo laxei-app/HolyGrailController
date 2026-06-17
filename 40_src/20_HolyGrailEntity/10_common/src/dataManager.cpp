@@ -21,6 +21,7 @@ astro::ccmSet dataManager::factoryCcmSet(void)
 	night->sunAltitude = -18.0;
 	night->autoEdge = true;
 	night->limitBright = night->limitDark = hgc::exposure{ "1600", "8", "1.4" };	// 固定露出(3.2)
+	night->initial = night->limitBright;	// 夜間の初期値=固定露出
 	set.night = night;
 
 	auto sunrise = std::make_shared<hgc::ccmSunrise>();
@@ -30,6 +31,7 @@ astro::ccmSet dataManager::factoryCcmSet(void)
 	sunrise->ev = -3.0;
 	sunrise->limitBright = hgc::exposure{ "3200", "8", "1.4" };
 	sunrise->limitDark   = hgc::exposure{ "100", "1/4000", "16" };
+	sunrise->initial = sunrise->limitBright;	// 朝日=暗所限界(夜明け前は暗い)から始める
 	set.sunrise = sunrise;
 
 	auto sunset = std::make_shared<hgc::ccmSunset>();
@@ -39,6 +41,7 @@ astro::ccmSet dataManager::factoryCcmSet(void)
 	sunset->ev = -3.0;
 	sunset->limitBright = hgc::exposure{ "3200", "8", "1.4" };
 	sunset->limitDark   = hgc::exposure{ "100", "1/4000", "16" };
+	sunset->initial = sunset->limitDark;	// 夕日=明所限界(日中は明るい)から始める
 	set.sunset = sunset;
 
 	auto day = std::make_shared<hgc::ccmDay>();
@@ -46,6 +49,7 @@ astro::ccmSet dataManager::factoryCcmSet(void)
 	day->ev = 0.0;
 	day->limitBright = hgc::exposure{ "3200", "8", "1.4" };
 	day->limitDark   = hgc::exposure{ "100", "1/4000", "16" };
+	day->initial = hgc::exposure{ "640", "1/20", "4.5" };	// 中間点(明所/暗所限界のAPEX中間の目安。編集で変更可)
 	set.day = day;
 
 	return set;
