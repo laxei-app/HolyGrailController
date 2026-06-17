@@ -93,6 +93,27 @@ namespace
 		std::snprintf(b, sizeof(b), "%02u-%02u %02u:%02u", d.month, d.day, d.hour, d.min);
 		return b;
 	}
+	// --- PLANログ補助 ---
+	bool isAutoCcm(hgc::ccmType t)
+	{
+		return t == hgc::ccmType::sunrise || t == hgc::ccmType::sunset || t == hgc::ccmType::day;
+	}
+	// 自動露出の目標ev(露出補正)。夜間/移行など非自動は 0。
+	double ccmTargetEv(const hgc::ccmBase* c)
+	{
+		switch (c->type)
+		{
+		case hgc::ccmType::sunrise: return static_cast<const hgc::ccmSunrise*>(c)->ev;
+		case hgc::ccmType::sunset:  return static_cast<const hgc::ccmSunset*>(c)->ev;
+		case hgc::ccmType::day:     return static_cast<const hgc::ccmDay*>(c)->ev;
+		default:                    return 0.0;
+		}
+	}
+	// iso/ss/fn を簡潔表記(iso/ss/fn)にする。
+	std::string expoBrief(const hgc::exposure& e)
+	{
+		return e.iso + "/" + e.ss + "/" + e.fn;
+	}
 	std::string jesc(const std::string& s)
 	{
 		std::string o;
@@ -346,8 +367,20 @@ namespace
 					for (const auto& w : g_plan.ccmList)
 					{
 						if (!w.ccm) { continue; }
-						std::string wd = w.ccm->name + " " +
-						                 dtShort(w.start) + "~" + dtShort(w.end);
+						const hgc::ccmBase* pc = w.ccm.get();
+						// 初期値(§4.4の起点): initialBright=true→明所限界(limitDark) / false→暗所限界(limitBright)
+						const hgc::exposure& pInit = pc->initialBright ? pc->limitDark : pc->limitBright;
+						char pev[16];
+						if (isAutoCcm(pc->type))                  { std::snprintf(pev, sizeof(pev), "%+.1f", ccmTargetEv(pc)); }
+						else if (pc->type == hgc::ccmType::night) { std::snprintf(pev, sizeof(pev), "fix"); }
+						else                                      { std::snprintf(pev, sizeof(pev), "-"); }
+						// PLAN: 適用区間 + iso/ss/fn の明所限界/暗所限界/初期値/露出補正の目標。
+						// 注: 表示名は UI と同じ(明所限界=limitDark, 暗所限界=limitBright)。
+						std::string wd = pc->name + " " + dtShort(w.start) + "~" + dtShort(w.end) +
+						                 " 明所=" + expoBrief(pc->limitDark) +
+						                 " 暗所=" + expoBrief(pc->limitBright) +
+						                 " 初期=" + expoBrief(pInit) +
+						                 " 目標ev=" + pev;
 						dataManager::logEvent("PLAN", wd.c_str());
 					}
 				}

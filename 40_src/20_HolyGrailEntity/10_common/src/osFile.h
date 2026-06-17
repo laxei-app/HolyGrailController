@@ -30,6 +30,14 @@ namespace osfile
 
 	// path の内容をすべて out に読み込む(検証・ログ転送用)。return: 成功
 	bool readAll(const std::string& path, std::string& out);
+
+	// 現在採用しているファイルシステム名("SD"/"LittleFS"/"none")を返す(検証用)。
+	const char* backendName(void);
+
+	// 内蔵フラッシュ(LittleFS)の /log 配下のログファイルをすべて削除する。
+	// SD 採用中でも内蔵ログのみを対象にする。return: 削除数(マウント失敗時 -1)。
+	// 注: 実装はメディア固有のため M5Stack のみ。他プラットフォームは未参照(未定義)。
+	int removeInternalLogs(void);
 }
 
 #endif // _OS_FILE_H_

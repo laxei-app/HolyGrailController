@@ -512,7 +512,7 @@ void loop(void)
 	// タッチ操作(スクロール/タップ)
 	handleTouch();
 
-	// シリアルコマンド(検証用): 's'=開始 'x'=停止 'i'=情報 'l'=ログ
+	// シリアルコマンド(検証用): 's'=開始 'x'=停止 'i'=情報 'l'=ログ 'F'=保存先 'D'=内蔵ログ削除
 	if (Serial.available() > 0)
 	{
 		int c = Serial.read();
@@ -534,6 +534,16 @@ void loop(void)
 		{
 			Serial.printf("[INFO] state=%s wifi=%d IP=%s\n", stName(g_state),
 			              (int)(WiFi.status() == WL_CONNECTED), WiFi.localIP().toString().c_str());
+		}
+		else if (c == 'F')	// 検証用: 現在のログ保存先(SD/LittleFS)を表示
+		{
+			Serial.printf("[FS] backend=%s\n", osfile::backendName());
+		}
+		else if (c == 'D')	// 検証用: 内蔵フラッシュ(LittleFS)の /log を全削除
+		{
+			int n = osfile::removeInternalLogs();
+			if (n >= 0) { Serial.printf("[LOGCLR] removed %d internal log file(s)\n", n); }
+			else        { Serial.printf("[LOGCLR] failed (LittleFS mount)\n"); }
 		}
 		else if (c == 'l')
 		{

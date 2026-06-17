@@ -237,6 +237,7 @@ errCode captureRunner::loop(void)
 	expo::exposureCtl postCtl;		// 夜間後移行用(夜間→次の自動露出)
 	std::vector<double> avgBuf;		// リニア輝度の移動平均バッファ
 	hgc::exposure lastExp{};		// 直近の露出設定
+	int meterFailStreak = 0;	// 連続測光失敗数(ライブビュー停止の検出/回復用)
 	int frame = 0;
 
 	// nowSec 以降で最初の自動露出窓の撮影制御方法を返す(夜間後移行の収束先)。
@@ -295,11 +296,12 @@ errCode captureRunner::loop(void)
 		}
 		else if (ccm->type == hgc::ccmType::postNight)
 		{
-			// 夜間後移行(仕様 3.9): 夜間固定露出から次の自動露出へなめらかに移行する。
-			// 次の撮影制御方法では優先度の低い(固定したい)露出設定を先に確定させたいので、
-			// 次の撮影制御方法の優先度を逆順にして、その初期露出へ 1/3 段ずつ収束させる。
+			// 夜間後移行(仕様 3.9 改定): 夜間固定露出から「暗所限界(=limitBright)」へなめらかに移行する。
+			// 明け方の薄明はまだ暗いため、次の撮影制御方法の初期値(=明所限界寄りで露出が少ない)へ
+			// 暗くするのではなく、暗所限界へ寄せて露出を確保し、以後の自動露出で明るさに追従させる。
+			// 段移動順は次の撮影制御方法の優先度を逆順にして、固定したい(優先度の低い)軸を先に決める。
 			const hgc::ccmBase* nextC = nextAutoCcmAfter(now);
-			hgc::exposure goal = nextC ? (nextC->initialBright ? nextC->limitDark : nextC->limitBright)
+			hgc::exposure goal = nextC ? (nextC->limitBright)	/* 暗所限界(=limitBright,最も露出の多い側)へ向かう(仕様3.9 改定) */
 			                           : hgc::exposure{};
 			// 直前の夜間撮影の「夜間後露出補正」を収束目標の明るさへ加える(仕様 7.4.10)。
 			double postEv = 0.0;
@@ -384,6 +386,21 @@ errCode captureRunner::loop(void)
 					double linD = expo::linearFromEv(evT - smooth_.hysteresis / 2.0);
 					if (avg > linU)      { autoCtl.darken(); }
 					else if (avg < linD) { autoCtl.brighten(); }
+					meterFailStreak = 0;	// 測光成功
+				}
+				else
+				{
+					// 測光失敗。ライブビュー停止やカメラの一時不応答が起きると、以降ずっと測光
+					// できず露出が凍結し日中に白飛びする(実機 06/15 で発生)。ライブビューを
+					// 再開して次フレームで測光を回復させる。移動平均は陳腐化するので破棄する。
+					if (meterFailStreak == 0)
+					{
+						avgBuf.clear();
+						if (onError_) { onError_(ERR_HGC_RDY_METARING, "metering lost -> liveview restart"); }
+					}
+					++meterFailStreak;
+					cameraController::startShooting(*dev_);	// live view を張り直す
+					interruptibleSleep(kMeterSettleMs);
 				}
 				target = autoCtl.current();
 			}

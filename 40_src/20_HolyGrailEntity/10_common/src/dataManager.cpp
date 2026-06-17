@@ -241,15 +241,6 @@ namespace
 {
 	int g_logOff = 0;	// ログのタイムスタンプ用 UTCオフセット[分]
 
-	// rec の off から幅 w に s を詰める(left=左詰/右詰)。超過は切り捨て、余白は空白のまま。
-	void putField(char* rec, int off, int w, const char* s, bool left)
-	{
-		int n = static_cast<int>(std::strlen(s));
-		if (n > w) { n = w; }
-		int dst = left ? off : (off + (w - n));
-		std::memcpy(rec + dst, s, static_cast<size_t>(n));
-	}
-
 	// 現在のローカル時刻文字列(time 用19文字 と date 用10文字)を作る。
 	// std::time(UTC秒) + オフセットを gmtime することでタイムゾーン非依存にローカル化する。
 	void nowLocal(char timeStr[20], char dateStr[11])
@@ -266,33 +257,26 @@ namespace
 		std::snprintf(dateStr, 11, "%04d-%02d-%02d", g.tm_year + 1900, g.tm_mon + 1, g.tm_mday);
 	}
 
-	// 1レコード(128B固定長)を組み立てて日付ファイルへ追記する。
-	// 各列の配置は §8.3 のとおり。空欄は空文字列を渡す。
-	void writeRecord(const char* lvl, const char* event, const char* frame,
-	                 const char* iso, const char* ss, const char* fn,
-	                 const char* lum, const char* detail)
+	// 1レコードを組み立てて日付ファイルへ追記する(可変長・改行終端。仕様書 §8.3 改定)。
+	// 固定フォーマット部 = 「time(19) | lvl(3) | event(6)」まで。それ以降の body は各イベント自由形式。
+	// SHOT のみ body 内に frame〜lum を列整形する(他イベントは body を event 直後へ左詰めで置く)。
+	void writeRecord(const char* lvl, const char* event, const std::string& body)
 	{
-		char rec[128];
-		std::memset(rec, ' ', sizeof(rec));
-
 		char timeStr[20], dateStr[11];
 		nowLocal(timeStr, dateStr);
 
-		std::memcpy(rec + 0, timeStr, 19);	rec[19] = '|';
-		putField(rec, 20, 3,  lvl,    true);	rec[23] = '|';
-		putField(rec, 24, 6,  event,  true);	rec[30] = '|';
-		putField(rec, 31, 6,  frame,  false);	rec[37] = '|';
-		putField(rec, 38, 5,  iso,    false);	rec[43] = '|';
-		putField(rec, 44, 11, ss,     true);	rec[55] = '|';
-		putField(rec, 56, 6,  fn,     true);	rec[62] = '|';
-		putField(rec, 63, 8,  lum,    false);	rec[71] = '|';
-		putField(rec, 72, 55, detail, true);
-		rec[127] = '\n';
+		// 固定フォーマット部。lvl は3桁・event は6桁に左詰めで揃える。
+		char head[40];
+		std::snprintf(head, sizeof(head), "%s|%-3.3s|%-6.6s|", timeStr, lvl, event);
+
+		std::string rec(head);
+		rec += body;
+		rec += '\n';
 
 		std::string dir = osfile::logDir();
 		if (dir.empty()) { return; }
 		std::string path = dir + "/hg_" + dateStr + ".log";
-		osfile::append(path, rec, sizeof(rec));
+		osfile::append(path, rec.data(), rec.size());
 	}
 
 }
@@ -304,8 +288,7 @@ void dataManager::setLogOffset(int utcOffsetMin)
 
 void dataManager::logEvent(const char* event, const char* detail, bool error)
 {
-	writeRecord(error ? "ERR" : "INF", event ? event : "", "", "", "", "", "",
-	            detail ? detail : "");
+	writeRecord(error ? "ERR" : "INF", event ? event : "", detail ? detail : "");
 }
 
 std::string dataManager::currentLogPath(void)
@@ -320,12 +303,11 @@ std::string dataManager::currentLogPath(void)
 void dataManager::logShot(int frame, const hgc::exposure& e, double lumStops, const char* ccmName,
                           double meteredLinear)
 {
-	char frameStr[8], lumStr[12];
-	std::snprintf(frameStr, sizeof(frameStr), "%d", frame);
-	std::snprintf(lumStr,   sizeof(lumStr),   "%+.3f", lumStops);
+	char lumStr[12];
+	std::snprintf(lumStr, sizeof(lumStr), "%+.3f", lumStops);
 	// detail = ccm名 + 測光輝度(自動補正時のみ)。Y=リニア輝度, ev=中庸グレー(0.18)基準の段差。
-	char detail[56];
 	const char* nm = ccmName ? ccmName : "";
+	char detail[64];
 	if (meteredLinear > 0.0)
 	{
 		double ev = std::log2(meteredLinear / 0.18);
@@ -335,7 +317,9 @@ void dataManager::logShot(int frame, const hgc::exposure& e, double lumStops, co
 	{
 		std::snprintf(detail, sizeof(detail), "%s", nm);
 	}
-	// 露出値はカメラ設定値の文字列をそのまま記録する。
-	writeRecord("INF", "SHOT", frameStr, e.iso.c_str(), e.ss.c_str(), e.fn.c_str(),
-	            lumStr, detail);
+	// SHOT のみ frame〜lum を使う。body を列整形(frame|iso|ss|fn|lum|detail)。露出はカメラ設定値の文字列。
+	char body[176];
+	std::snprintf(body, sizeof(body), "%5d|%5s|%-11s|%-6s|%8s|%s",
+	              frame, e.iso.c_str(), e.ss.c_str(), e.fn.c_str(), lumStr, detail);
+	writeRecord("INF", "SHOT", body);
 }

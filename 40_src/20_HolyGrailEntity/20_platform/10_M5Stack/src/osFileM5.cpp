@@ -7,6 +7,7 @@
 #include <SD.h>
 #include <SPI.h>
 #include <LittleFS.h>
+#include <vector>
 #include "debugOut.h"
 
 namespace
@@ -22,23 +23,34 @@ namespace
 		if (g_inited) { return; }
 		g_inited = true;
 
-		// 1) microSD を試す
+		// 1) microSD を試す。CoreS3 は microSD と LCD が SPI を共有し、配線・カード相性で
+		//    高クロックだと SD.begin が失敗することがあるため、クロックを段階的に下げて再試行する。
 		SPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
-		if (SD.begin(SD_CS, SPI, 25000000))
+		static const uint32_t kSdHz[] = { 25000000, 20000000, 16000000, 10000000, 4000000, 1000000 };
+		for (uint32_t hz : kSdHz)
 		{
-			g_fs = &SD;
-			DBGLN(col::GRN, "osfile: using SD");
+			if (SD.begin(SD_CS, SPI, hz))
+			{
+				g_fs = &SD;
+				Serial.printf("[osfile] using SD (%u Hz, cardType=%u, %lluMB)\n",
+				              (unsigned)hz, (unsigned)SD.cardType(),
+				              (unsigned long long)(SD.cardSize() / (1024ULL * 1024ULL)));
+				return;
+			}
+			Serial.printf("[osfile] SD.begin failed at %u Hz\n", (unsigned)hz);
+			SD.end();
 		}
+
 		// 2) 失敗したら内蔵フラッシュ(LittleFS)
-		else if (LittleFS.begin(true))	// true: 未フォーマットなら自動フォーマット
+		if (LittleFS.begin(true))	// true: 未フォーマットなら自動フォーマット
 		{
 			g_fs = &LittleFS;
-			DBGLN(col::YEL, "osfile: SD not found, using LittleFS");
+			Serial.println("[osfile] SD not found, using LittleFS");
 		}
 		else
 		{
 			g_fs = nullptr;
-			DBGLN(col::RED, "osfile: no filesystem available");
+			Serial.println("[osfile] no filesystem available");
 		}
 	}
 }
@@ -101,5 +113,38 @@ namespace osfile
 		while (f.available()) { out.push_back(static_cast<char>(f.read())); }
 		f.close();
 		return true;
+	}
+
+	const char* backendName(void)
+	{
+		ensureInit();
+		if (g_fs == &SD)       { return "SD"; }
+		if (g_fs == &LittleFS) { return "LittleFS"; }
+		return "none";
+	}
+
+	int removeInternalLogs(void)
+	{
+		// 内蔵フラッシュ(LittleFS)を明示的に開き /log のファイルを全削除する。
+		// SD 採用中でも内蔵側ログを消したいので g_fs ではなく LittleFS を直接使う。
+		if (!LittleFS.begin(true)) { return -1; }
+		File d = LittleFS.open("/log");
+		if (!d) { return 0; }
+		if (!d.isDirectory()) { d.close(); return 0; }
+
+		std::vector<std::string> paths;
+		for (File f = d.openNextFile(); f; f = d.openNextFile())
+		{
+			std::string nm = f.name();
+			// core により name() がフルパス/ベース名のどちらでも動くよう整える。
+			std::string full = (!nm.empty() && nm[0] == '/') ? nm : (std::string("/log/") + nm);
+			paths.push_back(full);
+			f.close();
+		}
+		d.close();
+
+		int n = 0;
+		for (const auto& p : paths) { if (LittleFS.remove(p.c_str())) { ++n; } }
+		return n;
 	}
 }
