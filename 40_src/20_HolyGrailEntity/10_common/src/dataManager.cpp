@@ -605,6 +605,119 @@ bool dataManager::setColorsJson(const std::string& jsonStr)
 	return saveSettings();
 }
 
+// ============================================================================
+//  撮影制御方法の初期値プリセット(/asset/ccmPresets.json。型ごとに複数)
+// ============================================================================
+namespace
+{
+	json g_presets;
+	bool g_presetsLoaded = false;
+	const char* kPresetTypes[5] = { "night", "sunrise", "sunset", "day", "moon" };
+
+	std::string presetsPath(void)
+	{
+		std::string d = osfile::dir("asset");
+		return d.empty() ? std::string() : (d + "/ccmPresets.json");
+	}
+	bool savePresets(void)
+	{
+		std::string p = presetsPath();
+		if (p.empty()) { return false; }
+		std::string s = g_presets.dump();
+		return osfile::writeAll(p, s.data(), s.size());
+	}
+	void ensurePresets(void)
+	{
+		if (g_presetsLoaded) { return; }
+		g_presetsLoaded = true;
+		std::string body, p = presetsPath();
+		if (!p.empty() && osfile::readAll(p, body))
+		{
+			json j = json::parse(body, nullptr, false);
+			if (!j.is_discarded() && j.is_object()) { g_presets = j; }
+		}
+		if (!g_presets.is_object()) { g_presets = json::object(); }
+
+		// 種まき: 型ごとに最低1件。撮影制御方法の初期値(ccmDefaults)から「標準」を作る。
+		json def = json::parse(dataManager::ccmDefaultsJson(), nullptr, false);
+		ensureSettings();
+		bool changed = false, settingsChanged = false;
+		if (!g_settings.contains("preferredCcm") || !g_settings["preferredCcm"].is_object())
+		{
+			g_settings["preferredCcm"] = json::object();
+		}
+		for (const char* t : kPresetTypes)
+		{
+			if (!g_presets.contains(t) || !g_presets[t].is_array() || g_presets[t].empty())
+			{
+				json one = (def.is_object() && def.contains(t)) ? def[t] : json::object();
+				one["name"] = "標準";
+				g_presets[t] = json::array({ one });
+				changed = true;
+				if (!g_settings["preferredCcm"].contains(t)) { g_settings["preferredCcm"][t] = "標準"; settingsChanged = true; }
+			}
+		}
+		if (changed) { savePresets(); }
+		if (settingsChanged) { saveSettings(); }
+	}
+}
+
+std::string dataManager::ccmPresetsJson(const std::string& type)
+{
+	ensurePresets();
+	if (g_presets.contains(type) && g_presets[type].is_array()) { return g_presets[type].dump(); }
+	return "[]";
+}
+
+bool dataManager::setCcmPresetJson(const std::string& type, const std::string& origName, const std::string& ccmJson)
+{
+	ensurePresets();
+	json c = json::parse(ccmJson, nullptr, false);
+	if (c.is_discarded() || !c.is_object()) { return false; }
+	if (!g_presets.contains(type) || !g_presets[type].is_array()) { g_presets[type] = json::array(); }
+	auto& arr = g_presets[type];
+	for (auto& e : arr)
+	{
+		if (e.is_object() && e.value("name", std::string()) == origName) { e = c; return savePresets(); }
+	}
+	arr.push_back(c);
+	return savePresets();
+}
+
+bool dataManager::removeCcmPreset(const std::string& type, const std::string& name)
+{
+	ensurePresets();
+	if (!g_presets.contains(type) || !g_presets[type].is_array()) { return false; }
+	auto& arr = g_presets[type];
+	for (auto it = arr.begin(); it != arr.end(); ++it)
+	{
+		if (it->is_object() && it->value("name", std::string()) == name) { arr.erase(it); return savePresets(); }
+	}
+	return false;
+}
+
+std::string dataManager::preferredCcmName(const std::string& type)
+{
+	ensureSettings();
+	if (g_settings.contains("preferredCcm") && g_settings["preferredCcm"].is_object() &&
+	    g_settings["preferredCcm"].contains(type) && g_settings["preferredCcm"][type].is_string())
+	{
+		return g_settings["preferredCcm"][type].get<std::string>();
+	}
+	return std::string();
+}
+
+bool dataManager::setPreferredCcm(const std::string& type, const std::string& name)
+{
+	ensureSettings();
+	if (!g_settings.contains("preferredCcm") || !g_settings["preferredCcm"].is_object())
+	{
+		g_settings["preferredCcm"] = json::object();
+	}
+	g_settings["preferredCcm"][type] = name;
+	return saveSettings();
+}
+
 bool dataManager::setOwnedLensDetailJson(const std::string& origName, const std::string& jsonStr)
 {
 	ensureOwned();

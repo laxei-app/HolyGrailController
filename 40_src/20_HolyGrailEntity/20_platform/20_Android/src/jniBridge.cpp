@@ -330,6 +330,61 @@ Java_app_laxei_holygrail_HgeNative_nativeSetColors(JNIEnv* env, jobject /*thiz*/
 	return r;
 }
 
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeGetCcmPresets(JNIEnv* env, jobject /*thiz*/, jstring type)
+{
+	const char* t = env->GetStringUTFChars(type, nullptr);
+	int32_t len = 0;
+	hge_getCcmPresetsJson(t ? t : "", nullptr, &len);
+	std::string out = "[]";
+	if (len > 0) { std::vector<char> buf(static_cast<size_t>(len)); if (hge_getCcmPresetsJson(t ? t : "", buf.data(), &len) == 0) { out = buf.data(); } }
+	env->ReleaseStringUTFChars(type, t);
+	return env->NewStringUTF(out.c_str());
+}
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetCcmPreset(JNIEnv* env, jobject /*thiz*/, jstring type, jstring orig, jstring json)
+{
+	const char* t = env->GetStringUTFChars(type, nullptr);
+	const char* o = env->GetStringUTFChars(orig, nullptr);
+	const char* j = env->GetStringUTFChars(json, nullptr);
+	jint r = hge_setCcmPreset(t ? t : "", o ? o : "", j ? j : "");
+	env->ReleaseStringUTFChars(type, t); env->ReleaseStringUTFChars(orig, o); env->ReleaseStringUTFChars(json, j);
+	return r;
+}
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeRemoveCcmPreset(JNIEnv* env, jobject /*thiz*/, jstring type, jstring name)
+{
+	const char* t = env->GetStringUTFChars(type, nullptr);
+	const char* n = env->GetStringUTFChars(name, nullptr);
+	jint r = hge_removeCcmPreset(t ? t : "", n ? n : "");
+	env->ReleaseStringUTFChars(type, t); env->ReleaseStringUTFChars(name, n);
+	return r;
+}
+
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeGetPreferredCcm(JNIEnv* env, jobject /*thiz*/, jstring type)
+{
+	const char* t = env->GetStringUTFChars(type, nullptr);
+	int32_t len = 0;
+	hge_getPreferredCcm(t ? t : "", nullptr, &len);
+	std::string out;
+	if (len > 0) { std::vector<char> buf(static_cast<size_t>(len)); if (hge_getPreferredCcm(t ? t : "", buf.data(), &len) == 0) { out = buf.data(); } }
+	env->ReleaseStringUTFChars(type, t);
+	return env->NewStringUTF(out.c_str());
+}
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetPreferredCcm(JNIEnv* env, jobject /*thiz*/, jstring type, jstring name)
+{
+	const char* t = env->GetStringUTFChars(type, nullptr);
+	const char* n = env->GetStringUTFChars(name, nullptr);
+	jint r = hge_setPreferredCcm(t ? t : "", n ? n : "");
+	env->ReleaseStringUTFChars(type, t); env->ReleaseStringUTFChars(name, n);
+	return r;
+}
+
 JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeAddOwnedDetected(JNIEnv* /*env*/, jobject /*thiz*/, jint index)
 { return hge_addOwnedDetected(index); }

@@ -74,6 +74,17 @@ public:
 	static std::string colorsJson(void);
 	static bool        setColorsJson(const std::string& json);
 
+	// --- 撮影制御方法の初期値プリセット(/asset/ccmPresets.json。型ごとに複数) ---
+	// 型キー: night/sunrise/sunset/day/moon。各型は ccm の配列。
+	// 初回は撮影制御方法の初期値(ccmDefaults)から名前「標準」のプリセットを生成して種まきする。
+	static std::string ccmPresetsJson(const std::string& type);          // 指定型のプリセット配列
+	// 追加/更新(origName 一致を置換、無ければ追加)。ccmJson は ccm 1件の JSON。
+	static bool        setCcmPresetJson(const std::string& type, const std::string& origName, const std::string& ccmJson);
+	static bool        removeCcmPreset(const std::string& type, const std::string& name);
+	// 優先的な初期値(型ごとに1つ。settings.json の "preferredCcm")。
+	static std::string preferredCcmName(const std::string& type);
+	static bool        setPreferredCcm(const std::string& type, const std::string& name);
+
 	// --- 撮影計画への機材選択(所持から g_plan へ反映するのは UI/holyGrailEntity 側) ---
 	// 所持カメラ/レンズを名称で引く。見つからなければ false。
 	static bool findOwnedCamera(const std::string& name, hgc::camera& out);

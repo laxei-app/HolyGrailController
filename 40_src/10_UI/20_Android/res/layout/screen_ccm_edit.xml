@@ -21,12 +21,26 @@
         <View android:layout_width="32dp" android:layout_height="32dp" />
     </LinearLayout>
 
+    <!-- 初期値プリセット一覧(初期値編集時のみ表示。計画固有編集時は非表示) -->
+    <ScrollView android:id="@+id/edit_presetScroll"
+        android:layout_width="match_parent" android:layout_height="110dp">
+        <LinearLayout android:id="@+id/edit_presetList"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:padding="6dp" />
+    </ScrollView>
+    <FrameLayout android:id="@+id/edit_presetDivider"
+        android:layout_width="match_parent" android:layout_height="26dp"
+        android:background="#ECEFF1" android:clickable="true" android:focusable="true">
+        <View android:layout_width="48dp" android:layout_height="5dp" android:layout_gravity="center"
+            android:background="@drawable/divider_handle" />
+    </FrameLayout>
+
     <ScrollView
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1">
 
-        <LinearLayout
+        <LinearLayout android:id="@+id/edit_content"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"

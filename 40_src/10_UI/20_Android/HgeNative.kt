@@ -69,6 +69,12 @@ object HgeNative {
     external fun nativeAddOwnedDetected(index: Int): Int   // 検出カメラを所持へ追加
     external fun nativeGetColors(): String                 // システム共通の色 {"night":{"text","bg"},...}
     external fun nativeSetColors(json: String): Int
+    // 撮影制御方法の初期値プリセット(型ごとに複数)
+    external fun nativeGetCcmPresets(type: String): String  // [ccm,...]
+    external fun nativeSetCcmPreset(type: String, origName: String, json: String): Int
+    external fun nativeRemoveCcmPreset(type: String, name: String): Int
+    external fun nativeGetPreferredCcm(type: String): String
+    external fun nativeSetPreferredCcm(type: String, name: String): Int
 
     // --- エッジ端末(ETP §6) ---
     external fun nativeEdgeSearch(timeoutMs: Int): String           // edgeInfo の JSON 配列

@@ -80,6 +80,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private var colorType = "night"
     private var colorTextPicker: com.jaredrummler.android.colorpicker.ColorPickerView? = null
     private var colorBgPicker: com.jaredrummler.android.colorpicker.ColorPickerView? = null
+    // 撮影制御方法の初期値プリセット(型ごとに複数)
+    private var presetType = "day"
+    private val presetCcms = ArrayList<JSONObject>()
+    private var selPresetName: String? = null
+    private var presetNameField: EditText? = null
+    private var presetPreferCheck: CheckBox? = null
 
     // 露出(iso/ss/fn)はカメラ設定値の文字列配列からスライダーで選択する。
     private var isoValues = listOf<String>()    // hge_getExpoValues の iso 配列(real昇順)
@@ -274,10 +280,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<Button>(R.id.cmenu_day).setOnClickListener { openCcmEdit("day") }
         findViewById<Button>(R.id.cmenu_moon).setOnClickListener { openMoonEdit() }
         findViewById<ImageView>(R.id.edit_back).setOnClickListener { persistCcmEdit(); flipper.displayedChild = if (editingPlanCcm) 0 else 5 }
-        findViewById<Button>(R.id.edit_save).apply { text = "変更の取り消し"; setOnClickListener { cancelCcmEdit() } }
+        findViewById<Button>(R.id.edit_save).visibility = View.GONE   // 取消はエディタ先頭行へ移動
         // 色はメニュー「色の設定」(システム共通)で設定する(per-ccm色は廃止)。
         findViewById<ImageView>(R.id.color_back).setOnClickListener { leaveColorScreen() }
         findViewById<ImageView>(R.id.color_menu).setOnClickListener { leaveColorScreen() }
+        // 初期値プリセット一覧の分割バー(620と同挙動)
+        setupDivider(R.id.edit_presetDivider, R.id.edit_presetScroll)
+        setupDivider(R.id.moon_presetDivider, R.id.moon_presetScroll)
         // スライダーの値ラベル更新(露出スライダーと形を統一するため Material Slider・仕様8)
         setupValueSlider(R.id.edit_alt_seek, 14, gradient = true) {
             val deg = seekToAlt(it)
@@ -300,7 +309,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         // 月の影響への対処
         findViewById<ImageView>(R.id.moon_back).setOnClickListener { persistMoonEdit(); flipper.displayedChild = if (editingPlanCcm) 0 else 5 }
-        findViewById<Button>(R.id.moon_save).apply { text = "変更の取り消し"; setOnClickListener { cancelMoonEdit() } }
+        findViewById<Button>(R.id.moon_save).visibility = View.GONE   // 取消はエディタ先頭行へ移動
         setupValueSlider(R.id.moon_startlum_seek, 30, gradient = true, thumbRes = R.drawable.ic_moon) {
             findViewById<TextView>(R.id.moon_startlum_val).text = String.format("+%.1fev", it * 0.1)
         }
@@ -333,6 +342,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val o = ccmJson?.optJSONObject("moon") ?: return
         findViewById<TextView>(R.id.moon_title).text = "月の影響への対処" + (if (editingPlanCcm) "（この計画）" else "（初期値）")
         applyHeaderColor(R.id.moon_header, R.id.moon_title, 5)   // 月のシステム共通色
+        val showMoonPreset = !editingPlanCcm
+        findViewById<View>(R.id.moon_presetScroll).visibility = if (showMoonPreset) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.moon_presetDivider).visibility = if (showMoonPreset) View.VISIBLE else View.GONE
         findViewById<Spinner>(R.id.moon_mode).setSelection(o.optInt("mode", 0))
         val slP = (o.optDouble("startLuminance", 0.0) * 10).toInt().coerceIn(0, 30)
         setSliderProgress(R.id.moon_startlum_seek, slP)
@@ -354,14 +366,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
         moonLimit.set(o.optJSONObject("limitBright"), o.optJSONObject("limitDark"),
             o.optJSONArray("priority"), o.optJSONObject("initial"),
             moonMode = true, nightLimit = nightLimit)
+        addPresetTopRow(R.id.moon_content) { cancelMoonEdit() }   // 優先チェック+変更の取り消し
         flipper.displayedChild = 4
     }
 
     // 月編集の取り消し(保存済みから再読込)。
     private fun cancelMoonEdit() {
-        ccmJson = try {
-            JSONObject(if (editingPlanCcm) HgeNative.nativeGetPlanCcm() else HgeNative.nativeGetCcmDefaults())
-        } catch (e: Exception) { null }
+        if (!editingPlanCcm) { loadPresets(presetType); loadEditorOnly(); rebuildPresetList(); return }
+        ccmJson = try { JSONObject(HgeNative.nativeGetPlanCcm()) } catch (e: Exception) { null }
         if (ccmJson == null) return
         openMoonEdit()
     }
@@ -382,7 +394,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         o.put("limitBright", moonLimit.getBright())
         o.put("limitDark", moonLimit.getDark())
         o.put("initial", moonLimit.getInitial())
-        if (editingPlanCcm) HgeNative.nativeSetPlanCcm(all.toString()) else HgeNative.nativeSetCcmDefaults(all.toString())
+        if (editingPlanCcm) HgeNative.nativeSetPlanCcm(all.toString()) else savePresetFromEditor(o)
     }
 
     // --- 撮影制御方法 初期値: メニュー + 方法別エディタ ---
@@ -412,25 +424,37 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.addView(thinDivider())
     }
 
+    // 色の設定の項目: 現在の色(背景/文字)で四角く囲って表示(設計書イメージ)。
+    private fun gearColorItem(box: LinearLayout, typeKey: String, label: String) {
+        val t = keyType(typeKey)
+        val tv = TextView(this); tv.text = label; tv.textSize = 16f
+        tv.setBackgroundColor(ccmColor(t)); tv.setTextColor(ccmTextColor(t))
+        tv.setPadding(dp(16), dp(12), dp(16), dp(12))
+        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        lp.setMargins(dp(12), dp(4), dp(12), dp(4)); tv.layoutParams = lp
+        tv.setOnClickListener { openColorSetting(typeKey) }
+        box.addView(tv)
+    }
+
     private fun buildGearMenu() {
         val box = findViewById<LinearLayout>(R.id.gmenu_container)
         box.removeAllViews()
         gearBand(box, "撮影計画")
         gearItem(box, "撮影計画") { flipper.displayedChild = 0 }
         gearBand(box, "撮影制御方法 初期値")
-        gearItem(box, "月の影響への対処") { openInitialMoon() }
-        gearItem(box, "夜間撮影") { openInitialCcm("night") }
-        gearItem(box, "朝日撮影") { openInitialCcm("sunrise") }
-        gearItem(box, "夕日撮影") { openInitialCcm("sunset") }
-        gearItem(box, "日中撮影") { openInitialCcm("day") }
+        gearItem(box, "月の影響への対処") { openPresetScreen("moon") }
+        gearItem(box, "夜間撮影") { openPresetScreen("night") }
+        gearItem(box, "朝日撮影") { openPresetScreen("sunrise") }
+        gearItem(box, "夕日撮影") { openPresetScreen("sunset") }
+        gearItem(box, "日中撮影") { openPresetScreen("day") }
         gearBand(box, "色の設定")
-        gearItem(box, "月の影響への対処の色") { openColorSetting("moon") }
-        gearItem(box, "夜間撮影の色") { openColorSetting("night") }
-        gearItem(box, "朝日撮影の色") { openColorSetting("sunrise") }
-        gearItem(box, "夕日撮影の色") { openColorSetting("sunset") }
-        gearItem(box, "日中撮影の色") { openColorSetting("day") }
-        gearItem(box, "夜間前移行の色") { openColorSetting("preNight") }
-        gearItem(box, "夜間後移行の色") { openColorSetting("postNight") }
+        gearColorItem(box, "moon", "月の影響への対処")
+        gearColorItem(box, "night", "夜間撮影")
+        gearColorItem(box, "sunrise", "朝日撮影")
+        gearColorItem(box, "sunset", "夕日撮影")
+        gearColorItem(box, "day", "日中撮影")
+        gearColorItem(box, "preNight", "夜間前移行")
+        gearColorItem(box, "postNight", "夜間後移行")
         gearBand(box, "所持機材")
         gearItem(box, "カメラリスト") { openCameraList() }
         gearItem(box, "レンズリスト") { openLensList() }
@@ -451,10 +475,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val lab1 = TextView(this); lab1.text = "文字の色"; lab1.textSize = 14f; box.addView(lab1)
         val p1 = com.jaredrummler.android.colorpicker.ColorPickerView(this)
         p1.setAlphaSliderVisible(true); p1.setColor(ccmTextColor(t), true)
+        // ピッカー変更で即タイトル文字色に反映(その場で見た目確認)。
+        p1.setOnColorChangedListener { c -> findViewById<TextView>(R.id.color_title).setTextColor(0xFF000000.toInt() or (c and 0xFFFFFF)) }
         box.addView(p1); colorTextPicker = p1
         val lab2 = TextView(this); lab2.text = "背景の色"; lab2.textSize = 14f; lab2.setPadding(0, dp(16), 0, 0); box.addView(lab2)
         val p2 = com.jaredrummler.android.colorpicker.ColorPickerView(this)
         p2.setAlphaSliderVisible(true); p2.setColor(ccmColor(t), true)
+        // ピッカー変更で即タイトル背景色に反映。
+        p2.setOnColorChangedListener { c -> findViewById<View>(R.id.color_header).setBackgroundColor(0xFF000000.toInt() or (c and 0xFFFFFF)) }
         box.addView(p2); colorBgPicker = p2
     }
 
@@ -482,6 +510,151 @@ class MainActivity : AppCompatActivity(), HgeListener {
         ccmJson = try { JSONObject(HgeNative.nativeGetCcmDefaults()) } catch (e: Exception) { null }
         if (ccmJson == null) return
         openMoonEdit()
+    }
+
+    // ============================================================
+    //  撮影制御方法の初期値プリセット(型ごとに複数。分割ビュー=上:一覧/下:選択内容)
+    // ============================================================
+    private fun loadPresets(type: String) {
+        presetCcms.clear()
+        try { val a = JSONArray(HgeNative.nativeGetCcmPresets(type)); for (i in 0 until a.length()) a.optJSONObject(i)?.let { presetCcms.add(it) } } catch (_: Exception) {}
+    }
+    private fun presetByName(name: String?): JSONObject? = presetCcms.firstOrNull { it.optString("name") == name }
+    private fun preferredTypeCcm(type: String): JSONObject? {
+        val arr = try { JSONArray(HgeNative.nativeGetCcmPresets(type)) } catch (e: Exception) { return null }
+        val pref = HgeNative.nativeGetPreferredCcm(type); var first: JSONObject? = null
+        for (i in 0 until arr.length()) { val o = arr.optJSONObject(i) ?: continue; if (first == null) first = o; if (o.optString("name") == pref) return o }
+        return first
+    }
+
+    private fun presetListId() = if (presetType == "moon") R.id.moon_presetList else R.id.edit_presetList
+    private fun presetScrollId() = if (presetType == "moon") R.id.moon_presetScroll else R.id.edit_presetScroll
+
+    private fun openPresetScreen(type: String) {
+        editingPlanCcm = false
+        presetType = type
+        loadPresets(type)
+        val names = presetCcms.map { it.optString("name") }
+        val pref = HgeNative.nativeGetPreferredCcm(type)
+        selPresetName = if (pref in names) pref else names.firstOrNull()
+        loadEditorOnly()
+        buildPresetList(presetListId())
+        setInitialSplit(presetScrollId(), presetListId())
+    }
+
+    // 選択中プリセットを ccmJson に積んでエディタを開く(一覧は作り直さない)。
+    private fun loadEditorOnly() {
+        val p = presetByName(selPresetName) ?: presetCcms.firstOrNull() ?: return
+        selPresetName = p.optString("name")
+        ccmJson = JSONObject()
+        if (presetType == "moon") {
+            ccmJson!!.put("moon", p)
+            preferredTypeCcm("night")?.let { ccmJson!!.put("night", it) }
+            openMoonEdit()
+        } else {
+            ccmJson!!.put(presetType, p)
+            openCcmEdit(presetType)
+        }
+    }
+
+    // プリセット一覧。名称はその場で直接編集可。新規追加も文字を直接入力。⋮=緑ピル。
+    private fun buildPresetList(containerId: Int) {
+        val box = findViewById<LinearLayout>(containerId); box.removeAllViews()
+        val prefName = HgeNative.nativeGetPreferredCcm(presetType)
+        for (p in presetCcms) {
+            val nm = p.optString("name")
+            val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL; row.gravity = Gravity.CENTER_VERTICAL
+            val star = TextView(this); star.text = if (nm == prefName) "★" else "　"; star.textSize = 14f; star.setPadding(dp(2), 0, dp(4), 0)
+            val et = EditText(this); et.setText(nm); et.isSingleLine = true; et.textSize = 16f
+            et.setBackgroundColor(0x00000000)
+            et.setTypeface(null, if (nm == selPresetName) Typeface.BOLD else Typeface.NORMAL)
+            et.setTextColor(if (nm == selPresetName) Color.BLACK else Color.parseColor("#888888"))
+            et.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            et.setOnClickListener { selectPreset(nm) }
+            et.setOnFocusChangeListener { _, has -> if (!has) commitRename(nm, et.text.toString()) }
+            row.addView(star); row.addView(et); row.addView(ctxMenuButton(listOf("削除" to { removePreset(nm) })))
+            box.addView(row); box.addView(thinDivider())
+        }
+        // 新規追加(文字を直接入力して確定で作成)
+        val addEt = EditText(this); addEt.hint = "＋ 新規追加"; addEt.isSingleLine = true; addEt.textSize = 16f
+        addEt.setBackgroundColor(0x00000000); addEt.setTextColor(Color.parseColor("#1565C0"))
+        addEt.setPadding(dp(6), dp(8), dp(6), dp(8))
+        addEt.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+        val commitAdd = { val t = addEt.text.toString().trim(); if (t.isNotEmpty()) { addEt.setText(""); addPresetNamed(t) } }
+        addEt.setOnEditorActionListener { _, _, _ -> commitAdd(); true }
+        addEt.setOnFocusChangeListener { _, has -> if (!has) commitAdd() }
+        box.addView(addEt)
+    }
+
+    private fun rebuildPresetList() { buildPresetList(presetListId()) }
+    private fun persistCurrentPreset() { if (presetType == "moon") persistMoonEdit() else persistCcmEdit() }
+
+    private fun selectPreset(name: String) {
+        if (name == selPresetName) return   // 同じ行の再タップは編集(フォーカス)のみ
+        persistCurrentPreset()
+        selPresetName = name
+        loadPresets(presetType)
+        loadEditorOnly()
+        rebuildPresetList()
+    }
+    private fun commitRename(orig: String, newName: String) {
+        val nm = newName.trim()
+        if (nm.isEmpty() || nm == orig) return
+        val p = presetCcms.firstOrNull { it.optString("name") == orig } ?: return
+        p.put("name", nm)
+        HgeNative.nativeSetCcmPreset(presetType, orig, p.toString())
+        if (HgeNative.nativeGetPreferredCcm(presetType) == orig) HgeNative.nativeSetPreferredCcm(presetType, nm)
+        if (selPresetName == orig) selPresetName = nm
+        loadPresets(presetType); rebuildPresetList()
+    }
+    private fun addPresetNamed(name: String) {
+        persistCurrentPreset()
+        val base = presetByName(selPresetName)?.let { JSONObject(it.toString()) } ?: JSONObject().put("type", keyType(presetType))
+        val names = presetCcms.map { it.optString("name") }
+        var nm = name; var n = 1; while (nm in names) { n++; nm = "$name$n" }
+        base.put("name", nm)
+        HgeNative.nativeSetCcmPreset(presetType, "", base.toString())
+        selPresetName = nm
+        loadPresets(presetType); loadEditorOnly(); rebuildPresetList()
+    }
+    private fun removePreset(name: String) {
+        if (presetCcms.size <= 1) { Toast.makeText(this, "最後の1件は削除できません", Toast.LENGTH_SHORT).show(); return }
+        HgeNative.nativeRemoveCcmPreset(presetType, name)
+        loadPresets(presetType)
+        if (selPresetName == name) { selPresetName = presetCcms.firstOrNull()?.optString("name"); loadEditorOnly() }
+        rebuildPresetList()
+    }
+
+    // エディタ内容の先頭に [優先的な初期値にする] [変更の取り消し(赤)] の行を差し込む。
+    private fun addPresetTopRow(contentId: Int, onCancel: () -> Unit) {
+        val box = findViewById<LinearLayout>(contentId)
+        box.findViewWithTag<View>("ptop")?.let { box.removeView(it) }
+        presetPreferCheck = null
+        val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL; row.gravity = Gravity.CENTER_VERTICAL; row.tag = "ptop"
+        if (!editingPlanCcm) {
+            val cb = CheckBox(this); cb.text = "優先的な初期値にする"
+            cb.isChecked = selPresetName == HgeNative.nativeGetPreferredCcm(presetType)
+            cb.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            cb.setOnCheckedChangeListener { _, c ->
+                if (c) { selPresetName?.let { HgeNative.nativeSetPreferredCcm(presetType, it) }; rebuildPresetList() } else cb.isChecked = true
+            }
+            row.addView(cb); presetPreferCheck = cb
+        } else {
+            val sp = View(this); sp.layoutParams = LinearLayout.LayoutParams(0, 1, 1f); row.addView(sp)
+        }
+        val cancel = Button(this); cancel.text = "変更の取り消し"; cancel.textSize = 12f
+        cancel.setTextColor(Color.WHITE); cancel.setBackgroundColor(Color.parseColor("#EF5350"))
+        cancel.setPadding(dp(12), dp(4), dp(12), dp(4))
+        cancel.setOnClickListener { onCancel() }
+        row.addView(cancel)
+        box.addView(row, 0)
+    }
+
+    // エディタ内容をプリセットとして保存する(初期値編集時)。名称は一覧側で編集する。
+    private fun savePresetFromEditor(o: JSONObject) {
+        val nm = selPresetName ?: return
+        o.put("name", nm)
+        HgeNative.nativeSetCcmPreset(presetType, nm, o.toString())
     }
 
     // ============================================================
@@ -599,19 +772,25 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (sub.isNotEmpty()) { val s = TextView(this); s.text = sub; s.textSize = 12f; s.setTextColor(Color.GRAY); txt.addView(s) }
         txt.setOnClickListener { onSelect() }
         row.addView(txt)
-        if (menuItems.isNotEmpty()) {
-            val btn = Button(this); btn.text = "⋮"; btn.textSize = 18f
-            btn.setPadding(dp(8), 0, dp(8), 0)
-            btn.minWidth = dp(44); btn.minimumWidth = dp(44)
-            btn.setOnClickListener { anchor ->
-                val pm = PopupMenu(this, anchor)
-                menuItems.forEachIndexed { i, mi -> pm.menu.add(0, i, i, mi.first) }
-                pm.setOnMenuItemClickListener { mi -> menuItems[mi.itemId].second(); true }
-                pm.show()
-            }
-            row.addView(btn)
-        }
+        if (menuItems.isNotEmpty()) { row.addView(ctxMenuButton(menuItems)) }
         return row
+    }
+
+    // コンテキストメニューボタン(緑ピル ⋮。設計書イメージ)。
+    private fun ctxMenuButton(menuItems: List<Pair<String, () -> Unit>>): View {
+        val btn = TextView(this); btn.text = "⋮"; btn.textSize = 18f
+        btn.setTextColor(Color.WHITE); btn.gravity = Gravity.CENTER
+        btn.setBackgroundResource(R.drawable.ctx_menu_pill)
+        btn.setPadding(dp(12), dp(2), dp(12), dp(2))
+        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        lp.setMargins(dp(6), 0, dp(2), 0); btn.layoutParams = lp
+        btn.setOnClickListener { anchor ->
+            val pm = PopupMenu(this, anchor)
+            menuItems.forEachIndexed { i, mi -> pm.menu.add(0, i, i, mi.first) }
+            pm.setOnMenuItemClickListener { mi -> menuItems[mi.itemId].second(); true }
+            pm.show()
+        }
+        return btn
     }
 
     // ---------- 620 所持カメラ ----------
@@ -1203,6 +1382,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val title = mapOf("night" to "夜間撮影", "sunrise" to "朝日撮影", "sunset" to "夕日撮影", "day" to "日中撮影")[key]
         findViewById<TextView>(R.id.edit_title).text = title + (if (editingPlanCcm) "（この計画）" else "（初期値）")
         applyHeaderColor(R.id.edit_header, R.id.edit_title, keyType(key))   // タイトルバーにシステム共通色
+        val showPreset = !editingPlanCcm   // 初期値編集時のみプリセット一覧を出す
+        findViewById<View>(R.id.edit_presetScroll).visibility = if (showPreset) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.edit_presetDivider).visibility = if (showPreset) View.VISIBLE else View.GONE
 
         val hasAlt = key != "day"
         val hasEv = key != "night"
@@ -1261,14 +1443,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
             editLimit.set(o.optJSONObject("limitBright"), o.optJSONObject("limitDark"),
                 o.optJSONArray("priority"), o.optJSONObject("initial"), dayMode = (key == "day"))
         }
+        addPresetTopRow(R.id.edit_content) { cancelCcmEdit() }   // 優先チェック+変更の取り消し
         flipper.displayedChild = 3
     }
 
     // 撮影制御方法編集の取り消し(保存済みから再読込して破棄)。
     private fun cancelCcmEdit() {
-        ccmJson = try {
-            JSONObject(if (editingPlanCcm) HgeNative.nativeGetPlanCcm() else HgeNative.nativeGetCcmDefaults())
-        } catch (e: Exception) { null }
+        if (!editingPlanCcm) { loadPresets(presetType); loadEditorOnly(); rebuildPresetList(); return }
+        ccmJson = try { JSONObject(HgeNative.nativeGetPlanCcm()) } catch (e: Exception) { null }
         if (ccmJson == null) return
         openCcmEdit(editingKey)
     }
@@ -1299,7 +1481,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             o.put("limitDark", editLimit.getDark())
             o.put("initial", editLimit.getInitial())
         }
-        if (editingPlanCcm) HgeNative.nativeSetPlanCcm(all.toString()) else HgeNative.nativeSetCcmDefaults(all.toString())
+        if (editingPlanCcm) HgeNative.nativeSetPlanCcm(all.toString()) else savePresetFromEditor(o)
     }
 
     // SeekBar 値変更だけ拾う簡易リスナ(カラーピッカーのRGBで使用)。

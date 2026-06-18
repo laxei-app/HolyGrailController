@@ -147,6 +147,13 @@ int32_t hge_setOwnedLensDetail(const char* origName, const char* json);
 int32_t hge_getColorsJson(char* buf, int32_t* inoutLen);
 int32_t hge_setColorsJson(const char* json);
 
+// 撮影制御方法の初期値プリセット(型ごとに複数)。型: night/sunrise/sunset/day/moon。
+int32_t hge_getCcmPresetsJson(const char* type, char* buf, int32_t* inoutLen);  // 型のプリセット配列
+int32_t hge_setCcmPreset(const char* type, const char* origName, const char* json); // 追加/更新
+int32_t hge_removeCcmPreset(const char* type, const char* name);
+int32_t hge_getPreferredCcm(const char* type, char* buf, int32_t* inoutLen);    // 優先初期値の名前
+int32_t hge_setPreferredCcm(const char* type, const char* name);
+
 // 接続カメラ検索(同期)。検出した全カメラの一覧 JSON を返す(バッファ規約)。
 //  [{"model","friendly","serial"},...]。続けて hge_addOwnedDetected で所持へ追加する。
 int32_t hge_searchDevicesListJson(char* buf, int32_t* inoutLen);

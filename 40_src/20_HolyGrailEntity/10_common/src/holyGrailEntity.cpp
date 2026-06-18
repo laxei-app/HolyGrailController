@@ -869,6 +869,36 @@ int32_t hge_setColorsJson(const char* json)
 	return dataManager::setColorsJson(std::string(json)) ? ERR_HGC_OK : ERR_HGC_JSON_PARSE;
 }
 
+int32_t hge_getCcmPresetsJson(const char* type, char* buf, int32_t* inoutLen)
+{
+	if (type == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return copyOut(dataManager::ccmPresetsJson(std::string(type)), buf, inoutLen);
+}
+
+int32_t hge_setCcmPreset(const char* type, const char* origName, const char* json)
+{
+	if (type == nullptr || origName == nullptr || json == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return dataManager::setCcmPresetJson(std::string(type), std::string(origName), std::string(json)) ? ERR_HGC_OK : ERR_HGC_JSON_PARSE;
+}
+
+int32_t hge_removeCcmPreset(const char* type, const char* name)
+{
+	if (type == nullptr || name == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return dataManager::removeCcmPreset(std::string(type), std::string(name)) ? ERR_HGC_OK : ERR_HGC_NO_ELEMENT;
+}
+
+int32_t hge_getPreferredCcm(const char* type, char* buf, int32_t* inoutLen)
+{
+	if (type == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return copyOut(dataManager::preferredCcmName(std::string(type)), buf, inoutLen);
+}
+
+int32_t hge_setPreferredCcm(const char* type, const char* name)
+{
+	if (type == nullptr || name == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return dataManager::setPreferredCcm(std::string(type), std::string(name)) ? ERR_HGC_OK : ERR_HGC_INVALID_STATE;
+}
+
 // 接続カメラ検索(同期)。検出した全カメラを g_devices に格納し、一覧 JSON を返す。
 //  [{"model":..,"friendly":..,"serial":..}, ...]。コンテキストメニューの「接続カメラ検索」用。
 int32_t hge_searchDevicesListJson(char* buf, int32_t* inoutLen)
