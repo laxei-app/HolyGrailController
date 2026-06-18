@@ -215,6 +215,81 @@ Java_app_laxei_holygrail_HgeNative_nativeSunAltitudeTimes(JNIEnv* env, jobject /
 	return env->NewStringUTF(buf.data());
 }
 
+// --- 機材マスタ・所持機材(データ構造仕様書43 §5.5〜5.9 / §7.6) ---
+namespace
+{
+	// hge の「バッファ規約」getter を呼んで Java String にする共通処理。
+	jstring callBufGetter(JNIEnv* env, int32_t (*fn)(char*, int32_t*))
+	{
+		int32_t len = 0;
+		fn(nullptr, &len);
+		if (len <= 0) { return env->NewStringUTF("[]"); }
+		std::vector<char> buf(static_cast<size_t>(len));
+		if (fn(buf.data(), &len) != 0) { return env->NewStringUTF("[]"); }
+		return env->NewStringUTF(buf.data());
+	}
+	// name 引数1つの hge コマンドを呼ぶ共通処理。
+	jint callNameCmd(JNIEnv* env, jstring name_, int32_t (*fn)(const char*))
+	{
+		if (name_ == nullptr) { return -1; }
+		const char* n = env->GetStringUTFChars(name_, nullptr);
+		jint r = fn(n ? n : "");
+		env->ReleaseStringUTFChars(name_, n);
+		return r;
+	}
+}
+
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeGetMasterCameras(JNIEnv* env, jobject /*thiz*/)
+{ return callBufGetter(env, hge_getMasterCamerasJson); }
+
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeGetMasterLenses(JNIEnv* env, jobject /*thiz*/)
+{ return callBufGetter(env, hge_getMasterLensesJson); }
+
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeGetOwnedCameras(JNIEnv* env, jobject /*thiz*/)
+{ return callBufGetter(env, hge_getOwnedCamerasJson); }
+
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeGetOwnedLenses(JNIEnv* env, jobject /*thiz*/)
+{ return callBufGetter(env, hge_getOwnedLensesJson); }
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeAddOwnedCamera(JNIEnv* env, jobject /*thiz*/, jstring name)
+{ return callNameCmd(env, name, hge_addOwnedCamera); }
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeAddOwnedLens(JNIEnv* env, jobject /*thiz*/, jstring name)
+{ return callNameCmd(env, name, hge_addOwnedLens); }
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeRemoveOwnedCamera(JNIEnv* env, jobject /*thiz*/, jstring name)
+{ return callNameCmd(env, name, hge_removeOwnedCamera); }
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeRemoveOwnedLens(JNIEnv* env, jobject /*thiz*/, jstring name)
+{ return callNameCmd(env, name, hge_removeOwnedLens); }
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetOwnedCameraAutoInsert(JNIEnv* env, jobject /*thiz*/,
+                                                                  jstring name, jint autoInsert)
+{
+	if (name == nullptr) { return -1; }
+	const char* n = env->GetStringUTFChars(name, nullptr);
+	jint r = hge_setOwnedCameraAutoInsert(n ? n : "", autoInsert);
+	env->ReleaseStringUTFChars(name, n);
+	return r;
+}
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetPlanCamera(JNIEnv* env, jobject /*thiz*/, jstring name)
+{ return callNameCmd(env, name, hge_setPlanCamera); }
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetPlanLens(JNIEnv* env, jobject /*thiz*/, jstring name)
+{ return callNameCmd(env, name, hge_setPlanLens); }
+
 // listener(HgeListener) を登録/解除する。
 JNIEXPORT void JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeSetListener(JNIEnv* env, jobject /*thiz*/, jobject listener)

@@ -115,7 +115,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         setContentView(R.layout.activity_main)
         bindViews()
 
-        HgeNative.nativeSetLogDir(getExternalFilesDir(null)?.absolutePath ?: filesDir.absolutePath)
+        val baseDir = getExternalFilesDir(null) ?: filesDir
+        copyMasterAssets(baseDir)   // インストール同梱の機材マスタを /master へ展開(nativeInit より前)
+        HgeNative.nativeSetLogDir(baseDir.absolutePath)
         HgeNative.nativeInit()
         HgeNative.nativeSetListener(this)
         loadExpoValues()
@@ -234,9 +236,24 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         // 撮影制御方法の編集ボタン(全種・固定配置)をスケジュールの下に構築する。
         buildCcmEditButtons()
-        // 初期値メニュー(plan_menu→メニュー画面)
-        planMenu.setOnClickListener { openCcmMenu() }
-        findViewById<ImageView>(R.id.cmenu_back).setOnClickListener { flipper.displayedChild = 0 }
+        // メニュー(plan_menu→600.メニュー)。そこから撮影制御方法初期値/所持機材へ分岐。
+        planMenu.setOnClickListener { flipper.displayedChild = 5 }
+        findViewById<ImageView>(R.id.gmenu_back).setOnClickListener { flipper.displayedChild = 0 }
+        findViewById<Button>(R.id.gmenu_ccm).setOnClickListener { openCcmMenu() }
+        findViewById<Button>(R.id.gmenu_cameras).setOnClickListener { openCameraList() }
+        findViewById<Button>(R.id.gmenu_lenses).setOnClickListener { openLensList() }
+        findViewById<ImageView>(R.id.cmenu_back).setOnClickListener { flipper.displayedChild = 5 }
+        // 620 所持カメラ / 622 カメラ追加(マスタ)
+        findViewById<ImageView>(R.id.cameralist_back).setOnClickListener { flipper.displayedChild = 5 }
+        findViewById<Button>(R.id.cameralist_add).setOnClickListener { openCameraAdd() }
+        findViewById<ImageView>(R.id.cameraadd_back).setOnClickListener { openCameraList() }
+        // 630 所持レンズ / 632 レンズ追加(マスタ)
+        findViewById<ImageView>(R.id.lenslist_back).setOnClickListener { flipper.displayedChild = 5 }
+        findViewById<Button>(R.id.lenslist_add).setOnClickListener { openLensAdd() }
+        findViewById<ImageView>(R.id.lensadd_back).setOnClickListener { openLensList() }
+        // 撮影計画(330)のカメラ/レンズをタップで所持から選択する。
+        cameraText.setOnClickListener { choosePlanCamera() }
+        lensText.setOnClickListener { choosePlanLens() }
         findViewById<Button>(R.id.cmenu_night).setOnClickListener { openCcmEdit("night") }
         findViewById<Button>(R.id.cmenu_sunrise).setOnClickListener { openCcmEdit("sunrise") }
         findViewById<Button>(R.id.cmenu_sunset).setOnClickListener { openCcmEdit("sunset") }
@@ -357,6 +374,191 @@ class MainActivity : AppCompatActivity(), HgeListener {
         editingPlanCcm = false   // メニュー経由は初期値ccmの編集
         ccmJson = try { JSONObject(HgeNative.nativeGetCcmDefaults()) } catch (e: Exception) { null }
         flipper.displayedChild = 2
+    }
+
+    // ============================================================
+    //  機材マスタ・所持機材(600/620/622/630/632。データ構造仕様書43 §5.5〜5.9 / §7.6)
+    // ============================================================
+
+    // インストール同梱の assets/master/*.json を /master へコピーする(無ければ)。
+    // osfile のベース = getExternalFilesDir(null) なので dataManager は /master で読める。
+    // 将来サーバ更新は filesDir 側を上書きする(本タスクでは未実装)。
+    private fun copyMasterAssets(baseDir: java.io.File) {
+        try {
+            val dir = java.io.File(baseDir, "master")
+            if (!dir.exists()) dir.mkdirs()
+            for (name in listOf("cameras.json", "lenses.json")) {
+                val out = java.io.File(dir, name)
+                if (out.exists() && out.length() > 0L) continue   // 既にあれば残す(更新は別途)
+                assets.open("master/$name").use { ins ->
+                    out.outputStream().use { os -> ins.copyTo(os) }
+                }
+            }
+        } catch (e: Exception) {
+            // マスタ未配置でも entity 側の出荷時フォールバックで最低限動く。
+        }
+    }
+
+    private fun openCameraList() { buildCameraList(); flipper.displayedChild = 6 }
+    private fun openCameraAdd()  { buildCameraAdd();  flipper.displayedChild = 7 }
+    private fun openLensList()   { buildLensList();   flipper.displayedChild = 8 }
+    private fun openLensAdd()    { buildLensAdd();    flipper.displayedChild = 9 }
+
+    private fun camArray(json: String): JSONArray = try { JSONArray(json) } catch (e: Exception) { JSONArray() }
+
+    // 行レイアウト(タイトル＋サブ＋右ボタン)を作る共通処理。
+    private fun gearRow(title: String, sub: String, btnText: String, onBtn: () -> Unit): View {
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER_VERTICAL
+        row.setPadding(dp(8), dp(10), dp(8), dp(10))
+        val txt = LinearLayout(this)
+        txt.orientation = LinearLayout.VERTICAL
+        txt.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        val t = TextView(this); t.text = title; t.textSize = 16f; t.setTypeface(null, Typeface.BOLD)
+        txt.addView(t)
+        if (sub.isNotEmpty()) {
+            val s = TextView(this); s.text = sub; s.textSize = 12f; s.setTextColor(Color.GRAY)
+            txt.addView(s)
+        }
+        row.addView(txt)
+        val b = Button(this); b.text = btnText
+        b.setOnClickListener { onBtn() }
+        row.addView(b)
+        return row
+    }
+
+    private fun divider(): View {
+        val v = View(this)
+        v.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1)
+        v.setBackgroundColor(0xFFDDDDDD.toInt())
+        return v
+    }
+
+    private fun buildCameraList() {
+        val box = findViewById<LinearLayout>(R.id.cameralist_container)
+        box.removeAllViews()
+        val arr = camArray(HgeNative.nativeGetOwnedCameras())
+        if (arr.length() == 0) {
+            val tv = TextView(this); tv.text = "所持カメラがありません。\n「＋ 新規カメラ追加」から登録してください。\n(カメラ接続時にも自動で登録されます)"
+            tv.setPadding(dp(8), dp(16), dp(8), dp(16)); box.addView(tv)
+            return
+        }
+        for (i in 0 until arr.length()) {
+            val oc = arr.optJSONObject(i) ?: continue
+            val cam = oc.optJSONObject("camera") ?: continue
+            val name = cam.optString("name")
+            val serial = cam.optString("serial")
+            val friendly = cam.optString("friendly")
+            val parts = mutableListOf<String>()
+            if (friendly.isNotEmpty()) parts.add("愛称: $friendly")
+            if (serial.isNotEmpty()) parts.add("S/N: $serial")
+            val sub = if (parts.isEmpty()) cam.optString("maker") else parts.joinToString("  ")
+            box.addView(gearRow(name, sub, "削除") {
+                Thread {
+                    HgeNative.nativeRemoveOwnedCamera(name)
+                    runOnUiThread { buildCameraList() }
+                }.start()
+            })
+            box.addView(divider())
+        }
+    }
+
+    private fun buildCameraAdd() {
+        val box = findViewById<LinearLayout>(R.id.cameraadd_container)
+        box.removeAllViews()
+        val arr = camArray(HgeNative.nativeGetMasterCameras())
+        for (i in 0 until arr.length()) {
+            val oc = arr.optJSONObject(i) ?: continue
+            val cam = oc.optJSONObject("camera") ?: continue
+            val name = cam.optString("name")
+            val maker = cam.optString("maker")
+            box.addView(gearRow(name, maker, "追加") {
+                Thread {
+                    val r = HgeNative.nativeAddOwnedCamera(name)
+                    runOnUiThread {
+                        Toast.makeText(this, if (r == 0) "$name を追加しました" else "追加に失敗しました", Toast.LENGTH_SHORT).show()
+                    }
+                }.start()
+            })
+            box.addView(divider())
+        }
+    }
+
+    private fun buildLensList() {
+        val box = findViewById<LinearLayout>(R.id.lenslist_container)
+        box.removeAllViews()
+        val arr = camArray(HgeNative.nativeGetOwnedLenses())
+        if (arr.length() == 0) {
+            val tv = TextView(this); tv.text = "所持レンズがありません。\n「＋ 新規レンズ追加」から登録してください。"
+            tv.setPadding(dp(8), dp(16), dp(8), dp(16)); box.addView(tv)
+            return
+        }
+        for (i in 0 until arr.length()) {
+            val l = arr.optJSONObject(i) ?: continue
+            val name = l.optString("name")
+            val sub = "${l.optString("maker")}  ${l.optDouble("focalLength", 0.0).toInt()}mm  F${l.optDouble("fn", 0.0)}"
+            box.addView(gearRow(name, sub, "削除") {
+                Thread {
+                    HgeNative.nativeRemoveOwnedLens(name)
+                    runOnUiThread { buildLensList() }
+                }.start()
+            })
+            box.addView(divider())
+        }
+    }
+
+    private fun buildLensAdd() {
+        val box = findViewById<LinearLayout>(R.id.lensadd_container)
+        box.removeAllViews()
+        val arr = camArray(HgeNative.nativeGetMasterLenses())
+        for (i in 0 until arr.length()) {
+            val l = arr.optJSONObject(i) ?: continue
+            val name = l.optString("name")
+            val sub = "${l.optString("maker")}  ${l.optDouble("focalLength", 0.0).toInt()}mm  F${l.optDouble("fn", 0.0)}"
+            box.addView(gearRow(name, sub, "追加") {
+                Thread {
+                    val r = HgeNative.nativeAddOwnedLens(name)
+                    runOnUiThread {
+                        Toast.makeText(this, if (r == 0) "$name を追加しました" else "追加に失敗しました", Toast.LENGTH_SHORT).show()
+                    }
+                }.start()
+            })
+            box.addView(divider())
+        }
+    }
+
+    // 撮影計画のカメラ/レンズを所持機材から選ぶ(無ければ登録画面へ誘導)。
+    private fun choosePlanCamera() {
+        val arr = camArray(HgeNative.nativeGetOwnedCameras())
+        if (arr.length() == 0) { openCameraList(); return }
+        val names = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optJSONObject("camera")?.optString("name") }
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("カメラを選択")
+            .setItems(names.toTypedArray()) { _, which ->
+                val name = names[which]
+                Thread {
+                    HgeNative.nativeSetPlanCamera(name)
+                    val sched = HgeNative.nativeScheduleJson()
+                    runOnUiThread { latestSchedule = sched; updatePlanDisplay(sched) }
+                }.start()
+            }.show()
+    }
+
+    private fun choosePlanLens() {
+        val arr = camArray(HgeNative.nativeGetOwnedLenses())
+        if (arr.length() == 0) { openLensList(); return }
+        val names = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("name") }
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("レンズを選択")
+            .setItems(names.toTypedArray()) { _, which ->
+                val name = names[which]
+                Thread {
+                    HgeNative.nativeSetPlanLens(name)
+                    val sched = HgeNative.nativeScheduleJson()
+                    runOnUiThread { latestSchedule = sched; updatePlanDisplay(sched); loadExpoValues() }
+                }.start()
+            }.show()
     }
 
     // 撮影計画画面の色別リストから「この計画の」撮影制御方法を編集する(初期値とは別)。

@@ -2,7 +2,10 @@
 #include "dataManager.h"
 #include "osFile.h"
 #include "csJson.h"
+#include "device.h"
 #include <json/nlohmann/json.hpp>
+#include <vector>
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -236,6 +239,270 @@ void dataManager::factoryFixedPlan(hgc::cs& plan)
 	plan.azimuth   = 90.0;	// 東向き(日の出方向)
 	plan.elevation = 10.0;
 	plan.landscape = true;
+}
+
+// ============================================================================
+//  機材マスタ・所持機材(データ構造仕様書43 §5.5〜5.9 / §7.6)
+// ============================================================================
+namespace
+{
+	// --- 機材マスタ(読取専用。/master/cameras.json・lenses.json) ---
+	std::vector<hgc::camera> g_masterCameras;
+	std::vector<hgc::lens>   g_masterLenses;
+	bool                     g_masterLoaded = false;
+
+	std::string masterPath(const char* file)
+	{
+		std::string d = osfile::dir("master");
+		return d.empty() ? std::string() : (d + "/" + file);
+	}
+
+	// 出荷時フォールバック(マスタ未配置時)。最低限 EOS R10 + 16mm が選べるようにする。
+	void masterFallback(void)
+	{
+		hgc::cs fp;
+		dataManager::factoryFixedPlan(fp);
+		g_masterCameras.clear();
+		g_masterCameras.push_back(fp.camera);
+		g_masterLenses.clear();
+		g_masterLenses.push_back(fp.lens);
+	}
+
+	void ensureMaster(void)
+	{
+		if (g_masterLoaded) { return; }
+		g_masterLoaded = true;
+		std::string pc = masterPath("cameras.json");
+		std::string pl = masterPath("lenses.json");
+		std::string body;
+		bool okC = (!pc.empty() && osfile::readAll(pc, body) &&
+		            csjson::camerasFromMasterJson(body, g_masterCameras) && !g_masterCameras.empty());
+		body.clear();
+		bool okL = (!pl.empty() && osfile::readAll(pl, body) &&
+		            csjson::lensesFromMasterJson(body, g_masterLenses) && !g_masterLenses.empty());
+		if (!okC || !okL) { masterFallback(); }	// どちらか欠けたら最低限を用意
+	}
+
+	// --- 所持機材(/asset/ownedCameras.json・ownedLenses.json) ---
+	std::vector<hgc::ownedCamera> g_ownedCameras;
+	std::vector<hgc::lens>        g_ownedLenses;
+	bool                          g_ownedLoaded = false;
+
+	std::string ownedCamPath(void)
+	{
+		std::string d = osfile::dir("asset");
+		return d.empty() ? std::string() : (d + "/ownedCameras.json");
+	}
+	std::string ownedLensPath(void)
+	{
+		std::string d = osfile::dir("asset");
+		return d.empty() ? std::string() : (d + "/ownedLenses.json");
+	}
+
+	void ensureOwned(void)
+	{
+		if (g_ownedLoaded) { return; }
+		g_ownedLoaded = true;
+		std::string body;
+		std::string pc = ownedCamPath();
+		if (!pc.empty() && osfile::readAll(pc, body)) { csjson::ownedCamerasFromJson(body, g_ownedCameras); }
+		body.clear();
+		std::string pl = ownedLensPath();
+		if (!pl.empty() && osfile::readAll(pl, body)) { csjson::ownedLensesFromJson(body, g_ownedLenses); }
+	}
+
+	bool saveOwnedCameras(void)
+	{
+		std::string p = ownedCamPath();
+		if (p.empty()) { return false; }
+		std::string s = csjson::ownedCamerasToJson(g_ownedCameras);
+		return osfile::writeAll(p, s.data(), s.size());
+	}
+	bool saveOwnedLenses(void)
+	{
+		std::string p = ownedLensPath();
+		if (p.empty()) { return false; }
+		std::string s = csjson::ownedLensesToJson(g_ownedLenses);
+		return osfile::writeAll(p, s.data(), s.size());
+	}
+
+	const hgc::camera* findMasterCamera(const std::string& name)
+	{
+		ensureMaster();
+		for (const auto& c : g_masterCameras) { if (c.name == name) { return &c; } }
+		return nullptr;
+	}
+
+	// device.model("Canon EOS R10")から先頭のメーカー名を除いた型番を得る("EOS R10")。
+	std::string stripMaker(const std::string& model, const std::string& maker)
+	{
+		std::string m = model;
+		if (!maker.empty() && m.size() >= maker.size() &&
+		    m.compare(0, maker.size(), maker) == 0)
+		{
+			m.erase(0, maker.size());
+			while (!m.empty() && (m.front() == ' ' || m.front() == '\t')) { m.erase(0, 1); }
+		}
+		return m;
+	}
+
+	// dev に最も一致するマスタカメラを返す。完全一致優先、無ければ最長部分一致。
+	// ("EOS R6" が "EOS R6 Mark II" を誤って先取りしないよう最長一致を採る)
+	const hgc::camera* matchMasterCamera(const device& dev)
+	{
+		ensureMaster();
+		std::string key = stripMaker(dev.model, dev.manufacturer);
+		const hgc::camera* best = nullptr;
+		size_t bestLen = 0;
+		for (const auto& c : g_masterCameras)
+		{
+			if (!c.name.empty() && c.name == key) { return &c; }		// 完全一致
+			if (!c.name.empty() && key.find(c.name) != std::string::npos && c.name.size() > bestLen)
+			{
+				best = &c; bestLen = c.name.size();
+			}
+		}
+		return best;
+	}
+	const hgc::lens* findMasterLens(const std::string& name)
+	{
+		ensureMaster();
+		for (const auto& l : g_masterLenses) { if (l.name == name) { return &l; } }
+		return nullptr;
+	}
+}
+
+std::string dataManager::masterCamerasJson(void)
+{
+	ensureMaster();
+	std::vector<hgc::ownedCamera> tmp;	// camera 配列を所持形式の "camera" キーで出すと UI で扱いやすい
+	tmp.reserve(g_masterCameras.size());
+	for (const auto& c : g_masterCameras) { hgc::ownedCamera oc; oc.cam = c; tmp.push_back(std::move(oc)); }
+	return csjson::ownedCamerasToJson(tmp);
+}
+
+std::string dataManager::masterLensesJson(void)
+{
+	ensureMaster();
+	return csjson::ownedLensesToJson(g_masterLenses);
+}
+
+std::string dataManager::ownedCamerasJson(void)
+{
+	ensureOwned();
+	return csjson::ownedCamerasToJson(g_ownedCameras);
+}
+
+std::string dataManager::ownedLensesJson(void)
+{
+	ensureOwned();
+	return csjson::ownedLensesToJson(g_ownedLenses);
+}
+
+bool dataManager::addOwnedCameraFromMaster(const std::string& name)
+{
+	ensureOwned();
+	for (const auto& oc : g_ownedCameras) { if (oc.cam.name == name) { return true; } }	// 既存
+	const hgc::camera* m = findMasterCamera(name);
+	if (!m) { return false; }
+	hgc::ownedCamera oc;
+	oc.cam = *m;
+	g_ownedCameras.push_back(std::move(oc));
+	return saveOwnedCameras();
+}
+
+bool dataManager::addOwnedLensFromMaster(const std::string& name)
+{
+	ensureOwned();
+	for (const auto& l : g_ownedLenses) { if (l.name == name) { return true; } }	// 既存
+	const hgc::lens* m = findMasterLens(name);
+	if (!m) { return false; }
+	g_ownedLenses.push_back(*m);
+	return saveOwnedLenses();
+}
+
+bool dataManager::removeOwnedCamera(const std::string& name)
+{
+	ensureOwned();
+	auto it = std::remove_if(g_ownedCameras.begin(), g_ownedCameras.end(),
+	                         [&](const hgc::ownedCamera& oc) { return oc.cam.name == name; });
+	if (it == g_ownedCameras.end()) { return false; }
+	g_ownedCameras.erase(it, g_ownedCameras.end());
+	return saveOwnedCameras();
+}
+
+bool dataManager::removeOwnedLens(const std::string& name)
+{
+	ensureOwned();
+	auto it = std::remove_if(g_ownedLenses.begin(), g_ownedLenses.end(),
+	                         [&](const hgc::lens& l) { return l.name == name; });
+	if (it == g_ownedLenses.end()) { return false; }
+	g_ownedLenses.erase(it, g_ownedLenses.end());
+	return saveOwnedLenses();
+}
+
+bool dataManager::setOwnedCameraAutoInsert(const std::string& name, bool autoInsert)
+{
+	ensureOwned();
+	for (auto& oc : g_ownedCameras)
+	{
+		if (oc.cam.name == name) { oc.autoInsert = autoInsert; return saveOwnedCameras(); }
+	}
+	return false;
+}
+
+bool dataManager::findOwnedCamera(const std::string& name, hgc::camera& out)
+{
+	ensureOwned();
+	for (const auto& oc : g_ownedCameras) { if (oc.cam.name == name) { out = oc.cam; return true; } }
+	return false;
+}
+
+bool dataManager::findOwnedLens(const std::string& name, hgc::lens& out)
+{
+	ensureOwned();
+	for (const auto& l : g_ownedLenses) { if (l.name == name) { out = l; return true; } }
+	return false;
+}
+
+bool dataManager::recordConnectedCamera(const device& dev)
+{
+	ensureOwned();
+	// device.model 例 "Canon EOS R10"。所持/マスタは型番のみ("EOS R10")なのでメーカー名を除いて照合。
+	std::string key = stripMaker(dev.model, dev.manufacturer);
+	auto modelMatch = [&](const std::string& camModel, const std::string& camName) -> bool {
+		if (!camName.empty()  && (camName  == key || camName  == dev.model)) { return true; }
+		if (!camModel.empty() && (camModel == key || camModel == dev.model)) { return true; }
+		return false;
+	};
+
+	// 1) モデル一致の所持カメラへ serial/friendly を保存
+	for (auto& oc : g_ownedCameras)
+	{
+		if (modelMatch(oc.cam.model, oc.cam.name))
+		{
+			bool changed = false;
+			if (!dev.serialno.empty()   && oc.cam.serial   != dev.serialno)   { oc.cam.serial   = dev.serialno;   changed = true; }
+			if (!dev.friendName.empty() && oc.cam.friendly != dev.friendName) { oc.cam.friendly = dev.friendName; changed = true; }
+			return changed ? saveOwnedCameras() : true;
+		}
+	}
+
+	// 2) 一致が無ければ master(model)＋device から所持カメラを自動作成(1台運用で無設定OK)
+	hgc::ownedCamera oc;
+	const hgc::camera* m = matchMasterCamera(dev);
+	if (m) { oc.cam = *m; }
+	else
+	{
+		oc.cam.model = key.empty() ? dev.model : key;
+		oc.cam.name  = oc.cam.model;
+		oc.cam.maker = dev.manufacturer;
+	}
+	if (oc.cam.name.empty()) { oc.cam.name = dev.friendName.empty() ? dev.serialno : dev.friendName; }
+	oc.cam.serial   = dev.serialno;
+	oc.cam.friendly = dev.friendName;
+	g_ownedCameras.push_back(std::move(oc));
+	return saveOwnedCameras();
 }
 
 // ============================================================================

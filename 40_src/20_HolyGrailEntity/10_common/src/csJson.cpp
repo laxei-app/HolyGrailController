@@ -67,6 +67,7 @@ namespace csjson
 		json cameraToJson(const hgc::camera& c)
 		{
 			return json{ {"maker", c.maker}, {"model", c.model}, {"name", c.name},
+			             {"serial", c.serial}, {"friendly", c.friendly},
 			             {"sensorSize", c.sensorSize}, {"sensorSizeV", c.sensorSizeV}, {"sensorPixel", c.sensorPixel},
 			             {"isoList", c.isoList}, {"ssList", c.ssList} };
 		}
@@ -76,6 +77,8 @@ namespace csjson
 			c.maker       = j.value("maker", std::string());
 			c.model       = j.value("model", std::string());
 			c.name        = j.value("name", std::string());
+			c.serial      = getStr(j, "serial");
+			c.friendly    = getStr(j, "friendly");
 			c.sensorSize  = j.value("sensorSize", 0.0);
 			c.sensorSizeV = j.value("sensorSizeV", 0.0);
 			c.sensorPixel = j.value("sensorPixel", 0u);
@@ -331,5 +334,117 @@ namespace csjson
 		json j = json::parse(s, nullptr, false);
 		if (j.is_discarded() || !j.is_object()) { return nullptr; }
 		return ccmFromJsonObj(j);
+	}
+
+	// ========================================================================
+	//  所持機材(§5.5/5.6)・機材マスタ(§5.8/5.9)の JSON 変換
+	// ========================================================================
+
+	// --- 所持カメラ/所持レンズ(内部形式。/asset/ownedCameras.json・ownedLenses.json) ---
+	std::string ownedCamerasToJson(const std::vector<hgc::ownedCamera>& list)
+	{
+		json arr = json::array();
+		for (const auto& oc : list)
+		{
+			json o;
+			o["camera"]     = cameraToJson(oc.cam);	// JSONキーは "camera"(メンバは cam)
+			json ll = json::array();
+			for (const auto& l : oc.lensList) { ll.push_back(lensToJson(l)); }
+			o["lensList"]   = ll;
+			o["autoInsert"] = oc.autoInsert;
+			arr.push_back(o);
+		}
+		return arr.dump();
+	}
+
+	bool ownedCamerasFromJson(const std::string& s, std::vector<hgc::ownedCamera>& out)
+	{
+		out.clear();
+		json j = json::parse(s, nullptr, false);
+		if (j.is_discarded() || !j.is_array()) { return false; }
+		for (const auto& o : j)
+		{
+			if (!o.is_object()) { continue; }
+			hgc::ownedCamera oc;
+			if (o.contains("camera")) { oc.cam = cameraFromJson(o["camera"]); }
+			if (o.contains("lensList") && o["lensList"].is_array())
+			{
+				for (const auto& l : o["lensList"]) { oc.lensList.push_back(lensFromJson(l)); }
+			}
+			oc.autoInsert = o.value("autoInsert", false);
+			out.push_back(std::move(oc));
+		}
+		return true;
+	}
+
+	std::string ownedLensesToJson(const std::vector<hgc::lens>& list)
+	{
+		json arr = json::array();
+		for (const auto& l : list) { arr.push_back(lensToJson(l)); }
+		return arr.dump();
+	}
+
+	bool ownedLensesFromJson(const std::string& s, std::vector<hgc::lens>& out)
+	{
+		out.clear();
+		json j = json::parse(s, nullptr, false);
+		if (j.is_discarded() || !j.is_array()) { return false; }
+		for (const auto& l : j) { if (l.is_object()) { out.push_back(lensFromJson(l)); } }
+		return true;
+	}
+
+	// --- 機材マスタ(30_refer 由来の読取専用形式) ---
+	// camera_body_list: manufacture/name/pixel_h/pixel_w/sensor_h/sensor_w/iso(int配列)/ss(string配列)
+	bool camerasFromMasterJson(const std::string& s, std::vector<hgc::camera>& out)
+	{
+		out.clear();
+		json j = json::parse(s, nullptr, false);
+		if (j.is_discarded() || !j.is_array()) { return false; }
+		for (const auto& m : j)
+		{
+			if (!m.is_object()) { continue; }
+			hgc::camera c;
+			c.maker       = m.value("manufacture", std::string());
+			c.name        = m.value("name", std::string());
+			c.model       = c.name;	// マスタは型番のみ。model/name 共通とする
+			c.sensorSize  = m.value("sensor_w", 0.0);	// 横[mm]
+			c.sensorSizeV = m.value("sensor_h", 0.0);	// 縦[mm]
+			c.sensorPixel = m.value("pixel_w", 0u);		// 横[pixel]
+			if (m.contains("iso") && m["iso"].is_array())
+			{
+				for (const auto& v : m["iso"])
+				{
+					if (v.is_number_integer()) { c.isoList.push_back(std::to_string(v.get<long long>())); }
+					else if (v.is_string())    { c.isoList.push_back(v.get<std::string>()); }
+				}
+			}
+			if (m.contains("ss") && m["ss"].is_array())
+			{
+				for (const auto& v : m["ss"]) { if (v.is_string()) { c.ssList.push_back(v.get<std::string>()); } }
+			}
+			out.push_back(std::move(c));
+		}
+		return true;
+	}
+
+	// lenses_list: manufacture/mount/name/f_min/f_max/fnum_min_wide/fnum_min_tele/fnum_max/electronic_contacts
+	// 単一焦点・単一F値モデルへ縮約(焦点=f_min(広角端)、開放F=fnum_min_wide。ズーム/絞り域は後回し)。
+	bool lensesFromMasterJson(const std::string& s, std::vector<hgc::lens>& out)
+	{
+		out.clear();
+		json j = json::parse(s, nullptr, false);
+		if (j.is_discarded() || !j.is_array()) { return false; }
+		for (const auto& m : j)
+		{
+			if (!m.is_object()) { continue; }
+			hgc::lens l;
+			l.maker       = m.value("manufacture", std::string());
+			l.name        = m.value("name", std::string());
+			l.focalLength = m.value("f_min", 0.0);
+			l.fn          = m.value("fnum_min_wide", 0.0);
+			l.hasContact  = m.value("electronic_contacts", true);
+			out.push_back(std::move(l));
+		}
+		return true;
 	}
 }

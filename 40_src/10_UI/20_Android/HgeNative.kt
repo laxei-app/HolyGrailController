@@ -51,6 +51,19 @@ object HgeNative {
     external fun nativeSearchDevices(): Int
     external fun nativeConnectManual(host: String): Int
 
+    // --- 機材マスタ・所持機材(データ構造仕様書43 §5.5〜5.9 / §7.6) ---
+    external fun nativeGetMasterCameras(): String   // [{"camera":{...}},...]
+    external fun nativeGetMasterLenses(): String     // [{...},...]
+    external fun nativeGetOwnedCameras(): String
+    external fun nativeGetOwnedLenses(): String
+    external fun nativeAddOwnedCamera(name: String): Int
+    external fun nativeAddOwnedLens(name: String): Int
+    external fun nativeRemoveOwnedCamera(name: String): Int
+    external fun nativeRemoveOwnedLens(name: String): Int
+    external fun nativeSetOwnedCameraAutoInsert(name: String, autoInsert: Int): Int
+    external fun nativeSetPlanCamera(name: String): Int   // 所持→撮影計画へ反映し再生成
+    external fun nativeSetPlanLens(name: String): Int
+
     // --- エッジ端末(ETP §6) ---
     external fun nativeEdgeSearch(timeoutMs: Int): String           // edgeInfo の JSON 配列
     external fun nativeEdgeStart(host: String, port: Int, datetime: String, offMin: Int): Int

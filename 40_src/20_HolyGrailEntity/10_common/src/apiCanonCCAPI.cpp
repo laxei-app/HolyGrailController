@@ -105,6 +105,20 @@ errCode apiCanonCCAPI::initManual(class device& device)
     if (catlog.length() == 0)   { return ERR_HGC_API_LIST; }
 
     errCode err = analizeUseFunction(device, catlog);
+
+    // CCAPI の deviceinformation からモデル名/シリアルNo.等を補完する(UPnP記述子の代替)。
+    // 失敗しても手動接続自体は続行する(機能取得が済んでいれば撮影は可能)。
+    std::string info;
+    if (netThread::httpGet(device.urlAccess + "/ver100/deviceinformation", info) && info.length() > 0)
+    {
+        try {
+            auto j = json::parse(info);
+            if (j.contains("manufacturer")) { device.manufacturer = j.value("manufacturer", std::string()); }
+            if (j.contains("productname"))  { device.model        = j.value("productname", std::string()); }
+            if (j.contains("serialnumber")) { device.serialno     = j.value("serialnumber", std::string()); }
+        } catch (const std::exception&) { /* deviceinformation 無し/解析失敗は無視 */ }
+    }
+
     this->device = device;
     liveViewInfo.resize(1024 * 8);
     return err;

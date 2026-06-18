@@ -117,6 +117,26 @@ int32_t hge_getCameraAbilityJson(char* buf, int32_t* inoutLen);
 //  {"start":"MM/dd HH:mm","end":"MM/dd HH:mm"}(見つからなければ "--:--")
 int32_t hge_sunAltitudeTimes(int32_t altitudeDeg, char* buf, int32_t* inoutLen);
 
+// --- 機材マスタ・所持機材(データ構造仕様書43 §5.5〜5.9 / §7.6) ---
+// 機材マスタ(読取専用。インストール同梱)を JSON 配列で取得(バッファ規約)。
+//  cameras: [{"camera":{...}},...]  lenses: [{...},...]。UI の「追加リスト」表示用。
+int32_t hge_getMasterCamerasJson(char* buf, int32_t* inoutLen);
+int32_t hge_getMasterLensesJson(char* buf, int32_t* inoutLen);
+// 所持機材(ユーザー資産)を JSON 配列で取得(バッファ規約)。
+int32_t hge_getOwnedCamerasJson(char* buf, int32_t* inoutLen);
+int32_t hge_getOwnedLensesJson(char* buf, int32_t* inoutLen);
+// マスタ(名称一致)から所持へ追加して保存する。
+int32_t hge_addOwnedCamera(const char* name);
+int32_t hge_addOwnedLens(const char* name);
+// 所持から削除して保存する。
+int32_t hge_removeOwnedCamera(const char* name);
+int32_t hge_removeOwnedLens(const char* name);
+// 所持カメラの撮影計画への自動挿入フラグを設定して保存する(0/1)。
+int32_t hge_setOwnedCameraAutoInsert(const char* name, int32_t autoInsert);
+// 所持機材を撮影計画(cs)へ反映し、スケジュールを再生成して通知する。
+int32_t hge_setPlanCamera(const char* name);
+int32_t hge_setPlanLens(const char* name);
+
 // 現在の進捗スナップショットを JSON で取得(バッファ規約)。
 //  {"state","frame","total","remainSec","elapsedSec","ccm","iso","ss","fn"}
 //  エッジ端末が progress(get) 応答に使う。

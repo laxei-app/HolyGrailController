@@ -57,6 +57,8 @@ namespace hgc
 		std::string maker;				// メーカー名
 		std::string model;				// モデル名
 		std::string name;				// 表示名称
+		std::string serial;				// シリアルNo.(接続時に自動取得・保存。識別用)
+		std::string friendly;			// フレンドリ名(愛称。接続時に自動取得)
 		double   sensorSize  = 0.0;		// センサー横[mm]
 		double   sensorSizeV = 0.0;		// センサー縦[mm]
 		uint32_t sensorPixel = 0;		// センサー横[pixel]
@@ -72,6 +74,14 @@ namespace hgc
 		double focalLength = 0.0;	// 焦点距離[mm]
 		double fn = 0.0;			// 開放F値
 		bool   hasContact = true;	// 電子接点有無
+	};
+
+	// 5.5 所持カメラ(camera + 組み合わせるレンズ + 自動挿入)
+	struct ownedCamera
+	{
+		camera            cam;					// カメラ情報(JSONキーは "camera")
+		std::vector<lens> lensList;				// 組み合わせるレンズ(先頭が初期値)
+		bool              autoInsert = false;	// 撮影計画に自動的に挿入する
 	};
 
 	// 5.10 露出平滑化

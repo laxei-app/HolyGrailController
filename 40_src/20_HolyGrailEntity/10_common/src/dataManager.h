@@ -9,6 +9,9 @@
 #include "ccm.h"
 #include "cs.h"
 #include "astroSched.h"		// astro::ccmSet
+#include <vector>
+
+class device;	// 接続時のシリアル/フレンドリ自動保存に使う
 
 class dataManager
 {
@@ -34,6 +37,36 @@ public:
 	// name/place/camera/lens/interval/azimuth/elevation/landscape を設定する。
 	// start/end と events/ccmList は呼び出し側が設定する。
 	static void factoryFixedPlan(hgc::cs& plan);
+
+	// ========================================================================
+	//  機材マスタ・所持機材(データ構造仕様書43 §5.5〜5.9 / §7.6)
+	// ========================================================================
+	// --- 機材マスタ(読取専用。/master/cameras.json・lenses.json。インストール同梱) ---
+	// UI の「追加リスト」表示用 JSON(配列)。読込失敗時は出荷時フォールバック。
+	static std::string masterCamerasJson(void);
+	static std::string masterLensesJson(void);
+
+	// --- 所持機材(ユーザー資産。/asset/ownedCameras.json・ownedLenses.json) ---
+	static std::string ownedCamerasJson(void);
+	static std::string ownedLensesJson(void);
+	// マスタ(名称一致)から所持へ追加して保存する。return: 成功(追加 or 既存)。
+	static bool addOwnedCameraFromMaster(const std::string& name);
+	static bool addOwnedLensFromMaster(const std::string& name);
+	// 所持から削除して保存する。return: 成功(削除した)。
+	static bool removeOwnedCamera(const std::string& name);
+	static bool removeOwnedLens(const std::string& name);
+	// 所持カメラの撮影計画への自動挿入フラグを設定して保存する。
+	static bool setOwnedCameraAutoInsert(const std::string& name, bool autoInsert);
+
+	// --- 撮影計画への機材選択(所持から g_plan へ反映するのは UI/holyGrailEntity 側) ---
+	// 所持カメラ/レンズを名称で引く。見つからなければ false。
+	static bool findOwnedCamera(const std::string& name, hgc::camera& out);
+	static bool findOwnedLens(const std::string& name, hgc::lens& out);
+
+	// --- 接続時のシリアル/フレンドリ自動保存(§5.2拡張) ---
+	// モデル一致の所持カメラへ serial/friendly を保存。一致が無ければ
+	// master(model)＋device から所持カメラを自動作成して保存(1台運用で無設定OK)。
+	static bool recordConnectedCamera(const device& dev);
 
 	// --- 撮影計画の永続化(案A /plan、当面は単一ファイル plan.json) ---
 	// 撮影計画(cs)の自己完結JSONを /plan/plan.json へ保存する。

@@ -5,8 +5,10 @@
 
 #include "cs.h"
 #include "ccm.h"
+#include "hgcCommon.h"
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace csjson
 {
@@ -21,6 +23,16 @@ namespace csjson
 
 	// JSON 文字列から撮影制御方法 ccm を復元する。失敗時 nullptr。
 	std::shared_ptr<hgc::ccmBase> ccmFromJson(const std::string& s);
+
+	// --- 所持機材(§5.5/5.6)。内部形式(/asset/ownedCameras.json・ownedLenses.json) ---
+	std::string ownedCamerasToJson(const std::vector<hgc::ownedCamera>& list);
+	bool        ownedCamerasFromJson(const std::string& s, std::vector<hgc::ownedCamera>& out);
+	std::string ownedLensesToJson(const std::vector<hgc::lens>& list);
+	bool        ownedLensesFromJson(const std::string& s, std::vector<hgc::lens>& out);
+
+	// --- 機材マスタ(§5.8/5.9)。30_refer 由来の読取専用形式 → 内部 camera/lens へマップ ---
+	bool        camerasFromMasterJson(const std::string& s, std::vector<hgc::camera>& out);
+	bool        lensesFromMasterJson(const std::string& s, std::vector<hgc::lens>& out);
 }
 
 #endif // _CS_JSON_H_

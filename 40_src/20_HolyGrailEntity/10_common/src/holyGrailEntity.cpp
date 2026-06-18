@@ -315,6 +315,8 @@ namespace
 		}
 		notify(HGE_EV_DEVICE, devicesJson());
 		logCameraNet();
+		// 接続時にシリアル/フレンドリ名を所持カメラへ自動保存(無ければ自動作成。§5.2拡張)。
+		dataManager::recordConnectedCamera(g_devices[0]);
 		setState(HGE_ST_READY);
 		return ERR_HGC_OK;
 	}
@@ -346,6 +348,10 @@ namespace
 		// デバイス一覧を通知
 		notify(HGE_EV_DEVICE, devicesJson());
 		logCameraNet();
+
+		// 接続したカメラのシリアル/フレンドリ名を所持カメラへ自動保存(§5.2拡張)。
+		// モデル一致の所持カメラへ反映、無ければ master+device から自動作成(1台運用で無設定OK)。
+		dataManager::recordConnectedCamera(g_devices[0]);
 
 		// 撮影ループの通知配線
 		g_runner.setCallbacks(
@@ -482,6 +488,8 @@ int32_t hge_connectManual(const char* host)
 	}
 	notify(HGE_EV_DEVICE, devicesJson());
 	logCameraNet();
+	// 接続時にシリアル/フレンドリ名を所持カメラへ自動保存(無ければ自動作成。§5.2拡張)。
+	dataManager::recordConnectedCamera(g_devices[0]);
 	setState(HGE_ST_READY);
 	return ERR_HGC_OK;
 }
@@ -739,6 +747,100 @@ int32_t hge_sunAltitudeTimes(int32_t altitudeDeg, char* buf, int32_t* inoutLen)
 	if (buf == nullptr || *inoutLen < need) { *inoutLen = need; return ERR_HGC_BUF_SHORT; }
 	std::memcpy(buf, j.c_str(), need);
 	*inoutLen = need;
+	return ERR_HGC_OK;
+}
+
+// ============================================================================
+//  機材マスタ・所持機材(データ構造仕様書43 §5.5〜5.9 / §7.6)
+// ============================================================================
+// 文字列をバッファ規約で返す共通処理(内部リンケージ)。
+static int32_t copyOut(const std::string& s, char* buf, int32_t* inoutLen)
+{
+	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
+	int32_t need = static_cast<int32_t>(s.size()) + 1;
+	if (buf == nullptr || *inoutLen < need) { *inoutLen = need; return ERR_HGC_BUF_SHORT; }
+	std::memcpy(buf, s.c_str(), need);
+	*inoutLen = need;
+	return ERR_HGC_OK;
+}
+
+int32_t hge_getMasterCamerasJson(char* buf, int32_t* inoutLen)
+{
+	return copyOut(dataManager::masterCamerasJson(), buf, inoutLen);
+}
+
+int32_t hge_getMasterLensesJson(char* buf, int32_t* inoutLen)
+{
+	return copyOut(dataManager::masterLensesJson(), buf, inoutLen);
+}
+
+int32_t hge_getOwnedCamerasJson(char* buf, int32_t* inoutLen)
+{
+	return copyOut(dataManager::ownedCamerasJson(), buf, inoutLen);
+}
+
+int32_t hge_getOwnedLensesJson(char* buf, int32_t* inoutLen)
+{
+	return copyOut(dataManager::ownedLensesJson(), buf, inoutLen);
+}
+
+int32_t hge_addOwnedCamera(const char* name)
+{
+	if (name == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return dataManager::addOwnedCameraFromMaster(std::string(name)) ? ERR_HGC_OK : ERR_HGC_NO_ELEMENT;
+}
+
+int32_t hge_addOwnedLens(const char* name)
+{
+	if (name == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return dataManager::addOwnedLensFromMaster(std::string(name)) ? ERR_HGC_OK : ERR_HGC_NO_ELEMENT;
+}
+
+int32_t hge_removeOwnedCamera(const char* name)
+{
+	if (name == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return dataManager::removeOwnedCamera(std::string(name)) ? ERR_HGC_OK : ERR_HGC_NO_ELEMENT;
+}
+
+int32_t hge_removeOwnedLens(const char* name)
+{
+	if (name == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return dataManager::removeOwnedLens(std::string(name)) ? ERR_HGC_OK : ERR_HGC_NO_ELEMENT;
+}
+
+int32_t hge_setOwnedCameraAutoInsert(const char* name, int32_t autoInsert)
+{
+	if (name == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return dataManager::setOwnedCameraAutoInsert(std::string(name), autoInsert != 0) ? ERR_HGC_OK : ERR_HGC_NO_ELEMENT;
+}
+
+int32_t hge_setPlanCamera(const char* name)
+{
+	if (name == nullptr) { return ERR_HGC_INVALID_ARG; }
+	if (!g_planReady) { errCode e = loadFixedPlanImpl(); if (e != ERR_HGC_OK) { return e; } }
+	hgc::camera c;
+	if (!dataManager::findOwnedCamera(std::string(name), c)) { return ERR_HGC_NO_ELEMENT; }
+	g_plan.camera = c;
+	// センサーサイズ/画角が変わると太陽の画角侵入時刻が変わるためスケジュールを再生成する。
+	errCode e = astro::buildSchedule(g_plan, g_planCcm, g_offMin);
+	if (e != ERR_HGC_OK) { return e; }
+	buildScheduleJson();
+	notify(HGE_EV_SCHEDULE, g_schedJson);
+	return ERR_HGC_OK;
+}
+
+int32_t hge_setPlanLens(const char* name)
+{
+	if (name == nullptr) { return ERR_HGC_INVALID_ARG; }
+	if (!g_planReady) { errCode e = loadFixedPlanImpl(); if (e != ERR_HGC_OK) { return e; } }
+	hgc::lens l;
+	if (!dataManager::findOwnedLens(std::string(name), l)) { return ERR_HGC_NO_ELEMENT; }
+	g_plan.lens = l;
+	// 焦点距離が変わると画角が変わるためスケジュールを再生成する。
+	errCode e = astro::buildSchedule(g_plan, g_planCcm, g_offMin);
+	if (e != ERR_HGC_OK) { return e; }
+	buildScheduleJson();
+	notify(HGE_EV_SCHEDULE, g_schedJson);
 	return ERR_HGC_OK;
 }
 
