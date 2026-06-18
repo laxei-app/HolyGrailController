@@ -1,4 +1,4 @@
-#include "device.h"
+ï»¿#include "device.h"
 
 device::~device()
 {
@@ -9,22 +9,22 @@ device::~device()
 	}
 }
 
-// “à—e‚ðÁ‹Ž‚·‚é
+// å†…å®¹ã‚’æ¶ˆåŽ»ã™ã‚‹
 void device::clear(void)
 {
-	//deviceDiscovery ‚Ì“à—e
-	uuid.clear();			// uuidBˆêˆÓ‚ÉƒfƒoƒCƒX‚ðŒˆ‚ß‚é
-	location.clear();	// device ƒƒP[ƒVƒ‡ƒ“
+	//deviceDiscovery ã®å†…å®¹
+	uuid.clear();			// uuidã€‚ä¸€æ„ã«ãƒ‡ãƒã‚¤ã‚¹ã‚’æ±ºã‚ã‚‹
+	location.clear();	// device ãƒ­ã‚±ãƒ¼ã‚·ãƒ§ãƒ³
 
-	// ˆÈ‰ºƒfƒoƒCƒXƒfƒBƒXƒNƒŠƒvƒ^‚Ì“à—e
-	model.clear();			// ƒJƒƒ‰ƒ‚ƒfƒ‹–¼ "Canon EOS R10"
-	friendName.clear();		// ˆ¤Ì
-	manufacturer.clear();	// ’ñ‹ŸŒ³B"canon","sony"
-	serialno.clear();		// ƒVƒŠƒAƒ‹no.
+	// ä»¥ä¸‹ãƒ‡ãƒã‚¤ã‚¹ãƒ‡ã‚£ã‚¹ã‚¯ãƒªãƒ—ã‚¿ã®å†…å®¹
+	model.clear();			// ã‚«ãƒ¡ãƒ©ãƒ¢ãƒ‡ãƒ«å "Canon EOS R10"
+	friendName.clear();		// æ„›ç§°
+	manufacturer.clear();	// æä¾›å…ƒã€‚"canon","sony"
+	serialno.clear();		// ã‚·ãƒªã‚¢ãƒ«no.
 	urlbase.clear();		// url base
 	urlAccess.clear();		// access URL
 
-	// api ‚ðíœ
+	// api ã‚’å‰Šé™¤
 	if (this->apiBase == nullptr)
 	{
 		delete this->apiBase;

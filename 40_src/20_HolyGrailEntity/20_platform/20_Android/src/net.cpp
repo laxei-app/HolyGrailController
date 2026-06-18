@@ -267,6 +267,9 @@ namespace net
 		if (sock < 0) { return nullptr; }
 		setTimeout(sock, 1);
 
+		int reuse = 1;
+		setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+
 		sockaddr_in localAddr{};
 		localAddr.sin_family = AF_INET;
 		localAddr.sin_port = htons(0);
@@ -277,6 +280,18 @@ namespace net
 			close(sock);
 			return nullptr;
 		}
+
+		// マルチキャストの送信インターフェースを明示する。ソケットの bind(送信元IP)では
+		// マルチキャストの出口IFは決まらず、既定経路(携帯回線・別Wi-Fi等)へ出てしまうため、
+		// localIp の NIC を IP_MULTICAST_IF に設定して必ずカメラと同じLANへ M-SEARCH を出す。
+		if (!localIp.empty())
+		{
+			in_addr ifAddr{};
+			inet_pton(AF_INET, localIp.c_str(), &ifAddr);
+			setsockopt(sock, IPPROTO_IP, IP_MULTICAST_IF, &ifAddr, sizeof(ifAddr));
+		}
+		unsigned char ttl = 4;	// 同一サブネット想定だが念のため数ホップ許可
+		setsockopt(sock, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof(ttl));
 
 		sockaddr_in dest{};
 		dest.sin_family = AF_INET;
