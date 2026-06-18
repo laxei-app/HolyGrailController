@@ -58,6 +58,16 @@ public:
 	// 所持カメラの撮影計画への自動挿入フラグを設定して保存する。
 	static bool setOwnedCameraAutoInsert(const std::string& name, bool autoInsert);
 
+	// 所持カメラの詳細(全項目)を JSON で更新/新規作成して保存する。origName 一致を置換、
+	// 無ければ新規追加(マスタに無い手動カメラ)。json キー:
+	//  maker/model/name/friendly/serial/sensorSize/sensorSizeV/sensorPixel/
+	//  isoMin/isoMax/ssMin/ssMax(設定可能範囲。変更時は標準1/3段で再生成)/autoInsert/lensNames[]
+	static bool setOwnedCameraDetailJson(const std::string& origName, const std::string& json);
+
+	// 所持レンズの詳細を JSON で更新/新規作成して保存する。json キー:
+	//  maker/name/focalLength/fn(F最小=開放)/fnMax(F最大)/hasContact
+	static bool setOwnedLensDetailJson(const std::string& origName, const std::string& json);
+
 	// --- 撮影計画への機材選択(所持から g_plan へ反映するのは UI/holyGrailEntity 側) ---
 	// 所持カメラ/レンズを名称で引く。見つからなければ false。
 	static bool findOwnedCamera(const std::string& name, hgc::camera& out);

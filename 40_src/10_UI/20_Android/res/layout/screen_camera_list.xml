@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 620.カメラリスト(所持カメラ)。一覧表示・削除・自動挿入。新規追加で 622 へ。 -->
+<!-- 620.カメラリスト(所持カメラ)。上=一覧(タップ選択)/下=選択カメラの詳細。分割バーで上下比率を変更。 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
@@ -20,11 +20,25 @@
         <View android:layout_width="32dp" android:layout_height="32dp" />
     </LinearLayout>
 
-    <Button android:id="@+id/cameralist_add" android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:layout_margin="12dp" android:text="＋ 新規カメラ追加" />
-
-    <ScrollView android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+    <!-- 上: 一覧(高さは Kotlin で初期1/4に設定。分割バーで可変) -->
+    <ScrollView android:id="@+id/cameralist_listScroll"
+        android:layout_width="match_parent" android:layout_height="120dp">
         <LinearLayout android:id="@+id/cameralist_container"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:padding="8dp" />
+    </ScrollView>
+
+    <!-- 分割バー(ドラッグで上下比率を変更) -->
+    <FrameLayout android:id="@+id/cameralist_divider"
+        android:layout_width="match_parent" android:layout_height="26dp"
+        android:background="#ECEFF1" android:clickable="true" android:focusable="true">
+        <View android:layout_width="48dp" android:layout_height="5dp" android:layout_gravity="center"
+            android:background="@drawable/divider_handle" />
+    </FrameLayout>
+
+    <!-- 下: 選択カメラの詳細(残り全部) -->
+    <ScrollView android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+        <LinearLayout android:id="@+id/cameralist_detail"
             android:layout_width="match_parent" android:layout_height="wrap_content"
             android:orientation="vertical" android:padding="12dp" />
     </ScrollView>

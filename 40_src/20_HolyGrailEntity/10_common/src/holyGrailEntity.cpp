@@ -208,6 +208,7 @@ namespace
 			if (i) { dj += ","; }
 			const auto& d = g_devices[i];
 			dj += "{\"uuid\":\"" + jesc(d.uuid) + "\",\"model\":\"" + jesc(d.model) +
+			      "\",\"friendly\":\"" + jesc(d.friendName) +
 			      "\",\"manufacturer\":\"" + jesc(d.manufacturer) +
 			      "\",\"serialno\":\"" + jesc(d.serialno) + "\"}";
 		}
@@ -683,9 +684,10 @@ int32_t hge_getExpoValuesJson(char* buf, int32_t* inoutLen)
 	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
 	if (!g_planReady) { loadFixedPlanImpl(); }
 	double fmin = (g_plan.lens.fn > 0.0) ? g_plan.lens.fn : 1.0;
+	double fmax = (g_plan.lens.fnMax > 0.0) ? g_plan.lens.fnMax : 32.0;	// レンズのF最大があれば使う
 	auto iso = expo::standardValues(expo::expoKind::iso);
 	auto ss  = expo::standardValues(expo::expoKind::ss);
-	auto fn  = expo::standardFn(fmin, 32.0);
+	auto fn  = expo::standardFn(fmin, fmax);
 	auto arr = [](const std::vector<std::string>& v) {
 		std::string s = "[";
 		for (size_t i = 0; i < v.size(); ++i) { if (i) { s += ","; } s += "\"" + v[i] + "\""; }
@@ -842,6 +844,49 @@ int32_t hge_setPlanLens(const char* name)
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
 	return ERR_HGC_OK;
+}
+
+int32_t hge_setOwnedCameraDetail(const char* origName, const char* json)
+{
+	if (origName == nullptr || json == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return dataManager::setOwnedCameraDetailJson(std::string(origName), std::string(json)) ? ERR_HGC_OK : ERR_HGC_JSON_PARSE;
+}
+
+int32_t hge_setOwnedLensDetail(const char* origName, const char* json)
+{
+	if (origName == nullptr || json == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return dataManager::setOwnedLensDetailJson(std::string(origName), std::string(json)) ? ERR_HGC_OK : ERR_HGC_JSON_PARSE;
+}
+
+// 接続カメラ検索(同期)。検出した全カメラを g_devices に格納し、一覧 JSON を返す。
+//  [{"model":..,"friendly":..,"serial":..}, ...]。コンテキストメニューの「接続カメラ検索」用。
+int32_t hge_searchDevicesListJson(char* buf, int32_t* inoutLen)
+{
+	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
+	// バッファ規約では buf==null(サイズ問い合わせ)→ buf!=null(本取得)の順で2回呼ばれる。
+	// 検索は重いので初回(サイズ問い合わせ)だけ実行し、結果(g_devices)を両呼び出しで共有する。
+	if (buf == nullptr)
+	{
+		g_devices.clear();
+		cameraController::detectTarget(g_devices);
+	}
+	std::string s = "[";
+	for (size_t i = 0; i < g_devices.size(); ++i)
+	{
+		if (i) { s += ","; }
+		const auto& d = g_devices[i];
+		s += "{\"model\":\"" + jesc(d.model) + "\",\"friendly\":\"" + jesc(d.friendName) +
+		     "\",\"serial\":\"" + jesc(d.serialno) + "\"}";
+	}
+	s += "]";
+	return copyOut(s, buf, inoutLen);
+}
+
+// 検索で見つかったカメラ(g_devices[index])を所持カメラへ追加/更新する。
+int32_t hge_addOwnedDetected(int32_t index)
+{
+	if (index < 0 || static_cast<size_t>(index) >= g_devices.size()) { return ERR_HGC_NO_ELEMENT; }
+	return dataManager::recordConnectedCamera(g_devices[index]) ? ERR_HGC_OK : ERR_HGC_INVALID_STATE;
 }
 
 int32_t hge_getProgressJson(char* buf, int32_t* inoutLen)

@@ -290,6 +290,36 @@ JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeSetPlanLens(JNIEnv* env, jobject /*thiz*/, jstring name)
 { return callNameCmd(env, name, hge_setPlanLens); }
 
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetOwnedCameraDetail(JNIEnv* env, jobject /*thiz*/, jstring orig, jstring json)
+{
+	const char* o = env->GetStringUTFChars(orig, nullptr);
+	const char* j = env->GetStringUTFChars(json, nullptr);
+	jint r = hge_setOwnedCameraDetail(o ? o : "", j ? j : "");
+	env->ReleaseStringUTFChars(orig, o);
+	env->ReleaseStringUTFChars(json, j);
+	return r;
+}
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetOwnedLensDetail(JNIEnv* env, jobject /*thiz*/, jstring orig, jstring json)
+{
+	const char* o = env->GetStringUTFChars(orig, nullptr);
+	const char* j = env->GetStringUTFChars(json, nullptr);
+	jint r = hge_setOwnedLensDetail(o ? o : "", j ? j : "");
+	env->ReleaseStringUTFChars(orig, o);
+	env->ReleaseStringUTFChars(json, j);
+	return r;
+}
+
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSearchDevicesList(JNIEnv* env, jobject /*thiz*/)
+{ return callBufGetter(env, hge_searchDevicesListJson); }
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeAddOwnedDetected(JNIEnv* /*env*/, jobject /*thiz*/, jint index)
+{ return hge_addOwnedDetected(index); }
+
 // listener(HgeListener) を登録/解除する。
 JNIEXPORT void JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeSetListener(JNIEnv* env, jobject /*thiz*/, jobject listener)

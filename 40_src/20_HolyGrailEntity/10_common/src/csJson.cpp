@@ -90,7 +90,7 @@ namespace csjson
 		json lensToJson(const hgc::lens& l)
 		{
 			return json{ {"maker", l.maker}, {"name", l.name}, {"focalLength", l.focalLength},
-			             {"fn", l.fn}, {"hasContact", l.hasContact} };
+			             {"fn", l.fn}, {"fnMax", l.fnMax}, {"hasContact", l.hasContact} };
 		}
 		hgc::lens lensFromJson(const json& j)
 		{
@@ -99,6 +99,7 @@ namespace csjson
 			l.name        = j.value("name", std::string());
 			l.focalLength = j.value("focalLength", 0.0);
 			l.fn          = j.value("fn", 0.0);
+			l.fnMax       = j.value("fnMax", 0.0);
 			l.hasContact  = j.value("hasContact", true);
 			return l;
 		}
@@ -442,6 +443,7 @@ namespace csjson
 			l.name        = m.value("name", std::string());
 			l.focalLength = m.value("f_min", 0.0);
 			l.fn          = m.value("fnum_min_wide", 0.0);
+			l.fnMax       = m.value("fnum_max", 0.0);
 			l.hasContact  = m.value("electronic_contacts", true);
 			out.push_back(std::move(l));
 		}

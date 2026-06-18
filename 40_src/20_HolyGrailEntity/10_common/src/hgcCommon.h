@@ -72,7 +72,8 @@ namespace hgc
 		std::string maker;			// メーカー名
 		std::string name;			// レンズ名称
 		double focalLength = 0.0;	// 焦点距離[mm]
-		double fn = 0.0;			// 開放F値
+		double fn = 0.0;			// 開放F値(F最小)
+		double fnMax = 0.0;			// 最小絞り(F最大)。0=未設定
 		bool   hasContact = true;	// 電子接点有無
 	};
 

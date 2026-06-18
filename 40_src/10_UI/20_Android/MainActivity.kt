@@ -8,6 +8,8 @@ import android.graphics.Typeface
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.InputType
+import android.widget.PopupMenu
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -245,12 +247,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<ImageView>(R.id.cmenu_back).setOnClickListener { flipper.displayedChild = 5 }
         // 620 所持カメラ / 622 カメラ追加(マスタ)
         findViewById<ImageView>(R.id.cameralist_back).setOnClickListener { flipper.displayedChild = 5 }
-        findViewById<Button>(R.id.cameralist_add).setOnClickListener { openCameraAdd() }
         findViewById<ImageView>(R.id.cameraadd_back).setOnClickListener { openCameraList() }
+        findViewById<Button>(R.id.cameraadd_addsel).setOnClickListener { addCheckedCameras() }
+        setupDivider(R.id.cameralist_divider, R.id.cameralist_listScroll)
         // 630 所持レンズ / 632 レンズ追加(マスタ)
         findViewById<ImageView>(R.id.lenslist_back).setOnClickListener { flipper.displayedChild = 5 }
-        findViewById<Button>(R.id.lenslist_add).setOnClickListener { openLensAdd() }
         findViewById<ImageView>(R.id.lensadd_back).setOnClickListener { openLensList() }
+        findViewById<Button>(R.id.lensadd_addsel).setOnClickListener { addCheckedLenses() }
+        setupDivider(R.id.lenslist_divider, R.id.lenslist_listScroll)
         // 撮影計画(330)のカメラ/レンズをタップで所持から選択する。
         cameraText.setOnClickListener { choosePlanCamera() }
         lensText.setOnClickListener { choosePlanLens() }
@@ -399,134 +403,428 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
     }
 
-    private fun openCameraList() { buildCameraList(); flipper.displayedChild = 6 }
-    private fun openCameraAdd()  { buildCameraAdd();  flipper.displayedChild = 7 }
-    private fun openLensList()   { buildLensList();   flipper.displayedChild = 8 }
-    private fun openLensAdd()    { buildLensAdd();    flipper.displayedChild = 9 }
+    // --- 選択状態と詳細編集の参照 ---
+    private var selCamera: String? = null               // 620 選択中の所持カメラ名
+    private var selLens: String? = null                 // 630 選択中の所持レンズ名
+    private val camFields = HashMap<String, EditText>()  // カメラ詳細の入力欄
+    private var camAutoInsert: CheckBox? = null
+    private val camLensNames = ArrayList<String>()       // 組み合わせるレンズ(順序=先頭が初期値)
+    private val lensFields = HashMap<String, EditText>()
+    private var lensContact: CheckBox? = null
+    private val checkedCamAdd = LinkedHashSet<String>()  // 622 チェック中
+    private val checkedLensAdd = LinkedHashSet<String>() // 632 チェック中
+    private val expandedMakers = HashSet<String>()       // 632 展開中メーカー
 
     private fun camArray(json: String): JSONArray = try { JSONArray(json) } catch (e: Exception) { JSONArray() }
 
-    // 行レイアウト(タイトル＋サブ＋右ボタン)を作る共通処理。
-    private fun gearRow(title: String, sub: String, btnText: String, onBtn: () -> Unit): View {
-        val row = LinearLayout(this)
-        row.orientation = LinearLayout.HORIZONTAL
-        row.gravity = Gravity.CENTER_VERTICAL
-        row.setPadding(dp(8), dp(10), dp(8), dp(10))
-        val txt = LinearLayout(this)
-        txt.orientation = LinearLayout.VERTICAL
-        txt.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        val t = TextView(this); t.text = title; t.textSize = 16f; t.setTypeface(null, Typeface.BOLD)
-        txt.addView(t)
-        if (sub.isNotEmpty()) {
-            val s = TextView(this); s.text = sub; s.textSize = 12f; s.setTextColor(Color.GRAY)
-            txt.addView(s)
+    private fun openCameraList() { buildCameraList(); buildCameraDetail(); setInitialSplit(R.id.cameralist_listScroll, R.id.cameralist_container); flipper.displayedChild = 6 }
+    private fun openCameraAdd()  { checkedCamAdd.clear(); buildCameraAdd(); flipper.displayedChild = 7 }
+    private fun openLensList()   { buildLensList(); buildLensDetail(); setInitialSplit(R.id.lenslist_listScroll, R.id.lenslist_container); flipper.displayedChild = 8 }
+    private fun openLensAdd()    { checkedLensAdd.clear(); expandedMakers.clear(); buildLensAdd(); flipper.displayedChild = 9 }
+
+    // 分割バーの初期高さ(上=リスト)。リストが短ければ内容ぴったりまで上に詰め、
+    // 多い場合(内容が画面の1/4超)は1/4で止める。ほとんどは1件なので上寄せになる。
+    private fun setInitialSplit(listId: Int, containerId: Int) {
+        val v = findViewById<View>(listId)
+        val c = findViewById<View>(containerId)
+        v.post {
+            val quarter = resources.displayMetrics.heightPixels / 4
+            val content = c.height
+            val h = if (content in 1 until quarter) content else quarter
+            val lp = v.layoutParams; lp.height = h; v.layoutParams = lp
         }
-        row.addView(txt)
-        val b = Button(this); b.text = btnText
-        b.setOnClickListener { onBtn() }
-        row.addView(b)
-        return row
     }
 
-    private fun divider(): View {
+    // 分割バーのドラッグで上(リスト)の高さを変える。上限=1行が見える、下限=下から1/4。
+    private fun setupDivider(dividerId: Int, listId: Int) {
+        val divider = findViewById<View>(dividerId)
+        val list = findViewById<View>(listId)
+        var startY = 0f; var startH = 0
+        divider.setOnTouchListener { _, ev ->
+            when (ev.action) {
+                MotionEvent.ACTION_DOWN -> { startY = ev.rawY; startH = list.height; true }
+                MotionEvent.ACTION_MOVE -> {
+                    val root = list.parent as ViewGroup
+                    val headerH = root.getChildAt(0).height
+                    val minH = dp(48)                                                   // 1行が見える
+                    val maxH = root.height - headerH - divider.height - resources.displayMetrics.heightPixels / 4
+                    var h = (startH + (ev.rawY - startY)).toInt()
+                    if (h < minH) h = minH
+                    if (maxH > minH && h > maxH) h = maxH
+                    val lp = list.layoutParams; lp.height = h; list.layoutParams = lp
+                    true
+                }
+                else -> true
+            }
+        }
+    }
+
+    private fun linkText(text: String, onClick: () -> Unit): TextView {
+        val tv = TextView(this); tv.text = text; tv.textSize = 15f
+        tv.setTextColor(Color.parseColor("#1565C0"))
+        tv.setPadding(dp(4), dp(10), dp(4), dp(10))
+        tv.setOnClickListener { onClick() }
+        return tv
+    }
+
+    private fun thinDivider(): View {
         val v = View(this)
         v.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1)
         v.setBackgroundColor(0xFFDDDDDD.toInt())
         return v
     }
 
+    // 一覧の1行(タップで選択。右にコンテキストメニュー「⋮」)。
+    private fun listRow(title: String, sub: String, selected: Boolean, onSelect: () -> Unit,
+                        menuItems: List<Pair<String, () -> Unit>>): View {
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER_VERTICAL
+        row.setPadding(dp(6), dp(8), dp(6), dp(8))
+        val txt = LinearLayout(this); txt.orientation = LinearLayout.VERTICAL
+        txt.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        val t = TextView(this); t.text = title
+        t.textSize = if (selected) 19f else 16f
+        t.setTypeface(null, if (selected) Typeface.BOLD else Typeface.NORMAL)
+        t.setTextColor(if (selected) Color.BLACK else Color.parseColor("#888888"))
+        txt.addView(t)
+        if (sub.isNotEmpty()) { val s = TextView(this); s.text = sub; s.textSize = 12f; s.setTextColor(Color.GRAY); txt.addView(s) }
+        txt.setOnClickListener { onSelect() }
+        row.addView(txt)
+        if (menuItems.isNotEmpty()) {
+            val btn = Button(this); btn.text = "⋮"; btn.textSize = 18f
+            btn.setPadding(dp(8), 0, dp(8), 0)
+            btn.minWidth = dp(44); btn.minimumWidth = dp(44)
+            btn.setOnClickListener { anchor ->
+                val pm = PopupMenu(this, anchor)
+                menuItems.forEachIndexed { i, mi -> pm.menu.add(0, i, i, mi.first) }
+                pm.setOnMenuItemClickListener { mi -> menuItems[mi.itemId].second(); true }
+                pm.show()
+            }
+            row.addView(btn)
+        }
+        return row
+    }
+
+    // ---------- 620 所持カメラ ----------
     private fun buildCameraList() {
         val box = findViewById<LinearLayout>(R.id.cameralist_container)
         box.removeAllViews()
         val arr = camArray(HgeNative.nativeGetOwnedCameras())
-        if (arr.length() == 0) {
-            val tv = TextView(this); tv.text = "所持カメラがありません。\n「＋ 新規カメラ追加」から登録してください。\n(カメラ接続時にも自動で登録されます)"
-            tv.setPadding(dp(8), dp(16), dp(8), dp(16)); box.addView(tv)
-            return
-        }
+        val names = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optJSONObject("camera")?.optString("name") }
+        if (selCamera == null || selCamera !in names) selCamera = names.firstOrNull()
         for (i in 0 until arr.length()) {
-            val oc = arr.optJSONObject(i) ?: continue
-            val cam = oc.optJSONObject("camera") ?: continue
+            val cam = arr.optJSONObject(i)?.optJSONObject("camera") ?: continue
             val name = cam.optString("name")
-            val serial = cam.optString("serial")
-            val friendly = cam.optString("friendly")
             val parts = mutableListOf<String>()
-            if (friendly.isNotEmpty()) parts.add("愛称: $friendly")
-            if (serial.isNotEmpty()) parts.add("S/N: $serial")
+            if (cam.optString("friendly").isNotEmpty()) parts.add("愛称:${cam.optString("friendly")}")
+            if (cam.optString("serial").isNotEmpty()) parts.add("S/N:${cam.optString("serial")}")
             val sub = if (parts.isEmpty()) cam.optString("maker") else parts.joinToString("  ")
-            box.addView(gearRow(name, sub, "削除") {
-                Thread {
-                    HgeNative.nativeRemoveOwnedCamera(name)
-                    runOnUiThread { buildCameraList() }
-                }.start()
-            })
-            box.addView(divider())
+            box.addView(listRow(name, sub, name == selCamera,
+                onSelect = { selCamera = name; buildCameraList(); buildCameraDetail() },
+                menuItems = listOf(
+                    "削除" to {
+                        Thread { HgeNative.nativeRemoveOwnedCamera(name)
+                            runOnUiThread { if (selCamera == name) selCamera = null; buildCameraList(); buildCameraDetail() } }.start()
+                    },
+                    "接続カメラ検索" to { searchAndAddCameras() }
+                )))
+            box.addView(thinDivider())
         }
+        box.addView(linkText("＋ 新規カメラ追加") { openCameraAdd() })
     }
 
+    private fun arrMinMax(a: JSONArray?): Pair<String, String> {
+        if (a == null || a.length() == 0) return Pair("", "")
+        val lo = a.optString(0)
+        var hi = ""
+        for (i in a.length() - 1 downTo 0) { val v = a.optString(i); if (v != "Bulb") { hi = v; break } }
+        return Pair(lo, hi)
+    }
+
+    private fun buildCameraDetail() {
+        val box = findViewById<LinearLayout>(R.id.cameralist_detail)
+        box.removeAllViews(); camFields.clear(); camAutoInsert = null; camLensNames.clear()
+        buildingLens = false
+        val sel = selCamera
+        if (sel == null) {
+            val tv = TextView(this); tv.text = "カメラを選択してください"; tv.setPadding(dp(4), dp(16), dp(4), dp(16)); box.addView(tv); return
+        }
+        val arr = camArray(HgeNative.nativeGetOwnedCameras())
+        var cam: JSONObject? = null
+        var ocObj: JSONObject? = null
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            if (o.optJSONObject("camera")?.optString("name") == sel) { cam = o.optJSONObject("camera"); ocObj = o; break }
+        }
+        if (cam == null) { val tv = TextView(this); tv.text = "(データなし)"; box.addView(tv); return }
+        box.addView(editRow("メーカー", "maker", cam.optString("maker")))
+        box.addView(editRow("モデル", "model", cam.optString("model")))
+        box.addView(editRow("名称", "name", cam.optString("name")))
+        box.addView(editRow("愛称", "friendly", cam.optString("friendly")))
+        box.addView(editRow("シリアルNo.", "serial", cam.optString("serial")))
+        box.addView(editRow2("センサーサイズ", "sensorSize", cam.optDouble("sensorSize", 0.0).toString(),
+            "sensorSizeV", cam.optDouble("sensorSizeV", 0.0).toString(), "×", "mm", true))
+        box.addView(editRow("センサーpixel(横)", "sensorPixel", cam.optInt("sensorPixel", 0).toString(), true))
+        val iso = arrMinMax(cam.optJSONArray("isoList"))
+        box.addView(editRow2("ISO感度", "isoMin", iso.first, "isoMax", iso.second, "〜", "", false))
+        val ss = arrMinMax(cam.optJSONArray("ssList"))
+        box.addView(editRow2("シャッター速度", "ssMin", ss.first, "ssMax", ss.second, "〜", "", false))
+        val cb = CheckBox(this); cb.text = "撮影計画の初期値にする"; cb.isChecked = ocObj?.optBoolean("autoInsert", false) ?: false
+        camAutoInsert = cb; box.addView(cb)
+
+        // 組み合わせるレンズ(先頭=初期値)
+        box.addView(thinDivider())
+        val hdr = TextView(this); hdr.text = "組み合わせるレンズ(先頭が初期値)"; hdr.textSize = 13f; hdr.setTextColor(Color.GRAY)
+        hdr.setPadding(0, dp(8), 0, dp(4)); box.addView(hdr)
+        ocObj?.optJSONArray("lensList")?.let { ll -> for (i in 0 until ll.length()) ll.optJSONObject(i)?.optString("name")?.let { camLensNames.add(it) } }
+        renderCamLensRows(box)
+
+        val save = Button(this); save.text = "保存"; save.setOnClickListener { saveCameraDetail() }
+        box.addView(save)
+    }
+
+    private fun renderCamLensRows(box: LinearLayout) {
+        // 既存のレンズ行とリンクは末尾の保存ボタン手前に作るため、毎回 detail を作り直す方針。
+        for (idx in camLensNames.indices) {
+            val nm = camLensNames[idx]
+            val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL; row.gravity = Gravity.CENTER_VERTICAL
+            val up = Button(this); up.text = "▲"; up.setPadding(dp(6),0,dp(6),0); up.minWidth = dp(40)
+            up.isEnabled = idx > 0
+            up.setOnClickListener { val t = camLensNames[idx-1]; camLensNames[idx-1] = camLensNames[idx]; camLensNames[idx] = t; saveCameraDetail() }
+            val dn = Button(this); dn.text = "▼"; dn.setPadding(dp(6),0,dp(6),0); dn.minWidth = dp(40)
+            dn.isEnabled = idx < camLensNames.size - 1
+            dn.setOnClickListener { val t = camLensNames[idx+1]; camLensNames[idx+1] = camLensNames[idx]; camLensNames[idx] = t; saveCameraDetail() }
+            val tv = TextView(this); tv.text = nm; tv.textSize = 14f
+            tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            val menu = Button(this); menu.text = "⋮"; menu.textSize = 18f; menu.minWidth = dp(44)
+            menu.setOnClickListener { anchor ->
+                val pm = PopupMenu(this, anchor); pm.menu.add("削除")
+                pm.setOnMenuItemClickListener { camLensNames.removeAt(idx); saveCameraDetail(); true }; pm.show()
+            }
+            row.addView(up); row.addView(dn); row.addView(tv); row.addView(menu)
+            box.addView(row)
+        }
+        box.addView(linkText("＋ 新規レンズ追加") { addLensToCamera() })
+    }
+
+    private fun addLensToCamera() {
+        val arr = camArray(HgeNative.nativeGetOwnedLenses())
+        val names = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("name") }
+        if (names.isEmpty()) { Toast.makeText(this, "所持レンズがありません。先に「所持レンズ」で登録してください", Toast.LENGTH_SHORT).show(); return }
+        val checks = BooleanArray(names.size) { names[it] in camLensNames }
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("組み合わせるレンズを選択")
+            .setMultiChoiceItems(names.toTypedArray(), checks) { _, which, isChecked -> checks[which] = isChecked }
+            .setPositiveButton("OK") { _, _ ->
+                for (i in names.indices) { if (checks[i] && names[i] !in camLensNames) camLensNames.add(names[i]) }
+                // チェックを外したものは除外
+                camLensNames.retainAll { nm -> val ix = names.indexOf(nm); ix < 0 || checks[ix] }
+                saveCameraDetail()
+            }
+            .setNegativeButton("キャンセル", null).show()
+    }
+
+    private fun saveCameraDetail() {
+        val orig = selCamera ?: return
+        val o = JSONObject()
+        for ((k, et) in camFields) {
+            when (k) {
+                "sensorSize", "sensorSizeV" -> o.put(k, et.text.toString().toDoubleOrNull() ?: 0.0)
+                "sensorPixel" -> o.put(k, et.text.toString().toIntOrNull() ?: 0)
+                else -> o.put(k, et.text.toString())
+            }
+        }
+        o.put("autoInsert", camAutoInsert?.isChecked ?: false)
+        val ln = JSONArray(); camLensNames.forEach { ln.put(it) }; o.put("lensNames", ln)
+        val newName = o.optString("name", orig)
+        Thread {
+            HgeNative.nativeSetOwnedCameraDetail(orig, o.toString())
+            runOnUiThread { selCamera = if (newName.isNotEmpty()) newName else orig; buildCameraList(); buildCameraDetail() }
+        }.start()
+    }
+
+    // ---------- 622 カメラ追加(マスタ。チェックで複数追加) ----------
     private fun buildCameraAdd() {
         val box = findViewById<LinearLayout>(R.id.cameraadd_container)
         box.removeAllViews()
         val arr = camArray(HgeNative.nativeGetMasterCameras())
         for (i in 0 until arr.length()) {
-            val oc = arr.optJSONObject(i) ?: continue
-            val cam = oc.optJSONObject("camera") ?: continue
+            val cam = arr.optJSONObject(i)?.optJSONObject("camera") ?: continue
             val name = cam.optString("name")
-            val maker = cam.optString("maker")
-            box.addView(gearRow(name, maker, "追加") {
-                Thread {
-                    val r = HgeNative.nativeAddOwnedCamera(name)
-                    runOnUiThread {
-                        Toast.makeText(this, if (r == 0) "$name を追加しました" else "追加に失敗しました", Toast.LENGTH_SHORT).show()
-                    }
-                }.start()
-            })
-            box.addView(divider())
+            val cbx = CheckBox(this); cbx.text = "$name  (${cam.optString("maker")})"
+            cbx.isChecked = name in checkedCamAdd
+            cbx.setOnCheckedChangeListener { _, c -> if (c) checkedCamAdd.add(name) else checkedCamAdd.remove(name) }
+            box.addView(cbx)
         }
     }
 
+    private fun addCheckedCameras() {
+        if (checkedCamAdd.isEmpty()) { Toast.makeText(this, "追加するカメラを選んでください", Toast.LENGTH_SHORT).show(); return }
+        val sel = ArrayList(checkedCamAdd)
+        Thread {
+            sel.forEach { HgeNative.nativeAddOwnedCamera(it) }
+            runOnUiThread { Toast.makeText(this, "${sel.size}台を追加しました", Toast.LENGTH_SHORT).show(); openCameraList() }
+        }.start()
+    }
+
+    // ---------- 630 所持レンズ ----------
     private fun buildLensList() {
         val box = findViewById<LinearLayout>(R.id.lenslist_container)
         box.removeAllViews()
         val arr = camArray(HgeNative.nativeGetOwnedLenses())
-        if (arr.length() == 0) {
-            val tv = TextView(this); tv.text = "所持レンズがありません。\n「＋ 新規レンズ追加」から登録してください。"
-            tv.setPadding(dp(8), dp(16), dp(8), dp(16)); box.addView(tv)
-            return
-        }
+        val names = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("name") }
+        if (selLens == null || selLens !in names) selLens = names.firstOrNull()
         for (i in 0 until arr.length()) {
             val l = arr.optJSONObject(i) ?: continue
             val name = l.optString("name")
             val sub = "${l.optString("maker")}  ${l.optDouble("focalLength", 0.0).toInt()}mm  F${l.optDouble("fn", 0.0)}"
-            box.addView(gearRow(name, sub, "削除") {
-                Thread {
-                    HgeNative.nativeRemoveOwnedLens(name)
-                    runOnUiThread { buildLensList() }
-                }.start()
-            })
-            box.addView(divider())
+            box.addView(listRow(name, sub, name == selLens,
+                onSelect = { selLens = name; buildLensList(); buildLensDetail() },
+                menuItems = listOf("削除" to {
+                    Thread { HgeNative.nativeRemoveOwnedLens(name)
+                        runOnUiThread { if (selLens == name) selLens = null; buildLensList(); buildLensDetail() } }.start()
+                })))
+            box.addView(thinDivider())
         }
+        box.addView(linkText("＋ 新規レンズ追加") { openLensAdd() })
     }
 
+    private fun buildLensDetail() {
+        val box = findViewById<LinearLayout>(R.id.lenslist_detail)
+        box.removeAllViews(); lensFields.clear(); lensContact = null
+        buildingLens = true
+        val sel = selLens
+        if (sel == null) { val tv = TextView(this); tv.text = "レンズを選択してください"; tv.setPadding(dp(4), dp(16), dp(4), dp(16)); box.addView(tv); return }
+        val arr = camArray(HgeNative.nativeGetOwnedLenses())
+        var l: JSONObject? = null
+        for (i in 0 until arr.length()) { val o = arr.optJSONObject(i) ?: continue; if (o.optString("name") == sel) { l = o; break } }
+        if (l == null) { val tv = TextView(this); tv.text = "(データなし)"; box.addView(tv); return }
+        box.addView(editRow("メーカー", "maker", l.optString("maker")))
+        box.addView(editRow("モデル", "name", l.optString("name")))
+        val cb = CheckBox(this); cb.text = "電子接点あり"; cb.isChecked = l.optBoolean("hasContact", true); lensContact = cb; box.addView(cb)
+        box.addView(editRow2("F値", "fn", l.optDouble("fn", 0.0).toString(), "fnMax", l.optDouble("fnMax", 0.0).toString(), "〜", "", true))
+        box.addView(editRow("焦点距離", "focalLength", l.optDouble("focalLength", 0.0).toString(), true))
+        val note = TextView(this); note.text = "ズームの場合は撮影計画実行時の焦点距離を設定してください。"
+        note.textSize = 12f; note.setTextColor(Color.GRAY); note.setPadding(0, dp(8), 0, dp(8)); box.addView(note)
+        val save = Button(this); save.text = "保存"; save.setOnClickListener { saveLensDetail() }; box.addView(save)
+    }
+
+    private fun saveLensDetail() {
+        val orig = selLens ?: return
+        val o = JSONObject()
+        for ((k, et) in lensFields) {
+            when (k) {
+                "fn", "fnMax", "focalLength" -> o.put(k, et.text.toString().toDoubleOrNull() ?: 0.0)
+                else -> o.put(k, et.text.toString())
+            }
+        }
+        o.put("hasContact", lensContact?.isChecked ?: true)
+        val newName = o.optString("name", orig)
+        Thread {
+            HgeNative.nativeSetOwnedLensDetail(orig, o.toString())
+            runOnUiThread { selLens = if (newName.isNotEmpty()) newName else orig; buildLensList(); buildLensDetail() }
+        }.start()
+    }
+
+    // ---------- 632 レンズ追加(マスタ。メーカー分類＋▼開閉、チェックで複数追加) ----------
     private fun buildLensAdd() {
         val box = findViewById<LinearLayout>(R.id.lensadd_container)
         box.removeAllViews()
         val arr = camArray(HgeNative.nativeGetMasterLenses())
+        val byMaker = LinkedHashMap<String, MutableList<JSONObject>>()
         for (i in 0 until arr.length()) {
             val l = arr.optJSONObject(i) ?: continue
-            val name = l.optString("name")
-            val sub = "${l.optString("maker")}  ${l.optDouble("focalLength", 0.0).toInt()}mm  F${l.optDouble("fn", 0.0)}"
-            box.addView(gearRow(name, sub, "追加") {
-                Thread {
-                    val r = HgeNative.nativeAddOwnedLens(name)
-                    runOnUiThread {
-                        Toast.makeText(this, if (r == 0) "$name を追加しました" else "追加に失敗しました", Toast.LENGTH_SHORT).show()
-                    }
-                }.start()
-            })
-            box.addView(divider())
+            byMaker.getOrPut(l.optString("maker", "その他")) { mutableListOf() }.add(l)
+        }
+        for ((maker, lenses) in byMaker) {
+            val open = maker in expandedMakers
+            val hdr = TextView(this); hdr.text = "${if (open) "▼" else "▶"}  $maker  (${lenses.size})"
+            hdr.textSize = 16f; hdr.setTypeface(null, Typeface.BOLD); hdr.setPadding(dp(4), dp(10), dp(4), dp(10))
+            hdr.setOnClickListener { if (open) expandedMakers.remove(maker) else expandedMakers.add(maker); buildLensAdd() }
+            box.addView(hdr)
+            if (open) {
+                for (l in lenses) {
+                    val name = l.optString("name")
+                    val cbx = CheckBox(this)
+                    cbx.text = "$name   ${l.optDouble("focalLength", 0.0).toInt()}mm F${l.optDouble("fn", 0.0)}"
+                    cbx.setPadding(dp(24), 0, 0, 0)
+                    cbx.isChecked = name in checkedLensAdd
+                    cbx.setOnCheckedChangeListener { _, c -> if (c) checkedLensAdd.add(name) else checkedLensAdd.remove(name) }
+                    box.addView(cbx)
+                }
+            }
+            box.addView(thinDivider())
         }
     }
+
+    private fun addCheckedLenses() {
+        if (checkedLensAdd.isEmpty()) { Toast.makeText(this, "追加するレンズを選んでください", Toast.LENGTH_SHORT).show(); return }
+        val sel = ArrayList(checkedLensAdd)
+        Thread {
+            sel.forEach { HgeNative.nativeAddOwnedLens(it) }
+            runOnUiThread { Toast.makeText(this, "${sel.size}本を追加しました", Toast.LENGTH_SHORT).show(); openLensList() }
+        }.start()
+    }
+
+    // 接続カメラ検索→検出一覧をチェックして所持へ追加。
+    private fun searchAndAddCameras() {
+        Toast.makeText(this, "接続カメラを検索中…", Toast.LENGTH_SHORT).show()
+        Thread {
+            val js = HgeNative.nativeSearchDevicesList()
+            runOnUiThread {
+                val arr = camArray(js)
+                if (arr.length() == 0) { Toast.makeText(this, "カメラが見つかりませんでした", Toast.LENGTH_SHORT).show(); return@runOnUiThread }
+                val labels = (0 until arr.length()).map { val d = arr.optJSONObject(it)
+                    "${d.optString("model")}  ${if (d.optString("serial").isNotEmpty()) "S/N:" + d.optString("serial") else ""}" }
+                val checks = BooleanArray(arr.length()) { true }
+                androidx.appcompat.app.AlertDialog.Builder(this)
+                    .setTitle("検出したカメラ")
+                    .setMultiChoiceItems(labels.toTypedArray(), checks) { _, which, c -> checks[which] = c }
+                    .setPositiveButton("追加") { _, _ ->
+                        Thread {
+                            for (i in 0 until arr.length()) if (checks[i]) HgeNative.nativeAddOwnedDetected(i)
+                            runOnUiThread { buildCameraList(); buildCameraDetail() }
+                        }.start()
+                    }
+                    .setNegativeButton("キャンセル", null).show()
+            }
+        }.start()
+    }
+
+    // ラベル＋入力欄1つの行。
+    private fun editRow(label: String, key: String, value: String, numeric: Boolean = false): View {
+        val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL; row.gravity = Gravity.CENTER_VERTICAL
+        row.setPadding(0, dp(3), 0, dp(3))
+        val lab = TextView(this); lab.text = label; lab.textSize = 14f; lab.width = dp(118)
+        val et = EditText(this); et.setText(value); et.textSize = 14f
+        et.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        if (numeric) et.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+        camFieldsOrLens(key, et)
+        row.addView(lab); row.addView(et)
+        return row
+    }
+
+    // ラベル＋入力欄2つの行(min/max や 横×縦)。
+    private fun editRow2(label: String, k1: String, v1: String, k2: String, v2: String, sep: String, unit: String, numeric: Boolean): View {
+        val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL; row.gravity = Gravity.CENTER_VERTICAL
+        row.setPadding(0, dp(3), 0, dp(3))
+        val lab = TextView(this); lab.text = label; lab.textSize = 14f; lab.width = dp(118)
+        val e1 = EditText(this); e1.setText(v1); e1.textSize = 14f
+        e1.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        val sp = TextView(this); sp.text = " $sep "; sp.textSize = 14f
+        val e2 = EditText(this); e2.setText(v2); e2.textSize = 14f
+        e2.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        if (numeric) { e1.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL; e2.inputType = e1.inputType }
+        camFieldsOrLens(k1, e1); camFieldsOrLens(k2, e2)
+        row.addView(lab); row.addView(e1); row.addView(sp); row.addView(e2)
+        if (unit.isNotEmpty()) { val u = TextView(this); u.text = " $unit"; u.textSize = 14f; row.addView(u) }
+        return row
+    }
+
+    // 現在組み立て中の画面(カメラ詳細 or レンズ詳細)の参照マップへ EditText を登録する。
+    private var buildingLens = false
+    private fun camFieldsOrLens(key: String, et: EditText) { if (buildingLens) lensFields[key] = et else camFields[key] = et }
 
     // 撮影計画のカメラ/レンズを所持機材から選ぶ(無ければ登録画面へ誘導)。
     private fun choosePlanCamera() {

@@ -137,6 +137,17 @@ int32_t hge_setOwnedCameraAutoInsert(const char* name, int32_t autoInsert);
 int32_t hge_setPlanCamera(const char* name);
 int32_t hge_setPlanLens(const char* name);
 
+// 所持カメラ/レンズの詳細(全項目)を JSON で更新/新規作成して保存する(620/630 詳細編集)。
+//  origName 一致を置換、無ければ新規追加。json キーは dataManager の同名関数を参照。
+int32_t hge_setOwnedCameraDetail(const char* origName, const char* json);
+int32_t hge_setOwnedLensDetail(const char* origName, const char* json);
+
+// 接続カメラ検索(同期)。検出した全カメラの一覧 JSON を返す(バッファ規約)。
+//  [{"model","friendly","serial"},...]。続けて hge_addOwnedDetected で所持へ追加する。
+int32_t hge_searchDevicesListJson(char* buf, int32_t* inoutLen);
+// 直近の検索で見つかったカメラ(index)を所持カメラへ追加/更新する。
+int32_t hge_addOwnedDetected(int32_t index);
+
 // 現在の進捗スナップショットを JSON で取得(バッファ規約)。
 //  {"state","frame","total","remainSec","elapsedSec","ccm","iso","ss","fn"}
 //  エッジ端末が progress(get) 応答に使う。

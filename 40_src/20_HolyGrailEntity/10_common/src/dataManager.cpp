@@ -3,6 +3,7 @@
 #include "osFile.h"
 #include "csJson.h"
 #include "device.h"
+#include "exposureMath.h"
 #include <json/nlohmann/json.hpp>
 #include <vector>
 #include <algorithm>
@@ -449,6 +450,111 @@ bool dataManager::setOwnedCameraAutoInsert(const std::string& name, bool autoIns
 		if (oc.cam.name == name) { oc.autoInsert = autoInsert; return saveOwnedCameras(); }
 	}
 	return false;
+}
+
+namespace
+{
+	// 設定可能範囲[mn,mx]に入る標準1/3段の値を生成する(real昇順)。Bulb は別途付与。
+	std::vector<std::string> sliceStd(expo::expoKind kind, const std::string& mn, const std::string& mx)
+	{
+		auto all = expo::standardValues(kind);
+		double rmin = expo::parseValue(mn, kind);
+		double rmax = expo::parseValue(mx, kind);
+		if (rmin > 0.0 && rmax > 0.0 && rmin > rmax) { std::swap(rmin, rmax); }
+		std::vector<std::string> out;
+		for (const auto& v : all)
+		{
+			double r = expo::parseValue(v, kind);
+			if (r <= 0.0) { continue; }
+			if ((rmin <= 0.0 || r >= rmin - 1e-9) && (rmax <= 0.0 || r <= rmax + 1e-9)) { out.push_back(v); }
+		}
+		if (out.empty()) { if (!mn.empty()) { out.push_back(mn); } if (mx != mn && !mx.empty()) { out.push_back(mx); } }
+		return out;
+	}
+
+	// 現在の設定可能値配列の表示上の min/max(SS は末尾の "Bulb" を除く)。
+	std::string listMin(const std::vector<std::string>& v) { return v.empty() ? std::string() : v.front(); }
+	std::string listMax(const std::vector<std::string>& v)
+	{
+		for (auto it = v.rbegin(); it != v.rend(); ++it) { if (*it != "Bulb") { return *it; } }
+		return v.empty() ? std::string() : v.back();
+	}
+}
+
+bool dataManager::setOwnedCameraDetailJson(const std::string& origName, const std::string& jsonStr)
+{
+	ensureOwned();
+	json j = json::parse(jsonStr, nullptr, false);
+	if (j.is_discarded() || !j.is_object()) { return false; }
+
+	// 対象を探す(無ければ新規)
+	hgc::ownedCamera* oc = nullptr;
+	for (auto& c : g_ownedCameras) { if (c.cam.name == origName) { oc = &c; break; } }
+	if (!oc) { g_ownedCameras.emplace_back(); oc = &g_ownedCameras.back(); }
+
+	hgc::camera& cam = oc->cam;
+	cam.maker       = j.value("maker", cam.maker);
+	cam.model       = j.value("model", cam.model);
+	cam.name        = j.value("name", cam.name);
+	cam.friendly    = j.value("friendly", cam.friendly);
+	cam.serial      = j.value("serial", cam.serial);
+	cam.sensorSize  = j.value("sensorSize", cam.sensorSize);
+	cam.sensorSizeV = j.value("sensorSizeV", cam.sensorSizeV);
+	cam.sensorPixel = j.value("sensorPixel", cam.sensorPixel);
+
+	// ISO/SS: min/max が現状と変わったときだけ標準1/3段で再生成(マスタ/カメラ取得値は維持)。
+	std::string isoMin = j.value("isoMin", std::string());
+	std::string isoMax = j.value("isoMax", std::string());
+	if (!isoMin.empty() && !isoMax.empty() &&
+	    (cam.isoList.empty() || isoMin != listMin(cam.isoList) || isoMax != listMax(cam.isoList)))
+	{
+		cam.isoList = sliceStd(expo::expoKind::iso, isoMin, isoMax);
+	}
+	std::string ssMin = j.value("ssMin", std::string());
+	std::string ssMax = j.value("ssMax", std::string());
+	if (!ssMin.empty() && !ssMax.empty() &&
+	    (cam.ssList.empty() || ssMin != listMin(cam.ssList) || ssMax != listMax(cam.ssList)))
+	{
+		bool keepBulb = false;
+		for (const auto& s : cam.ssList) { if (s == "Bulb") { keepBulb = true; break; } }
+		cam.ssList = sliceStd(expo::expoKind::ss, ssMin, ssMax);
+		if (keepBulb) { cam.ssList.push_back("Bulb"); }
+	}
+
+	oc->autoInsert = j.value("autoInsert", oc->autoInsert);
+
+	// 組み合わせるレンズ(先頭が初期値)。所持レンズ名から順に解決する。
+	if (j.contains("lensNames") && j["lensNames"].is_array())
+	{
+		oc->lensList.clear();
+		for (const auto& nm : j["lensNames"])
+		{
+			if (!nm.is_string()) { continue; }
+			hgc::lens l;
+			if (findOwnedLens(nm.get<std::string>(), l)) { oc->lensList.push_back(l); }
+		}
+	}
+
+	return saveOwnedCameras();
+}
+
+bool dataManager::setOwnedLensDetailJson(const std::string& origName, const std::string& jsonStr)
+{
+	ensureOwned();
+	json j = json::parse(jsonStr, nullptr, false);
+	if (j.is_discarded() || !j.is_object()) { return false; }
+
+	hgc::lens* lp = nullptr;
+	for (auto& l : g_ownedLenses) { if (l.name == origName) { lp = &l; break; } }
+	if (!lp) { g_ownedLenses.emplace_back(); lp = &g_ownedLenses.back(); }
+
+	lp->maker       = j.value("maker", lp->maker);
+	lp->name        = j.value("name", lp->name);
+	lp->focalLength = j.value("focalLength", lp->focalLength);
+	lp->fn          = j.value("fn", lp->fn);
+	lp->fnMax       = j.value("fnMax", lp->fnMax);
+	lp->hasContact  = j.value("hasContact", lp->hasContact);
+	return saveOwnedLenses();
 }
 
 bool dataManager::findOwnedCamera(const std::string& name, hgc::camera& out)
