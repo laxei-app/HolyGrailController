@@ -574,6 +574,17 @@
   {
     "manufacture": "Sigma",
     "mount": "RF",
+    "name": "12mm F1.4 DC DN | Contemporary",
+    "f_min": 12,
+    "f_max": 12,
+    "fnum_min_wide": 1.4,
+    "fnum_min_tele": 1.4,
+    "fnum_max": 16.0,
+    "electronic_contacts": true
+  },
+  {
+    "manufacture": "Sigma",
+    "mount": "RF",
     "name": "16mm F1.4 DC DN | Contemporary",
     "f_min": 16,
     "f_max": 16,
