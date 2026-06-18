@@ -238,23 +238,25 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         // 撮影制御方法の編集ボタン(全種・固定配置)をスケジュールの下に構築する。
         buildCcmEditButtons()
-        // メニュー(plan_menu→600.メニュー)。そこから撮影制御方法初期値/所持機材へ分岐。
-        planMenu.setOnClickListener { flipper.displayedChild = 5 }
+        // メニュー(plan_menu→600.メニュー)。帯付きの一覧から各画面へ分岐。
+        planMenu.setOnClickListener { openGearMenu() }
         findViewById<ImageView>(R.id.gmenu_back).setOnClickListener { flipper.displayedChild = 0 }
-        findViewById<Button>(R.id.gmenu_ccm).setOnClickListener { openCcmMenu() }
-        findViewById<Button>(R.id.gmenu_cameras).setOnClickListener { openCameraList() }
-        findViewById<Button>(R.id.gmenu_lenses).setOnClickListener { openLensList() }
-        findViewById<ImageView>(R.id.cmenu_back).setOnClickListener { flipper.displayedChild = 5 }
-        // 620 所持カメラ / 622 カメラ追加(マスタ)
-        findViewById<ImageView>(R.id.cameralist_back).setOnClickListener { flipper.displayedChild = 5 }
-        findViewById<ImageView>(R.id.cameraadd_back).setOnClickListener { openCameraList() }
-        findViewById<Button>(R.id.cameraadd_addsel).setOnClickListener { addCheckedCameras() }
+        // 620 所持カメラ(戻る/メニューで離脱時に自動保存)
+        findViewById<ImageView>(R.id.cameralist_back).setOnClickListener { leaveCameraList() }
+        findViewById<ImageView>(R.id.cameralist_menu).setOnClickListener { leaveCameraList() }
         setupDivider(R.id.cameralist_divider, R.id.cameralist_listScroll)
-        // 630 所持レンズ / 632 レンズ追加(マスタ)
-        findViewById<ImageView>(R.id.lenslist_back).setOnClickListener { flipper.displayedChild = 5 }
-        findViewById<ImageView>(R.id.lensadd_back).setOnClickListener { openLensList() }
-        findViewById<Button>(R.id.lensadd_addsel).setOnClickListener { addCheckedLenses() }
+        // 622 カメラ追加(離脱時にチェックを追加 / 取消でチェック解除)
+        findViewById<ImageView>(R.id.cameraadd_back).setOnClickListener { leaveCameraAdd(false) }
+        findViewById<ImageView>(R.id.cameraadd_menu).setOnClickListener { leaveCameraAdd(true) }
+        findViewById<Button>(R.id.cameraadd_cancel).setOnClickListener { checkedCamAdd.clear(); buildCameraAdd() }
+        // 630 所持レンズ
+        findViewById<ImageView>(R.id.lenslist_back).setOnClickListener { leaveLensList() }
+        findViewById<ImageView>(R.id.lenslist_menu).setOnClickListener { leaveLensList() }
         setupDivider(R.id.lenslist_divider, R.id.lenslist_listScroll)
+        // 632 レンズ追加
+        findViewById<ImageView>(R.id.lensadd_back).setOnClickListener { leaveLensAdd(false) }
+        findViewById<ImageView>(R.id.lensadd_menu).setOnClickListener { leaveLensAdd(true) }
+        findViewById<Button>(R.id.lensadd_cancel).setOnClickListener { checkedLensAdd.clear(); buildLensAdd() }
         // 撮影計画(330)のカメラ/レンズをタップで所持から選択する。
         cameraText.setOnClickListener { choosePlanCamera() }
         lensText.setOnClickListener { choosePlanLens() }
@@ -263,8 +265,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<Button>(R.id.cmenu_sunset).setOnClickListener { openCcmEdit("sunset") }
         findViewById<Button>(R.id.cmenu_day).setOnClickListener { openCcmEdit("day") }
         findViewById<Button>(R.id.cmenu_moon).setOnClickListener { openMoonEdit() }
-        findViewById<ImageView>(R.id.edit_back).setOnClickListener { flipper.displayedChild = if (editingPlanCcm) 0 else 2 }
-        findViewById<Button>(R.id.edit_save).setOnClickListener { saveCcmEdit() }
+        findViewById<ImageView>(R.id.edit_back).setOnClickListener { persistCcmEdit(); flipper.displayedChild = if (editingPlanCcm) 0 else 5 }
+        findViewById<Button>(R.id.edit_save).apply { text = "変更の取り消し"; setOnClickListener { cancelCcmEdit() } }
         findViewById<Button>(R.id.edit_color_btn).setOnClickListener {
             showColorPicker(editColor) { c -> editColor = c; findViewById<View>(R.id.edit_color_swatch).setBackgroundColor(0xFF000000.toInt() or c) }
         }
@@ -289,8 +291,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             addOnChangeListener { _, _, _ -> updateAltRangeLabels() }
         }
         // 月の影響への対処
-        findViewById<ImageView>(R.id.moon_back).setOnClickListener { flipper.displayedChild = if (editingPlanCcm) 0 else 2 }
-        findViewById<Button>(R.id.moon_save).setOnClickListener { saveMoonEdit() }
+        findViewById<ImageView>(R.id.moon_back).setOnClickListener { persistMoonEdit(); flipper.displayedChild = if (editingPlanCcm) 0 else 5 }
+        findViewById<Button>(R.id.moon_save).apply { text = "変更の取り消し"; setOnClickListener { cancelMoonEdit() } }
         findViewById<Button>(R.id.moon_color_btn).setOnClickListener {
             showColorPicker(editColor) { c -> editColor = c; findViewById<View>(R.id.moon_color_swatch).setBackgroundColor(0xFF000000.toInt() or c) }
         }
@@ -351,7 +353,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
         flipper.displayedChild = 4
     }
 
-    private fun saveMoonEdit() {
+    // 月編集の取り消し(保存済みから再読込)。
+    private fun cancelMoonEdit() {
+        ccmJson = try {
+            JSONObject(if (editingPlanCcm) HgeNative.nativeGetPlanCcm() else HgeNative.nativeGetCcmDefaults())
+        } catch (e: Exception) { null }
+        if (ccmJson == null) return
+        openMoonEdit()
+    }
+
+    private fun persistMoonEdit() {
         val all = ccmJson ?: return
         val o = all.optJSONObject("moon") ?: return
         o.put("color", editColor)
@@ -367,9 +378,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         o.put("limitBright", moonLimit.getBright())
         o.put("limitDark", moonLimit.getDark())
         o.put("initial", moonLimit.getInitial())
-        val r = if (editingPlanCcm) HgeNative.nativeSetPlanCcm(all.toString()) else HgeNative.nativeSetCcmDefaults(all.toString())
-        Toast.makeText(this, if (r == 0) "保存しました" else "保存に失敗しました", Toast.LENGTH_SHORT).show()
-        flipper.displayedChild = if (editingPlanCcm) 0 else 2
+        if (editingPlanCcm) HgeNative.nativeSetPlanCcm(all.toString()) else HgeNative.nativeSetCcmDefaults(all.toString())
     }
 
     // --- 撮影制御方法 初期値: メニュー + 方法別エディタ ---
@@ -378,6 +387,55 @@ class MainActivity : AppCompatActivity(), HgeListener {
         editingPlanCcm = false   // メニュー経由は初期値ccmの編集
         ccmJson = try { JSONObject(HgeNative.nativeGetCcmDefaults()) } catch (e: Exception) { null }
         flipper.displayedChild = 2
+    }
+
+    // ============================================================
+    //  600.メニュー(帯=大項目 + 遷移項目)
+    // ============================================================
+    private fun openGearMenu() { buildGearMenu(); flipper.displayedChild = 5 }
+
+    private fun gearBand(box: LinearLayout, title: String) {
+        val tv = TextView(this); tv.text = title; tv.textSize = 14f; tv.setTypeface(null, Typeface.BOLD)
+        tv.setTextColor(Color.WHITE); tv.setBackgroundColor(Color.parseColor("#5C6BC0"))
+        tv.setPadding(dp(12), dp(6), dp(12), dp(6))
+        box.addView(tv)
+    }
+    private fun gearItem(box: LinearLayout, title: String, onClick: () -> Unit) {
+        val tv = TextView(this); tv.text = title; tv.textSize = 16f
+        tv.setPadding(dp(28), dp(12), dp(12), dp(12))
+        tv.setOnClickListener { onClick() }
+        box.addView(tv)
+        box.addView(thinDivider())
+    }
+
+    private fun buildGearMenu() {
+        val box = findViewById<LinearLayout>(R.id.gmenu_container)
+        box.removeAllViews()
+        gearBand(box, "撮影計画")
+        gearItem(box, "撮影計画") { flipper.displayedChild = 0 }
+        gearBand(box, "撮影制御方法 初期値")
+        gearItem(box, "月の影響への対処") { openInitialMoon() }
+        gearItem(box, "夜間撮影") { openInitialCcm("night") }
+        gearItem(box, "朝日撮影") { openInitialCcm("sunrise") }
+        gearItem(box, "夕日撮影") { openInitialCcm("sunset") }
+        gearItem(box, "日中撮影") { openInitialCcm("day") }
+        gearBand(box, "所持機材")
+        gearItem(box, "カメラリスト") { openCameraList() }
+        gearItem(box, "レンズリスト") { openLensList() }
+    }
+
+    // 600メニューから撮影制御方法の初期値を直接編集する(中間メニューを廃止)。
+    private fun openInitialCcm(key: String) {
+        editingPlanCcm = false
+        ccmJson = try { JSONObject(HgeNative.nativeGetCcmDefaults()) } catch (e: Exception) { null }
+        if (ccmJson == null) return
+        openCcmEdit(key)
+    }
+    private fun openInitialMoon() {
+        editingPlanCcm = false
+        ccmJson = try { JSONObject(HgeNative.nativeGetCcmDefaults()) } catch (e: Exception) { null }
+        if (ccmJson == null) return
+        openMoonEdit()
     }
 
     // ============================================================
@@ -409,6 +467,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private val camFields = HashMap<String, EditText>()  // カメラ詳細の入力欄
     private var camAutoInsert: CheckBox? = null
     private val camLensNames = ArrayList<String>()       // 組み合わせるレンズ(順序=先頭が初期値)
+    private var camLensContainer: LinearLayout? = null   // 組み合わせレンズの並べ替えコンテナ
+    private val lensRowViews = mutableListOf<View>()
+    private val lensGapViews = mutableListOf<View>()
+    private var lensDragFrom = -1
     private val lensFields = HashMap<String, EditText>()
     private var lensContact: CheckBox? = null
     private val checkedCamAdd = LinkedHashSet<String>()  // 622 チェック中
@@ -573,39 +635,80 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val cb = CheckBox(this); cb.text = "撮影計画の初期値にする"; cb.isChecked = ocObj?.optBoolean("autoInsert", false) ?: false
         camAutoInsert = cb; box.addView(cb)
 
-        // 組み合わせるレンズ(先頭=初期値)
+        // 組み合わせるレンズ(先頭=初期値)。並べ替えはハンドルをドラッグ(ss/iso/fnと同じ)。
         box.addView(thinDivider())
         val hdr = TextView(this); hdr.text = "組み合わせるレンズ(先頭が初期値)"; hdr.textSize = 13f; hdr.setTextColor(Color.GRAY)
         hdr.setPadding(0, dp(8), 0, dp(4)); box.addView(hdr)
         ocObj?.optJSONArray("lensList")?.let { ll -> for (i in 0 until ll.length()) ll.optJSONObject(i)?.optString("name")?.let { camLensNames.add(it) } }
-        renderCamLensRows(box)
+        val lensBox = LinearLayout(this); lensBox.orientation = LinearLayout.VERTICAL
+        box.addView(lensBox); camLensContainer = lensBox
+        renderCamLensReorder()
 
-        val save = Button(this); save.text = "保存"; save.setOnClickListener { saveCameraDetail() }
-        box.addView(save)
+        val cancel = Button(this); cancel.text = "変更の取り消し"; cancel.setOnClickListener { buildCameraDetail() }
+        box.addView(cancel)
     }
 
-    private fun renderCamLensRows(box: LinearLayout) {
-        // 既存のレンズ行とリンクは末尾の保存ボタン手前に作るため、毎回 detail を作り直す方針。
-        for (idx in camLensNames.indices) {
-            val nm = camLensNames[idx]
-            val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL; row.gravity = Gravity.CENTER_VERTICAL
-            val up = Button(this); up.text = "▲"; up.setPadding(dp(6),0,dp(6),0); up.minWidth = dp(40)
-            up.isEnabled = idx > 0
-            up.setOnClickListener { val t = camLensNames[idx-1]; camLensNames[idx-1] = camLensNames[idx]; camLensNames[idx] = t; saveCameraDetail() }
-            val dn = Button(this); dn.text = "▼"; dn.setPadding(dp(6),0,dp(6),0); dn.minWidth = dp(40)
-            dn.isEnabled = idx < camLensNames.size - 1
-            dn.setOnClickListener { val t = camLensNames[idx+1]; camLensNames[idx+1] = camLensNames[idx]; camLensNames[idx] = t; saveCameraDetail() }
-            val tv = TextView(this); tv.text = nm; tv.textSize = 14f
-            tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            val menu = Button(this); menu.text = "⋮"; menu.textSize = 18f; menu.minWidth = dp(44)
-            menu.setOnClickListener { anchor ->
-                val pm = PopupMenu(this, anchor); pm.menu.add("削除")
-                pm.setOnMenuItemClickListener { camLensNames.removeAt(idx); saveCameraDetail(); true }; pm.show()
+    // 組み合わせレンズの並べ替え行を描く。ハンドル(▲▼)をドラッグ、挿入位置を線で示す(仕様5/6)。
+    private fun renderCamLensReorder() {
+        val box = camLensContainer ?: return
+        box.removeAllViews(); lensRowViews.clear(); lensGapViews.clear()
+        for (i in 0..camLensNames.size) {
+            val gap = View(this)
+            gap.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(4))
+            gap.setBackgroundColor(0x00000000); lensGapViews.add(gap); box.addView(gap)
+            if (i < camLensNames.size) {
+                val idx = i; val nm = camLensNames[i]
+                val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL; row.gravity = Gravity.CENTER_VERTICAL
+                row.setBackgroundColor(0xFFF2EEFA.toInt()); row.setPadding(dp(2), dp(2), dp(2), dp(2))
+                val handle = TextView(this); handle.text = "▲\n▼"; handle.textSize = 12f; handle.gravity = Gravity.CENTER
+                handle.setBackgroundColor(0xFFD1C4E9.toInt())
+                handle.layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
+                handle.setOnTouchListener(lensDragTouch(idx))
+                val tv = TextView(this); tv.text = nm; tv.textSize = 14f
+                tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                tv.setPadding(dp(8), 0, 0, 0)
+                val menu = Button(this); menu.text = "⋮"; menu.textSize = 18f; menu.minWidth = dp(44)
+                menu.setOnClickListener { anchor ->
+                    val pm = PopupMenu(this, anchor); pm.menu.add("削除")
+                    pm.setOnMenuItemClickListener { camLensNames.removeAt(idx); persistCameraDetail(true); true }; pm.show()
+                }
+                row.addView(handle); row.addView(tv); row.addView(menu)
+                lensRowViews.add(row); box.addView(row)
             }
-            row.addView(up); row.addView(dn); row.addView(tv); row.addView(menu)
-            box.addView(row)
         }
         box.addView(linkText("＋ 新規レンズ追加") { addLensToCamera() })
+    }
+
+    private fun lensDragTouch(index: Int) = View.OnTouchListener { v, ev ->
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> { v.parent?.requestDisallowInterceptTouchEvent(true); lensDragFrom = index; lensHighlight(ev.rawY); true }
+            MotionEvent.ACTION_MOVE -> { lensHighlight(ev.rawY); true }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { lensDrop(ev.rawY); true }
+            else -> false
+        }
+    }
+    private fun lensGapFor(rawY: Float): Int {
+        val box = camLensContainer ?: return 0
+        val loc = IntArray(2); box.getLocationOnScreen(loc)
+        val y = rawY - loc[1]
+        var g = 0
+        for (c in lensRowViews) { if (c.top + c.height / 2f < y) g++ }
+        return g.coerceIn(0, camLensNames.size)
+    }
+    private fun lensHighlight(rawY: Float) {
+        val g = lensGapFor(rawY)
+        for (k in lensGapViews.indices) lensGapViews[k].setBackgroundColor(if (k == g) 0xFF1565C0.toInt() else 0x00000000)
+    }
+    private fun lensDrop(rawY: Float) {
+        val g = lensGapFor(rawY); val from = lensDragFrom; lensDragFrom = -1
+        camLensContainer?.post {
+            if (from in camLensNames.indices) {
+                val item = camLensNames.removeAt(from)
+                val insertAt = (if (g > from) g - 1 else g).coerceIn(0, camLensNames.size)
+                camLensNames.add(insertAt, item)
+            }
+            persistCameraDetail(true)
+        }
     }
 
     private fun addLensToCamera() {
@@ -620,13 +723,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 for (i in names.indices) { if (checks[i] && names[i] !in camLensNames) camLensNames.add(names[i]) }
                 // チェックを外したものは除外
                 camLensNames.retainAll { nm -> val ix = names.indexOf(nm); ix < 0 || checks[ix] }
-                saveCameraDetail()
+                persistCameraDetail(true)
             }
             .setNegativeButton("キャンセル", null).show()
     }
 
-    private fun saveCameraDetail() {
+    private fun leaveCameraList() { persistCameraDetail(false); flipper.displayedChild = 5 }
+
+    // カメラ詳細を保存する。rebuild=true は一覧/詳細を作り直す(並べ替え等)。false は離脱時(再描画なし)。
+    private fun persistCameraDetail(rebuild: Boolean) {
         val orig = selCamera ?: return
+        if (camFields.isEmpty()) return
         val o = JSONObject()
         for ((k, et) in camFields) {
             when (k) {
@@ -638,10 +745,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
         o.put("autoInsert", camAutoInsert?.isChecked ?: false)
         val ln = JSONArray(); camLensNames.forEach { ln.put(it) }; o.put("lensNames", ln)
         val newName = o.optString("name", orig)
-        Thread {
-            HgeNative.nativeSetOwnedCameraDetail(orig, o.toString())
-            runOnUiThread { selCamera = if (newName.isNotEmpty()) newName else orig; buildCameraList(); buildCameraDetail() }
-        }.start()
+        val js = o.toString()
+        selCamera = if (newName.isNotEmpty()) newName else orig
+        if (rebuild) {
+            Thread {
+                HgeNative.nativeSetOwnedCameraDetail(orig, js)
+                runOnUiThread { buildCameraList(); buildCameraDetail() }
+            }.start()
+        } else {
+            Thread { HgeNative.nativeSetOwnedCameraDetail(orig, js) }.start()
+        }
     }
 
     // ---------- 622 カメラ追加(マスタ。チェックで複数追加) ----------
@@ -659,12 +772,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
     }
 
-    private fun addCheckedCameras() {
-        if (checkedCamAdd.isEmpty()) { Toast.makeText(this, "追加するカメラを選んでください", Toast.LENGTH_SHORT).show(); return }
-        val sel = ArrayList(checkedCamAdd)
+    // 622 を離れる時: チェックしたカメラを追加(toMenu=true は600へ、false は620へ)。
+    private fun leaveCameraAdd(toMenu: Boolean) {
+        val sel = ArrayList(checkedCamAdd); checkedCamAdd.clear()
+        if (sel.isEmpty()) { if (toMenu) openGearMenu() else openCameraList(); return }
         Thread {
             sel.forEach { HgeNative.nativeAddOwnedCamera(it) }
-            runOnUiThread { Toast.makeText(this, "${sel.size}台を追加しました", Toast.LENGTH_SHORT).show(); openCameraList() }
+            runOnUiThread { Toast.makeText(this, "${sel.size}台を追加しました", Toast.LENGTH_SHORT).show(); if (toMenu) openGearMenu() else openCameraList() }
         }.start()
     }
 
@@ -707,11 +821,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.addView(editRow("焦点距離", "focalLength", l.optDouble("focalLength", 0.0).toString(), true))
         val note = TextView(this); note.text = "ズームの場合は撮影計画実行時の焦点距離を設定してください。"
         note.textSize = 12f; note.setTextColor(Color.GRAY); note.setPadding(0, dp(8), 0, dp(8)); box.addView(note)
-        val save = Button(this); save.text = "保存"; save.setOnClickListener { saveLensDetail() }; box.addView(save)
+        val cancel = Button(this); cancel.text = "変更の取り消し"; cancel.setOnClickListener { buildLensDetail() }; box.addView(cancel)
     }
 
-    private fun saveLensDetail() {
+    private fun leaveLensList() { persistLensDetail(false); flipper.displayedChild = 5 }
+
+    private fun persistLensDetail(rebuild: Boolean) {
         val orig = selLens ?: return
+        if (lensFields.isEmpty()) return
         val o = JSONObject()
         for ((k, et) in lensFields) {
             when (k) {
@@ -721,10 +838,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         o.put("hasContact", lensContact?.isChecked ?: true)
         val newName = o.optString("name", orig)
-        Thread {
-            HgeNative.nativeSetOwnedLensDetail(orig, o.toString())
-            runOnUiThread { selLens = if (newName.isNotEmpty()) newName else orig; buildLensList(); buildLensDetail() }
-        }.start()
+        val js = o.toString()
+        selLens = if (newName.isNotEmpty()) newName else orig
+        if (rebuild) {
+            Thread { HgeNative.nativeSetOwnedLensDetail(orig, js); runOnUiThread { buildLensList(); buildLensDetail() } }.start()
+        } else {
+            Thread { HgeNative.nativeSetOwnedLensDetail(orig, js) }.start()
+        }
     }
 
     // ---------- 632 レンズ追加(マスタ。メーカー分類＋▼開閉、チェックで複数追加) ----------
@@ -758,12 +878,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
     }
 
-    private fun addCheckedLenses() {
-        if (checkedLensAdd.isEmpty()) { Toast.makeText(this, "追加するレンズを選んでください", Toast.LENGTH_SHORT).show(); return }
-        val sel = ArrayList(checkedLensAdd)
+    private fun leaveLensAdd(toMenu: Boolean) {
+        val sel = ArrayList(checkedLensAdd); checkedLensAdd.clear()
+        if (sel.isEmpty()) { if (toMenu) openGearMenu() else openLensList(); return }
         Thread {
             sel.forEach { HgeNative.nativeAddOwnedLens(it) }
-            runOnUiThread { Toast.makeText(this, "${sel.size}本を追加しました", Toast.LENGTH_SHORT).show(); openLensList() }
+            runOnUiThread { Toast.makeText(this, "${sel.size}本を追加しました", Toast.LENGTH_SHORT).show(); if (toMenu) openGearMenu() else openLensList() }
         }.start()
     }
 
@@ -1099,7 +1219,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
         flipper.displayedChild = 3
     }
 
-    private fun saveCcmEdit() {
+    // 撮影制御方法編集の取り消し(保存済みから再読込して破棄)。
+    private fun cancelCcmEdit() {
+        ccmJson = try {
+            JSONObject(if (editingPlanCcm) HgeNative.nativeGetPlanCcm() else HgeNative.nativeGetCcmDefaults())
+        } catch (e: Exception) { null }
+        if (ccmJson == null) return
+        openCcmEdit(editingKey)
+    }
+
+    // 編集内容を保存する(離脱時に呼ぶ。トースト/画面遷移はしない)。
+    private fun persistCcmEdit() {
         val all = ccmJson ?: return
         val o = all.optJSONObject(editingKey) ?: return
         o.put("color", editColor)
@@ -1124,9 +1254,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             o.put("limitDark", editLimit.getDark())
             o.put("initial", editLimit.getInitial())
         }
-        val r = if (editingPlanCcm) HgeNative.nativeSetPlanCcm(all.toString()) else HgeNative.nativeSetCcmDefaults(all.toString())
-        Toast.makeText(this, if (r == 0) "保存しました" else "保存に失敗しました", Toast.LENGTH_SHORT).show()
-        flipper.displayedChild = if (editingPlanCcm) 0 else 2   // 計画固有は計画画面へ、初期値はメニューへ
+        if (editingPlanCcm) HgeNative.nativeSetPlanCcm(all.toString()) else HgeNative.nativeSetCcmDefaults(all.toString())
     }
 
     // SeekBar 値変更だけ拾う簡易リスナ(カラーピッカーのRGBで使用)。
@@ -1444,9 +1572,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
             // 行2: ドラッグハンドル(左) + 範囲スライダー(右へ・少し短く)(仕様4f)
             val slRow = LinearLayout(this@MainActivity); slRow.orientation = LinearLayout.HORIZONTAL; slRow.gravity = Gravity.CENTER_VERTICAL
             val handle = TextView(this@MainActivity)
-            handle.text = "⇅"; handle.textSize = 22f; handle.gravity = Gravity.CENTER
+            handle.text = "▲\n▼"; handle.textSize = 12f; handle.gravity = Gravity.CENTER
             handle.setBackgroundColor(0xFFD1C4E9.toInt()); handle.setPadding(dp(4), dp(2), dp(4), dp(2))
-            handle.layoutParams = LinearLayout.LayoutParams(dp(40), dp(36))
+            handle.layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
             handle.setOnTouchListener(dragTouch(i))
             slRow.addView(handle)
             val frame = FrameLayout(this@MainActivity)

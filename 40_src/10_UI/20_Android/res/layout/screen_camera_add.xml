@@ -17,8 +17,13 @@
         <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
             android:gravity="center" android:text="カメラ追加" android:textColor="#FFFFFF"
             android:textSize="20sp" android:textStyle="bold" />
-        <View android:layout_width="32dp" android:layout_height="32dp" />
+        <ImageView android:id="@+id/cameraadd_menu" android:layout_width="32dp" android:layout_height="32dp"
+            android:clickable="true" android:focusable="true" android:src="@drawable/ic_menu" />
     </LinearLayout>
+
+    <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:padding="8dp" android:textSize="12sp" android:textColor="#888888"
+        android:text="チェックして画面を離れると追加されます。" />
 
     <ScrollView android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
         <LinearLayout android:id="@+id/cameraadd_container"
@@ -26,6 +31,6 @@
             android:orientation="vertical" android:padding="12dp" />
     </ScrollView>
 
-    <Button android:id="@+id/cameraadd_addsel" android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:layout_margin="12dp" android:text="選択したカメラを追加" />
+    <Button android:id="@+id/cameraadd_cancel" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_margin="12dp" android:text="変更の取り消し" />
 </LinearLayout>

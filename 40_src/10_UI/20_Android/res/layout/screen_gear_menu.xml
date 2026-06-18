@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 600.メニュー(仕様書10 §7.2)。撮影制御方法初期値・所持機材へ分岐する。 -->
+<!-- 600.メニュー(仕様書10 §7.2)。帯=大項目、その下に遷移項目。内容は Kotlin で生成。 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
@@ -20,14 +20,9 @@
         <View android:layout_width="32dp" android:layout_height="32dp" />
     </LinearLayout>
 
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="16dp">
-
-        <Button android:id="@+id/gmenu_ccm"     android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:text="撮影制御方法 初期値" />
-        <Button android:id="@+id/gmenu_cameras" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:text="所持カメラ" />
-        <Button android:id="@+id/gmenu_lenses"  android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:text="所持レンズ" />
-    </LinearLayout>
+    <ScrollView android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+        <LinearLayout android:id="@+id/gmenu_container"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" />
+    </ScrollView>
 </LinearLayout>

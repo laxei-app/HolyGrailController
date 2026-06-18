@@ -17,7 +17,8 @@
         <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
             android:gravity="center" android:text="所持レンズ" android:textColor="#FFFFFF"
             android:textSize="20sp" android:textStyle="bold" />
-        <View android:layout_width="32dp" android:layout_height="32dp" />
+        <ImageView android:id="@+id/lenslist_menu" android:layout_width="32dp" android:layout_height="32dp"
+            android:clickable="true" android:focusable="true" android:src="@drawable/ic_menu" />
     </LinearLayout>
 
     <ScrollView android:id="@+id/lenslist_listScroll"
