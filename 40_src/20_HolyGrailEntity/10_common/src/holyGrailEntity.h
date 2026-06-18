@@ -142,6 +142,11 @@ int32_t hge_setPlanLens(const char* name);
 int32_t hge_setOwnedCameraDetail(const char* origName, const char* json);
 int32_t hge_setOwnedLensDetail(const char* origName, const char* json);
 
+// システム共通の色(全体設定)。型ごとの文字色/背景色を JSON で取得/設定する。
+//  {"night":{"text":int,"bg":int},...}  型: night/sunrise/sunset/day/moon/preNight/postNight
+int32_t hge_getColorsJson(char* buf, int32_t* inoutLen);
+int32_t hge_setColorsJson(const char* json);
+
 // 接続カメラ検索(同期)。検出した全カメラの一覧 JSON を返す(バッファ規約)。
 //  [{"model","friendly","serial"},...]。続けて hge_addOwnedDetected で所持へ追加する。
 int32_t hge_searchDevicesListJson(char* buf, int32_t* inoutLen);

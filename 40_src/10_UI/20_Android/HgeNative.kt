@@ -67,6 +67,8 @@ object HgeNative {
     external fun nativeSetOwnedLensDetail(origName: String, json: String): Int    // 630 詳細編集
     external fun nativeSearchDevicesList(): String         // 接続カメラ検索: [{"model","friendly","serial"},...]
     external fun nativeAddOwnedDetected(index: Int): Int   // 検出カメラを所持へ追加
+    external fun nativeGetColors(): String                 // システム共通の色 {"night":{"text","bg"},...}
+    external fun nativeSetColors(json: String): Int
 
     // --- エッジ端末(ETP §6) ---
     external fun nativeEdgeSearch(timeoutMs: Int): String           // edgeInfo の JSON 配列

@@ -538,6 +538,73 @@ bool dataManager::setOwnedCameraDetailJson(const std::string& origName, const st
 	return saveOwnedCameras();
 }
 
+// ============================================================================
+//  システム共通の色(全体設定。/asset/settings.json の "colors")
+// ============================================================================
+namespace
+{
+	json g_settings;
+	bool g_settingsLoaded = false;
+
+	std::string settingsPath(void)
+	{
+		std::string d = osfile::dir("asset");
+		return d.empty() ? std::string() : (d + "/settings.json");
+	}
+	void ensureSettings(void)
+	{
+		if (g_settingsLoaded) { return; }
+		g_settingsLoaded = true;
+		std::string body, p = settingsPath();
+		if (!p.empty() && osfile::readAll(p, body))
+		{
+			json j = json::parse(body, nullptr, false);
+			if (!j.is_discarded() && j.is_object()) { g_settings = j; }
+		}
+		if (!g_settings.is_object()) { g_settings = json::object(); }
+	}
+	bool saveSettings(void)
+	{
+		std::string p = settingsPath();
+		if (p.empty()) { return false; }
+		std::string s = g_settings.dump();
+		return osfile::writeAll(p, s.data(), s.size());
+	}
+	json factoryColors(void)
+	{
+		auto mk = [](uint32_t bg) { json o; o["text"] = 0x222222u; o["bg"] = bg; return o; };
+		json c;
+		c["night"]     = mk(0xB39DDBu);
+		c["sunrise"]   = mk(0xFFF59Du);
+		c["sunset"]    = mk(0xFFCC80u);
+		c["day"]       = mk(0x90CAF9u);
+		c["moon"]      = mk(0xCE93D8u);
+		c["preNight"]  = mk(0xA5D6A7u);
+		c["postNight"] = mk(0x80CBC4u);
+		return c;
+	}
+}
+
+std::string dataManager::colorsJson(void)
+{
+	ensureSettings();
+	json def = factoryColors();
+	if (g_settings.contains("colors") && g_settings["colors"].is_object())
+	{
+		for (auto& [k, v] : g_settings["colors"].items()) { if (v.is_object()) { def[k] = v; } }
+	}
+	return def.dump();
+}
+
+bool dataManager::setColorsJson(const std::string& jsonStr)
+{
+	ensureSettings();
+	json j = json::parse(jsonStr, nullptr, false);
+	if (j.is_discarded() || !j.is_object()) { return false; }
+	g_settings["colors"] = j;
+	return saveSettings();
+}
+
 bool dataManager::setOwnedLensDetailJson(const std::string& origName, const std::string& jsonStr)
 {
 	ensureOwned();

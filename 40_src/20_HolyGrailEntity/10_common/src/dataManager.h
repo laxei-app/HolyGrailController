@@ -68,6 +68,12 @@ public:
 	//  maker/name/focalLength/fn(F最小=開放)/fnMax(F最大)/hasContact
 	static bool setOwnedLensDetailJson(const std::string& origName, const std::string& json);
 
+	// --- システム共通の色(全体設定。/asset/settings.json の "colors") ---
+	// 撮影制御方法ごとの文字色/背景色。型キー: night/sunrise/sunset/day/moon/preNight/postNight。
+	// {"night":{"text":int,"bg":int},...}。未設定は出荷時の既定色で補完する。
+	static std::string colorsJson(void);
+	static bool        setColorsJson(const std::string& json);
+
 	// --- 撮影計画への機材選択(所持から g_plan へ反映するのは UI/holyGrailEntity 側) ---
 	// 所持カメラ/レンズを名称で引く。見つからなければ false。
 	static bool findOwnedCamera(const std::string& name, hgc::camera& out);

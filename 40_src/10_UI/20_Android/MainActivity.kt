@@ -72,7 +72,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private var ccmJson: JSONObject? = null     // 編集中のccm全体(初期値 or 計画固有)
     private var editingKey = "night"            // 編集中の方法
     private var editingPlanCcm = false          // true=計画固有ccmを編集 / false=初期値ccm
-    private var editColor = 0                    // 編集中の色(0xRRGGBB)
+    private var editColor = 0                    // (旧)per-ccm色。現在は未使用(色はシステム共通へ移行)
+    // システム共通の色(型ごとの文字色/背景色。0xRRGGBB)。nativeGetColors から読み込む。
+    private val ccmBgMap = HashMap<Int, Int>()
+    private val ccmTextMap = HashMap<Int, Int>()
+    // 色の設定画面の状態
+    private var colorType = "night"
+    private var colorTextPicker: com.jaredrummler.android.colorpicker.ColorPickerView? = null
+    private var colorBgPicker: com.jaredrummler.android.colorpicker.ColorPickerView? = null
 
     // 露出(iso/ss/fn)はカメラ設定値の文字列配列からスライダーで選択する。
     private var isoValues = listOf<String>()    // hge_getExpoValues の iso 配列(real昇順)
@@ -122,6 +129,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         HgeNative.nativeSetLogDir(baseDir.absolutePath)
         HgeNative.nativeInit()
         HgeNative.nativeSetListener(this)
+        loadColors()
         loadExpoValues()
         buildExposureEditors()
         refreshEdgeSpinner()
@@ -267,9 +275,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<Button>(R.id.cmenu_moon).setOnClickListener { openMoonEdit() }
         findViewById<ImageView>(R.id.edit_back).setOnClickListener { persistCcmEdit(); flipper.displayedChild = if (editingPlanCcm) 0 else 5 }
         findViewById<Button>(R.id.edit_save).apply { text = "変更の取り消し"; setOnClickListener { cancelCcmEdit() } }
-        findViewById<Button>(R.id.edit_color_btn).setOnClickListener {
-            showColorPicker(editColor) { c -> editColor = c; findViewById<View>(R.id.edit_color_swatch).setBackgroundColor(0xFF000000.toInt() or c) }
-        }
+        // 色はメニュー「色の設定」(システム共通)で設定する(per-ccm色は廃止)。
+        findViewById<ImageView>(R.id.color_back).setOnClickListener { leaveColorScreen() }
+        findViewById<ImageView>(R.id.color_menu).setOnClickListener { leaveColorScreen() }
         // スライダーの値ラベル更新(露出スライダーと形を統一するため Material Slider・仕様8)
         setupValueSlider(R.id.edit_alt_seek, 14, gradient = true) {
             val deg = seekToAlt(it)
@@ -293,9 +301,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 月の影響への対処
         findViewById<ImageView>(R.id.moon_back).setOnClickListener { persistMoonEdit(); flipper.displayedChild = if (editingPlanCcm) 0 else 5 }
         findViewById<Button>(R.id.moon_save).apply { text = "変更の取り消し"; setOnClickListener { cancelMoonEdit() } }
-        findViewById<Button>(R.id.moon_color_btn).setOnClickListener {
-            showColorPicker(editColor) { c -> editColor = c; findViewById<View>(R.id.moon_color_swatch).setBackgroundColor(0xFF000000.toInt() or c) }
-        }
         setupValueSlider(R.id.moon_startlum_seek, 30, gradient = true, thumbRes = R.drawable.ic_moon) {
             findViewById<TextView>(R.id.moon_startlum_val).text = String.format("+%.1fev", it * 0.1)
         }
@@ -327,8 +332,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun openMoonEdit() {
         val o = ccmJson?.optJSONObject("moon") ?: return
         findViewById<TextView>(R.id.moon_title).text = "月の影響への対処" + (if (editingPlanCcm) "（この計画）" else "（初期値）")
-        editColor = o.optInt("color", 0)
-        findViewById<View>(R.id.moon_color_swatch).setBackgroundColor(0xFF000000.toInt() or editColor)
+        applyHeaderColor(R.id.moon_header, R.id.moon_title, 5)   // 月のシステム共通色
         findViewById<Spinner>(R.id.moon_mode).setSelection(o.optInt("mode", 0))
         val slP = (o.optDouble("startLuminance", 0.0) * 10).toInt().coerceIn(0, 30)
         setSliderProgress(R.id.moon_startlum_seek, slP)
@@ -365,7 +369,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun persistMoonEdit() {
         val all = ccmJson ?: return
         val o = all.optJSONObject("moon") ?: return
-        o.put("color", editColor)
+        o.put("color", ccmBgMap[5] ?: 0)   // 色はシステム共通(転送用に派生値を入れる)
         o.put("mode", findViewById<Spinner>(R.id.moon_mode).selectedItemPosition)
         o.put("startLuminance", sliderProgress(R.id.moon_startlum_seek) * 0.1)
         o.put("ev", -sliderProgress(R.id.moon_ev_seek) * 0.1)
@@ -419,9 +423,51 @@ class MainActivity : AppCompatActivity(), HgeListener {
         gearItem(box, "朝日撮影") { openInitialCcm("sunrise") }
         gearItem(box, "夕日撮影") { openInitialCcm("sunset") }
         gearItem(box, "日中撮影") { openInitialCcm("day") }
+        gearBand(box, "色の設定")
+        gearItem(box, "月の影響への対処の色") { openColorSetting("moon") }
+        gearItem(box, "夜間撮影の色") { openColorSetting("night") }
+        gearItem(box, "朝日撮影の色") { openColorSetting("sunrise") }
+        gearItem(box, "夕日撮影の色") { openColorSetting("sunset") }
+        gearItem(box, "日中撮影の色") { openColorSetting("day") }
+        gearItem(box, "夜間前移行の色") { openColorSetting("preNight") }
+        gearItem(box, "夜間後移行の色") { openColorSetting("postNight") }
         gearBand(box, "所持機材")
         gearItem(box, "カメラリスト") { openCameraList() }
         gearItem(box, "レンズリスト") { openLensList() }
+    }
+
+    // ---------- 602 色の設定(文字色/背景色。jaredrummler ColorPicker) ----------
+    private fun colorTypeName(k: String) = when (k) {
+        "night" -> "夜間撮影"; "sunrise" -> "朝日撮影"; "sunset" -> "夕日撮影"; "day" -> "日中撮影"
+        "moon" -> "月の影響への対処"; "preNight" -> "夜間前移行"; "postNight" -> "夜間後移行"; else -> k
+    }
+    private fun openColorSetting(typeKey: String) { colorType = typeKey; buildColorScreen(); flipper.displayedChild = 10 }
+
+    private fun buildColorScreen() {
+        val t = keyType(colorType)
+        findViewById<TextView>(R.id.color_title).text = colorTypeName(colorType) + "の色"
+        applyHeaderColor(R.id.color_header, R.id.color_title, t)
+        val box = findViewById<LinearLayout>(R.id.color_container); box.removeAllViews()
+        val lab1 = TextView(this); lab1.text = "文字の色"; lab1.textSize = 14f; box.addView(lab1)
+        val p1 = com.jaredrummler.android.colorpicker.ColorPickerView(this)
+        p1.setAlphaSliderVisible(true); p1.setColor(ccmTextColor(t), true)
+        box.addView(p1); colorTextPicker = p1
+        val lab2 = TextView(this); lab2.text = "背景の色"; lab2.textSize = 14f; lab2.setPadding(0, dp(16), 0, 0); box.addView(lab2)
+        val p2 = com.jaredrummler.android.colorpicker.ColorPickerView(this)
+        p2.setAlphaSliderVisible(true); p2.setColor(ccmColor(t), true)
+        box.addView(p2); colorBgPicker = p2
+    }
+
+    private fun leaveColorScreen() { saveColorScreen(); flipper.displayedChild = 5; buildGearMenu() }
+
+    private fun saveColorScreen() {
+        val tp = colorTextPicker ?: return
+        val bp = colorBgPicker ?: return
+        val all = try { JSONObject(HgeNative.nativeGetColors()) } catch (e: Exception) { JSONObject() }
+        val one = JSONObject().put("text", tp.color and 0xFFFFFF).put("bg", bp.color and 0xFFFFFF)
+        all.put(colorType, one)
+        val js = all.toString()
+        Thread { HgeNative.nativeSetColors(js); runOnUiThread { loadColors() } }.start()
     }
 
     // 600メニューから撮影制御方法の初期値を直接編集する(中間メニューを廃止)。
@@ -1156,8 +1202,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         editingKey = key
         val title = mapOf("night" to "夜間撮影", "sunrise" to "朝日撮影", "sunset" to "夕日撮影", "day" to "日中撮影")[key]
         findViewById<TextView>(R.id.edit_title).text = title + (if (editingPlanCcm) "（この計画）" else "（初期値）")
-        editColor = o.optInt("color", 0)
-        findViewById<View>(R.id.edit_color_swatch).setBackgroundColor(0xFF000000.toInt() or editColor)
+        applyHeaderColor(R.id.edit_header, R.id.edit_title, keyType(key))   // タイトルバーにシステム共通色
 
         val hasAlt = key != "day"
         val hasEv = key != "night"
@@ -1232,7 +1277,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun persistCcmEdit() {
         val all = ccmJson ?: return
         val o = all.optJSONObject(editingKey) ?: return
-        o.put("color", editColor)
+        o.put("color", ccmBgMap[keyType(editingKey)] ?: 0)   // 色はシステム共通(転送用に派生値を入れる)
         when (editingKey) {
             "night" -> o.put("sunAltitude", seekToAlt(sliderProgress(R.id.edit_alt_seek)))
             "sunrise", "sunset" -> {
@@ -1819,15 +1864,30 @@ class MainActivity : AppCompatActivity(), HgeListener {
         } catch (_: Exception) {}
     }
 
-    private fun ccmColor(type: Int): Int = when (type) {
-        1 -> Color.parseColor("#B39DDB")   // 夜間
-        2 -> Color.parseColor("#FFF59D")   // 朝日
-        3 -> Color.parseColor("#FFCC80")   // 夕日
-        4 -> Color.parseColor("#90CAF9")   // 日中
-        5 -> Color.parseColor("#CE93D8")   // 月対処
-        6 -> Color.parseColor("#A5D6A7")   // 夜間前移行
-        7 -> Color.parseColor("#80CBC4")   // 夜間後移行
-        else -> Color.parseColor("#EEEEEE")
+    // 型→色テーブルキー。
+    private fun keyType(key: String): Int = when (key) {
+        "night" -> 1; "sunrise" -> 2; "sunset" -> 3; "day" -> 4; "moon" -> 5; "preNight" -> 6; "postNight" -> 7; else -> 0
+    }
+    private val colorTypeNames = mapOf(1 to "night", 2 to "sunrise", 3 to "sunset", 4 to "day", 5 to "moon", 6 to "preNight", 7 to "postNight")
+
+    // システム共通の色を Entity から読み込む(0xRRGGBB)。
+    private fun loadColors() {
+        ccmBgMap.clear(); ccmTextMap.clear()
+        try {
+            val o = JSONObject(HgeNative.nativeGetColors())
+            for ((t, nm) in colorTypeNames) {
+                o.optJSONObject(nm)?.let { ccmTextMap[t] = it.optInt("text", 0x222222); ccmBgMap[t] = it.optInt("bg", 0xEEEEEE) }
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun ccmColor(type: Int): Int = 0xFF000000.toInt() or (ccmBgMap[type] ?: 0xEEEEEE)
+    private fun ccmTextColor(type: Int): Int = 0xFF000000.toInt() or (ccmTextMap[type] ?: 0x222222)
+
+    // 画面タイトルバーにシステム共通色(背景/文字)を適用する。
+    private fun applyHeaderColor(headerId: Int, titleId: Int, type: Int) {
+        findViewById<View>(headerId).setBackgroundColor(ccmColor(type))
+        findViewById<TextView>(titleId).setTextColor(ccmTextColor(type))
     }
 
     private fun eventName(ev: Int): String = when (ev) {

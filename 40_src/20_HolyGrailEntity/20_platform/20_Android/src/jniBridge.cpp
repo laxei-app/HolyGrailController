@@ -316,6 +316,20 @@ JNIEXPORT jstring JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeSearchDevicesList(JNIEnv* env, jobject /*thiz*/)
 { return callBufGetter(env, hge_searchDevicesListJson); }
 
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeGetColors(JNIEnv* env, jobject /*thiz*/)
+{ return callBufGetter(env, hge_getColorsJson); }
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetColors(JNIEnv* env, jobject /*thiz*/, jstring json)
+{
+	if (json == nullptr) { return -1; }
+	const char* j = env->GetStringUTFChars(json, nullptr);
+	jint r = hge_setColorsJson(j ? j : "");
+	env->ReleaseStringUTFChars(json, j);
+	return r;
+}
+
 JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeAddOwnedDetected(JNIEnv* /*env*/, jobject /*thiz*/, jint index)
 { return hge_addOwnedDetected(index); }

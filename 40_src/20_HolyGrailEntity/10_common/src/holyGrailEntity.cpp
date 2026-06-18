@@ -858,6 +858,17 @@ int32_t hge_setOwnedLensDetail(const char* origName, const char* json)
 	return dataManager::setOwnedLensDetailJson(std::string(origName), std::string(json)) ? ERR_HGC_OK : ERR_HGC_JSON_PARSE;
 }
 
+int32_t hge_getColorsJson(char* buf, int32_t* inoutLen)
+{
+	return copyOut(dataManager::colorsJson(), buf, inoutLen);
+}
+
+int32_t hge_setColorsJson(const char* json)
+{
+	if (json == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return dataManager::setColorsJson(std::string(json)) ? ERR_HGC_OK : ERR_HGC_JSON_PARSE;
+}
+
 // 接続カメラ検索(同期)。検出した全カメラを g_devices に格納し、一覧 JSON を返す。
 //  [{"model":..,"friendly":..,"serial":..}, ...]。コンテキストメニューの「接続カメラ検索」用。
 int32_t hge_searchDevicesListJson(char* buf, int32_t* inoutLen)

@@ -15,4 +15,5 @@
     <include layout="@layout/screen_camera_add" />
     <include layout="@layout/screen_lens_list" />
     <include layout="@layout/screen_lens_add" />
+    <include layout="@layout/screen_color" />
 </ViewFlipper>
