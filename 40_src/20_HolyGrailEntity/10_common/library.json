@@ -1,0 +1,15 @@
+{
+  "name": "HolyGrailEntity",
+  "version": "0.1.0",
+  "description": "Holy Grail タイムラプスの中核ロジック(UI/プラットフォーム非依存)。撮影計画・撮影制御方法・露出計算・スケジュール・JSON・ログ抽象を含む。astronomy engine と nlohmann/json を lib/ に同梱(PIOが入れ子ライブラリとしてビルド)。新しいエッジ端末へはこのライブラリ＋各プラットフォーム実装を組み合わせて再利用する。UIライブラリの変更でこのコードを編集する必要は無い。",
+  "keywords": ["holygrail", "timelapse", "astronomy", "esp32"],
+  "license": "Proprietary",
+  "frameworks": "*",
+  "platforms": "*",
+  "build": {
+    "flags": [
+      "-I lib"
+    ],
+    "libArchive": true
+  }
+}

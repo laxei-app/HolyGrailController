@@ -10,7 +10,7 @@ interface HgeListener {
 
 object HgeNative {
     init {
-        System.loadLibrary("holygrail")
+        System.loadLibrary("HolyGrailEntity")
     }
 
     // 通知イベント種別 (モジュール構造仕様書 47 §2.3)
