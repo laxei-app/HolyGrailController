@@ -98,18 +98,18 @@ namespace expo
 
 		// 現在値を設定する(各テーブルの最も近い値にスナップする)。
 		void setCurrent(const hgc::exposure& e);
-		// 明側/暗側の限界を初期値にする(仕様 4.4)。
+		// 明側/暗側の限界を基準にする(仕様 4.4)。
 		void setToBrightLimit();
 		void setToDarkLimit();
 
 		hgc::exposure current() const { return cur_; }
 
 		// 1/3 段 明るく/暗くする。優先度順(reversePriority=true で逆順)に限界まで変更。変更不可なら false。
-		// 逆順は §4.5 の往復対称(初期値へ近づくときは優先度の逆で戻す)に使う。
+		// 逆順は §4.5 の往復対称(基準へ近づくときは優先度の逆で戻す)に使う。
 		bool brighten(bool reversePriority = false);
 		bool darken(bool reversePriority = false);
 
-		// home(初期値)へ戻る向きの 1/3 段。home からずれている軸を優先度の逆順で先に戻し、
+		// home(基準)へ戻る向きの 1/3 段。home からずれている軸を優先度の逆順で先に戻し、
 		// home にある軸は飛び越えない(離れたときと逆順に巻き戻す=往復で同じ組合せ。§4.5)。
 		// bright=戻る向き(home が現在より明るければ true)。
 		bool stepHome(bool bright, const hgc::exposure& home);

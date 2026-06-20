@@ -32,7 +32,7 @@ namespace hgc
 		exposure     limitDark;					// 暗い側の限界(iso/ss/fn 下限)
 		// 露出設定を変更する優先度(上位から先に変更)
 		exposureType priority[exposureTypeNum] = { exposureType::iso, exposureType::ss, exposureType::fn };
-		// 撮影開始時の初期値(iso/ss/fn)。§4.4 最初の補正の起点・§4.5 往復対称の基準(home)。
+		// 露出の基準(iso/ss/fn)。§4.4 最初の補正の起点・§4.5 往復対称の基準(home)。変数名 initial は維持。
 		// 日中=明所限界/中間点/暗所限界から選択、朝日/夕日=明暗いずれかの限界、夜間=固定露出。
 		// 夜間前/夜間後移行は実行時に決まる(保存しない)。
 		exposure     initial;

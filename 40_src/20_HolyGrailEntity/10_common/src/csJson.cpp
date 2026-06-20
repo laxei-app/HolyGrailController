@@ -123,7 +123,7 @@ namespace csjson
 			c.color = j.value("color", 0u);
 			if (j.contains("limitBright")) { c.limitBright = expFromJson(j["limitBright"]); }
 			if (j.contains("limitDark"))   { c.limitDark   = expFromJson(j["limitDark"]); }
-			// 初期値(iso/ss/fn)。後方互換: 旧 initialBright(bool) しか無ければ限界から派生する
+			// 基準(iso/ss/fn。JSONキーは initial 維持)。後方互換: 旧 initialBright(bool) しか無ければ限界から派生する
 		// (true=明所限界=limitDark / false=暗所限界=limitBright)。limit は上で読み込み済み。
 		if (j.contains("initial")) { c.initial = expFromJson(j["initial"]); }
 		else { c.initial = j.value("initialBright", true) ? c.limitDark : c.limitBright; }

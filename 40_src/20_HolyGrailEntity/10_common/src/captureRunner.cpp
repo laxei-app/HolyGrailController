@@ -124,7 +124,7 @@ hgc::exposure captureRunner::nightGoalAfter(long long nowSec) const
 }
 
 // 最初の補正(仕様 4.4)を反復収束で行う。撮影開始直後は初期露出が不定なので、
-// 初期値(iso/ss/fn)から始め、ライブビューを測光して目標 ev へ寄せる。
+// 基準(iso/ss/fn)から始め、ライブビューを測光して目標 ev へ寄せる。
 //  - 測光が信用できる(張り付いていない)ときは仕様 4.4 のニュートン段(目標との差ぶん移動)。
 //  - 明側/暗側に張り付いているときは測光値を信用せず、明限界〜暗限界のブラケットを
 //    方向で狭めて中央へ二分探索的に寄せる(張り付き解消後はニュートン段に戻る)。
@@ -140,7 +140,7 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 	ctl.setToDarkLimit();
 	double loB = expo::brightnessStops(ctl.current(), tables_);
 
-	// 仕様 4.4 の初期値(iso/ss/fn)から開始する。
+	// 仕様 4.4 の基準(iso/ss/fn)から開始する。
 	ctl.setCurrent(initial);
 
 	hgc::exposure best = ctl.current();
@@ -301,7 +301,7 @@ errCode captureRunner::loop(void)
 						expo::exposureCtl seed;
 						seed.init(tables_, lead->limitBright, lead->limitDark, lead->priority);
 						seed.setCurrent(lead->initial);
-						seed.applyStops(startB - expo::brightnessStops(lead->initial, tables_));	// 初期値から離れる向き(優先度順)
+						seed.applyStops(startB - expo::brightnessStops(lead->initial, tables_));	// 基準から離れる向き(優先度順)
 						preCtl.setCurrent(seed.current());
 					}
 					else { preCtl.setCurrent(goal); }
@@ -322,11 +322,11 @@ errCode captureRunner::loop(void)
 		else if (ccm->type == hgc::ccmType::postNight)
 		{
 			// 夜間後移行(仕様 3.9 改定): 1本の測光自動露出。露出の上限(暗所限界=最も露出の多い側)を
-			// 夜間の固定露出にクランプし、下限(明所限界)・初期値(home)・優先度は次の自動露出制御方法に
+			// 夜間の固定露出にクランプし、下限(明所限界)・基準(home)・優先度は次の自動露出制御方法に
 			// 合わせる。目標 ev=夜間撮影の postNightEv。夜間露出から始まり、明るくなった分だけ測光で下げる
 			// (暗いうちは上限=夜間露出のまま)。雲などの明暗にも追従する。
 			const hgc::ccmBase* nextC = nextAutoCcmAfter(now);
-			hgc::exposure goal = nextC ? (validExposure(nextC->initial) ? nextC->initial : nightGoalAfter(now))	/* 次の制御方法の初期値へ向かう(仕様3.9) */
+			hgc::exposure goal = nextC ? (validExposure(nextC->initial) ? nextC->initial : nightGoalAfter(now))	/* 次の制御方法の基準へ向かう(仕様3.9) */
 			                           : hgc::exposure{};
 			// 直前の夜間撮影の固定露出(=露出の上限)と夜間後露出補正(=目標ev)を取得する。
 			hgc::exposure nightExp{};
@@ -355,7 +355,7 @@ errCode captureRunner::loop(void)
 					initialConverge(postCtl, seed, postEv);	// 測光しながら目標ev=postEv へ収束
 				}
 			}
-			// home(往復対称の基準)=次ccmの初期値(=goal)。
+			// home(往復対称の基準)=次ccmの基準(=goal)。
 			const bool   haveHome = validExposure(goal);
 			const double homeB    = haveHome ? expo::brightnessStops(goal, tables_) : 0.0;
 			double linear = -1.0;
@@ -369,7 +369,7 @@ errCode captureRunner::loop(void)
 			meteredLinear = linear;
 			if (linear > 0.0)
 			{
-				// 露出補正(仕様 4.5): 移動平均・ヒステリシス。目標 ev=postEv。往復対称(home=次初期値)。
+				// 露出補正(仕様 4.5): 移動平均・ヒステリシス。目標 ev=postEv。往復対称(home=次の基準)。
 				avgBuf.push_back(linear);
 				int n = (smooth_.movingAverage > 0) ? smooth_.movingAverage : 5;
 				while (static_cast<int>(avgBuf.size()) > n) { avgBuf.erase(avgBuf.begin()); }
@@ -396,7 +396,7 @@ errCode captureRunner::loop(void)
 		else if (isAuto(ccm->type))
 		{
 			const double evT = targetEv(ccm);
-			// §4.5 往復対称の基準(home)=初期値の明るさ。home から離れる→優先度順 / 近づく→逆優先。
+			// §4.5 往復対称の基準(home)=基準の明るさ。home から離れる→優先度順 / 近づく→逆優先。
 			const bool   haveHome = validExposure(ccm->initial);
 			const double homeB    = haveHome ? expo::brightnessStops(ccm->initial, tables_) : 0.0;
 			bool didInitConverge = false;
@@ -407,7 +407,7 @@ errCode captureRunner::loop(void)
 				if (validExposure(lastExp))
 				{
 					// 自動露出の開始(仕様 4.8): 撮影継続中の撮影制御方法切替では不連続を避け、
-					// 初期値(iso/ss/fn)の構成から始めて直前露出の APEX(明るさ)へ合わせて開始する。
+					// 基準(iso/ss/fn)の構成から始めて直前露出の APEX(明るさ)へ合わせて開始する。
 					if (validExposure(ccm->initial)) { autoCtl.setCurrent(ccm->initial); }
 					else                    { autoCtl.setCurrent(lastExp); }
 					double prevB = expo::brightnessStops(lastExp, tables_);
@@ -416,7 +416,7 @@ errCode captureRunner::loop(void)
 				}
 				else
 				{
-					// 最初の補正(仕様 4.4): 撮影開始直後は初期露出が不定。初期値から測光しながら
+					// 最初の補正(仕様 4.4): 撮影開始直後は初期露出が不定。基準から測光しながら
 					// 目標 ev へ反復収束させて 1 枚目の露出を決める(張り付き時は二分探索)。
 					target = initialConverge(autoCtl, ccm->initial, evT);
 					didInitConverge = true;

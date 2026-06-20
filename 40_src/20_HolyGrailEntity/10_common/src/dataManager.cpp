@@ -25,7 +25,7 @@ astro::ccmSet dataManager::factoryCcmSet(void)
 	night->sunAltitude = -18.0;
 	night->autoEdge = true;
 	night->limitBright = night->limitDark = hgc::exposure{ "1600", "8", "1.4" };	// 固定露出(3.2)
-	night->initial = night->limitBright;	// 夜間の初期値=固定露出
+	night->initial = night->limitBright;	// 夜間の基準=固定露出
 	set.night = night;
 
 	auto sunrise = std::make_shared<hgc::ccmSunrise>();

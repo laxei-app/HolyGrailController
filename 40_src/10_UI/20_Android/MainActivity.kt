@@ -1662,7 +1662,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         private val darkPlace = HashMap<Int, String>()    // 暗所限界 = limitBright(高ISO側・左つまみ)
         private val brightPlace = HashMap<Int, String>()  // 明所限界 = limitDark(低ISO側・右つまみ)
         private val keys = listOf("iso", "ss", "fn")
-        private var initMode = 0                          // 初期値: 0=明所限界 1=中間点 2=暗所限界(仕様4d)
+        private var initMode = 0                          // 基準: 0=明所限界 1=中間点 2=暗所限界(仕様4d)
         private var dayMode = false                       // 日中=3択ピッカー(明所/中間/暗所)。他=チェックボックス
         private var moonMode = false                      // 月撮影時露出限界(暗所=夜間値で固定・明所のみ編集・仕様6d/e)
         private val cards = mutableListOf<View>()
@@ -1698,7 +1698,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             initTvs[t]?.text = initVal(t)
         }
         private fun refreshInit() { for (t in 0..2) initTvs[t]?.text = initVal(t) }
-        // 初期値の各軸の値: 0=明所限界(limitDark=brightPlace) 2=暗所限界(limitBright=darkPlace) 1=中間点(index中点=APEX中点)。
+        // 基準の各軸の値: 0=明所限界(limitDark=brightPlace) 2=暗所限界(limitBright=darkPlace) 1=中間点(index中点=APEX中点)。
         private fun initVal(t: Int): String {
             val vals = valsFor(t)
             return when (initMode) {
@@ -1726,21 +1726,21 @@ class MainActivity : AppCompatActivity(), HgeListener {
             return tv
         }
 
-        // 上部に「初期値チェック」と列見出し(一か所)、続けて divider 挟みのカード(並べ替え対象)。
+        // 上部に「基準チェック」と列見出し(一か所)、続けて divider 挟みのカード(並べ替え対象)。
         private fun render() {
             container.removeAllViews()
             cards.clear(); dividers.clear(); darkTvs.clear(); brightTvs.clear(); initTvs.clear()
-            if (!moonMode) {   // 月モードは初期値チェックも暗所/初期値/明所の見出しも無し(明所限界のみ)
+            if (!moonMode) {   // 月モードは基準チェックも暗所/基準/明所の見出しも無し(明所限界のみ)
                 if (dayMode) {   // 日中: 明所限界→中間点→暗所限界 をタップで巡回
                     val tv = TextView(this@MainActivity)
-                    fun lbl() = "初期値(タップで切替): " + when (initMode) { 0 -> "明所限界"; 1 -> "中間点"; else -> "暗所限界" }
+                    fun lbl() = "基準(タップで切替): " + when (initMode) { 0 -> "明所限界"; 1 -> "中間点"; else -> "暗所限界" }
                     tv.text = lbl(); tv.textSize = 14f; tv.setPadding(dp(8), dp(8), dp(8), dp(8))
                     tv.setBackgroundColor(0xFFD1C4E9.toInt()); tv.setTextColor(0xFF222222.toInt())
                     tv.setOnClickListener { initMode = (initMode + 1) % 3; tv.text = lbl(); refreshInit() }
                     container.addView(tv)
                 } else {   // 朝日/夕日: 明所限界 or 暗所限界 のチェックボックス(従来どおり)
                     val cb = CheckBox(this@MainActivity)
-                    cb.text = "明所限界を初期値にする"; cb.isChecked = (initMode == 0)
+                    cb.text = "明所限界を基準にする"; cb.isChecked = (initMode == 0)
                     cb.setOnCheckedChangeListener { _, c -> initMode = if (c) 0 else 2; refreshInit() }
                     container.addView(cb)
                 }
@@ -1764,7 +1764,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, weight)
                 row.addView(tv)
             }
-            col("", 1.5f); col("暗所限界", 1f); col("初期値", 1f); col("明所限界", 1f); col("", 1f)
+            col("", 1.5f); col("暗所限界", 1f); col("基準", 1f); col("明所限界", 1f); col("", 1f)
             return row
         }
 
@@ -1776,7 +1776,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             card.setBackgroundColor(0xFFF2EEFA.toInt())
             card.setPadding(dp(4), dp(2), dp(4), dp(4))
 
-            // 行1: 名称(左) + 数値。通常は 暗所/初期値/明所 の3値、月モードは明所限界のみ(仕様4g/6e)。
+            // 行1: 名称(左) + 数値。通常は 暗所/基準/明所 の3値、月モードは明所限界のみ(仕様4g/6e)。
             val valRow = LinearLayout(this@MainActivity); valRow.orientation = LinearLayout.HORIZONTAL
             valRow.gravity = Gravity.CENTER_VERTICAL
             val name = TextView(this@MainActivity); name.text = nameFor(t); name.textSize = 14f; name.setTypeface(null, Typeface.BOLD)
