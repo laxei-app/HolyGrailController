@@ -95,12 +95,9 @@ int32_t hge_savePlan(void);
 int32_t hge_getPlanCcmJson(char* buf, int32_t* inoutLen);
 int32_t hge_setPlanCcmJson(const char* json, int32_t len);
 
-// --- 撮影制御方法の初期値(ユーザー資産。データ構造仕様書43 §7.6) ---
-// 現在の初期値(夜間/朝日/夕日/日中)を JSON で取得(バッファ規約)。
+// --- 撮影制御方法の初期値(参照専用。コード上の出荷時設定。データ構造仕様書43 §7.6) ---
+// 初期値(夜間/朝日/夕日/日中)を JSON で取得(バッファ規約)。ファイルは持たない。
 int32_t hge_getCcmDefaultsJson(char* buf, int32_t* inoutLen);
-// 初期値を JSON で設定し /asset/ccmDefaults.json へ保存する。
-// 計画があればスケジュールを再生成して HGE_EV_SCHEDULE で通知する。
-int32_t hge_setCcmDefaultsJson(const char* json, int32_t len);
 
 // 露出編集用の設定可能値(文字列配列)を取得する(バッファ規約)。
 //  {"iso":["100",...],"ss":["1/8000",...,"30"],"fn":["1.4",...,"32"]}

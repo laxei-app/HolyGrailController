@@ -22,13 +22,11 @@ public:
 	// 出荷時設定の月の影響への対処(データ構造仕様書43 §3.6)。
 	static std::shared_ptr<hgc::ccmMoon> factoryMoon(void);
 
-	// --- 撮影制御方法の初期値(ユーザー資産。/asset/ccmDefaults.json。仕様書43 §7.6) ---
-	// 現在の初期値(ファイルがあればそれ、無ければ出荷時設定)。スケジュール生成に使う。
+	// --- 撮影制御方法の初期値(参照専用。コード上の出荷時設定。仕様書43 §7.6) ---
+	// 初期値の撮影制御方法一式(=出荷時設定)。スケジュール生成・プリセット種まきに使う。
 	static astro::ccmSet currentCcmSet(void);
-	// 現在の初期値を JSON 文字列で取得(編集画面表示用)。
+	// 初期値を JSON 文字列で取得(プリセット種まき・計画ccm初期化用)。
 	static std::string ccmDefaultsJson(void);
-	// 初期値を JSON から更新し /asset/ccmDefaults.json へ保存する。return: 成功。
-	static bool setCcmDefaultsJson(const std::string& json);
 
 	// 出荷時設定の露出平滑化(ヒステリシス1段, 移動平均5フレーム)。
 	static hgc::exposureSmoothing factorySmoothing(void);

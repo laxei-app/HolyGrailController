@@ -88,12 +88,6 @@ namespace
 	std::shared_ptr<hgc::ccmMoon> g_moonDefault;
 	bool                          g_defaultsLoaded = false;
 
-	std::string ccmDefaultsPath(void)
-	{
-		std::string d = osfile::dir("asset");
-		return d.empty() ? std::string() : (d + "/ccmDefaults.json");
-	}
-
 	// JSON文字列を ccmSet(night/sunrise/sunset/day)+moon へ復元する。
 	// 4種揃わなければ失敗(false)。moon は任意(無ければ nullptr)。
 	bool parseDefaults(const std::string& s, astro::ccmSet& set, std::shared_ptr<hgc::ccmMoon>& moon)
@@ -118,12 +112,9 @@ namespace
 	{
 		if (g_defaultsLoaded) { return; }
 		g_defaultsLoaded = true;
-		std::string path = ccmDefaultsPath();
-		std::string body;
-		bool ok = (!path.empty() && osfile::readAll(path, body) &&
-		           parseDefaults(body, g_ccmDefaults, g_moonDefault));
-		if (!ok) { g_ccmDefaults = dataManager::factoryCcmSet(); g_moonDefault.reset(); }
-		if (!g_moonDefault) { g_moonDefault = dataManager::factoryMoon(); }	// moon は常に用意
+		// 撮影制御方法の初期値は参照専用。ファイルを持たずコード上の出荷時設定から取得する。
+		g_ccmDefaults = dataManager::factoryCcmSet();
+		g_moonDefault = dataManager::factoryMoon();	// moon は常に用意
 	}
 }
 
@@ -154,19 +145,6 @@ std::string dataManager::ccmDefaultsJson(void)
 {
 	ensureLoaded();
 	return ccmSetToJson(g_ccmDefaults, g_moonDefault);
-}
-
-bool dataManager::setCcmDefaultsJson(const std::string& jsonStr)
-{
-	astro::ccmSet set;
-	std::shared_ptr<hgc::ccmMoon> moon;
-	if (!parseDefaults(jsonStr, set, moon)) { return false; }
-	g_ccmDefaults = set;
-	g_moonDefault = moon ? moon : factoryMoon();
-	g_defaultsLoaded = true;
-	std::string path = ccmDefaultsPath();
-	if (path.empty()) { return false; }
-	return osfile::writeAll(path, jsonStr.data(), jsonStr.size());
 }
 
 // ============================================================================

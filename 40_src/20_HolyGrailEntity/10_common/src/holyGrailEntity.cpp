@@ -668,17 +668,6 @@ int32_t hge_getCcmDefaultsJson(char* buf, int32_t* inoutLen)
 	return ERR_HGC_OK;
 }
 
-int32_t hge_setCcmDefaultsJson(const char* json, int32_t len)
-{
-	if (json == nullptr || len <= 0) { return ERR_HGC_INVALID_ARG; }
-	if (!dataManager::setCcmDefaultsJson(std::string(json, static_cast<size_t>(len))))
-	{
-		return ERR_HGC_JSON_PARSE;
-	}
-	// 初期値(プリセット)は計画固有ccmとは別管理。現在の計画スケジュールは変更しない。
-	return ERR_HGC_OK;
-}
-
 int32_t hge_getExpoValuesJson(char* buf, int32_t* inoutLen)
 {
 	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }

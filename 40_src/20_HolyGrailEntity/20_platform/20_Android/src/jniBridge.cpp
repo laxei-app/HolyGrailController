@@ -164,15 +164,6 @@ Java_app_laxei_holygrail_HgeNative_nativeGetCcmDefaults(JNIEnv* env, jobject /*t
 	return env->NewStringUTF(buf.data());
 }
 
-JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetCcmDefaults(JNIEnv* env, jobject /*thiz*/, jstring json_)
-{
-	const char* j = env->GetStringUTFChars(json_, nullptr);
-	jint r = hge_setCcmDefaultsJson(j ? j : "", j ? static_cast<int32_t>(std::strlen(j)) : 0);
-	env->ReleaseStringUTFChars(json_, j);
-	return r;
-}
-
 JNIEXPORT jstring JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeGetPlanCcm(JNIEnv* env, jobject /*thiz*/)
 {
