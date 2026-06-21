@@ -123,6 +123,34 @@ namespace osfile
 		return "none";
 	}
 
+	std::vector<std::string> logFileNames(void)
+	{
+		ensureInit();
+		std::vector<std::string> out;
+		if (g_fs == nullptr) { return out; }
+		File d = g_fs->open("/log");
+		if (!d) { return out; }
+		if (!d.isDirectory()) { d.close(); return out; }
+		for (File f = d.openNextFile(); f; f = d.openNextFile())
+		{
+			std::string nm = f.name();
+			size_t slash = nm.find_last_of('/');
+			std::string base = (slash == std::string::npos) ? nm : nm.substr(slash + 1);
+			if (base.rfind("hg_", 0) == 0) { out.push_back(base); }
+			f.close();
+		}
+		d.close();
+		return out;
+	}
+
+	bool removeLog(const std::string& name)
+	{
+		ensureInit();
+		if (g_fs == nullptr) { return false; }
+		std::string p = "/log/" + name;
+		return g_fs->remove(p.c_str());
+	}
+
 	int removeInternalLogs(void)
 	{
 		// 内蔵フラッシュ(LittleFS)を明示的に開き /log のファイルを全削除する。

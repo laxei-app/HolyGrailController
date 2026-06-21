@@ -147,6 +147,13 @@ int32_t hge_setOwnedLensDetail(const char* origName, const char* json);
 int32_t hge_getColorsJson(char* buf, int32_t* inoutLen);
 int32_t hge_setColorsJson(const char* json);
 
+// 全体設定の露出平滑化(ヒステリシス/移動平均)。{"hysteresis":double,"movingAverage":int}
+int32_t hge_getSmoothingJson(char* buf, int32_t* inoutLen);
+int32_t hge_setSmoothingJson(const char* json);
+
+// 起動時のログ整理(当日以外が5件以上なら古い順に削除、最新4件まで残す)。offMin=ローカルTZ[分]。
+int32_t hge_pruneOldLogs(int32_t offMin);
+
 // 撮影制御方法の初期値プリセット(型ごとに複数)。型: night/sunrise/sunset/day/moon。
 int32_t hge_getCcmPresetsJson(const char* type, char* buf, int32_t* inoutLen);  // 型のプリセット配列
 int32_t hge_setCcmPreset(const char* type, const char* origName, const char* json); // 追加/更新

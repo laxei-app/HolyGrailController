@@ -425,7 +425,7 @@ namespace
 			},
 			[](errCode e, const std::string& m) { notifyError(e, m.c_str()); });
 
-		hgc::exposureSmoothing smooth = dataManager::factorySmoothing();	// 出荷時設定
+		hgc::exposureSmoothing smooth = dataManager::currentSmoothing();	// 全体設定(無ければ出荷時)
 		errCode e = g_runner.ready(g_plan, &g_devices[0], smooth, g_offMin);
 		if (e != ERR_HGC_OK) { notifyError(e, "ready"); setState(HGE_ST_ERROR); return e; }
 		return g_runner.start();	// 撮影ループ(別スレッド)を起動。CAPTURING は runner が通知
@@ -867,6 +867,22 @@ int32_t hge_setColorsJson(const char* json)
 {
 	if (json == nullptr) { return ERR_HGC_INVALID_ARG; }
 	return dataManager::setColorsJson(std::string(json)) ? ERR_HGC_OK : ERR_HGC_JSON_PARSE;
+}
+
+int32_t hge_getSmoothingJson(char* buf, int32_t* inoutLen)
+{
+	return copyOut(dataManager::smoothingJson(), buf, inoutLen);
+}
+
+int32_t hge_setSmoothingJson(const char* json)
+{
+	if (json == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return dataManager::setSmoothingJson(std::string(json)) ? ERR_HGC_OK : ERR_HGC_JSON_PARSE;
+}
+
+int32_t hge_pruneOldLogs(int32_t offMin)
+{
+	return dataManager::pruneOldLogs(offMin);
 }
 
 int32_t hge_getCcmPresetsJson(const char* type, char* buf, int32_t* inoutLen)

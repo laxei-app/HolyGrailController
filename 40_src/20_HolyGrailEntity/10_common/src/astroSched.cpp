@@ -2,6 +2,7 @@
 #include <astronomy/astronomy.h>
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace astro
 {
@@ -211,12 +212,60 @@ namespace astro
 
 		// --- 1分刻みでサンプリングして撮影制御方法を分類 → 区間統合 ---
 		const double stepDays = 60.0 / 86400.0;
-		// 上昇/下降判定の初期値として1ステップ前の高度を用意
-		double prevAlt = sunHorizAt(Astronomy_AddDays(tStart, -stepDays), obs).altitude;
+		constexpr double sunDirectMaxAlt = 12.0;	// これ以上高い太陽は直接撮影ccm扱いにしない
 
+		// 第1パス: 全サンプルの高度・上昇/下降・画角侵入を収集する。
+		struct Sample { astro_time_t t; double h; bool rising; bool inF; };
+		std::vector<Sample> samples;
+		double prevAlt = sunHorizAt(Astronomy_AddDays(tStart, -stepDays), obs).altitude;
+		for (astro_time_t t = tStart; t.ut <= tEnd.ut + 1e-9; t = Astronomy_AddDays(t, stepDays))
+		{
+			horiz s = sunHorizAt(t, obs);
+			bool rising = (s.altitude - prevAlt) >= 0.0;
+			bool inF = inFrame(s, plan.azimuth, plan.elevation, f);
+			samples.push_back({ t, s.altitude, rising, inF });
+			prevAlt = s.altitude;
+		}
+
+		// 第2パス: 種別を決める(項目1)。直接撮影候補帯(高度 twiAlt..+12°, 上昇/下降が一定の連続区間)は、
+		// その帯のあいだ一度でも太陽が画角に入れば帯まるごと朝日/夕日、一度も入らなければ帯まるごと日中。
+		// 帯外(深い薄明 nightAlt..twiAlt は夜間後/前移行、夜間、+12°超は日中)は従来どおり高度で分類する。
+		std::vector<hgc::ccmType> types(samples.size(), hgc::ccmType::invalid);
+		for (size_t i = 0; i < samples.size(); )
+		{
+			const double twiAlt = samples[i].rising ? twiAltRise : twiAltSet;
+			const bool isBand = (samples[i].h >= twiAlt && samples[i].h <= sunDirectMaxAlt);
+			if (!isBand)
+			{
+				const double h = samples[i].h;
+				hgc::ccmType ct;
+				if (h < nightAlt)             { ct = hgc::ccmType::night; }
+				else if (h > sunDirectMaxAlt) { ct = hgc::ccmType::day; }
+				else /* nightAlt..twiAlt 薄明 */ { ct = samples[i].rising ? hgc::ccmType::postNight : hgc::ccmType::preNight; }
+				types[i] = ct;
+				++i;
+				continue;
+			}
+			// 上昇/下降が一定の帯を切り出し、画角侵入の有無で帯全体の種別を決める。
+			const bool rising = samples[i].rising;
+			const double ta = rising ? twiAltRise : twiAltSet;
+			size_t j = i;
+			bool any = false;
+			while (j < samples.size() && samples[j].rising == rising &&
+			       samples[j].h >= ta && samples[j].h <= sunDirectMaxAlt)
+			{
+				if (samples[j].inF) { any = true; }
+				++j;
+			}
+			const hgc::ccmType ct = any ? (rising ? hgc::ccmType::sunrise : hgc::ccmType::sunset)
+			                            : hgc::ccmType::day;
+			for (size_t k = i; k < j; ++k) { types[k] = ct; }
+			i = j;
+		}
+
+		// 種別の連続区間を窓へ統合する。
 		hgc::ccmType runType = hgc::ccmType::invalid;
 		astro_time_t runStart = tStart;
-
 		auto flushRun = [&](astro_time_t runEnd)
 		{
 			if (runType == hgc::ccmType::invalid) { return; }
@@ -226,20 +275,13 @@ namespace astro
 			w.ccm   = makeCcm(set, runType);
 			plan.ccmList.push_back(std::move(w));
 		};
-
-		for (astro_time_t t = tStart; t.ut <= tEnd.ut + 1e-9; t = Astronomy_AddDays(t, stepDays))
+		for (size_t i = 0; i < samples.size(); ++i)
 		{
-			horiz s = sunHorizAt(t, obs);
-			bool rising = (s.altitude - prevAlt) >= 0.0;
-			double twiAlt = rising ? twiAltRise : twiAltSet;
-			hgc::ccmType ct = classify(s.altitude, rising, inFrame(s, plan.azimuth, plan.elevation, f), nightAlt, twiAlt);
-			prevAlt = s.altitude;
-
-			if (ct != runType)
+			if (types[i] != runType)
 			{
-				flushRun(t);
-				runType = ct;
-				runStart = t;
+				flushRun(samples[i].t);
+				runType = types[i];
+				runStart = samples[i].t;
 			}
 		}
 		flushRun(tEnd);

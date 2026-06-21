@@ -69,10 +69,12 @@
                 </FrameLayout>
             </LinearLayout>
 
-            <!-- 露出補正(ev)(スライダー)。明暗バー下地・つまみ●・値はセンター。 -->
+            <!-- 露出補正(ev)(スライダー)。タイトルと値は同一行(左:タイトル/右:値)。 -->
             <LinearLayout android:id="@+id/edit_ev_section" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="12dp">
-                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="露出補正(ev)" android:textStyle="bold" />
-                <TextView android:id="@+id/edit_ev_val" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:textSize="18sp" android:textStyle="bold" android:text="-3.0" />
+                <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="start|center_vertical" android:text="露出補正(ev)" android:textStyle="bold" />
+                    <TextView android:id="@+id/edit_ev_val" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="center" android:gravity="center" android:textSize="16sp" android:textStyle="bold" android:text="-3.0" />
+                </FrameLayout>
                 <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginStart="24dp" android:layout_marginEnd="24dp">
                     <View android:layout_width="match_parent" android:layout_height="12dp" android:layout_gravity="center_vertical" android:background="@drawable/brightness_bar" />
                     <com.google.android.material.slider.Slider android:id="@+id/edit_ev_seek" android:layout_width="match_parent" android:layout_height="wrap_content" />
@@ -88,14 +90,49 @@
                 <LinearLayout android:id="@+id/edit_fix_container" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" />
             </LinearLayout>
 
-            <!-- 夜間後露出補正(夜間)。夜間後移行の露出補正(ev)。明暗バー下地・つまみ●・値はセンター。 -->
+            <!-- 夜間前露出補正(夜間)。夜間前移行(自動露出→夜間)の目標露出補正(ev)。時間的に夜間後より前なので先に表示。 -->
+            <LinearLayout android:id="@+id/edit_preev_section" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="12dp">
+                <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="start|center_vertical" android:text="夜間前露出補正(ev)" android:textStyle="bold" />
+                    <TextView android:id="@+id/edit_preev_val" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="center" android:gravity="center" android:textSize="16sp" android:textStyle="bold" android:text="+0.0" />
+                </FrameLayout>
+                <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginStart="24dp" android:layout_marginEnd="24dp">
+                    <View android:layout_width="match_parent" android:layout_height="12dp" android:layout_gravity="center_vertical" android:background="@drawable/brightness_bar" />
+                    <com.google.android.material.slider.Slider android:id="@+id/edit_preev_seek" android:layout_width="match_parent" android:layout_height="wrap_content" />
+                </FrameLayout>
+            </LinearLayout>
+
+            <!-- 夜間後露出補正(夜間)。タイトルと値は同一行(左:タイトル/右:値)。 -->
             <LinearLayout android:id="@+id/edit_postev_section" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="12dp">
-                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="夜間後露出補正(ev)" android:textStyle="bold" />
-                <TextView android:id="@+id/edit_postev_val" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center" android:textSize="18sp" android:textStyle="bold" android:text="+0.0" />
+                <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="start|center_vertical" android:text="夜間後露出補正(ev)" android:textStyle="bold" />
+                    <TextView android:id="@+id/edit_postev_val" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="center" android:gravity="center" android:textSize="16sp" android:textStyle="bold" android:text="+0.0" />
+                </FrameLayout>
                 <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginStart="24dp" android:layout_marginEnd="24dp">
                     <View android:layout_width="match_parent" android:layout_height="12dp" android:layout_gravity="center_vertical" android:background="@drawable/brightness_bar" />
                     <com.google.android.material.slider.Slider android:id="@+id/edit_postev_seek" android:layout_width="match_parent" android:layout_height="wrap_content" />
                 </FrameLayout>
+            </LinearLayout>
+
+            <!-- 露出平滑化(朝日/夕日のみ。この撮影制御方法に個別のヒステリシス/移動平均)。 -->
+            <LinearLayout android:id="@+id/edit_smooth_section" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="12dp">
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="露出平滑化(この撮影)" android:textStyle="bold" />
+                <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="start|center_vertical" android:text="ヒステリシス" />
+                    <TextView android:id="@+id/edit_hyst_val" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="center" android:gravity="center" android:textSize="16sp" android:textStyle="bold" android:text="0.3ev" />
+                </FrameLayout>
+                <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginStart="24dp" android:layout_marginEnd="24dp">
+                    <com.google.android.material.slider.Slider android:id="@+id/edit_hyst_seek" android:layout_width="match_parent" android:layout_height="wrap_content" />
+                </FrameLayout>
+                <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="start|center_vertical" android:text="移動平均フレーム数" />
+                    <TextView android:id="@+id/edit_ma_val" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="center" android:gravity="center" android:textSize="16sp" android:textStyle="bold" android:text="3frame" />
+                </FrameLayout>
+                <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginStart="24dp" android:layout_marginEnd="24dp">
+                    <com.google.android.material.slider.Slider android:id="@+id/edit_ma_seek" android:layout_width="match_parent" android:layout_height="wrap_content" />
+                </FrameLayout>
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:textSize="11sp" android:textColor="#888888"
+                    android:text="朝日/夕日だけ個別に平滑化を設定できます。ヒステリシスを広く・移動平均を多くすると露出変化はなめらかになりますが明るさ変化への追従は遅くなります。" />
             </LinearLayout>
 
             <!-- 露出限界、範囲: 項目ごとに暗所限界〜明所限界の範囲スライダー。左の⇅で並べ替え。 -->

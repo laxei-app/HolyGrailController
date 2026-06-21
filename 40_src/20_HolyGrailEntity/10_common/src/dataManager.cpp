@@ -36,6 +36,7 @@ astro::ccmSet dataManager::factoryCcmSet(void)
 	sunrise->limitBright = hgc::exposure{ "3200", "8", "1.4" };
 	sunrise->limitDark   = hgc::exposure{ "100", "1/4000", "16" };
 	sunrise->initial = sunrise->limitBright;	// 朝日=暗所限界(夜明け前は暗い)から始める
+	sunrise->hysteresis = 0.3; sunrise->movingAverage = 3;	// 朝日は急変するので個別平滑化(§7)
 	set.sunrise = sunrise;
 
 	auto sunset = std::make_shared<hgc::ccmSunset>();
@@ -46,6 +47,7 @@ astro::ccmSet dataManager::factoryCcmSet(void)
 	sunset->limitBright = hgc::exposure{ "3200", "8", "1.4" };
 	sunset->limitDark   = hgc::exposure{ "100", "1/4000", "16" };
 	sunset->initial = sunset->limitDark;	// 夕日=明所限界(日中は明るい)から始める
+	sunset->hysteresis = 0.3; sunset->movingAverage = 3;	// 夕日は急変するので個別平滑化(§7)
 	set.sunset = sunset;
 
 	auto day = std::make_shared<hgc::ccmDay>();
@@ -603,6 +605,69 @@ bool dataManager::setColorsJson(const std::string& jsonStr)
 	if (j.is_discarded() || !j.is_object()) { return false; }
 	g_settings["colors"] = j;
 	return saveSettings();
+}
+
+// 全体設定の露出平滑化(/asset/settings.json の "smoothing")
+hgc::exposureSmoothing dataManager::currentSmoothing(void)
+{
+	ensureSettings();
+	hgc::exposureSmoothing s = factorySmoothing();
+	if (g_settings.contains("smoothing") && g_settings["smoothing"].is_object())
+	{
+		const auto& o = g_settings["smoothing"];
+		s.hysteresis    = o.value("hysteresis", s.hysteresis);
+		s.movingAverage = static_cast<uint16_t>(o.value("movingAverage", static_cast<int>(s.movingAverage)));
+	}
+	return s;
+}
+
+std::string dataManager::smoothingJson(void)
+{
+	hgc::exposureSmoothing s = currentSmoothing();
+	json j; j["hysteresis"] = s.hysteresis; j["movingAverage"] = s.movingAverage;
+	return j.dump();
+}
+
+bool dataManager::setSmoothingJson(const std::string& jsonStr)
+{
+	ensureSettings();
+	json j = json::parse(jsonStr, nullptr, false);
+	if (j.is_discarded() || !j.is_object()) { return false; }
+	json o;
+	o["hysteresis"]    = j.value("hysteresis", 1.0);
+	o["movingAverage"] = j.value("movingAverage", 5);
+	g_settings["smoothing"] = o;
+	return saveSettings();
+}
+
+// ============================================================================
+//  起動時のログ整理(当日以外が5件以上なら古い順に削除し最新4件まで残す)
+// ============================================================================
+int dataManager::pruneOldLogs(int offMin)
+{
+	// 当日(ローカル)の日付文字列を作る。
+	std::time_t lt = std::time(nullptr) + static_cast<std::time_t>(offMin) * 60;
+	std::tm g{};
+#if defined(_WIN32)
+	gmtime_s(&g, &lt);
+#else
+	gmtime_r(&lt, &g);
+#endif
+	char today[24];
+	std::snprintf(today, sizeof(today), "hg_%04d-%02d-%02d.log", g.tm_year + 1900, g.tm_mon + 1, g.tm_mday);
+
+	std::vector<std::string> all = osfile::logFileNames();	// hg_YYYY-MM-DD.log 群
+	std::vector<std::string> others;
+	for (const auto& f : all) { if (f != today) { others.push_back(f); } }
+	if (others.size() < 5) { return 0; }		// 当日以外が5件未満なら何もしない
+	std::sort(others.begin(), others.end());	// 名前=日付昇順 → 先頭が最古
+	int removed = 0;
+	const size_t keep = 4;						// 当日以外は最新4件まで残す
+	for (size_t i = 0; i + keep < others.size(); ++i)
+	{
+		if (osfile::removeLog(others[i])) { ++removed; }
+	}
+	return removed;
 }
 
 // ============================================================================

@@ -36,6 +36,9 @@ namespace hgc
 		// 日中=明所限界/中間点/暗所限界から選択、朝日/夕日=明暗いずれかの限界、夜間=固定露出。
 		// 夜間前/夜間後移行は実行時に決まる(保存しない)。
 		exposure     initial;
+		// 個別の露出平滑化(0=全体設定を使用)。朝日/夕日で個別指定する(§5.10 拡張)。
+		double       hysteresis    = 0.0;	// ヒステリシス[段]。0=全体設定
+		uint16_t     movingAverage = 0;		// 移動平均フレーム数。0=全体設定
 
 		ccmBase() = default;
 		explicit ccmBase(ccmType t) : type(t) {}
@@ -50,6 +53,7 @@ namespace hgc
 		double sunAltitude = -18.0;	// 開始終了の太陽高度[°]
 		bool   autoEdge    = true;	// 開始終了の自動判別
 		double postNightEv = 0.0;	// 夜間後移行(仕様3.9/7.4.10)の露出補正[ev]。範囲 -5.0〜+5.0
+		double preNightEv  = 0.0;	// 夜間前移行(仕様3.7)の露出補正[ev]。範囲 -5.0〜+5.0
 
 		ccmNight() : ccmBase(ccmType::night) {}
 		std::unique_ptr<ccmBase> clone() const override { return std::make_unique<ccmNight>(*this); }

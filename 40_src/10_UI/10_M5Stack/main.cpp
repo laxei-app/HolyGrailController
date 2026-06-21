@@ -19,6 +19,7 @@
 #include "etpEdge.h"
 #include "dataManager.h"
 #include "osFile.h"
+#include "osClock.h"
 #include "debugOut.h"
 
 using json = nlohmann::json;
@@ -477,6 +478,8 @@ void setup(void)
 
 	hge_init();
 	hge_setNotify(notifyCb, nullptr);
+	// 起動時のログ整理(当日以外が5件以上なら古い順に削除、最新4件まで残す)。永続化したTZで「当日」を判定。
+	hge_pruneOldLogs(osclock::utcOffsetMin());
 	hge_loadFixedPlan();		// 出荷時設定(dataManager)から固定撮影計画を生成
 	g_state = hge_getState();
 	redraw();

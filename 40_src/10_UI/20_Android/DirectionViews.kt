@@ -208,7 +208,8 @@ class ElevationView @JvmOverloads constructor(context: Context, attrs: Attribute
 // 区間の境目は撮影制御方法の実開始時刻から MainActivity 側で算出して渡す
 // (イベント±10分は行中心、前後ならイベントの手前/後ろ)。左のイベント列と高さが揃う。
 class BandView(context: Context) : View(context) {
-    data class Seg(val top: Float, val bottom: Float, val color: Int, val label: String?, val type: Int)
+    data class Seg(val top: Float, val bottom: Float, val color: Int, val label: String?, val type: Int,
+                   val textColor: Int = 0xFF212121.toInt())
     var segs: List<Seg> = emptyList()
     var rows: Int = 0
     // タップされた区間の撮影制御方法 種別を返す(編集画面へ遷移するため)。
@@ -249,6 +250,7 @@ class BandView(context: Context) : View(context) {
             if (s.color != 0) { fill.color = s.color; c.drawRect(0f, top, width.toFloat(), bot, fill) }
             val lbl = s.label
             if (lbl != null && bot - top >= txt.textSize * 1.3f) {
+                txt.color = s.textColor
                 val cy = (top + bot) / 2f - (txt.descent() + txt.ascent()) / 2f
                 c.drawText(lbl, width / 2f, cy, txt)
             }

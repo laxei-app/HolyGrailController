@@ -4,9 +4,11 @@
 
 #include "osFile.h"
 #include <sys/stat.h>
+#include <dirent.h>
 #include <cstdio>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -86,5 +88,29 @@ namespace osfile
 		while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) { out.append(buf, n); }
 		std::fclose(f);
 		return true;
+	}
+
+	std::vector<std::string> logFileNames(void)
+	{
+		std::vector<std::string> out;
+		std::string d = logDir();
+		if (d.empty()) { return out; }
+		DIR* dp = opendir(d.c_str());
+		if (dp == nullptr) { return out; }
+		struct dirent* e;
+		while ((e = readdir(dp)) != nullptr)
+		{
+			std::string n = e->d_name;
+			if (n.rfind("hg_", 0) == 0) { out.push_back(n); }
+		}
+		closedir(dp);
+		return out;
+	}
+
+	bool removeLog(const std::string& name)
+	{
+		std::string d = logDir();
+		if (d.empty()) { return false; }
+		return std::remove((d + "/" + name).c_str()) == 0;
 	}
 }

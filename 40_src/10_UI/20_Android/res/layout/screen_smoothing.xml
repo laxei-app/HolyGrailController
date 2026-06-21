@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 630.露出平滑化(自動露出 全体設定)。ヒステリシスと移動平均フレーム数を設定する(settings.json)。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <LinearLayout android:id="@+id/smooth_header"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="#1565C0"
+        android:gravity="center_vertical"
+        android:padding="8dp">
+        <ImageView android:id="@+id/smooth_back" android:layout_width="32dp" android:layout_height="32dp"
+            android:clickable="true" android:focusable="true" android:src="@drawable/ic_back" />
+        <TextView android:id="@+id/smooth_title" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+            android:gravity="center" android:text="露出平滑化" android:textColor="#FFFFFF"
+            android:textSize="20sp" android:textStyle="bold" />
+        <ImageView android:id="@+id/smooth_menu" android:layout_width="32dp" android:layout_height="32dp"
+            android:clickable="true" android:focusable="true" android:src="@drawable/ic_menu" />
+    </LinearLayout>
+
+    <ScrollView android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+        <LinearLayout
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:padding="12dp">
+
+            <!-- 変更の取り消し: 赤の丸ボタン(2重枠)・右寄せ -->
+            <androidx.appcompat.widget.AppCompatButton android:id="@+id/smooth_cancel"
+                android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:layout_gravity="end" android:text="変更の取り消し"
+                android:textColor="#FFFFFF" android:textAllCaps="false"
+                android:background="@drawable/btn_cancel_double"
+                android:paddingLeft="20dp" android:paddingRight="20dp"
+                android:paddingTop="8dp" android:paddingBottom="8dp"
+                android:layout_marginBottom="8dp" />
+
+            <!-- ヒステリシス(タイトルと値は同一行) -->
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="8dp">
+                <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="start|center_vertical" android:text="ヒステリシス" android:textStyle="bold" />
+                    <TextView android:id="@+id/smooth_hyst_val" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="center" android:gravity="center" android:textSize="16sp" android:textStyle="bold" android:text="0.5ev" />
+                </FrameLayout>
+                <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginStart="24dp" android:layout_marginEnd="24dp">
+                    <com.google.android.material.slider.Slider android:id="@+id/smooth_hyst_seek" android:layout_width="match_parent" android:layout_height="wrap_content" />
+                </FrameLayout>
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:textSize="11sp" android:textColor="#888888"
+                    android:text="目標露出からこの幅(±半分)の範囲内では露出を変えません。広くすると小さな明るさのゆらぎを無視してちらつきを抑えますが、明るさ変化への反応はにぶくなります。" />
+            </LinearLayout>
+
+            <!-- 移動平均フレーム数(タイトルと値は同一行) -->
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="16dp">
+                <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="start|center_vertical" android:text="移動平均フレーム数" android:textStyle="bold" />
+                    <TextView android:id="@+id/smooth_ma_val" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="center" android:gravity="center" android:textSize="16sp" android:textStyle="bold" android:text="5frame" />
+                </FrameLayout>
+                <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginStart="24dp" android:layout_marginEnd="24dp">
+                    <com.google.android.material.slider.Slider android:id="@+id/smooth_ma_seek" android:layout_width="match_parent" android:layout_height="wrap_content" />
+                </FrameLayout>
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:textSize="11sp" android:textColor="#888888"
+                    android:text="直近この枚数ぶんの測光値を平均して露出を決めます。多くすると露出変化はなめらかになりますが、明るさ変化への追従は遅くなります。" />
+            </LinearLayout>
+        </LinearLayout>
+    </ScrollView>
+</LinearLayout>

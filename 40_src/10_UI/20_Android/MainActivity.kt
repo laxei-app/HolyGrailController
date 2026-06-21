@@ -135,6 +135,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         HgeNative.nativeSetLogDir(baseDir.absolutePath)
         HgeNative.nativeInit()
         HgeNative.nativeSetListener(this)
+        // 起動時のログ整理(当日以外が5件以上なら古い順に削除、最新4件まで残す)。端末TZで「当日」を判定。
+        val tzOffMin = java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60000
+        Thread { HgeNative.nativePruneOldLogs(tzOffMin) }.start()
         loadColors()
         loadExpoValues()
         buildExposureEditors()
@@ -284,6 +287,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 色はメニュー「色の設定」(システム共通)で設定する(per-ccm色は廃止)。
         findViewById<ImageView>(R.id.color_back).setOnClickListener { leaveColorScreen() }
         findViewById<ImageView>(R.id.color_menu).setOnClickListener { leaveColorScreen() }
+        // 露出平滑化(630)。戻る/メニューで保存して離脱。取り消しで保存値から再読込。
+        findViewById<ImageView>(R.id.smooth_back).setOnClickListener { leaveSmoothingScreen() }
+        findViewById<ImageView>(R.id.smooth_menu).setOnClickListener { leaveSmoothingScreen() }
+        findViewById<Button>(R.id.smooth_cancel).setOnClickListener { loadSmoothingScreen() }
+        setupValueSlider(R.id.smooth_hyst_seek, 20) {
+            findViewById<TextView>(R.id.smooth_hyst_val).text = String.format("%.1fev", seekToHyst(it))
+        }
+        setupValueSlider(R.id.smooth_ma_seek, 10) {
+            findViewById<TextView>(R.id.smooth_ma_val).text = "${it}frame"
+        }
         // 初期値プリセット一覧の分割バー(620と同挙動)
         setupDivider(R.id.edit_presetDivider, R.id.edit_presetScroll)
         setupDivider(R.id.moon_presetDivider, R.id.moon_presetScroll)
@@ -298,6 +311,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         setupValueSlider(R.id.edit_postev_seek, 30, gradient = true) {
             findViewById<TextView>(R.id.edit_postev_val).text = String.format("%+.1f ev", seekToEv(it))
+        }
+        setupValueSlider(R.id.edit_preev_seek, 30, gradient = true) {
+            findViewById<TextView>(R.id.edit_preev_val).text = String.format("%+.1f ev", seekToEv(it))
+        }
+        setupValueSlider(R.id.edit_hyst_seek, 20) {
+            findViewById<TextView>(R.id.edit_hyst_val).text = hystLabel(it)
+        }
+        setupValueSlider(R.id.edit_ma_seek, 10) {
+            findViewById<TextView>(R.id.edit_ma_val).text = maLabel(it)
         }
         // 朝日/夕日の太陽高度=範囲スライダー(2つまみ)。明暗バー下地・つまみ●。
         findViewById<RangeSlider>(R.id.edit_alt_range).apply {
@@ -447,6 +469,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         gearItem(box, "朝日撮影") { openPresetScreen("sunrise") }
         gearItem(box, "夕日撮影") { openPresetScreen("sunset") }
         gearItem(box, "日中撮影") { openPresetScreen("day") }
+        gearBand(box, "自動露出")
+        gearItem(box, "露出平滑化") { openSmoothingScreen() }
         gearBand(box, "色の設定")
         gearColorItem(box, "moon", "月の影響への対処")
         gearColorItem(box, "night", "夜間撮影")
@@ -487,6 +511,26 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private fun leaveColorScreen() { saveColorScreen(); flipper.displayedChild = 5; buildGearMenu() }
+
+    // ---------- 630 露出平滑化(自動露出 全体設定。settings.json) ----------
+    private fun openSmoothingScreen() { loadSmoothingScreen(); flipper.displayedChild = 11 }
+    private fun loadSmoothingScreen() {
+        val o = try { JSONObject(HgeNative.nativeGetSmoothing()) } catch (e: Exception) { JSONObject() }
+        val h = hystToSeek(o.optDouble("hysteresis", 0.5))
+        setSliderProgress(R.id.smooth_hyst_seek, h)
+        findViewById<TextView>(R.id.smooth_hyst_val).text = String.format("%.1fev", seekToHyst(h))
+        val m = o.optInt("movingAverage", 5).coerceIn(0, 10)
+        setSliderProgress(R.id.smooth_ma_seek, m)
+        findViewById<TextView>(R.id.smooth_ma_val).text = "${m}frame"
+    }
+    private fun leaveSmoothingScreen() { saveSmoothingScreen(); flipper.displayedChild = 5; buildGearMenu() }
+    private fun saveSmoothingScreen() {
+        val js = JSONObject()
+            .put("hysteresis", seekToHyst(sliderProgress(R.id.smooth_hyst_seek)))
+            .put("movingAverage", sliderProgress(R.id.smooth_ma_seek))
+            .toString()
+        Thread { HgeNative.nativeSetSmoothing(js) }.start()
+    }
 
     private fun saveColorScreen() {
         val tp = colorTextPicker ?: return
@@ -642,12 +686,35 @@ class MainActivity : AppCompatActivity(), HgeListener {
         } else {
             val sp = View(this); sp.layoutParams = LinearLayout.LayoutParams(0, 1, 1f); row.addView(sp)
         }
-        val cancel = Button(this); cancel.text = "変更の取り消し"; cancel.textSize = 12f
-        cancel.setTextColor(Color.WHITE); cancel.setBackgroundColor(Color.parseColor("#EF5350"))
-        cancel.setPadding(dp(12), dp(4), dp(12), dp(4))
+        val cancel = Button(this); styleCancelButton(cancel)
+        cancel.layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         cancel.setOnClickListener { onCancel() }
         row.addView(cancel)
         box.addView(row, 0)
+    }
+
+    // 「変更の取り消し」ボタン共通スタイル: 赤の丸ボタン + 白の内側リング(2重)。文字は白。
+    private fun styleCancelButton(btn: Button) {
+        btn.text = "変更の取り消し"
+        btn.isAllCaps = false
+        btn.textSize = 12f
+        btn.setTextColor(Color.WHITE)
+        btn.background = androidx.core.content.ContextCompat.getDrawable(this, R.drawable.btn_cancel_double)
+        btn.backgroundTintList = null
+        btn.minWidth = 0; btn.minHeight = 0
+        btn.setPadding(dp(20), dp(8), dp(20), dp(8))
+    }
+
+    // 縦並びコンテナに「変更の取り消し」ボタンを右寄せで追加する。atTop=true で先頭(分割バー直下)へ。
+    private fun addCancelButton(box: LinearLayout, atTop: Boolean = false, onCancel: () -> Unit): Button {
+        val btn = Button(this); styleCancelButton(btn)
+        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        lp.gravity = Gravity.END; lp.topMargin = dp(4); lp.bottomMargin = dp(4)
+        btn.layoutParams = lp
+        btn.setOnClickListener { onCancel() }
+        if (atTop) box.addView(btn, 0) else box.addView(btn)
+        return btn
     }
 
     // エディタ内容をプリセットとして保存する(初期値編集時)。名称は一覧側で編集する。
@@ -845,6 +912,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             if (o.optJSONObject("camera")?.optString("name") == sel) { cam = o.optJSONObject("camera"); ocObj = o; break }
         }
         if (cam == null) { val tv = TextView(this); tv.text = "(データなし)"; box.addView(tv); return }
+        addCancelButton(box, atTop = true) { buildCameraDetail() }   // 分割バー直下に右寄せ
         box.addView(editRow("メーカー", "maker", cam.optString("maker")))
         box.addView(editRow("モデル", "model", cam.optString("model")))
         box.addView(editRow("名称", "name", cam.optString("name")))
@@ -868,9 +936,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val lensBox = LinearLayout(this); lensBox.orientation = LinearLayout.VERTICAL
         box.addView(lensBox); camLensContainer = lensBox
         renderCamLensReorder()
-
-        val cancel = Button(this); cancel.text = "変更の取り消し"; cancel.setOnClickListener { buildCameraDetail() }
-        box.addView(cancel)
     }
 
     // 組み合わせレンズの並べ替え行を描く。ハンドル(▲▼)をドラッグ、挿入位置を線で示す(仕様5/6)。
@@ -1039,6 +1104,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         var l: JSONObject? = null
         for (i in 0 until arr.length()) { val o = arr.optJSONObject(i) ?: continue; if (o.optString("name") == sel) { l = o; break } }
         if (l == null) { val tv = TextView(this); tv.text = "(データなし)"; box.addView(tv); return }
+        addCancelButton(box, atTop = true) { buildLensDetail() }   // 分割バー直下に右寄せ
         box.addView(editRow("メーカー", "maker", l.optString("maker")))
         box.addView(editRow("モデル", "name", l.optString("name")))
         val cb = CheckBox(this); cb.text = "電子接点あり"; cb.isChecked = l.optBoolean("hasContact", true); lensContact = cb; box.addView(cb)
@@ -1046,7 +1112,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.addView(editRow("焦点距離", "focalLength", l.optDouble("focalLength", 0.0).toString(), true))
         val note = TextView(this); note.text = "ズームの場合は撮影計画実行時の焦点距離を設定してください。"
         note.textSize = 12f; note.setTextColor(Color.GRAY); note.setPadding(0, dp(8), 0, dp(8)); box.addView(note)
-        val cancel = Button(this); cancel.text = "変更の取り消し"; cancel.setOnClickListener { buildLensDetail() }; box.addView(cancel)
     }
 
     private fun leaveLensList() { persistLensDetail(false); flipper.displayedChild = 5 }
@@ -1236,7 +1301,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 btn.text = ccmTypeName[t]
                 btn.isAllCaps = false
                 btn.textSize = 13f
-                btn.setTextColor(Color.parseColor("#212121"))
+                btn.setTextColor(ccmTextColor(t))
                 btn.backgroundTintList = ColorStateList.valueOf(ccmColor(t))
                 btn.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                     .apply { setMargins(dp(2), dp(2), dp(2), dp(2)) }
@@ -1259,6 +1324,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // ev: SeekBar 0..30 ⇔ -5.0..+5.0(1/3刻み)
     private fun evToSeek(v: Double) = ((v + 5.0) * 3.0).toInt().coerceIn(0, 30)
     private fun seekToEv(p: Int) = -5.0 + p / 3.0
+    // ヒステリシス: Slider 0..20 ⇔ 0.0..2.0 ev(0.1刻み)。0=全体設定に従う(ccm個別では未設定扱い)。
+    private fun hystToSeek(v: Double) = (v * 10.0).toInt().coerceIn(0, 20)
+    private fun seekToHyst(p: Int) = p / 10.0
+    private fun hystLabel(p: Int) = if (p == 0) "全体設定" else String.format("%.1fev", seekToHyst(p))
+    // 移動平均フレーム数: Slider 0..10(1刻み)。0=全体設定に従う(ccm個別では未設定扱い)。
+    private fun maLabel(p: Int) = if (p == 0) "全体設定" else "${p}frame"
 
     private fun altLabel(v: Double) = String.format("%.0f°", v)
 
@@ -1394,6 +1465,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<View>(R.id.edit_autoEdge).visibility = if (isNight) View.VISIBLE else View.GONE
         findViewById<View>(R.id.edit_fixed_section).visibility = if (isNight) View.VISIBLE else View.GONE
         findViewById<View>(R.id.edit_postev_section).visibility = if (isNight) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.edit_preev_section).visibility = if (isNight) View.VISIBLE else View.GONE
+        val isSun = key == "sunrise" || key == "sunset"
+        findViewById<View>(R.id.edit_smooth_section).visibility = if (isSun) View.VISIBLE else View.GONE
         findViewById<View>(R.id.edit_limit_section).visibility = if (isNight) View.GONE else View.VISIBLE
 
         if (hasAlt) {
@@ -1438,10 +1512,21 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val pp = evToSeek(o.optDouble("postNightEv", 0.0))   // 夜間後露出補正
             setSliderProgress(R.id.edit_postev_seek, pp)
             findViewById<TextView>(R.id.edit_postev_val).text = String.format("%+.1f ev", seekToEv(pp))
+            val pe = evToSeek(o.optDouble("preNightEv", 0.0))    // 夜間前露出補正(仕様3.7)
+            setSliderProgress(R.id.edit_preev_seek, pe)
+            findViewById<TextView>(R.id.edit_preev_val).text = String.format("%+.1f ev", seekToEv(pe))
             fixEditor.set(o.optJSONObject("limitBright"))
         } else {
             editLimit.set(o.optJSONObject("limitBright"), o.optJSONObject("limitDark"),
                 o.optJSONArray("priority"), o.optJSONObject("initial"), dayMode = (key == "day"))
+        }
+        if (isSun) {
+            val hp = hystToSeek(o.optDouble("hysteresis", 0.3))   // ccm個別の平滑化(項目7)
+            setSliderProgress(R.id.edit_hyst_seek, hp)
+            findViewById<TextView>(R.id.edit_hyst_val).text = hystLabel(hp)
+            val mp = o.optInt("movingAverage", 3).coerceIn(0, 10)
+            setSliderProgress(R.id.edit_ma_seek, mp)
+            findViewById<TextView>(R.id.edit_ma_val).text = maLabel(mp)
         }
         addPresetTopRow(R.id.edit_content) { cancelCcmEdit() }   // 優先チェック+変更の取り消し
         flipper.displayedChild = 3
@@ -1469,9 +1554,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
             }
         }
         if (editingKey != "night") o.put("ev", seekToEv(sliderProgress(R.id.edit_ev_seek)))
+        if (editingKey == "sunrise" || editingKey == "sunset") {
+            o.put("hysteresis", seekToHyst(sliderProgress(R.id.edit_hyst_seek)))    // ccm個別の平滑化(項目7)
+            o.put("movingAverage", sliderProgress(R.id.edit_ma_seek))
+        }
         if (editingKey == "night") {
             o.put("autoEdge", findViewById<CheckBox>(R.id.edit_autoEdge).isChecked)
             o.put("postNightEv", seekToEv(sliderProgress(R.id.edit_postev_seek)))   // 夜間後露出補正
+            o.put("preNightEv", seekToEv(sliderProgress(R.id.edit_preev_seek)))     // 夜間前露出補正(仕様3.7)
             val e = fixEditor.get()
             o.put("limitBright", e)
             o.put("limitDark", JSONObject(e.toString()))   // 固定露出は明暗同値
@@ -2178,7 +2268,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 val ty = runs[k].type
                 val col = if (ty in 1..7) ccmColor(ty) else 0
                 val lbl = if (ty in 1..7) ccmTypeName[ty] else null
-                segs.add(BandView.Seg(pos[k], pos[k + 1], col, lbl, ty))
+                val txtCol = if (ty in 1..7) ccmTextColor(ty) else 0xFF212121.toInt()
+                segs.add(BandView.Seg(pos[k], pos[k + 1], col, lbl, ty, txtCol))
             }
         }
         val band = BandView(this)

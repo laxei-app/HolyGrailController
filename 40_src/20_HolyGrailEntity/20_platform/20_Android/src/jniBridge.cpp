@@ -331,6 +331,24 @@ Java_app_laxei_holygrail_HgeNative_nativeSetColors(JNIEnv* env, jobject /*thiz*/
 }
 
 JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeGetSmoothing(JNIEnv* env, jobject /*thiz*/)
+{ return callBufGetter(env, hge_getSmoothingJson); }
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetSmoothing(JNIEnv* env, jobject /*thiz*/, jstring json)
+{
+	if (json == nullptr) { return -1; }
+	const char* j = env->GetStringUTFChars(json, nullptr);
+	jint r = hge_setSmoothingJson(j ? j : "");
+	env->ReleaseStringUTFChars(json, j);
+	return r;
+}
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativePruneOldLogs(JNIEnv* /*env*/, jobject /*thiz*/, jint offMin)
+{ return hge_pruneOldLogs(offMin); }
+
+JNIEXPORT jstring JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeGetCcmPresets(JNIEnv* env, jobject /*thiz*/, jstring type)
 {
 	const char* t = env->GetStringUTFChars(type, nullptr);

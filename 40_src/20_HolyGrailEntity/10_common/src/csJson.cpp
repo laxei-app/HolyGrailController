@@ -116,6 +116,8 @@ namespace csjson
 			json pr = json::array();
 			for (int i = 0; i < hgc::exposureTypeNum; ++i) { pr.push_back(static_cast<int>(c.priority[i])); }
 			j["priority"] = pr;
+			j["hysteresis"]    = c.hysteresis;		// 個別露出平滑化(0=全体設定)
+			j["movingAverage"] = c.movingAverage;
 		}
 		void baseFromJson(const json& j, hgc::ccmBase& c)
 		{
@@ -135,6 +137,8 @@ namespace csjson
 					c.priority[i] = static_cast<hgc::exposureType>(pr[i].get<int>());
 				}
 			}
+			c.hysteresis    = j.value("hysteresis", 0.0);		// 個別露出平滑化(0=全体設定)
+			c.movingAverage = j.value("movingAverage", 0u);
 		}
 
 		json ccmToJsonObj(const hgc::ccmBase& c)
@@ -148,6 +152,7 @@ namespace csjson
 				const auto& n = static_cast<const hgc::ccmNight&>(c);
 				j["sunAltitude"] = n.sunAltitude; j["autoEdge"] = n.autoEdge;
 				j["postNightEv"] = n.postNightEv;
+				j["preNightEv"]  = n.preNightEv;
 				break;
 			}
 			case hgc::ccmType::sunrise:
@@ -198,6 +203,7 @@ namespace csjson
 				n->sunAltitude = j.value("sunAltitude", -18.0);
 				n->autoEdge    = j.value("autoEdge", true);
 				n->postNightEv = j.value("postNightEv", 0.0);
+				n->preNightEv  = j.value("preNightEv", 0.0);
 				c = n; break;
 			}
 			case hgc::ccmType::sunrise:

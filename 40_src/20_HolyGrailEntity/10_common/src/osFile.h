@@ -6,6 +6,7 @@
 // 実装は各プラットフォーム(20_platform/*/src/osFile*.cpp)に置く。
 
 #include <string>
+#include <vector>
 
 namespace osfile
 {
@@ -33,6 +34,11 @@ namespace osfile
 
 	// 現在採用しているファイルシステム名("SD"/"LittleFS"/"none")を返す(検証用)。
 	const char* backendName(void);
+
+	// ログディレクトリ(logDir)内のログファイル名一覧(例 "hg_2026-06-21.log")。
+	std::vector<std::string> logFileNames(void);
+	// ログディレクトリ内の指定名のログファイルを削除する。return: 成功。
+	bool removeLog(const std::string& name);
 
 	// 内蔵フラッシュ(LittleFS)の /log 配下のログファイルをすべて削除する。
 	// SD 採用中でも内蔵ログのみを対象にする。return: 削除数(マウント失敗時 -1)。

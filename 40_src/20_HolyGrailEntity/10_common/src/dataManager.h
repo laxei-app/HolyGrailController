@@ -33,6 +33,16 @@ public:
 	// 出荷時設定の露出平滑化(ヒステリシス1段, 移動平均5フレーム)。
 	static hgc::exposureSmoothing factorySmoothing(void);
 
+	// --- 全体設定の露出平滑化(/asset/settings.json の "smoothing") ---
+	// 現在の全体平滑化(ファイルがあればそれ、無ければ出荷時)。撮影制御方法で個別未設定時に使う。
+	static hgc::exposureSmoothing currentSmoothing(void);
+	static std::string smoothingJson(void);              // {"hysteresis":double,"movingAverage":int}
+	static bool        setSmoothingJson(const std::string& json);
+
+	// 起動時のログ整理: 当日以外のログが5件以上なら古い順に削除し、当日以外を最新4件まで残す。
+	// offMin: ローカル日付判定用 UTCオフセット[分]。return: 削除した件数。
+	static int pruneOldLogs(int offMin);
+
 	// 固定撮影計画の出荷時設定部分を plan に書き込む。
 	// name/place/camera/lens/interval/azimuth/elevation/landscape を設定する。
 	// start/end と events/ccmList は呼び出し側が設定する。
