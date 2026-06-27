@@ -2551,52 +2551,57 @@ class MainActivity : AppCompatActivity(), HgeListener {
         container.addView(horiz)
     }
 
-    // §7.3.2 スケジュール表示/編集ビュー(計画画面)。太陽高度帯+境目時刻/高度+色帯、ドラッグ編集。
-    private fun parseScheduleMs(s: String): Long = try { fmtIso.parse(s)?.time ?: 0L } catch (_: Exception) { 0L }
-
+    // §7.3.2 スケジュール表示/編集ビュー(計画画面)。太陽高度軸(+6..-24)で夕方/朝方を分けて表示。
+    private var curSunriseMode = 0
+    private var curSunsetMode = 0
     private fun renderScheduleView(o: JSONObject) {
         val sv = scheduleView ?: ScheduleView(this).also {
             it.onTapType = { t -> ccmTypeToKey[t]?.let { k -> openPlanCcmEdit(k) } }
-            it.onMoveBoundary = { before, after, occ, ms -> moveBoundary(before, after, occ, ms) }
+            it.onMoveBoundary = { before, after, occ, altDeg, rising ->
+                Thread { HgeNative.nativeSetBoundaryByAlt(before, after, occ, altDeg, rising) }.start()
+            }
             it.onSetBand = { rising, insert -> setBand(rising, insert) }
+            it.onNeedTwoFinger = { Toast.makeText(this, "スケジュール変更は2本指で", Toast.LENGTH_SHORT).show() }
             scheduleView = it
             planSchedule.removeAllViews()
-            planSchedule.addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(420)))
+            planSchedule.addView(it, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
-        val wins = ArrayList<ScheduleView.Win>()
-        o.optJSONArray("windows")?.let { arr ->
+        curSunriseMode = o.optInt("sunriseMode", 0)
+        curSunsetMode = o.optInt("sunsetMode", 0)
+        val blocks = ArrayList<ScheduleView.Block>()
+        o.optJSONArray("blocks")?.let { arr ->
             for (i in 0 until arr.length()) {
-                val w = arr.getJSONObject(i)
-                val ty = w.optInt("type")
-                val col = if (ty in 1..7) ccmColor(ty) else 0
-                val tc = if (ty in 1..7) ccmTextColor(ty) else 0xFF212121.toInt()
-                val nm = if (ty in 1..7) ccmTypeName[ty] else null
-                wins.add(ScheduleView.Win(ty, parseScheduleMs(w.optString("start")), parseScheduleMs(w.optString("end")),
-                    nm, col, tc, w.optDouble("startAlt"), w.optDouble("endAlt")))
+                val b = arr.getJSONObject(i)
+                val segs = ArrayList<ScheduleView.Seg>()
+                b.optJSONArray("segments")?.let { sa ->
+                    for (k in 0 until sa.length()) {
+                        val s = sa.getJSONObject(k); val ty = s.optInt("type")
+                        val col = if (ty in 1..7) ccmColor(ty) else 0
+                        val tc = if (ty in 1..7) ccmTextColor(ty) else 0xFF212121.toInt()
+                        val nm = ccmTypeName[ty] ?: s.optString("name")   // 種別の和名を表示
+                        segs.add(ScheduleView.Seg(ty, nm, s.optDouble("altTop"),
+                            s.optDouble("altBottom"), s.optBoolean("used"), col, tc))
+                    }
+                }
+                val marks = ArrayList<ScheduleView.Mark>()
+                b.optJSONArray("marks")?.let { ma ->
+                    for (k in 0 until ma.length()) {
+                        val m = ma.getJSONObject(k)
+                        marks.add(ScheduleView.Mark(m.optString("label"), m.optString("time"), m.optDouble("alt")))
+                    }
+                }
+                blocks.add(ScheduleView.Block(b.optString("title"), b.optString("axis") == "down",
+                    b.optString("date"), segs, marks))
             }
         }
-        val evs = ArrayList<ScheduleView.Ev>()
-        o.optJSONArray("events")?.let { arr ->
-            for (i in 0 until arr.length()) {
-                val e = arr.getJSONObject(i)
-                evs.add(ScheduleView.Ev(e.optInt("event"), parseScheduleMs(e.optString("when"))))
-            }
-        }
-        sv.curSunriseMode = o.optInt("sunriseMode", 0)
-        sv.curSunsetMode = o.optInt("sunsetMode", 0)
-        sv.setData(parseScheduleMs(o.optString("start")), parseScheduleMs(o.optString("end")), wins, evs)
-    }
-
-    // 境目を上下ドラッグ→その時刻を ccm 開始/終了に設定(再生成は EV_SCHEDULE で反映)。
-    private fun moveBoundary(before: Int, after: Int, occ: Int, ms: Long) {
-        val iso = fmtIso.format(java.util.Date(ms))
-        Thread { HgeNative.nativeSetBoundary(before, after, occ, iso) }.start()
+        sv.setData(blocks)
     }
 
     // 夕日/朝日の帯を挿入(insert=true)/排除(insert=false)。他方の帯モードは保持する。
     private fun setBand(rising: Boolean, insert: Boolean) {
-        var sr = scheduleView?.curSunriseMode ?: 0
-        var ss = scheduleView?.curSunsetMode ?: 0
+        var sr = curSunriseMode
+        var ss = curSunsetMode
         val m = if (insert) 1 else 2
         if (rising) sr = m else ss = m
         Thread { HgeNative.nativeSetBandMode(sr, ss) }.start()

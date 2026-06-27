@@ -94,6 +94,9 @@ int32_t hge_setBandMode(int32_t sunriseMode, int32_t sunsetMode);
 // 境目の時刻上書きを追加/置換する。before/after=種別(ccmType), occ=同型ペアの出現順,
 // whenIso="YYYY-MM-DDThh:mm:ss"(ローカル)。再生成して通知する。
 int32_t hge_setBoundary(int32_t beforeType, int32_t afterType, int32_t occ, const char* whenIso);
+// 境目を太陽高度で指定して上書きする(高度軸スケジュールUIの2本指ドラッグ用)。
+// altDeg=太陽高度[°], rising!=0 で朝方(上昇)側、=0 で夕方(下降)側の到達時刻を使う。
+int32_t hge_setBoundaryByAlt(int32_t beforeType, int32_t afterType, int32_t occ, double altDeg, int32_t rising);
 // スケジュール手動編集をすべて解除する(帯モード=自動, 境目上書き消去)。再生成して通知する。
 int32_t hge_clearScheduleEdits(void);
 

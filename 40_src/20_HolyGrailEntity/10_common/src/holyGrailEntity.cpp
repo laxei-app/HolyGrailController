@@ -12,6 +12,7 @@
 #include "ccm.h"
 #include "exposureMath.h"
 #include <json/nlohmann/json.hpp>
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -129,6 +130,154 @@ namespace
 		return o;
 	}
 
+	// unix秒 → ローカル日時(g_offMin 基準)。
+	hgc::dateTime localFromUnix(long long sec)
+	{
+		time_t local = static_cast<time_t>(sec + static_cast<long long>(g_offMin) * 60);
+		std::tm g{};
+#if defined(_WIN32)
+		gmtime_s(&g, &local);
+#else
+		gmtime_r(&local, &g);
+#endif
+		hgc::dateTime d;
+		d.year = static_cast<uint16_t>(g.tm_year + 1900); d.month = static_cast<uint16_t>(g.tm_mon + 1);
+		d.day = static_cast<uint16_t>(g.tm_mday); d.hour = static_cast<uint16_t>(g.tm_hour);
+		d.min = static_cast<uint16_t>(g.tm_min); d.sec = static_cast<uint16_t>(g.tm_sec);
+		return d;
+	}
+	double sunAltAtUnix(long long sec) { return astro::sunHoriz(localFromUnix(sec), g_offMin, g_plan.place).altitude; }
+	const hgc::ccmBase* activeCcmAtUnix(long long sec)
+	{
+		for (const auto& w : g_plan.ccmList)
+		{
+			long long s = hgc::toUnixUtc(w.start, g_offMin), e = hgc::toUnixUtc(w.end, g_offMin);
+			if (sec >= s && sec < e) { return w.ccm.get(); }
+		}
+		return nullptr;
+	}
+
+	// 仕様 7.3.2 のスケジュール=太陽高度軸(+6°〜-24°)で夕方/朝方を分けたブロック群を JSON 配列で返す。
+	// 各ブロック: {title,date,axis(down=夕/up=朝),segments[{type,name,altTop,altBottom,used}],marks[{label,time,alt}]}
+	std::string buildBlocksJson(void)
+	{
+		const double TOP = 6.0, BOT = -24.0;
+		auto clampAlt = [&](double a) { return a > TOP ? TOP : (a < BOT ? BOT : a); };
+		long long s0 = hgc::toUnixUtc(g_plan.start, g_offMin), s1 = hgc::toUnixUtc(g_plan.end, g_offMin);
+		if (s1 <= s0) { return "[]"; }
+		hgc::dateTime d0 = localFromUnix(s0), d1 = localFromUnix(s1);
+		bool multiDay = !(d0.year == d1.year && d0.month == d1.month && d0.day == d1.day);
+
+		struct Smp { long long t; double alt; };
+		std::vector<Smp> sm;
+		for (long long t = s0; t <= s1; t += 60) { sm.push_back({ t, sunAltAtUnix(t) }); }
+		if (sm.size() < 2) { return "[]"; }
+
+		auto hms = [&](long long sec) { hgc::dateTime d = localFromUnix(sec); char b[16]; std::snprintf(b, sizeof(b), "%02u:%02u:%02u", d.hour, d.min, d.sec); return std::string(b); };
+		auto md  = [&](long long sec) { hgc::dateTime d = localFromUnix(sec); char b[12]; std::snprintf(b, sizeof(b), "%u/%u", d.month, d.day); return std::string(b); };
+
+		// 高度が[-24,+6]に入る極大連続区間を抽出し、内部の最小高度(=太陽南中の逆=深夜)で
+		// 下降部(夕方)/上昇部(朝方)に分割する。
+		struct Blk { size_t a, b; };
+		std::vector<Blk> blks;
+		size_t i = 0;
+		while (i < sm.size())
+		{
+			if (!(sm[i].alt <= TOP && sm[i].alt >= BOT)) { ++i; continue; }
+			size_t j = i;
+			while (j < sm.size() && sm[j].alt <= TOP && sm[j].alt >= BOT) { ++j; }
+			// 区間 [i, j-1]。最小高度の位置で分割。
+			size_t mn = i; for (size_t k = i; k < j; ++k) { if (sm[k].alt < sm[mn].alt) { mn = k; } }
+			bool fallsThenRises = (mn > i && mn < j - 1);
+			if (fallsThenRises) { blks.push_back({ i, mn }); blks.push_back({ mn, j - 1 }); }
+			else { blks.push_back({ i, j - 1 }); }
+			i = j;
+		}
+
+		std::string out = "[";
+		bool firstBlk = true;
+		for (const auto& bk : blks)
+		{
+			size_t a = bk.a, b = bk.b;
+			if (b <= a) { continue; }
+			bool down = sm[a].alt > sm[b].alt;	// 夕方=下降
+			if (!firstBlk) { out += ","; }
+			firstBlk = false;
+			out += "{\"title\":\"" + std::string(down ? "\\u5915\\u65b9\\u306e\\u8a08\\u753b" : "\\u671d\\u306e\\u8a08\\u753b") + "\"";
+			out += ",\"axis\":\"" + std::string(down ? "down" : "up") + "\"";
+			out += ",\"date\":\"" + std::string(multiDay ? md(sm[a].t) : "") + "\"";
+			// segments(ccm をポインタ同一でグループ化、高度範囲)
+			out += ",\"segments\":[";
+			bool fseg = true;
+			size_t k = a;
+			while (k <= b)
+			{
+				const hgc::ccmBase* c = activeCcmAtUnix(sm[k].t);
+				double mnA = sm[k].alt, mxA = sm[k].alt;
+				size_t st = k;
+				while (k <= b && activeCcmAtUnix(sm[k].t) == c) { if (sm[k].alt < mnA) mnA = sm[k].alt; if (sm[k].alt > mxA) mxA = sm[k].alt; ++k; }
+				if (c)
+				{
+					char nb[64];
+					if (!fseg) out += ","; fseg = false;
+					out += "{\"type\":" + std::to_string(static_cast<int>(c->type)) + ",\"name\":\"" + jesc(c->name) + "\"";
+					std::snprintf(nb, sizeof(nb), "%.1f", clampAlt(mxA)); out += ",\"altTop\":" + std::string(nb);
+					std::snprintf(nb, sizeof(nb), "%.1f", clampAlt(mnA)); out += ",\"altBottom\":" + std::string(nb);
+					out += ",\"used\":true}";
+				}
+				(void)st;
+			}
+			// 排除した夕日/朝日(使用しない)
+			const hgc::ccmBase* exC = nullptr;
+			if (down && g_plan.sunsetMode == hgc::bandMode::off && g_planCcm.sunset) exC = g_planCcm.sunset.get();
+			if (!down && g_plan.sunriseMode == hgc::bandMode::off && g_planCcm.sunrise) exC = g_planCcm.sunrise.get();
+			if (exC)
+			{
+				double aTop = TOP, aBot = -6.0;
+				if (exC->type == hgc::ccmType::sunset) { const auto* s = static_cast<const hgc::ccmSunset*>(exC); aTop = std::max(s->sunAltitude, s->sunAltitudeEnd); aBot = std::min(s->sunAltitude, s->sunAltitudeEnd); }
+				else if (exC->type == hgc::ccmType::sunrise) { const auto* s = static_cast<const hgc::ccmSunrise*>(exC); aTop = std::max(s->sunAltitude, s->sunAltitudeEnd); aBot = std::min(s->sunAltitude, s->sunAltitudeEnd); }
+				char nb[64];
+				if (!fseg) out += ","; fseg = false;
+				out += "{\"type\":" + std::to_string(static_cast<int>(exC->type)) + ",\"name\":\"" + jesc(exC->name) + "\"";
+				std::snprintf(nb, sizeof(nb), "%.1f", clampAlt(aTop)); out += ",\"altTop\":" + std::string(nb);
+				std::snprintf(nb, sizeof(nb), "%.1f", clampAlt(aBot)); out += ",\"altBottom\":" + std::string(nb);
+				out += ",\"used\":false}";
+			}
+			out += "]";
+			// marks(境目=種別変化の時刻/高度、開始/終了、月の出入り)
+			out += ",\"marks\":[";
+			bool fmk = true;
+			auto addMark = [&](const std::string& label, long long t, double alt) {
+				char nb[16]; if (!fmk) out += ","; fmk = false;
+				out += "{\"label\":\"" + label + "\",\"time\":\"" + hms(t) + "\",";
+				std::snprintf(nb, sizeof(nb), "%.1f", clampAlt(alt)); out += "\"alt\":" + std::string(nb) + "}";
+			};
+			const hgc::ccmBase* prevC = reinterpret_cast<const hgc::ccmBase*>(1);
+			for (size_t m = a; m <= b; ++m)
+			{
+				const hgc::ccmBase* c = activeCcmAtUnix(sm[m].t);
+				if (m == a || c != prevC)
+				{
+					std::string lbl = (sm[m].t == s0) ? "Start" : "";
+					addMark(lbl, sm[m].t, sm[m].alt);
+					prevC = c;
+				}
+			}
+			if (sm[b].t == s1) { addMark("End", sm[b].t, sm[b].alt); }
+			// 月の出入り
+			for (const auto& ev : g_plan.events)
+			{
+				if (ev.event != hgc::csEvent::moonrise && ev.event != hgc::csEvent::moonset) continue;
+				long long mt = hgc::toUnixUtc(ev.when, g_offMin);
+				if (mt < sm[a].t || mt > sm[b].t) continue;
+				addMark(ev.event == hgc::csEvent::moonrise ? "\\u6708\\u306e\\u51fa" : "\\u6708\\u306e\\u5165\\u308a", mt, sunAltAtUnix(mt));
+			}
+			out += "]}";
+		}
+		out += "]";
+		return out;
+	}
+
 	// 全撮影制御方法の最長ss[秒] + 2 を最小撮影周期として返す(仕様 7.4.2)。
 	// 最長ss = 各窓の明るい方向の限界(=最も露出の多い側 limitBright)の ss。
 	int minIntervalSec(const hgc::cs& plan)
@@ -230,7 +379,7 @@ namespace
 			std::snprintf(ab, sizeof(ab), "%.1f", ea); j += ",\"endAlt\":" + std::string(ab);
 			j += "}";
 		}
-		j += "]}";
+		j += "],\"blocks\":" + buildBlocksJson() + "}";
 		g_schedJson = j;
 	}
 
@@ -925,6 +1074,28 @@ int32_t hge_setBoundary(int32_t beforeType, int32_t afterType, int32_t occ, cons
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
 	return ERR_HGC_OK;
+}
+
+int32_t hge_setBoundaryByAlt(int32_t beforeType, int32_t afterType, int32_t occ, double altDeg, int32_t rising)
+{
+	if (!g_planReady) { errCode e = loadFixedPlanImpl(); if (e != ERR_HGC_OK) { return e; } }
+	// 既存の (before,after,occ) 境目の日付を探索の基準にする(無ければ計画開始日)。
+	hgc::dateTime base = g_plan.start;
+	{
+		int cnt = 0;
+		for (size_t i = 0; i + 1 < g_plan.ccmList.size(); ++i)
+		{
+			int bt = g_plan.ccmList[i].ccm ? static_cast<int>(g_plan.ccmList[i].ccm->type) : 0;
+			int at = g_plan.ccmList[i + 1].ccm ? static_cast<int>(g_plan.ccmList[i + 1].ccm->type) : 0;
+			if (bt == beforeType && at == afterType) { if (cnt == occ) { base = g_plan.ccmList[i].end; break; } ++cnt; }
+		}
+	}
+	astro::altTime at = astro::sunAltitudeTime(g_plan.place, base, altDeg, rising != 0, g_offMin);
+	if (!at.valid) { return ERR_HGC_NOT_FOUND; }
+	char iso[32];
+	std::snprintf(iso, sizeof(iso), "%04u-%02u-%02uT%02u:%02u:%02u",
+	              at.when.year, at.when.month, at.when.day, at.when.hour, at.when.min, at.when.sec);
+	return hge_setBoundary(beforeType, afterType, occ, iso);
 }
 
 int32_t hge_clearScheduleEdits(void)

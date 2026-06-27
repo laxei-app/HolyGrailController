@@ -46,6 +46,7 @@ object HgeNative {
     // スケジュール手動編集(7.3.2)
     external fun nativeSetBandMode(sunriseMode: Int, sunsetMode: Int): Int  // 0=自動,1=挿入,2=排除
     external fun nativeSetBoundary(beforeType: Int, afterType: Int, occ: Int, whenIso: String): Int
+    external fun nativeSetBoundaryByAlt(beforeType: Int, afterType: Int, occ: Int, altDeg: Double, rising: Int): Int
     external fun nativeClearScheduleEdits(): Int
     external fun nativeSavePlan(): Int
     // --- 複数撮影計画(§7.4) ---

@@ -251,6 +251,13 @@ Java_app_laxei_holygrail_HgeNative_nativeSetBoundary(JNIEnv* env, jobject /*thiz
 }
 
 JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetBoundaryByAlt(JNIEnv* /*env*/, jobject /*thiz*/,
+                                                          jint beforeType, jint afterType, jint occ, jdouble altDeg, jint rising)
+{
+	return hge_setBoundaryByAlt(beforeType, afterType, occ, altDeg, rising);
+}
+
+JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeClearScheduleEdits(JNIEnv* /*env*/, jobject /*thiz*/)
 {
 	return hge_clearScheduleEdits();
