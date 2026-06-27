@@ -17,6 +17,9 @@
 
 using json = nlohmann::json;
 
+// 計画名ビットマップの取り込み(実体は main.cpp)。
+extern void edgeSetNameBitmap(const uint8_t* data, int len);
+
 namespace
 {
 	constexpr uint16_t PORT_DISCOVERY = 50505;
@@ -120,6 +123,9 @@ namespace
 			if (hge_setPlanJson(pk.data.c_str(), static_cast<int32_t>(pk.data.size())) != ERR_HGC_OK)
 			{ rm = etp::M_NAK; }
 			else { hge_savePlan(); }	// 受信した計画を永続化(スマホ切断後も単独動作・再起動で復元)
+			break;
+		case etp::C_NAME_BMP:	// 計画名のモノクロ2値ビットマップを受領して表示に使う
+			edgeSetNameBitmap(reinterpret_cast<const uint8_t*>(pk.data.data()), static_cast<int>(pk.data.size()));
 			break;
 		case etp::C_CONTROL_METHOD:
 			break;	// 将来用。現状は受領のみ(ccmListは計画に内包)

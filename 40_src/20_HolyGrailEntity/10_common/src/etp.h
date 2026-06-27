@@ -26,7 +26,9 @@ namespace etp
 	enum cmd : uint16_t
 	{
 		C_SEARCH = 1000, C_ACTION = 1, C_STOP = 2, C_PROGRESS = 3,
-		C_DIRECTION = 4, C_CAPTURE_PLAN = 5, C_CONTROL_METHOD = 6, C_TIME = 7
+		C_DIRECTION = 4, C_CAPTURE_PLAN = 5, C_CONTROL_METHOD = 6, C_TIME = 7,
+		C_NAME_BMP = 8	// 計画名のモノクロ2値ビットマップ(width u16LE, height u16LE, 1bpp pixels)
+
 	};
 
 	// 解釈結果
