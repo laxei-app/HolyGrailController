@@ -209,82 +209,104 @@ namespace
 			i = j;
 		}
 
-		std::string out = "[";
-		bool firstBlk = true;
+		// 薄明にかからない純夜間の断片(最高高度が低い)はブロックにしない。
+		std::vector<Blk> kept;
 		for (const auto& bk : blks)
 		{
-			size_t a = bk.a, b = bk.b;
-			if (b <= a) { continue; }
+			if (bk.b <= bk.a) { continue; }
+			double mx = -90.0; for (size_t k = bk.a; k <= bk.b; ++k) { if (sm[k].alt > mx) { mx = sm[k].alt; } }
+			if (mx > -16.0) { kept.push_back(bk); }	// -16°より上に届く=薄明/直接撮影にかかる
+		}
+
+		std::string out = "[";
+		for (size_t bi = 0; bi < kept.size(); ++bi)
+		{
+			size_t a = kept[bi].a, b = kept[bi].b;
 			bool down = sm[a].alt > sm[b].alt;	// 夕方=下降
-			if (!firstBlk) { out += ","; }
-			firstBlk = false;
+			int sunType = down ? 3 : 2;			// このブロックの直接撮影(夕方=夕日3 / 朝=朝日2)
+			if (bi) { out += ","; }
 			out += "{\"title\":\"" + std::string(down ? "\\u5915\\u65b9\\u306e\\u8a08\\u753b" : "\\u671d\\u306e\\u8a08\\u753b") + "\"";
 			out += ",\"axis\":\"" + std::string(down ? "down" : "up") + "\"";
 			out += ",\"date\":\"" + std::string(multiDay ? md(sm[a].t) : "") + "\"";
-			// segments(ccm をポインタ同一でグループ化、高度範囲)
+			// segments(ccm をポインタ同一でグループ化、高度範囲)。後処理のため一旦集める。
+			struct Seg { int type; std::string name; double altTop; double altBottom; };
+			std::vector<Seg> segs;
+			bool hasSunDirect = false;
+			{
+				size_t k = a;
+				while (k <= b)
+				{
+					const hgc::ccmBase* c = activeCcmAtUnix(sm[k].t);
+					double mnA = sm[k].alt, mxA = sm[k].alt;
+					while (k <= b && activeCcmAtUnix(sm[k].t) == c) { if (sm[k].alt < mnA) mnA = sm[k].alt; if (sm[k].alt > mxA) mxA = sm[k].alt; ++k; }
+					if (c)
+					{
+						int ty = static_cast<int>(c->type);
+						if (ty == 2 || ty == 3) { ty = sunType; hasSunDirect = true; }	// ブロック方向に種別を統一(item4)
+						segs.push_back({ ty, c->name, clampAlt(mxA), clampAlt(mnA) });
+					}
+				}
+			}
+			// 直接撮影(夕日/朝日)が +6°(上端)まで広がり日中が消えても、日中↔夕日/朝日の境目を
+			// 掴み直して戻せるよう、0 幅の日中セグメントを上端に差し込む(夕方=先頭/朝=末尾)。
+			if (hasSunDirect && g_planCcm.day && !segs.empty())
+			{
+				size_t edge = down ? 0 : segs.size() - 1;
+				// クリップ端(最上端)のセグメントが直接撮影=日中が +6° まで潰れている状態。
+				// (60秒サンプリングのため上端は +5.9° 程度になる。+4.5° 以上で潰れと判定)
+				if (segs[edge].type == sunType && segs[edge].altTop >= 4.5)
+				{
+					Seg dz{ 4, g_planCcm.day->name, TOP, TOP };
+					if (down) segs.insert(segs.begin(), dz); else segs.push_back(dz);
+				}
+			}
 			out += ",\"segments\":[";
 			bool fseg = true;
-			size_t k = a;
-			while (k <= b)
+			for (const auto& s : segs)
 			{
-				const hgc::ccmBase* c = activeCcmAtUnix(sm[k].t);
-				double mnA = sm[k].alt, mxA = sm[k].alt;
-				size_t st = k;
-				while (k <= b && activeCcmAtUnix(sm[k].t) == c) { if (sm[k].alt < mnA) mnA = sm[k].alt; if (sm[k].alt > mxA) mxA = sm[k].alt; ++k; }
-				if (c)
-				{
-					char nb[64];
-					if (!fseg) out += ","; fseg = false;
-					out += "{\"type\":" + std::to_string(static_cast<int>(c->type)) + ",\"name\":\"" + jesc(c->name) + "\"";
-					std::snprintf(nb, sizeof(nb), "%.1f", clampAlt(mxA)); out += ",\"altTop\":" + std::string(nb);
-					std::snprintf(nb, sizeof(nb), "%.1f", clampAlt(mnA)); out += ",\"altBottom\":" + std::string(nb);
-					out += ",\"used\":true}";
-				}
-				(void)st;
-			}
-			// 排除した夕日/朝日(使用しない)
-			const hgc::ccmBase* exC = nullptr;
-			if (down && g_plan.sunsetMode == hgc::bandMode::off && g_planCcm.sunset) exC = g_planCcm.sunset.get();
-			if (!down && g_plan.sunriseMode == hgc::bandMode::off && g_planCcm.sunrise) exC = g_planCcm.sunrise.get();
-			if (exC)
-			{
-				// 排除した夕日/朝日は仕様の帯範囲 +6°〜0° で「使用しない」列に表示する。
-				double aTop = 6.0, aBot = 0.0;
 				char nb[64];
 				if (!fseg) out += ","; fseg = false;
-				out += "{\"type\":" + std::to_string(static_cast<int>(exC->type)) + ",\"name\":\"" + jesc(exC->name) + "\"";
-				std::snprintf(nb, sizeof(nb), "%.1f", clampAlt(aTop)); out += ",\"altTop\":" + std::string(nb);
-				std::snprintf(nb, sizeof(nb), "%.1f", clampAlt(aBot)); out += ",\"altBottom\":" + std::string(nb);
-				out += ",\"used\":false}";
+				out += "{\"type\":" + std::to_string(s.type) + ",\"name\":\"" + jesc(s.name) + "\"";
+				std::snprintf(nb, sizeof(nb), "%.1f", s.altTop); out += ",\"altTop\":" + std::string(nb);
+				std::snprintf(nb, sizeof(nb), "%.1f", s.altBottom); out += ",\"altBottom\":" + std::string(nb);
+				out += ",\"used\":true}";
+			}
+			// 直接撮影(夕日/朝日)が使用中に無ければ「使用しない」に置く(挿入できるように。item3)。
+			if (!hasSunDirect)
+			{
+				const hgc::ccmBase* sc = down ? (g_planCcm.sunset ? static_cast<hgc::ccmBase*>(g_planCcm.sunset.get()) : nullptr)
+				                              : (g_planCcm.sunrise ? static_cast<hgc::ccmBase*>(g_planCcm.sunrise.get()) : nullptr);
+				if (!fseg) out += ","; fseg = false;
+				out += "{\"type\":" + std::to_string(sunType) + ",\"name\":\"" + jesc(sc ? sc->name : "") + "\"";
+				out += ",\"altTop\":3.0,\"altBottom\":0.0,\"used\":false}";
 			}
 			out += "]";
-			// marks(境目=種別変化の時刻/高度、開始/終了、月の出入り)
+			// marks: 内部の可動境目(種別変化の時刻/高度)＋開始/終了＋月出入り。
+			//  ・ブロック先頭(クリップ端 +6° や、計画開始と一致して動かせない境目)はマーク化しない。
+			//  ・撮影開始/終了は計画の start/end 時刻を最初/最後のブロックに必ず表示。
+			//    範囲外(日中/深夜)の時は実際の太陽高度を渡し、View 側でブロック外側に描く。
 			out += ",\"marks\":[";
 			bool fmk = true;
 			auto addMark = [&](const std::string& label, long long t, double alt) {
 				char nb[16]; if (!fmk) out += ","; fmk = false;
 				out += "{\"label\":\"" + label + "\",\"time\":\"" + hms(t) + "\",";
-				std::snprintf(nb, sizeof(nb), "%.1f", clampAlt(alt)); out += "\"alt\":" + std::string(nb) + "}";
+				std::snprintf(nb, sizeof(nb), "%.1f", alt); out += "\"alt\":" + std::string(nb) + "}";
 			};
-			const hgc::ccmBase* prevC = reinterpret_cast<const hgc::ccmBase*>(1);
-			for (size_t m = a; m <= b; ++m)
+			const hgc::ccmBase* prevC = activeCcmAtUnix(sm[a].t);
+			for (size_t m = a + 1; m <= b; ++m)
 			{
 				const hgc::ccmBase* c = activeCcmAtUnix(sm[m].t);
-				if (m == a || c != prevC)
-				{
-					std::string lbl = (sm[m].t == s0) ? "Start" : "";
-					addMark(lbl, sm[m].t, sm[m].alt);
-					prevC = c;
-				}
+				if (c != prevC) { addMark("", sm[m].t, clampAlt(sm[m].alt)); prevC = c; }	// 内部の可動境目のみ
 			}
-			if (sm[b].t == s1) { addMark("End", sm[b].t, sm[b].alt); }
+			if (bi == 0) { addMark("Start", s0, sunAltAtUnix(s0)); }
+			if (bi == kept.size() - 1) { addMark("End", s1, sunAltAtUnix(s1)); }
 			// 月の出入り
 			for (const auto& ev : g_plan.events)
 			{
 				if (ev.event != hgc::csEvent::moonrise && ev.event != hgc::csEvent::moonset) continue;
 				long long mt = hgc::toUnixUtc(ev.when, g_offMin);
 				if (mt < sm[a].t || mt > sm[b].t) continue;
-				addMark(ev.event == hgc::csEvent::moonrise ? "\\u6708\\u306e\\u51fa" : "\\u6708\\u306e\\u5165\\u308a", mt, sunAltAtUnix(mt));
+				addMark(ev.event == hgc::csEvent::moonrise ? "\\u6708\\u306e\\u51fa" : "\\u6708\\u306e\\u5165\\u308a", mt, clampAlt(sunAltAtUnix(mt)));
 			}
 			out += "]}";
 		}
@@ -1135,7 +1157,11 @@ int32_t hge_setBoundaryByAlt(int32_t beforeType, int32_t afterType, int32_t occ,
 		if (altDeg < lo) altDeg = lo;
 		if (altDeg > hi) altDeg = hi;
 	}
-	astro::altTime at = astro::sunAltitudeTime(g_plan.place, base, altDeg, rising != 0, g_offMin);
+	// sunAltitudeTime は基準日の正午から前方探索する。朝(上昇)の交差は正午より前にあるため、
+	// そのままだと翌日の上昇交差を拾って境界が翌日へ飛ぶ。基準を前日へ寄せて当日の朝を拾わせる。
+	hgc::dateTime searchBase = base;
+	if (rising != 0) { searchBase = localFromUnix(hgc::toUnixUtc(base, g_offMin) - 18 * 3600); }
+	astro::altTime at = astro::sunAltitudeTime(g_plan.place, searchBase, altDeg, rising != 0, g_offMin);
 	if (!at.valid) { return ERR_HGC_NOT_FOUND; }
 	char iso[32];
 	std::snprintf(iso, sizeof(iso), "%04u-%02u-%02uT%02u:%02u:%02u",

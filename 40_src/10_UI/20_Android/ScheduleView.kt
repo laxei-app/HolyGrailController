@@ -68,7 +68,7 @@ class ScheduleView(context: Context) : View(context) {
 
     override fun onMeasure(wSpec: Int, hSpec: Int) {
         val w = MeasureSpec.getSize(wSpec)
-        val h = (blocks.size.coerceAtLeast(1) * (headerH + blockH) + dp(12f)).toInt()  // 下に余白(編集ボタンと分離)
+        val h = (blocks.size.coerceAtLeast(1) * (headerH + blockH) + dp(24f)).toInt()  // 下に余白(範囲外の終了時刻+編集ボタンと分離)
         setMeasuredDimension(w, h)
     }
 
@@ -152,10 +152,19 @@ class ScheduleView(context: Context) : View(context) {
         // 境目の時刻・太陽高度 / 開始終了 / 月出入り(中列)
         val markX0 = axisLabelW + bandW
         for (m in blk.marks) {
-            val y = yOf(bi, m.alt)
-            c.drawLine(bandX0 + bandW, y, width.toFloat(), y, line)
-            val right = if (m.label.isNotEmpty()) m.label else "%.1f°".format(m.alt)
-            c.drawText("${m.time}  $right", markX0 + dp(2f), y + sp(11f), markTxt)
+            val inRange = m.alt <= TOP + 0.01 && m.alt >= BOT - 0.01
+            if (inRange) {
+                val y = yOf(bi, m.alt)
+                c.drawLine(bandX0 + bandW, y, width.toFloat(), y, line)
+                val right = if (m.label.isNotEmpty()) m.label else "%.1f°".format(m.alt)
+                c.drawText("${m.time}  $right", markX0 + dp(2f), y + sp(11f), markTxt)
+            } else {
+                // 範囲外(日中で+6°超/深夜で-24°未満)の開始・終了はブロックの外側に時刻だけ描く。
+                val above = yOf(bi, m.alt) < bodyTop(bi)
+                val y = if (above) bodyTop(bi) - dp(3f) else bodyTop(bi) + blockH + sp(11f)
+                val label = if (m.label.isNotEmpty()) m.label else "%.1f°".format(m.alt)
+                c.drawText("${m.time}  $label", markX0 + dp(2f), y, markTxt)
+            }
         }
     }
 
@@ -203,6 +212,21 @@ class ScheduleView(context: Context) : View(context) {
     private fun segAt(bi: Int, y: Float): Int {
         val b = blocks[bi]
         for (i in b.segs.indices) { val s = b.segs[i]; val yt = yOf(bi, s.altTop); val yb = yOf(bi, s.altBottom); if (y >= minOf(yt, yb) && y < maxOf(yt, yb)) return i }
+        return -1
+    }
+    // タップ判定は描画している色付きの箱(使用する/使用しない列)の中だけに限定する。
+    // 左の高度軸・薄明帯・時刻列や、箱の無い余白をタップしても遷移しないようにする(自然な操作)。
+    private fun segAtXY(bi: Int, x: Float, y: Float): Int {
+        val b = blocks[bi]
+        for (i in b.segs.indices) {
+            val s = b.segs[i]
+            val yt = yOf(bi, s.altTop); val yb = yOf(bi, s.altBottom)
+            val top = minOf(yt, yb); val bot = maxOf(yt, yb)
+            if (bot - top <= 0f) continue
+            val x0 = if (s.used) ccmX0() else usedX1()
+            val x1 = if (s.used) usedX1() else width.toFloat()
+            if (x >= x0 && x < x1 && y >= top && y < bot) return i
+        }
         return -1
     }
 
@@ -263,7 +287,7 @@ class ScheduleView(context: Context) : View(context) {
                     commitEdit()
                 } else if (e.actionMasked == MotionEvent.ACTION_UP && !twoFinger &&
                            abs(e.x - downX) < dp(10f) && abs(e.y - downY) < dp(10f)) {
-                    val bi = blockAt(e.y); if (bi >= 0) { val si = segAt(bi, e.y); if (si >= 0) onTapType?.invoke(blocks[bi].segs[si].type) }
+                    val bi = blockAt(e.y); if (bi >= 0) { val si = segAtXY(bi, e.x, e.y); if (si >= 0) onTapType?.invoke(blocks[bi].segs[si].type) }
                 }
                 twoFinger = false; previewY = -1f; invalidate()
                 return true
