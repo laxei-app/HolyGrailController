@@ -81,9 +81,6 @@
                 </FrameLayout>
             </LinearLayout>
 
-            <!-- 曇り空 自動判別(夜間) -->
-            <CheckBox android:id="@+id/edit_autoEdge" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:text="曇り空など空が暗い時は自動判別する" />
-
             <!-- 固定露出(夜間) -->
             <LinearLayout android:id="@+id/edit_fixed_section" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="12dp">
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="固定露出" android:textStyle="bold" />

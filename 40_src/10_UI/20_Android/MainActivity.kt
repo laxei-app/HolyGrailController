@@ -308,7 +308,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<Button>(R.id.cmenu_sunset).setOnClickListener { openCcmEdit("sunset") }
         findViewById<Button>(R.id.cmenu_day).setOnClickListener { openCcmEdit("day") }
         findViewById<Button>(R.id.cmenu_moon).setOnClickListener { openMoonEdit() }
-        findViewById<ImageView>(R.id.edit_back).setOnClickListener { persistCcmEdit(); flipper.displayedChild = if (editingPlanCcm) 0 else 5 }
+        findViewById<ImageView>(R.id.edit_back).setOnClickListener { stopDirtyWatch(); persistCcmEdit(); flipper.displayedChild = if (editingPlanCcm) 0 else 5 }
         findViewById<Button>(R.id.edit_save).visibility = View.GONE   // 取消はエディタ先頭行へ移動
         // 色はメニュー「色の設定」(システム共通)で設定する(per-ccm色は廃止)。
         findViewById<ImageView>(R.id.color_back).setOnClickListener { leaveColorScreen() }
@@ -316,7 +316,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 露出平滑化(630)。戻る/メニューで保存して離脱。取り消しで保存値から再読込。
         findViewById<ImageView>(R.id.smooth_back).setOnClickListener { leaveSmoothingScreen() }
         findViewById<ImageView>(R.id.smooth_menu).setOnClickListener { leaveSmoothingScreen() }
-        findViewById<Button>(R.id.smooth_cancel).setOnClickListener { loadSmoothingScreen() }
+        findViewById<Button>(R.id.smooth_cancel).setOnClickListener { loadSmoothingScreen(); resetDirtyBaseline() }
         setupValueSlider(R.id.smooth_hyst_seek, 20) {
             findViewById<TextView>(R.id.smooth_hyst_val).text = String.format("%.1fev", seekToHyst(it))
         }
@@ -356,7 +356,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             addOnChangeListener { _, _, _ -> updateAltRangeLabels() }
         }
         // 月の影響への対処
-        findViewById<ImageView>(R.id.moon_back).setOnClickListener { persistMoonEdit(); flipper.displayedChild = if (editingPlanCcm) 0 else 5 }
+        findViewById<ImageView>(R.id.moon_back).setOnClickListener { stopDirtyWatch(); persistMoonEdit(); flipper.displayedChild = if (editingPlanCcm) 0 else 5 }
         findViewById<Button>(R.id.moon_save).visibility = View.GONE   // 取消はエディタ先頭行へ移動
         setupValueSlider(R.id.moon_startlum_seek, 30, gradient = true, thumbRes = R.drawable.ic_moon) {
             findViewById<TextView>(R.id.moon_startlum_val).text = String.format("+%.1fev", it * 0.1)
@@ -414,7 +414,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         moonLimit.set(o.optJSONObject("limitBright"), o.optJSONObject("limitDark"),
             o.optJSONArray("priority"), o.optJSONObject("initial"),
             moonMode = true, nightLimit = nightLimit)
-        addPresetTopRow(R.id.moon_content) { cancelMoonEdit() }   // 優先チェック+変更の取り消し
+        val cancelBtn = addPresetTopRow(R.id.moon_content) { cancelMoonEdit() }   // 優先チェック+変更の取り消し
+        startDirtyWatch(cancelBtn) { buildMoonEditJson()?.toString() ?: "" }      // item8
         flipper.displayedChild = 4
     }
 
@@ -426,9 +427,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         openMoonEdit()
     }
 
-    private fun persistMoonEdit() {
-        val all = ccmJson ?: return
-        val o = all.optJSONObject("moon") ?: return
+    // 現在の月エディタ内容から JSON を組み立てる(保存せず・破壊しない)。dirty 比較にも使う。
+    private fun buildMoonEditJson(): JSONObject? {
+        val all = ccmJson ?: return null
+        val src = all.optJSONObject("moon") ?: return null
+        val o = JSONObject(src.toString())
         o.put("color", ccmBgMap[5] ?: 0)   // 色はシステム共通(転送用に派生値を入れる)
         o.put("mode", findViewById<Spinner>(R.id.moon_mode).selectedItemPosition)
         o.put("startLuminance", sliderProgress(R.id.moon_startlum_seek) * 0.1)
@@ -442,6 +445,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         o.put("limitBright", moonLimit.getBright())
         o.put("limitDark", moonLimit.getDark())
         o.put("initial", moonLimit.getInitial())
+        return o
+    }
+
+    private fun persistMoonEdit() {
+        val all = ccmJson ?: return
+        val o = buildMoonEditJson() ?: return
+        all.put("moon", o)
         if (editingPlanCcm) HgeNative.nativeSetPlanCcm(all.toString()) else savePresetFromEditor(o)
     }
 
@@ -539,7 +549,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun leaveColorScreen() { saveColorScreen(); flipper.displayedChild = 5; buildGearMenu() }
 
     // ---------- 630 露出平滑化(自動露出 全体設定。settings.json) ----------
-    private fun openSmoothingScreen() { loadSmoothingScreen(); flipper.displayedChild = 11 }
+    private fun openSmoothingScreen() {
+        loadSmoothingScreen()
+        startDirtyWatch(findViewById(R.id.smooth_cancel)) {
+            "${sliderProgress(R.id.smooth_hyst_seek)},${sliderProgress(R.id.smooth_ma_seek)}"
+        }
+        flipper.displayedChild = 11
+    }
     private fun loadSmoothingScreen() {
         val o = try { JSONObject(HgeNative.nativeGetSmoothing()) } catch (e: Exception) { JSONObject() }
         val h = hystToSeek(o.optDouble("hysteresis", 0.5))
@@ -549,7 +565,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         setSliderProgress(R.id.smooth_ma_seek, m)
         findViewById<TextView>(R.id.smooth_ma_val).text = "${m}frame"
     }
-    private fun leaveSmoothingScreen() { saveSmoothingScreen(); flipper.displayedChild = 5; buildGearMenu() }
+    private fun leaveSmoothingScreen() { stopDirtyWatch(); saveSmoothingScreen(); flipper.displayedChild = 5; buildGearMenu() }
     private fun saveSmoothingScreen() {
         val js = JSONObject()
             .put("hysteresis", seekToHyst(sliderProgress(R.id.smooth_hyst_seek)))
@@ -696,7 +712,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // エディタ内容の先頭に [優先的な初期値にする] [変更の取り消し(赤)] の行を差し込む。
-    private fun addPresetTopRow(contentId: Int, onCancel: () -> Unit) {
+    // 戻り値=変更の取り消しボタン(dirty 連動の監視に使う)。
+    private fun addPresetTopRow(contentId: Int, onCancel: () -> Unit): Button {
         val box = findViewById<LinearLayout>(contentId)
         box.findViewWithTag<View>("ptop")?.let { box.removeView(it) }
         presetPreferCheck = null
@@ -718,6 +735,36 @@ class MainActivity : AppCompatActivity(), HgeListener {
         cancel.setOnClickListener { onCancel() }
         row.addView(cancel)
         box.addView(row, 0)
+        return cancel
+    }
+
+    // --- 変更の取り消しボタンの dirty 連動(item8) ---
+    // 未変更=グレー無効、変更=赤有効、元に戻すと無効へ。開いた時の baseline と現在値を
+    // 比較して状態を更新する(短周期の監視で全ウィジェットに非依存)。
+    private var dirtyBtn: Button? = null
+    private var dirtyBaseline: String = ""
+    private var dirtyProvider: (() -> String)? = null
+    private val dirtyWatch = object : Runnable {
+        override fun run() {
+            val b = dirtyBtn; val p = dirtyProvider ?: return
+            if (b != null) { setCancelEnabled(b, p() != dirtyBaseline); handler.postDelayed(this, 300) }
+        }
+    }
+    // 監視開始。provider は「現在の編集内容」を表す文字列(保存JSON等)を返す。
+    private fun startDirtyWatch(btn: Button, provider: () -> String) {
+        handler.removeCallbacks(dirtyWatch)
+        dirtyBtn = btn; dirtyProvider = provider; dirtyBaseline = provider()
+        setCancelEnabled(btn, false)
+        handler.postDelayed(dirtyWatch, 300)
+    }
+    private fun stopDirtyWatch() { handler.removeCallbacks(dirtyWatch); dirtyBtn = null; dirtyProvider = null }
+    // 取り消しでベースラインへ戻したら無効へ(取り消しハンドラの末尾で呼ぶ)。
+    private fun resetDirtyBaseline() { dirtyProvider?.let { dirtyBaseline = it() }; dirtyBtn?.let { setCancelEnabled(it, false) } }
+    private fun setCancelEnabled(btn: Button, enabled: Boolean) {
+        btn.isEnabled = enabled
+        btn.background = androidx.core.content.ContextCompat.getDrawable(
+            this, if (enabled) R.drawable.btn_cancel_double else R.drawable.btn_cancel_gray)
+        btn.setTextColor(if (enabled) Color.WHITE else 0xFFEEEEEE.toInt())
     }
 
     // 「変更の取り消し」ボタン共通スタイル: 赤の丸ボタン + 白の内側リング(2重)。文字は白。
@@ -1488,7 +1535,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val isNight = key == "night"
         findViewById<View>(R.id.edit_alt_section).visibility = if (hasAlt) View.VISIBLE else View.GONE
         findViewById<View>(R.id.edit_ev_section).visibility = if (hasEv) View.VISIBLE else View.GONE
-        findViewById<View>(R.id.edit_autoEdge).visibility = if (isNight) View.VISIBLE else View.GONE
         findViewById<View>(R.id.edit_fixed_section).visibility = if (isNight) View.VISIBLE else View.GONE
         findViewById<View>(R.id.edit_postev_section).visibility = if (isNight) View.VISIBLE else View.GONE
         findViewById<View>(R.id.edit_preev_section).visibility = if (isNight) View.VISIBLE else View.GONE
@@ -1534,7 +1580,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
             findViewById<TextView>(R.id.edit_ev_val).text = String.format("%+.1f ev", seekToEv(p))
         }
         if (isNight) {
-            findViewById<CheckBox>(R.id.edit_autoEdge).isChecked = o.optBoolean("autoEdge", true)
             val pp = evToSeek(o.optDouble("postNightEv", 0.0))   // 夜間後露出補正
             setSliderProgress(R.id.edit_postev_seek, pp)
             findViewById<TextView>(R.id.edit_postev_val).text = String.format("%+.1f ev", seekToEv(pp))
@@ -1554,7 +1599,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             setSliderProgress(R.id.edit_ma_seek, mp)
             findViewById<TextView>(R.id.edit_ma_val).text = maLabel(mp)
         }
-        addPresetTopRow(R.id.edit_content) { cancelCcmEdit() }   // 優先チェック+変更の取り消し
+        val cancelBtn = addPresetTopRow(R.id.edit_content) { cancelCcmEdit() }   // 優先チェック+変更の取り消し
+        startDirtyWatch(cancelBtn) { buildCcmEditJson()?.toString() ?: "" }      // item8: 変更で赤・未変更でグレー
         flipper.displayedChild = 3
     }
 
@@ -1566,10 +1612,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         openCcmEdit(editingKey)
     }
 
-    // 編集内容を保存する(離脱時に呼ぶ。トースト/画面遷移はしない)。
-    private fun persistCcmEdit() {
-        val all = ccmJson ?: return
-        val o = all.optJSONObject(editingKey) ?: return
+    // 現在のエディタ内容から ccm の JSON を組み立てる(保存せず・破壊しない)。dirty 比較にも使う。
+    private fun buildCcmEditJson(): JSONObject? {
+        val all = ccmJson ?: return null
+        val src = all.optJSONObject(editingKey) ?: return null
+        val o = JSONObject(src.toString())   // コピー(保存時まで元を変えない)
         o.put("color", ccmBgMap[keyType(editingKey)] ?: 0)   // 色はシステム共通(転送用に派生値を入れる)
         when (editingKey) {
             "night" -> o.put("sunAltitude", seekToAlt(sliderProgress(R.id.edit_alt_seek)))
@@ -1585,7 +1632,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
             o.put("movingAverage", sliderProgress(R.id.edit_ma_seek))
         }
         if (editingKey == "night") {
-            o.put("autoEdge", findViewById<CheckBox>(R.id.edit_autoEdge).isChecked)
             o.put("postNightEv", seekToEv(sliderProgress(R.id.edit_postev_seek)))   // 夜間後露出補正
             o.put("preNightEv", seekToEv(sliderProgress(R.id.edit_preev_seek)))     // 夜間前露出補正(仕様3.7)
             val e = fixEditor.get()
@@ -1597,6 +1643,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
             o.put("limitDark", editLimit.getDark())
             o.put("initial", editLimit.getInitial())
         }
+        return o
+    }
+
+    // 編集内容を保存する(離脱時に呼ぶ。トースト/画面遷移はしない)。
+    private fun persistCcmEdit() {
+        val all = ccmJson ?: return
+        val o = buildCcmEditJson() ?: return
+        all.put(editingKey, o)
         if (editingPlanCcm) HgeNative.nativeSetPlanCcm(all.toString()) else savePresetFromEditor(o)
     }
 
