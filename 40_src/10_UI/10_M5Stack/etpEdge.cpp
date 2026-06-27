@@ -119,6 +119,7 @@ namespace
 		case etp::C_CAPTURE_PLAN:
 			if (hge_setPlanJson(pk.data.c_str(), static_cast<int32_t>(pk.data.size())) != ERR_HGC_OK)
 			{ rm = etp::M_NAK; }
+			else { hge_savePlan(); }	// 受信した計画を永続化(スマホ切断後も単独動作・再起動で復元)
 			break;
 		case etp::C_CONTROL_METHOD:
 			break;	// 将来用。現状は受領のみ(ccmListは計画に内包)

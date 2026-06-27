@@ -2274,7 +2274,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 currentPlanId = id
                 capturingPlans.add(id)
                 // 撮影中も撮影計画画面のまま(item7)。並行撮影対応で planId 指定。
-                if (e == null) HgeNative.nativeCaptureStartPlan(id) else startOnEdge(e)
+                if (e == null) HgeNative.nativeCaptureStartPlan(id) else startOnEdge(e, id)
                 startBlink(); refreshPlanList(); updateReadOnly()
             }
         }.start()
@@ -2742,32 +2742,44 @@ class MainActivity : AppCompatActivity(), HgeListener {
         refreshEdgeSpinner()
     }
 
+    // エッジ端末の状態を約10秒ごとに問い合わせ、スマホ表示へ反映する(仕様8.2)。
+    // エッジ側で停止された場合もここで検知してスマホUIを更新する(既知ギャップの解消)。
     private val edgePoll = object : Runnable {
         override fun run() {
-            val e = selectedEdge() ?: return
+            val e = selectedEdge()
+            if (e == null) { return }
             Thread {
                 val js = HgeNative.nativeEdgeProgress(e.ip, e.port)
                 runOnUiThread {
                     if (js.isNotEmpty()) {
                         try {
                             val o = JSONObject(js)
-                            capState.text = "エッジ端末: ${HgeNative.stateName(o.optInt("state"))}"
-                            capProgress.text = "frame ${o.optInt("frame")}/${o.optInt("total")}  " +
-                                "elapsed ${o.optInt("elapsedSec")}s  remain ${o.optInt("remainSec")}s"
-                            capCaptured.text = "ccm ${o.optString("ccm")}  iso ${o.optString("iso")}  " +
-                                "ss ${o.optString("ss")}  f ${o.optString("fn")}"
+                            val st = o.optInt("state")
+                            if (currentPlanId == edgeCapturingPlanId && edgeCapturingPlanId.isNotEmpty()) {
+                                captureStatus.text = "● エッジ撮影中  ${o.optInt("frame")}/${o.optInt("total")}枚  残り${o.optInt("remainSec")}秒"
+                                captureStatus.visibility = View.VISIBLE
+                            }
+                            // エッジが停止/終了/エラー → スマホ側の撮影中表示を解除。
+                            if (st == HgeNative.ST_IDLE || st == HgeNative.ST_ERROR) {
+                                edgeCapturing = false
+                                if (edgeCapturingPlanId.isNotEmpty()) {
+                                    capturingPlans.remove(edgeCapturingPlanId); edgeCapturingPlanId = ""
+                                    if (capturingPlans.isEmpty()) stopBlink()
+                                    refreshPlanList(); updateReadOnly(); captureStatus.visibility = View.GONE
+                                }
+                            }
                         } catch (_: Exception) {}
                     }
                 }
             }.start()
-            if (edgeCapturing) handler.postDelayed(this, 3000)
+            if (edgeCapturing) handler.postDelayed(this, 10000)   // 約10秒間隔
         }
     }
 
-    private fun startOnEdge(e: Edge) {
-        // 時刻同期(C_TIME)はエッジ端末の時計を「現在時刻」に合わせるためのもの。
-        // 計画開始時刻(startCal)を送るとエッジが now=開始時刻と誤認し、開始前でも即撮影してしまう。
-        // 計画の start/end は別途 C_CAPTURE_PLAN(getPlanJson)で渡るので、ここは現在時刻を送る。
+    private var edgeCapturingPlanId = ""   // エッジで撮影中の計画 id
+
+    private fun startOnEdge(e: Edge, planId: String) {
+        // 時刻同期(C_TIME)はエッジ端末の時計を「現在時刻」に合わせるためのもの。現在時刻を送る。
         val nowCal = Calendar.getInstance()
         val s = fmtIso.format(nowCal.time)
         val off = TimeZone.getDefault().getOffset(nowCal.timeInMillis) / 60000
@@ -2775,12 +2787,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val r = HgeNative.nativeEdgeStart(e.ip, e.port, s, off)
             runOnUiThread {
                 if (r == 0) {
-                    edgeCapturing = true
-                    flipper.displayedChild = 1
-                    capState.text = "エッジ端末へ転送・撮影開始 ${e.ip}"
+                    edgeCapturing = true; edgeCapturingPlanId = planId   // 撮影中も計画画面のまま
+                    captureStatus.text = "● エッジ端末へ転送・撮影開始"; captureStatus.visibility = View.VISIBLE
                     handler.postDelayed(edgePoll, 2000)
                 } else {
-                    capState.text = "エッジ端末 開始失敗 (code=$r)"
+                    capturingPlans.remove(planId); refreshPlanList(); updateReadOnly()
+                    Toast.makeText(this, "エッジ端末 開始失敗 (code=$r)", Toast.LENGTH_LONG).show()
                 }
             }
         }.start()
@@ -2790,9 +2802,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         Thread {
             HgeNative.nativeEdgeStop(e.ip, e.port)
             runOnUiThread {
-                edgeCapturing = false
+                edgeCapturing = false; edgeCapturingPlanId = ""
                 handler.removeCallbacks(edgePoll)
-                flipper.displayedChild = 0
+                captureStatus.visibility = View.GONE
             }
         }.start()
     }
