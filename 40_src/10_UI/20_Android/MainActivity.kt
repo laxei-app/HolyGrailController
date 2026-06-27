@@ -1600,7 +1600,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<View>(R.id.edit_presetScroll).visibility = if (showPreset) View.VISIBLE else View.GONE
         findViewById<View>(R.id.edit_presetDivider).visibility = if (showPreset) View.VISIBLE else View.GONE
 
-        val hasAlt = key != "day"
+        val hasAlt = false   // 開始/終了(太陽高度)はスケジュール画面の境界で設定するため ccm からは撤去
         val hasEv = key != "night"
         val isNight = key == "night"
         findViewById<View>(R.id.edit_alt_section).visibility = if (hasAlt) View.VISIBLE else View.GONE
@@ -1696,14 +1696,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val src = all.optJSONObject(editingKey) ?: return null
         val o = JSONObject(src.toString())   // コピー(保存時まで元を変えない)
         o.put("color", ccmBgMap[keyType(editingKey)] ?: 0)   // 色はシステム共通(転送用に派生値を入れる)
-        when (editingKey) {
-            "night" -> o.put("sunAltitude", seekToAlt(sliderProgress(R.id.edit_alt_seek)))
-            "sunrise", "sunset" -> {
-                val v = findViewById<RangeSlider>(R.id.edit_alt_range).values
-                o.put("sunAltitude", altRangeValToDeg(v[0].toInt()))      // 撮り始め
-                o.put("sunAltitudeEnd", altRangeValToDeg(v[1].toInt()))   // 終わり
-            }
-        }
+        // 開始/終了(太陽高度)はスケジュール画面の境界で設定するため、ここでは書き込まない。
         if (editingKey != "night") o.put("ev", seekToEv(sliderProgress(R.id.edit_ev_seek)))
         if (editingKey == "sunrise" || editingKey == "sunset") {
             o.put("hysteresis", seekToHyst(sliderProgress(R.id.edit_hyst_seek)))    // ccm個別の平滑化(項目7)

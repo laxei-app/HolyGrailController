@@ -68,7 +68,7 @@ class ScheduleView(context: Context) : View(context) {
 
     override fun onMeasure(wSpec: Int, hSpec: Int) {
         val w = MeasureSpec.getSize(wSpec)
-        val h = (blocks.size.coerceAtLeast(1) * (headerH + blockH)).toInt()
+        val h = (blocks.size.coerceAtLeast(1) * (headerH + blockH) + dp(12f)).toInt()  // 下に余白(編集ボタンと分離)
         setMeasuredDimension(w, h)
     }
 
@@ -180,11 +180,24 @@ class ScheduleView(context: Context) : View(context) {
             for (k in 0 until u.size - 1) {
                 val bef = u[k].type; val aft = u[k + 1].type
                 val key = bef * 100 + aft; val occ = cnt.getOrDefault(key, 0); cnt[key] = occ + 1
-                val alt = u[k].altBottom
+                // 隣接する2セグメントが接する高度。夕方(降順)は上segの下端、朝方(昇順)は上segの上端。
+                val alt = if (blocks[bi].axisDown) u[k].altBottom else u[k].altTop
                 res.add(Bnd(bi, bef, aft, occ, alt, yOf(bi, alt)))
             }
         }
         return res
+    }
+    // 境界の可動範囲[°](仕様7.3.2)。接する種別ペアで決まる。
+    private fun clampRange(before: Int, after: Int): Pair<Double, Double> {
+        fun has(t: Int) = before == t || after == t
+        val sun = has(2) || has(3); val trans = has(6) || has(7)
+        return when {
+            has(4) && sun -> 3.0 to 6.0          // 日中↔夕日/朝日(上境界 +6〜+3)
+            sun && trans -> -1.0 to 2.0          // 夕日/朝日↔移行(下境界 +2〜-1)
+            has(4) && trans -> -3.0 to 4.0       // 日中↔移行(日中境界 +4〜-3)
+            has(1) && trans -> -19.0 to -12.0    // 夜間↔移行(夜間境界 -12〜-19)
+            else -> -24.0 to 6.0
+        }
     }
     private fun blockAt(y: Float): Int { for (bi in blocks.indices) { if (y >= blockTop(bi) && y < blockTop(bi) + headerH + blockH) return bi }; return -1 }
     private fun segAt(bi: Int, y: Float): Int {
@@ -210,10 +223,11 @@ class ScheduleView(context: Context) : View(context) {
                     parent?.requestDisallowInterceptTouchEvent(true)
                     startMidX = midX(e); startMidY = midY(e); curMidX = startMidX; curMidY = startMidY
                     targetBi = blockAt(startMidY)
-                    // 最寄りの境目を掴む(距離制限なし=近いものを選ぶ)。
+                    // 境目は「線の近く(±dp22)」を掴んだ時だけ対象にする(帯中央の横ドラッグで
+                    // 誤って境目を動かさないため)。帯本体は常に segAt で挿入/排除の対象にする。
                     targetBoundary = -1; targetSeg = -1
                     if (targetBi >= 0) {
-                        var best = -1; var bestD = Float.MAX_VALUE; val bs = boundaries()
+                        var best = -1; var bestD = dp(22f); val bs = boundaries()
                         for (idx in bs.indices) { if (bs[idx].bi == targetBi) { val d = abs(bs[idx].y - startMidY); if (d < bestD) { bestD = d; best = idx } } }
                         targetBoundary = best
                         targetSeg = segAt(targetBi, startMidY)
@@ -224,8 +238,16 @@ class ScheduleView(context: Context) : View(context) {
             MotionEvent.ACTION_MOVE -> {
                 if (twoFinger) {
                     if (e.pointerCount >= 2) { curMidX = midX(e); curMidY = midY(e) }
-                    // 縦移動が優勢なら境目プレビュー線を出す
-                    if (targetBoundary >= 0 && abs(curMidY - startMidY) >= abs(curMidX - startMidX)) { previewY = curMidY; invalidate() }
+                    // 縦移動が優勢なら境目プレビュー線を出す(可動範囲にクランプ)
+                    if (targetBoundary >= 0 && abs(curMidY - startMidY) >= abs(curMidX - startMidX)) {
+                        val bnd = boundaries().getOrNull(targetBoundary)
+                        if (bnd != null) {
+                            val (lo, hi) = clampRange(bnd.before, bnd.after)
+                            val a = altOfY(bnd.bi, curMidY).coerceIn(lo, hi)
+                            previewY = yOf(bnd.bi, a)
+                        } else { previewY = curMidY }
+                        invalidate()
+                    }
                     return true
                 }
                 // 1本指で動いたらヒント+親スクロールへ委譲
@@ -257,7 +279,8 @@ class ScheduleView(context: Context) : View(context) {
         if (targetBoundary >= 0 && abs(mvy) >= abs(mvx) && abs(mvy) > dp(8f)) {
             // 縦ドラッグ=境目の時刻(=高度)変更
             val bnd = boundaries().getOrNull(targetBoundary) ?: return
-            val newAlt = altOfY(bi, curMidY)
+            val (lo, hi) = clampRange(bnd.before, bnd.after)
+            val newAlt = altOfY(bi, curMidY).coerceIn(lo, hi)   // 可動範囲にクランプ(仕様7.3.2)
             val rising = if (blocks[bi].axisDown) 0 else 1
             onMoveBoundary?.invoke(bnd.before, bnd.after, bnd.occ, newAlt, rising)
         } else if (targetSeg >= 0 && abs(mvx) > abs(mvy) && abs(mvx) > dp(20f)) {

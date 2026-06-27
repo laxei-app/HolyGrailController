@@ -60,7 +60,7 @@ namespace astro
 		// 1サンプルの撮影制御方法を分類する。
 		hgc::ccmType classify(double h, bool rising, bool sunInFrame, double nightAlt, double twiAlt)
 		{
-			constexpr double sunDirectMaxAlt = 12.0;	// これ以上高い太陽は直接撮影ccm扱いにしない
+			constexpr double sunDirectMaxAlt = 3.0;	// これ以上高い太陽は日中扱い(朝日/夕日の上限既定+3°)
 			if (sunInFrame && h >= twiAlt && h <= sunDirectMaxAlt)
 			{
 				return rising ? hgc::ccmType::sunrise : hgc::ccmType::sunset;
@@ -200,19 +200,19 @@ namespace astro
 		if (tEnd.ut <= tStart.ut) { return ERR_HGC_INVALID_ARG; }
 
 		const fov f = calcFov(plan.camera, plan.lens, plan.landscape);
-		const double nightAlt   = set.night   ? set.night->sunAltitude   : -18.0;
-		// 直接撮影の太陽高度の下限は「撮り始め/終わりのうち低い方」を使う。
-		// 朝日は sunAltitude(-6)が低く、夕日は sunAltitudeEnd(-6)が低い。sunAltitude固定だと
-		// 夕日の下限が0になり、地平線近くで沈む太陽が夕日と判定されずこぼれていた。
-		const double twiAltRise = set.sunrise ? std::min(set.sunrise->sunAltitude, set.sunrise->sunAltitudeEnd) : -6.0;
-		const double twiAltSet  = set.sunset  ? std::min(set.sunset->sunAltitude,  set.sunset->sunAltitudeEnd)  : -6.0;
+		// 撮影制御方法の開始/終了高度はスケジュール画面の境界で決める(ccm画面のスライダーは廃止)。
+		// 既定の高度帯: 夜間 <-18° / 夜間前後移行 -18°〜0° / 朝日・夕日(直接撮影) 0°〜+3° / 日中 >+3°。
+		// 各境界はスケジュールで可動(夜間境界 -19〜-12, 移行↔朝日夕日 -1〜+2, 朝日夕日↔日中 +3〜+6)。
+		const double nightAlt   = -18.0;	// 夜間の上限(固定)
+		const double twiAltRise = 0.0;		// 朝日/夕日帯の下限(既定)
+		const double twiAltSet  = 0.0;
 
 		plan.ccmList.clear();
 		plan.events.clear();
 
 		// --- 1分刻みでサンプリングして撮影制御方法を分類 → 区間統合 ---
 		const double stepDays = 60.0 / 86400.0;
-		constexpr double sunDirectMaxAlt = 12.0;	// これ以上高い太陽は直接撮影ccm扱いにしない
+		constexpr double sunDirectMaxAlt = 3.0;	// これ以上高い太陽は日中扱い(朝日/夕日の上限既定+3°)
 
 		// 第1パス: 全サンプルの高度・上昇/下降・画角侵入を収集する。
 		struct Sample { astro_time_t t; double h; bool rising; bool inF; };

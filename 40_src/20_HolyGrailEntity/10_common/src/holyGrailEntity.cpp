@@ -1075,6 +1075,7 @@ int32_t hge_setBandMode(int32_t sunriseMode, int32_t sunsetMode)
 	auto cl = [](int32_t m) { return (m < 0 || m > 2) ? hgc::bandMode::autoDetect : static_cast<hgc::bandMode>(m); };
 	g_plan.sunriseMode = cl(sunriseMode);
 	g_plan.sunsetMode  = cl(sunsetMode);
+	g_plan.boundaries.clear();	// 帯の挿入/排除は構造が変わるため、古い境界上書きを破棄(整合性維持)
 	errCode e = astro::buildSchedule(g_plan, g_planCcm, g_offMin);
 	if (e != ERR_HGC_OK) { return e; }
 	buildScheduleJson();
@@ -1127,10 +1128,10 @@ int32_t hge_setBoundaryByAlt(int32_t beforeType, int32_t afterType, int32_t occ,
 		auto has = [&](int t) { return beforeType == t || afterType == t; };
 		double lo = -24.0, hi = 6.0;
 		bool sun = has(2) || has(3), trans = has(6) || has(7);
-		if (has(4) && sun)            { lo = 0.0;   hi = 6.0;   }  // 日中↔夕日/朝日(夕日朝日 +6〜0)
-		else if (sun && trans)        { lo = -11.5; hi = -4.5;  }  // 夕日/朝日↔移行(移行前後の境界)
-		else if (has(4) && trans)     { lo = -3.0;  hi = 4.0;   }  // 日中↔移行(日中撮影との境界)
-		else if (has(1) && trans)     { lo = -19.0; hi = -12.0; }  // 夜間↔移行(夜間撮影との境界)
+		if (has(4) && sun)            { lo = 3.0;   hi = 6.0;   }  // 日中↔夕日/朝日(上境界 +6〜+3)
+		else if (sun && trans)        { lo = -1.0;  hi = 2.0;   }  // 夕日/朝日↔移行(下境界 +2〜-1)
+		else if (has(4) && trans)     { lo = -3.0;  hi = 4.0;   }  // 日中↔移行(日中境界 +4〜-3)
+		else if (has(1) && trans)     { lo = -19.0; hi = -12.0; }  // 夜間↔移行(夜間境界 -12〜-19)
 		if (altDeg < lo) altDeg = lo;
 		if (altDeg > hi) altDeg = hi;
 	}
