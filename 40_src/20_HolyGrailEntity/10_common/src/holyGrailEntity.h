@@ -215,9 +215,15 @@ int32_t hge_addOwnedDetected(int32_t index);
 int32_t hge_getProgressJson(char* buf, int32_t* inoutLen);
 
 // --- 撮影実行 ---
-int32_t hge_captureStart(void);		// 撮影開始(非同期)。進捗は HGE_EV_PROGRESS
-int32_t hge_captureStop(void);		// 撮影停止
-int32_t hge_getState(void);			// 現在状態(hgeState)を即時返す
+int32_t hge_captureStart(void);		// 撮影開始(非同期。編集対象計画)。進捗は HGE_EV_PROGRESS
+int32_t hge_captureStop(void);		// 撮影停止(編集対象計画)
+int32_t hge_getState(void);			// 集約状態(hgeState)を即時返す
+
+// --- 並行撮影(Phase3。計画id指定。planId 空文字=編集対象計画) ---
+// 通知(HGE_EV_STATE/PROGRESS/CAPTURED)には "planId" が付与される。同時実行は上限あり。
+int32_t hge_captureStartPlan(const char* planId);
+int32_t hge_captureStopPlan(const char* planId);
+int32_t hge_getStatePlan(const char* planId);	// 指定計画の状態。planId 空=集約状態
 
 #ifdef __cplusplus
 }

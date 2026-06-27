@@ -36,6 +36,10 @@ object HgeNative {
     external fun nativeCaptureStart(): Int
     external fun nativeCaptureStop(): Int
     external fun nativeGetState(): Int
+    // 並行撮影(計画id指定。空文字=編集対象)。通知に planId が付く。
+    external fun nativeCaptureStartPlan(planId: String): Int
+    external fun nativeCaptureStopPlan(planId: String): Int
+    external fun nativeGetStatePlan(planId: String): Int
     external fun nativeScheduleJson(): String
     external fun nativeGetPlanJson(): String
     external fun nativeSetPlanTimes(start: String, end: String, offMin: Int): Int

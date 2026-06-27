@@ -90,6 +90,34 @@ Java_app_laxei_holygrail_HgeNative_nativeGetState(JNIEnv* /*env*/, jobject /*thi
 	return hge_getState();
 }
 
+// --- 並行撮影(計画id指定) ---
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeCaptureStartPlan(JNIEnv* env, jobject /*thiz*/, jstring id)
+{
+	const char* s = id ? env->GetStringUTFChars(id, nullptr) : nullptr;
+	jint r = hge_captureStartPlan(s ? s : "");
+	if (s) { env->ReleaseStringUTFChars(id, s); }
+	return r;
+}
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeCaptureStopPlan(JNIEnv* env, jobject /*thiz*/, jstring id)
+{
+	const char* s = id ? env->GetStringUTFChars(id, nullptr) : nullptr;
+	jint r = hge_captureStopPlan(s ? s : "");
+	if (s) { env->ReleaseStringUTFChars(id, s); }
+	return r;
+}
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeGetStatePlan(JNIEnv* env, jobject /*thiz*/, jstring id)
+{
+	const char* s = id ? env->GetStringUTFChars(id, nullptr) : nullptr;
+	jint r = hge_getStatePlan(s ? s : "");
+	if (s) { env->ReleaseStringUTFChars(id, s); }
+	return r;
+}
+
 JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeSearchDevices(JNIEnv* /*env*/, jobject /*thiz*/)
 {

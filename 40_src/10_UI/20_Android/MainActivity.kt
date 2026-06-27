@@ -67,7 +67,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private lateinit var planListScroll: ScrollView
     private lateinit var planListContainer: LinearLayout
     private var currentPlanId = ""          // 編集対象の計画 id
-    private var capturingPlanId = ""        // 撮影中の計画 id(ローカル/エッジ)
+    private val capturingPlans = mutableSetOf<String>()  // 撮影中の計画 id 群(並行撮影)
     private var scheduleView: ScheduleView? = null   // §7.3.2 スケジュール表示/編集ビュー
     private lateinit var captureStatus: TextView     // 撮影中ステータス(plan画面内)
     private var planReadOnly = false                 // 撮影中の計画を表示中=編集不可(item7)
@@ -2211,7 +2211,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val id = p.optString("id")
         val name = p.optString("name")
         val capturable = p.optBoolean("capturable")
-        val capturing = (id == capturingPlanId)
+        val capturing = capturingPlans.contains(id)
         val row = LinearLayout(this)
         row.orientation = LinearLayout.HORIZONTAL
         row.gravity = Gravity.CENTER_VERTICAL
@@ -2272,9 +2272,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
             HgeNative.nativeSelectPlan(id)
             runOnUiThread {
                 currentPlanId = id
-                capturingPlanId = id
-                // 撮影中も撮影計画画面のまま(item7: 別画面を用意しない)。読取専用にする。
-                if (e == null) HgeNative.nativeCaptureStart() else startOnEdge(e)
+                capturingPlans.add(id)
+                // 撮影中も撮影計画画面のまま(item7)。並行撮影対応で planId 指定。
+                if (e == null) HgeNative.nativeCaptureStartPlan(id) else startOnEdge(e)
                 startBlink(); refreshPlanList(); updateReadOnly()
             }
         }.start()
@@ -2287,9 +2287,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .setMessage("撮影を中止しますか？")
             .setPositiveButton("中止する") { _, _ ->
                 val e = selectedEdge()
-                if (e == null) HgeNative.nativeCaptureStop() else stopOnEdge(e)
-                capturingPlanId = ""; stopBlink(); refreshPlanList()
-                if (flipper.displayedChild == 1) flipper.displayedChild = 0
+                if (e == null) HgeNative.nativeCaptureStopPlan(id) else stopOnEdge(e)
+                capturingPlans.remove(id); if (capturingPlans.isEmpty()) stopBlink()
+                refreshPlanList(); updateReadOnly()
             }
             .setNegativeButton("続ける", null)
             .show()
@@ -2314,7 +2314,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private fun confirmDeletePlan(id: String, name: String) {
-        if (id == capturingPlanId) { Toast.makeText(this, "撮影中は削除できません", Toast.LENGTH_SHORT).show(); return }
+        if (capturingPlans.contains(id)) { Toast.makeText(this, "撮影中は削除できません", Toast.LENGTH_SHORT).show(); return }
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle("削除")
             .setMessage("「$name」を削除しますか？")
@@ -2336,9 +2336,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
             for (i in 0 until planListContainer.childCount) {
                 val row = planListContainer.getChildAt(i) as? LinearLayout ?: continue
                 val ic = row.getChildAt(0) as? ImageView ?: continue
-                if (ic.tag == "cam:$capturingPlanId") ic.alpha = if (blinkOn) 1f else 0.25f
+                val tag = ic.tag as? String
+                if (tag != null && tag.startsWith("cam:")) ic.alpha = if (blinkOn) 1f else 0.25f
             }
-            if (capturingPlanId.isNotEmpty()) handler.postDelayed(this, 500)
+            if (capturingPlans.isNotEmpty()) handler.postDelayed(this, 500)
         }
     }
     private fun startBlink() { handler.removeCallbacks(planBlink); blinkOn = true; handler.postDelayed(planBlink, 500) }
@@ -2357,24 +2358,32 @@ class MainActivity : AppCompatActivity(), HgeListener {
         runOnUiThread {
             when (event) {
                 HgeNative.EV_STATE -> {
-                    val st = JSONObject(json).optInt("state", HgeNative.ST_IDLE)
+                    val o = JSONObject(json)
+                    val st = o.optInt("state", HgeNative.ST_IDLE)
+                    val pid = o.optString("planId")
                     capState.text = "state: ${HgeNative.stateName(st)}"
-                    captureStatus.text = "● 撮影中 (${HgeNative.stateName(st)})"
-                    if (!edgeCapturing && (st == HgeNative.ST_IDLE || st == HgeNative.ST_ERROR)) {
-                        if (capturingPlanId.isNotEmpty()) {
-                            capturingPlanId = ""; stopBlink(); refreshPlanList(); updateReadOnly()
+                    if (pid.isNotEmpty()) {
+                        if (st == HgeNative.ST_CAPTURING || st == HgeNative.ST_SEARCHING) {
+                            if (capturingPlans.add(pid)) startBlink()
+                        } else if (st == HgeNative.ST_IDLE || st == HgeNative.ST_ERROR) {
+                            capturingPlans.remove(pid); if (capturingPlans.isEmpty()) stopBlink()
                         }
-                        captureStatus.visibility = View.GONE
-                    } else if (st == HgeNative.ST_CAPTURING || st == HgeNative.ST_SEARCHING) {
-                        captureStatus.visibility = View.VISIBLE
+                        refreshPlanList(); updateReadOnly()
                     }
+                    // 表示中の計画が撮影中ならステータス表示。
+                    if (capturingPlans.contains(currentPlanId)) {
+                        captureStatus.text = "● 撮影中 (${HgeNative.stateName(st)})"; captureStatus.visibility = View.VISIBLE
+                    } else { captureStatus.visibility = View.GONE }
                 }
                 HgeNative.EV_PROGRESS -> {
                     val o = JSONObject(json)
                     capProgress.text = "frame ${o.optInt("frame")}/${o.optInt("total")}  " +
                         "elapsed ${o.optInt("elapsedSec")}s  remain ${o.optInt("remainSec")}s"
-                    captureStatus.text = "● 撮影中  ${o.optInt("frame")}/${o.optInt("total")}枚  残り${o.optInt("remainSec")}秒"
-                    captureStatus.visibility = View.VISIBLE
+                    // 表示中の計画の進捗のみステータス行に出す。
+                    if (o.optString("planId") == currentPlanId && currentPlanId.isNotEmpty()) {
+                        captureStatus.text = "● 撮影中  ${o.optInt("frame")}/${o.optInt("total")}枚  残り${o.optInt("remainSec")}秒"
+                        captureStatus.visibility = View.VISIBLE
+                    }
                 }
                 HgeNative.EV_CAPTURED -> {
                     val o = JSONObject(json)
@@ -2632,7 +2641,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // 撮影中の計画を表示しているときは一切編集できない(item7)。各操作部の有効/無効を切替。
     private fun updateReadOnly() {
-        planReadOnly = capturingPlanId.isNotEmpty() && currentPlanId == capturingPlanId
+        planReadOnly = capturingPlans.contains(currentPlanId)
         val ed = !planReadOnly
         intArrayOf(R.id.plan_startDate, R.id.plan_startTime, R.id.plan_endDate, R.id.plan_endTime,
             R.id.plan_resetButton, R.id.plan_saveButton, R.id.plan_startButton, R.id.plan_gearConst,

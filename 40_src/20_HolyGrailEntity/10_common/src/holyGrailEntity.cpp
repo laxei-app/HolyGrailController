@@ -41,16 +41,31 @@ namespace
 	std::shared_ptr<hgc::ccmMoon> g_planMoon;
 
 	std::vector<device>   g_devices;
-	captureRunner         g_runner;
-	void*                 g_startThread = nullptr;
 	void*                 g_searchThread = nullptr;	// カメラ自動検索ワーカー
 	bool                  g_inited = false;
-	bool                  g_logCapturing = false;	// ログ用: 撮影中か(START/STOP検出)
-	std::string           g_lastCcm;				// ログ用: 直近の撮影制御方法名(CCMSW検出)
 
-	// 進捗スナップショット(progress(get) 応答・エッジ端末用)
+	// --- 並行撮影セッション(Phase3。計画ごとに1セッション=1ランナー+1カメラ) ---
+	// 同時実行は当面 MAX_CONCURRENT まで。将来はこの定数とカメラ台数を増やせば拡張できる。
+	constexpr size_t MAX_CONCURRENT = 2;
+	struct captureSession
+	{
+		std::string                   planId;
+		hgc::cs                       plan;
+		astro::ccmSet                 planCcm;
+		std::shared_ptr<hgc::ccmMoon> planMoon;
+		std::unique_ptr<captureRunner> runner;
+		int                           devIndex = -1;
+		std::atomic<int>              state{ HGE_ST_IDLE };
+		bool                          logCapturing = false;	// START/STOP検出
+		std::string                   lastCcm;				// CCMSW検出
+		void*                         startThread = nullptr;
+	};
+	std::vector<std::unique_ptr<captureSession>> g_sessions;
+
+	// 進捗スナップショット(progress(get) 応答・エッジ端末用。最後に撮影したセッションの値)
 	int                   g_pgFrame = 0, g_pgTotal = 0, g_pgRemain = 0, g_pgElapsed = 0;
 	hgc::exposure         g_pgExp{};
+	std::string           g_pgCcm;	// 最後の撮影制御方法名
 
 	const char* const     VERSION = "HolyGrailEntity 0.1 (MVP step2.1)";
 
@@ -550,6 +565,12 @@ namespace
 	// 成功で g_devices に格納し HGE_EV_DEVICE を通知、状態 READY。
 	errCode searchSequence(void)
 	{
+		if (!g_sessions.empty())	// 撮影中はデバイス配列を作り直さない(devIndex が壊れるため)
+		{
+			notify(HGE_EV_DEVICE, devicesJson());
+			setState(HGE_ST_READY);
+			return ERR_HGC_OK;
+		}
 		g_devices.clear();
 		size_t n = cameraController::detectTarget(g_devices);
 		if (n == 0 || g_devices.empty() || g_devices[0].apiBase == nullptr)
@@ -566,113 +587,124 @@ namespace
 		return ERR_HGC_OK;
 	}
 
-	// 撮影開始シーケンス(検索→スケジュール→撮影ループ起動)。ワーカースレッドで実行。
-	errCode startupSequence(void)
+	// --- 並行撮影セッション補助(Phase3) ---
+	captureSession* sessionFor(const std::string& planId)
 	{
-		if (!g_planReady)
+		for (auto& s : g_sessions) { if (s->planId == planId) { return s.get(); } }
+		return nullptr;
+	}
+	bool devUsedByOther(int idx, const captureSession* self)
+	{
+		for (auto& s : g_sessions) { if (s.get() != self && s->devIndex == idx) { return true; } }
+		return false;
+	}
+	// 計画のカメラ(serial一致優先、無ければ空きデバイス)を割り当てる。-1=空き無し。
+	int assignDeviceIndex(captureSession* sess)
+	{
+		if (!sess->plan.camera.serial.empty())
 		{
-			errCode e = loadFixedPlanImpl();
-			if (e != ERR_HGC_OK) { notifyError(e, "loadFixedPlan"); setState(HGE_ST_ERROR); return e; }
+			for (size_t i = 0; i < g_devices.size(); ++i)
+				if (g_devices[i].apiBase && g_devices[i].serialno == sess->plan.camera.serial && !devUsedByOther((int)i, sess)) { return (int)i; }
 		}
-		notify(HGE_EV_SCHEDULE, g_schedJson);
+		for (size_t i = 0; i < g_devices.size(); ++i)
+			if (g_devices[i].apiBase && !devUsedByOther((int)i, sess)) { return (int)i; }
+		return -1;
+	}
+	// 集約状態(どれか撮影中なら CAPTURING 系、無ければ IDLE)。legacy hge_getState 用。
+	void refreshAggregateState(void)
+	{
+		int agg = HGE_ST_IDLE;
+		for (auto& s : g_sessions) { int st = s->state.load(); if (st == HGE_ST_CAPTURING || st == HGE_ST_SEARCHING || st == HGE_ST_STOPPING) { agg = st; } }
+		g_state = agg;
+	}
+	void notifyStateP(const std::string& planId, int s)
+	{
+		std::string j = "{\"planId\":\"" + jesc(planId) + "\",\"state\":" + std::to_string(s) + "}";
+		notify(HGE_EV_STATE, j);
+	}
 
-		// カメラ検索(検出済み=手動IP or 自動検索 のカメラがあれば再検索しない)
-		bool haveCamera = !g_devices.empty() && g_devices[0].apiBase != nullptr;
-		if (!haveCamera)
+	// 1セッションの撮影開始シーケンス(カメラ割当→配線→ループ起動)。ワーカースレッドで実行。
+	errCode startSessionSequence(captureSession* S)
+	{
+		S->state = HGE_ST_SEARCHING; notifyStateP(S->planId, HGE_ST_SEARCHING); refreshAggregateState();
+		// カメラ未検出のときだけ検索する(実行中セッションの devIndex を壊さないため既存は保持)。
+		bool haveAny = false; for (auto& d : g_devices) { if (d.apiBase) { haveAny = true; break; } }
+		if (!haveAny) { g_devices.clear(); cameraController::detectTarget(g_devices); }
+		int idx = assignDeviceIndex(S);
+		if (idx < 0)
 		{
-			g_devices.clear();
-			size_t n = cameraController::detectTarget(g_devices);
-			if (n == 0 || g_devices.empty() || g_devices[0].apiBase == nullptr)
-			{
-				notifyError(ERR_HGC_NOT_FOUND, "no camera found");
-				setState(HGE_ST_ERROR);
-				return ERR_HGC_NOT_FOUND;
-			}
+			notifyError(ERR_HGC_NOT_FOUND, "no free camera");
+			S->state = HGE_ST_ERROR; notifyStateP(S->planId, HGE_ST_ERROR); refreshAggregateState();
+			return ERR_HGC_NOT_FOUND;
 		}
-
-		// デバイス一覧を通知
+		S->devIndex = idx;
 		notify(HGE_EV_DEVICE, devicesJson());
-		logCameraNet();
+		dataManager::recordConnectedCamera(g_devices[idx]);
 
-		// 接続したカメラのシリアル/フレンドリ名を所持カメラへ自動保存(§5.2拡張)。
-		// モデル一致の所持カメラへ反映、無ければ master+device から自動作成(1台運用で無設定OK)。
-		dataManager::recordConnectedCamera(g_devices[0]);
-
-		// 撮影ループの通知配線
-		g_runner.setCallbacks(
-			[](int s) {
-				// START/STOP をログに残す(状態遷移を監視)
-				if (s == HGE_ST_CAPTURING && !g_logCapturing)
+		S->runner->setCallbacks(
+			[S](int s) {
+				if (s == HGE_ST_CAPTURING && !S->logCapturing)
 				{
-					g_logCapturing = true;
-					g_lastCcm.clear();
-					std::string d = "plan=" + g_plan.name +
-					                " " + dtToStr(g_plan.start) + "~" + dtToStr(g_plan.end);
+					S->logCapturing = true; S->lastCcm.clear();
+					std::string d = "plan=" + S->plan.name + " " + dtToStr(S->plan.start) + "~" + dtToStr(S->plan.end);
 					dataManager::logEvent("START", d.c_str());
-					// 撮影計画の内容もログに残す(後からどの計画で撮ったか検証するため)。
-					char pb[56];
-					std::snprintf(pb, sizeof(pb), "int=%.0fs az=%.0f el=%.0f",
-					              g_plan.interval, g_plan.azimuth, g_plan.elevation);
+					char pb[56]; std::snprintf(pb, sizeof(pb), "int=%.0fs az=%.0f el=%.0f", S->plan.interval, S->plan.azimuth, S->plan.elevation);
 					dataManager::logEvent("PLAN", pb);
-					// 各撮影制御方法の適用区間(夜間/朝日/夕日/日中 …)。
-					for (const auto& w : g_plan.ccmList)
+					for (const auto& w : S->plan.ccmList)
 					{
 						if (!w.ccm) { continue; }
 						const hgc::ccmBase* pc = w.ccm.get();
-						// 初期値(§4.4の起点)= ccm の initial(exposure)。
-						const hgc::exposure& pInit = pc->initial;
 						char pev[16];
 						if (isAutoCcm(pc->type))                  { std::snprintf(pev, sizeof(pev), "%+.1f", ccmTargetEv(pc)); }
 						else if (pc->type == hgc::ccmType::night) { std::snprintf(pev, sizeof(pev), "fix"); }
 						else                                      { std::snprintf(pev, sizeof(pev), "-"); }
-						// PLAN: 適用区間 + iso/ss/fn の明所限界/暗所限界/初期値/露出補正の目標。
-						// 注: 表示名は UI と同じ(明所限界=limitDark, 暗所限界=limitBright)。
 						std::string wd = pc->name + " " + dtShort(w.start) + "~" + dtShort(w.end) +
-						                 " 明所=" + expoBrief(pc->limitDark) +
-						                 " 暗所=" + expoBrief(pc->limitBright) +
-						                 " 初期=" + expoBrief(pInit) +
-						                 " 目標ev=" + pev;
+						                 " 明所=" + expoBrief(pc->limitDark) + " 暗所=" + expoBrief(pc->limitBright) +
+						                 " 初期=" + expoBrief(pc->initial) + " 目標ev=" + pev;
 						dataManager::logEvent("PLAN", wd.c_str());
 					}
 				}
-				else if ((s == HGE_ST_IDLE || s == HGE_ST_ERROR) && g_logCapturing)
+				else if ((s == HGE_ST_IDLE || s == HGE_ST_ERROR) && S->logCapturing)
 				{
-					g_logCapturing = false;
-					dataManager::logEvent("STOP", "");
+					S->logCapturing = false; dataManager::logEvent("STOP", "");
 				}
-				setState(s);
+				S->state = s; notifyStateP(S->planId, s); refreshAggregateState();
 			},
-			[](const captureRunner::progressInfo& p) {
-				g_pgFrame = p.frame; g_pgTotal = p.total;
-				g_pgRemain = p.remainSec; g_pgElapsed = p.elapsedSec;
-				char b[96];
-				std::snprintf(b, sizeof(b),
-					"{\"frame\":%d,\"total\":%d,\"remainSec\":%d,\"elapsedSec\":%d}",
-					p.frame, p.total, p.remainSec, p.elapsedSec);
+			[S](const captureRunner::progressInfo& p) {
+				g_pgFrame = p.frame; g_pgTotal = p.total; g_pgRemain = p.remainSec; g_pgElapsed = p.elapsedSec;
+				char b[160];
+				std::snprintf(b, sizeof(b), "{\"planId\":\"%s\",\"frame\":%d,\"total\":%d,\"remainSec\":%d,\"elapsedSec\":%d}",
+				              S->planId.c_str(), p.frame, p.total, p.remainSec, p.elapsedSec);
 				notify(HGE_EV_PROGRESS, b);
 			},
-			[](const captureRunner::capturedInfo& c) {
-				g_pgExp = c.exp;
-				char b[200];
-				std::snprintf(b, sizeof(b),
-					"{\"frame\":%d,\"iso\":\"%s\",\"ss\":\"%s\",\"fn\":\"%s\",\"luminance\":%.3f}",
-					c.frame, c.exp.iso.c_str(), c.exp.ss.c_str(), c.exp.fn.c_str(), c.luminance);
+			[S](const captureRunner::capturedInfo& c) {
+				g_pgExp = c.exp; g_pgCcm = c.ccm;
+				char b[256];
+				std::snprintf(b, sizeof(b), "{\"planId\":\"%s\",\"frame\":%d,\"iso\":\"%s\",\"ss\":\"%s\",\"fn\":\"%s\",\"luminance\":%.3f}",
+				              S->planId.c_str(), c.frame, c.exp.iso.c_str(), c.exp.ss.c_str(), c.exp.fn.c_str(), c.luminance);
 				notify(HGE_EV_CAPTURED, b);
-				// 撮影制御方法が切り替わったらログ(CCMSW)
-				if (c.ccm != g_lastCcm)
-				{
-					std::string d = (g_lastCcm.empty() ? "" : g_lastCcm + " -> ") + c.ccm;
-					dataManager::logEvent("CCMSW", d.c_str());
-					g_lastCcm = c.ccm;
-				}
+				if (c.ccm != S->lastCcm) { std::string d = (S->lastCcm.empty() ? "" : S->lastCcm + " -> ") + c.ccm; dataManager::logEvent("CCMSW", d.c_str()); S->lastCcm = c.ccm; }
 				dataManager::logShot(c.frame, c.exp, c.luminance, c.ccm.c_str(), c.metered);
 			},
-			[](errCode e, const std::string& m) { notifyError(e, m.c_str()); });
+			[S](errCode e, const std::string& m) { notifyError(e, m.c_str()); });
 
-		hgc::exposureSmoothing smooth = dataManager::currentSmoothing();	// 全体設定(無ければ出荷時)
-		errCode e = g_runner.ready(g_plan, &g_devices[0], smooth, g_offMin);
-		if (e != ERR_HGC_OK) { notifyError(e, "ready"); setState(HGE_ST_ERROR); return e; }
-		return g_runner.start();	// 撮影ループ(別スレッド)を起動。CAPTURING は runner が通知
+		hgc::exposureSmoothing smooth = dataManager::currentSmoothing();
+		errCode e = S->runner->ready(S->plan, &g_devices[idx], smooth, g_offMin);
+		if (e != ERR_HGC_OK) { notifyError(e, "ready"); S->state = HGE_ST_ERROR; notifyStateP(S->planId, HGE_ST_ERROR); refreshAggregateState(); return e; }
+		return S->runner->start();
+	}
+
+	// 1セッションを停止・破棄する(ランナーを join してから erase)。
+	void stopSessionAt(size_t i)
+	{
+		captureSession* s = g_sessions[i].get();
+		s->state = HGE_ST_STOPPING; notifyStateP(s->planId, HGE_ST_STOPPING); refreshAggregateState();
+		if (s->startThread) { ossc::threadEnd(s->startThread); s->startThread = nullptr; }
+		if (s->runner) { s->runner->stop(); }	// ワーカースレッドを join(以後コールバック無し)
+		std::string pid = s->planId;
+		g_sessions.erase(g_sessions.begin() + i);
+		notifyStateP(pid, HGE_ST_IDLE);
+		refreshAggregateState();
 	}
 }
 
@@ -695,8 +727,7 @@ int32_t hge_init(void)
 
 int32_t hge_term(void)
 {
-	g_runner.stop();
-	if (g_startThread)  { ossc::threadEnd(g_startThread);  g_startThread = nullptr; }
+	while (!g_sessions.empty()) { stopSessionAt(g_sessions.size() - 1); }	// 全セッション停止
 	if (g_searchThread) { ossc::threadEnd(g_searchThread); g_searchThread = nullptr; }
 	if (g_inited) { netThread::deInit(); g_inited = false; }
 	setState(HGE_ST_IDLE);
@@ -717,7 +748,7 @@ int32_t hge_setNotify(hgeNotifyCb cb, void* user)
 
 int32_t hge_searchDevices(void)
 {
-	if (g_runner.isRunning()) { return ERR_HGC_INVALID_STATE; }
+	if (!g_sessions.empty()) { return ERR_HGC_INVALID_STATE; }	// 撮影中は検索しない
 	if (g_searchThread) { ossc::threadEnd(g_searchThread); g_searchThread = nullptr; }
 	setState(HGE_ST_SEARCHING);
 	ossc::THREAD_FUNC fn = [](void*) -> errCode { return searchSequence(); };
@@ -886,7 +917,8 @@ int32_t hge_listPlansJson(char* buf, int32_t* inoutLen)
 		    !csjson::fromJson(planJson, cs)) { continue; }
 		long long endU = hgc::toUnixUtc(cs.end, g_offMin);
 		bool capturable = endU > static_cast<long long>(now);
-		int st = (id == g_editId) ? g_state.load() : static_cast<int>(HGE_ST_IDLE);
+		captureSession* sess = sessionFor(id);
+		int st = sess ? sess->state.load() : static_cast<int>(HGE_ST_IDLE);
 		if (!first) { j += ","; }
 		first = false;
 		j += "{\"id\":\"" + jesc(id) + "\",\"name\":\"" + jesc(cs.name) + "\"" +
@@ -1160,8 +1192,8 @@ int32_t hge_getExpoValuesJson(char* buf, int32_t* inoutLen)
 int32_t hge_getCameraAbilityJson(char* buf, int32_t* inoutLen)
 {
 	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
-	// 接続済みカメラが無ければ検索する。
-	if (g_devices.empty() || g_devices[0].apiBase == nullptr)
+	// 接続済みカメラが無ければ検索する(撮影中は作り直さない)。
+	if ((g_devices.empty() || g_devices[0].apiBase == nullptr) && g_sessions.empty())
 	{
 		g_devices.clear();
 		cameraController::detectTarget(g_devices);
@@ -1377,7 +1409,7 @@ int32_t hge_searchDevicesListJson(char* buf, int32_t* inoutLen)
 	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
 	// バッファ規約では buf==null(サイズ問い合わせ)→ buf!=null(本取得)の順で2回呼ばれる。
 	// 検索は重いので初回(サイズ問い合わせ)だけ実行し、結果(g_devices)を両呼び出しで共有する。
-	if (buf == nullptr)
+	if (buf == nullptr && g_sessions.empty())	// 撮影中は作り直さない(devIndex 保護)
 	{
 		g_devices.clear();
 		cameraController::detectTarget(g_devices);
@@ -1409,7 +1441,7 @@ int32_t hge_getProgressJson(char* buf, int32_t* inoutLen)
 		"{\"state\":%d,\"frame\":%d,\"total\":%d,\"remainSec\":%d,\"elapsedSec\":%d,"
 		"\"ccm\":\"%s\",\"iso\":\"%s\",\"ss\":\"%s\",\"fn\":\"%s\"}",
 		g_state.load(), g_pgFrame, g_pgTotal, g_pgRemain, g_pgElapsed,
-		jesc(g_lastCcm).c_str(), g_pgExp.iso.c_str(), g_pgExp.ss.c_str(), g_pgExp.fn.c_str());
+		jesc(g_pgCcm).c_str(), g_pgExp.iso.c_str(), g_pgExp.ss.c_str(), g_pgExp.fn.c_str());
 	int32_t need = static_cast<int32_t>(std::strlen(tmp)) + 1;
 	if (buf == nullptr || *inoutLen < need)
 	{
@@ -1421,28 +1453,61 @@ int32_t hge_getProgressJson(char* buf, int32_t* inoutLen)
 	return ERR_HGC_OK;
 }
 
-int32_t hge_captureStart(void)
+// 計画id指定で撮影開始(並行撮影。planId 空=編集対象 g_editId)。
+int32_t hge_captureStartPlan(const char* planId_)
 {
-	if (g_runner.isRunning()) { return ERR_HGC_INVALID_STATE; }
-	if (g_startThread) { ossc::threadEnd(g_startThread); g_startThread = nullptr; }
-	setState(HGE_ST_SEARCHING);
-	ossc::THREAD_FUNC fn = [](void*) -> errCode { return startupSequence(); };
-	g_startThread = ossc::threadNet(fn, nullptr);
+	if (!g_planReady) { errCode e = loadFixedPlanImpl(); if (e != ERR_HGC_OK) { return e; } }
+	std::string planId = (planId_ && planId_[0]) ? std::string(planId_) : g_editId;
+	if (planId.empty()) { return ERR_HGC_INVALID_ARG; }
+	if (sessionFor(planId)) { return ERR_HGC_INVALID_STATE; }	// 既に撮影中
+	if (g_sessions.size() >= MAX_CONCURRENT) { notifyError(ERR_HGC_INVALID_STATE, "max concurrent reached"); return ERR_HGC_INVALID_STATE; }
+
+	auto sess = std::make_unique<captureSession>();
+	sess->planId = planId;
+	if (planId == g_editId)
+	{
+		sess->plan = g_plan; sess->planCcm = g_planCcm; sess->planMoon = g_planMoon;	// 編集中スナップショット
+	}
+	else
+	{
+		std::string saved, pj, cj; hgc::cs cs;
+		if (!dataManager::loadPlanFile(planId, saved) || !dataManager::splitSavedPlan(saved, pj, cj) || !csjson::fromJson(pj, cs)) { return ERR_HGC_NO_ELEMENT; }
+		sess->plan = cs;
+		if (cj.empty() || !dataManager::parseCcmSetJson(cj, sess->planCcm, sess->planMoon)) { dataManager::parseCcmSetJson(dataManager::ccmDefaultsJson(), sess->planCcm, sess->planMoon); }
+		if (!sess->planMoon) { sess->planMoon = dataManager::factoryMoon(); }
+		if (sess->plan.ccmList.empty()) { astro::buildSchedule(sess->plan, sess->planCcm, g_offMin); }
+	}
+	sess->runner = std::make_unique<captureRunner>();
+	captureSession* raw = sess.get();
+	g_sessions.push_back(std::move(sess));
+	ossc::THREAD_FUNC fn = [raw](void*) -> errCode { return startSessionSequence(raw); };
+	raw->startThread = ossc::threadNet(fn, nullptr);
 	return ERR_HGC_OK;
 }
 
-int32_t hge_captureStop(void)
+// 計画id指定で撮影停止(planId 空=編集対象)。
+int32_t hge_captureStopPlan(const char* planId_)
 {
-	setState(HGE_ST_STOPPING);
-	g_runner.stop();
-	if (g_startThread) { ossc::threadEnd(g_startThread); g_startThread = nullptr; }
-	setState(HGE_ST_IDLE);
+	std::string planId = (planId_ && planId_[0]) ? std::string(planId_) : g_editId;
+	for (size_t i = 0; i < g_sessions.size(); ++i)
+	{
+		if (g_sessions[i]->planId == planId) { stopSessionAt(i); return ERR_HGC_OK; }
+	}
 	return ERR_HGC_OK;
 }
 
-int32_t hge_getState(void)
+// 計画id指定の撮影状態。planId 空=集約状態。
+int32_t hge_getStatePlan(const char* planId_)
 {
-	return g_state.load();
+	std::string planId = (planId_ && planId_[0]) ? std::string(planId_) : std::string();
+	if (planId.empty()) { return g_state.load(); }
+	captureSession* s = sessionFor(planId);
+	return s ? s->state.load() : static_cast<int>(HGE_ST_IDLE);
 }
+
+// --- legacy(無引数。編集対象計画に作用) ---
+int32_t hge_captureStart(void) { return hge_captureStartPlan(nullptr); }
+int32_t hge_captureStop(void)  { return hge_captureStopPlan(nullptr); }
+int32_t hge_getState(void)     { return g_state.load(); }
 
 } // extern "C"
