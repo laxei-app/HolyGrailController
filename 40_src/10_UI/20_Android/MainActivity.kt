@@ -21,6 +21,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
@@ -56,10 +57,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private lateinit var lensText: TextView
     private lateinit var intervalText: TextView
     private lateinit var sensorText: TextView
+    private lateinit var npfText: TextView
+    private lateinit var landscapeCheck: CheckBox
+    private var suppressLandscape = false   // updatePlanDisplay でのチェック設定が native を呼ばないように
     private lateinit var dirText: TextView
     private lateinit var compass: CompassView
     private lateinit var elevationView: ElevationView
     private lateinit var planSchedule: LinearLayout
+    private lateinit var planListScroll: ScrollView
+    private lateinit var planListContainer: LinearLayout
+    private var currentPlanId = ""          // 編集対象の計画 id
+    private var capturingPlanId = ""        // 撮影中の計画 id(ローカル/エッジ)
+    private var scheduleView: ScheduleView? = null   // §7.3.2 スケジュール表示/編集ビュー
+    private var blinkOn = true              // 撮影中カメラアイコンの点滅状態
     private lateinit var planStartButton: Button
     private lateinit var edgeSpinner: Spinner
     private lateinit var edgeSearchButton: Button
@@ -145,6 +155,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
         wireListeners()
         restorePlan()    // 保存済み計画があれば復元、無ければ出荷時計画を表示(再生成しない)
+        refreshPlanList()   // 複数計画リスト(分割バー上)を構築
     }
 
     // Entity が持つ計画(保存済み or 出荷時)の時刻・内容を画面に反映する。
@@ -180,10 +191,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
         lensText = findViewById(R.id.plan_lensText)
         intervalText = findViewById(R.id.plan_intervalText)
         sensorText = findViewById(R.id.plan_sensorText)
+        npfText = findViewById(R.id.plan_npfText)
+        landscapeCheck = findViewById(R.id.plan_landscape)
         dirText = findViewById(R.id.plan_dirText)
         compass = findViewById(R.id.plan_compass)
         elevationView = findViewById(R.id.plan_elevation)
         planSchedule = findViewById(R.id.plan_scheduleContainer)
+        planListScroll = findViewById(R.id.plan_listScroll)
+        planListContainer = findViewById(R.id.plan_listContainer)
         planStartButton = findViewById(R.id.plan_startButton)
         edgeSpinner = findViewById(R.id.plan_edgeSpinner)
         edgeSearchButton = findViewById(R.id.plan_edgeSearchButton)
@@ -253,6 +268,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val host = ipInput.text.toString().trim()
             Thread { HgeNative.nativeConnectManual(host) }.start()
         }
+        // 撮影計画リスト(分割バー上)の分割バー。
+        setupDivider(R.id.plan_listDivider, R.id.plan_listScroll)
+        // 撮影周期(タップでキーボード入力)。最小未満は警告。
+        intervalText.setOnClickListener { editInterval() }
+        // 横向き(ランドスケープ)。
+        landscapeCheck.setOnCheckedChangeListener { _, checked ->
+            if (suppressLandscape) return@setOnCheckedChangeListener
+            Thread { HgeNative.nativeSetPlanLandscape(if (checked) 1 else 0) }.start()
+        }
+        // センサー/レンズ定数の変更(機材リストに無い値の参考用)。
+        findViewById<Button>(R.id.plan_gearConst).setOnClickListener { editGearConst() }
         // 撮影制御方法の編集ボタン(全種・固定配置)をスケジュールの下に構築する。
         buildCcmEditButtons()
         // メニュー(plan_menu→600.メニュー)。帯付きの一覧から各画面へ分岐。
@@ -2061,6 +2087,174 @@ class MainActivity : AppCompatActivity(), HgeListener {
         Thread { HgeNative.nativeSetPlanDirection(az.toDouble(), el.toDouble()) }.start()
     }
 
+    // ============================================================
+    //  複数撮影計画リスト(分割バー上。§7.3.1/§7.3.3)
+    // ============================================================
+    private fun refreshPlanList() {
+        Thread {
+            val js = HgeNative.nativeListPlans()
+            val cur = HgeNative.nativeCurrentPlanId()
+            runOnUiThread { currentPlanId = cur; buildPlanList(js) }
+        }.start()
+    }
+
+    private fun buildPlanList(js: String) {
+        planListContainer.removeAllViews()
+        // 常に先頭に「新規撮影計画」行(タップで初期値の新規計画を作成)。
+        val add = TextView(this)
+        add.text = "＋ 新規撮影計画"
+        add.textSize = 15f
+        add.setPadding(dp(8), dp(10), dp(8), dp(10))
+        add.setTextColor(0xFF1565C0.toInt())
+        add.setOnClickListener { doNewPlan() }
+        planListContainer.addView(add)
+        try {
+            val arr = JSONArray(js)
+            for (i in 0 until arr.length()) { planListContainer.addView(buildPlanRow(arr.getJSONObject(i))) }
+        } catch (_: Exception) {}
+    }
+
+    private fun buildPlanRow(p: JSONObject): View {
+        val id = p.optString("id")
+        val name = p.optString("name")
+        val capturable = p.optBoolean("capturable")
+        val capturing = (id == capturingPlanId)
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER_VERTICAL
+        row.setPadding(dp(4), dp(6), dp(4), dp(6))
+        if (id == currentPlanId) row.setBackgroundColor(0xFFE3F2FD.toInt())
+        // 左アイコン: 撮影中=カメラ点滅(ICOカメラ) / 撮影可=開始(ICO開始D) / 不可=空。
+        val icon = ImageView(this)
+        icon.layoutParams = LinearLayout.LayoutParams(dp(32), dp(32)).apply { rightMargin = dp(6) }
+        when {
+            capturing -> {
+                icon.setImageResource(R.drawable.ic_camera_cap)
+                icon.tag = "cam:$id"
+                icon.setOnClickListener { confirmStop(id) }
+            }
+            capturable -> {
+                icon.setImageResource(R.drawable.ic_start_d)
+                icon.setOnClickListener { startPlan(id) }
+            }
+            else -> icon.setImageDrawable(null)
+        }
+        row.addView(icon)
+        val tv = TextView(this)
+        tv.text = name
+        tv.textSize = 15f
+        tv.maxLines = 1
+        if (id == currentPlanId) tv.setTypeface(null, Typeface.BOLD)
+        tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        tv.setOnClickListener { selectPlanRow(id) }
+        row.addView(tv)
+        // ⋮ コンテキストメニュー(削除/コピーを追加)
+        val menu = ImageView(this)
+        menu.layoutParams = LinearLayout.LayoutParams(dp(32), dp(32))
+        menu.setImageResource(R.drawable.ic_menu)
+        menu.setOnClickListener { planContextMenu(it, id, name) }
+        row.addView(menu)
+        return row
+    }
+
+    private fun selectPlanRow(id: String) {
+        if (id == currentPlanId) return
+        Thread {
+            HgeNative.nativeSelectPlan(id)   // EV_SCHEDULE で詳細表示が更新される
+            runOnUiThread { currentPlanId = id; refreshPlanList() }
+        }.start()
+    }
+
+    private fun doNewPlan() {
+        Thread {
+            HgeNative.nativeNewPlan("")
+            val cur = HgeNative.nativeCurrentPlanId()
+            runOnUiThread { currentPlanId = cur; refreshPlanList() }
+        }.start()
+    }
+
+    private fun startPlan(id: String) {
+        val e = selectedEdge()
+        Thread {
+            HgeNative.nativeSelectPlan(id)
+            runOnUiThread {
+                currentPlanId = id
+                capturingPlanId = id
+                if (e == null) {
+                    HgeNative.nativeCaptureStart()
+                    flipper.displayedChild = 1
+                } else {
+                    startOnEdge(e)
+                }
+                startBlink(); refreshPlanList()
+            }
+        }.start()
+    }
+
+    private fun confirmStop(id: String) {
+        // 338.撮影中止 ダイアログ
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("撮影中止")
+            .setMessage("撮影を中止しますか？")
+            .setPositiveButton("中止する") { _, _ ->
+                val e = selectedEdge()
+                if (e == null) HgeNative.nativeCaptureStop() else stopOnEdge(e)
+                capturingPlanId = ""; stopBlink(); refreshPlanList()
+                if (flipper.displayedChild == 1) flipper.displayedChild = 0
+            }
+            .setNegativeButton("続ける", null)
+            .show()
+    }
+
+    private fun planContextMenu(anchor: View, id: String, name: String) {
+        val pm = PopupMenu(this, anchor)
+        pm.menu.add("コピーを追加")
+        pm.menu.add("削除")
+        pm.setOnMenuItemClickListener { mi ->
+            when (mi.title) {
+                "コピーを追加" -> Thread {
+                    HgeNative.nativeCopyPlan(id)
+                    val c = HgeNative.nativeCurrentPlanId()
+                    runOnUiThread { currentPlanId = c; refreshPlanList() }
+                }.start()
+                "削除" -> confirmDeletePlan(id, name)
+            }
+            true
+        }
+        pm.show()
+    }
+
+    private fun confirmDeletePlan(id: String, name: String) {
+        if (id == capturingPlanId) { Toast.makeText(this, "撮影中は削除できません", Toast.LENGTH_SHORT).show(); return }
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("削除")
+            .setMessage("「$name」を削除しますか？")
+            .setPositiveButton("削除") { _, _ ->
+                Thread {
+                    HgeNative.nativeDeletePlan(id)
+                    val c = HgeNative.nativeCurrentPlanId()
+                    runOnUiThread { currentPlanId = c; refreshPlanList() }
+                }.start()
+            }
+            .setNegativeButton("キャンセル", null)
+            .show()
+    }
+
+    // 撮影中カメラアイコンの点滅。
+    private val planBlink = object : Runnable {
+        override fun run() {
+            blinkOn = !blinkOn
+            for (i in 0 until planListContainer.childCount) {
+                val row = planListContainer.getChildAt(i) as? LinearLayout ?: continue
+                val ic = row.getChildAt(0) as? ImageView ?: continue
+                if (ic.tag == "cam:$capturingPlanId") ic.alpha = if (blinkOn) 1f else 0.25f
+            }
+            if (capturingPlanId.isNotEmpty()) handler.postDelayed(this, 500)
+        }
+    }
+    private fun startBlink() { handler.removeCallbacks(planBlink); blinkOn = true; handler.postDelayed(planBlink, 500) }
+    private fun stopBlink() { handler.removeCallbacks(planBlink) }
+
     override fun onDestroy() {
         handler.removeCallbacks(edgePoll)
         HgeNative.nativeSetListener(null)
@@ -2076,10 +2270,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 HgeNative.EV_STATE -> {
                     val st = JSONObject(json).optInt("state", HgeNative.ST_IDLE)
                     capState.text = "state: ${HgeNative.stateName(st)}"
-                    // ローカル撮影が終了/失敗したら計画画面へ戻す
-                    if (!edgeCapturing && flipper.displayedChild == 1 &&
-                        (st == HgeNative.ST_IDLE || st == HgeNative.ST_ERROR)) {
-                        flipper.displayedChild = 0
+                    // ローカル撮影が終了/失敗したら計画画面へ戻し、リストの撮影中表示を解除。
+                    if (!edgeCapturing && (st == HgeNative.ST_IDLE || st == HgeNative.ST_ERROR)) {
+                        if (capturingPlanId.isNotEmpty()) {
+                            capturingPlanId = ""; stopBlink(); refreshPlanList()
+                        }
+                        if (flipper.displayedChild == 1) { flipper.displayedChild = 0 }
                     }
                 }
                 HgeNative.EV_PROGRESS -> {
@@ -2107,6 +2303,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val o = JSONObject(json)
             planName.text = o.optString("name")
             capName.text = o.optString("name")
+            // 選択中計画の開始/終了をピッカー用カレンダーへ同期(計画切替時に時刻表示を追従)。
+            try {
+                fmtIso.parse(o.optString("start"))?.let { startCal.time = it }
+                fmtIso.parse(o.optString("end"))?.let { endCal.time = it }
+                updateTimeButtons()
+            } catch (_: Exception) {}
             placeText.text = o.optString("place")
             latlngText.text = o.optString("latlng") + "  標高 " + o.optInt("altitude") + "m"
             cameraText.text = "カメラ: " + o.optString("camera")
@@ -2114,8 +2316,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
             sensorText.text = "センサー %.1f×%.1fmm  焦点距離 %d mm  画角 %.0f×%.0f°".format(
                 o.optDouble("sensorW"), o.optDouble("sensorH"), o.optInt("focalLength"),
                 o.optDouble("fovH"), o.optDouble("fovV"))
-            val land = if (o.optBoolean("landscape")) "横" else "縦"
-            intervalText.text = "撮影周期: ${o.optInt("interval")}秒   $land 向き"
+            intervalText.text = "${o.optInt("interval")}秒"
+            suppressLandscape = true
+            landscapeCheck.isChecked = o.optBoolean("landscape")
+            suppressLandscape = false
+            npfText.text = "NPF %.1f秒   最小周期 %d秒".format(o.optDouble("npf"), o.optInt("minInterval"))
             // 撮影方向/仰角ウィジェットへ反映(setterは無音=コールバックを呼ばない)
             val az = o.optDouble("azimuth", 90.0).toFloat()
             val el = o.optDouble("elevation", 10.0).toFloat()
@@ -2131,8 +2336,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             dirText.text = "撮影方向 %.1f°   仰角 %.1f°".format(az, el)
             capGear.text = o.optString("camera") + " / " + o.optString("lens")
             capDir.text = dirText.text
-            renderSchedule(planSchedule, o, false, withBand = true)  // 右=時間帯ごとの色別バンド(連続同種は統合)
-            renderSchedule(capSchedule, o, true)
+            renderScheduleView(o)                  // §7.3.2 太陽高度帯+境目編集ビュー(計画画面)
+            renderSchedule(capSchedule, o, true)   // 撮影画面は従来のイベント時系列
         } catch (_: Exception) {}
     }
 
@@ -2283,6 +2488,109 @@ class MainActivity : AppCompatActivity(), HgeListener {
         horiz.addView(left)
         horiz.addView(band)
         container.addView(horiz)
+    }
+
+    // §7.3.2 スケジュール表示/編集ビュー(計画画面)。太陽高度帯+境目時刻/高度+色帯、ドラッグ編集。
+    private fun parseScheduleMs(s: String): Long = try { fmtIso.parse(s)?.time ?: 0L } catch (_: Exception) { 0L }
+
+    private fun renderScheduleView(o: JSONObject) {
+        val sv = scheduleView ?: ScheduleView(this).also {
+            it.onTapType = { t -> ccmTypeToKey[t]?.let { k -> openPlanCcmEdit(k) } }
+            it.onMoveBoundary = { before, after, occ, ms -> moveBoundary(before, after, occ, ms) }
+            it.onSetBand = { rising, insert -> setBand(rising, insert) }
+            scheduleView = it
+            planSchedule.removeAllViews()
+            planSchedule.addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(420)))
+        }
+        val wins = ArrayList<ScheduleView.Win>()
+        o.optJSONArray("windows")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val w = arr.getJSONObject(i)
+                val ty = w.optInt("type")
+                val col = if (ty in 1..7) ccmColor(ty) else 0
+                val tc = if (ty in 1..7) ccmTextColor(ty) else 0xFF212121.toInt()
+                val nm = if (ty in 1..7) ccmTypeName[ty] else null
+                wins.add(ScheduleView.Win(ty, parseScheduleMs(w.optString("start")), parseScheduleMs(w.optString("end")),
+                    nm, col, tc, w.optDouble("startAlt"), w.optDouble("endAlt")))
+            }
+        }
+        val evs = ArrayList<ScheduleView.Ev>()
+        o.optJSONArray("events")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val e = arr.getJSONObject(i)
+                evs.add(ScheduleView.Ev(e.optInt("event"), parseScheduleMs(e.optString("when"))))
+            }
+        }
+        sv.curSunriseMode = o.optInt("sunriseMode", 0)
+        sv.curSunsetMode = o.optInt("sunsetMode", 0)
+        sv.setData(parseScheduleMs(o.optString("start")), parseScheduleMs(o.optString("end")), wins, evs)
+    }
+
+    // 境目を上下ドラッグ→その時刻を ccm 開始/終了に設定(再生成は EV_SCHEDULE で反映)。
+    private fun moveBoundary(before: Int, after: Int, occ: Int, ms: Long) {
+        val iso = fmtIso.format(java.util.Date(ms))
+        Thread { HgeNative.nativeSetBoundary(before, after, occ, iso) }.start()
+    }
+
+    // 夕日/朝日の帯を挿入(insert=true)/排除(insert=false)。他方の帯モードは保持する。
+    private fun setBand(rising: Boolean, insert: Boolean) {
+        var sr = scheduleView?.curSunriseMode ?: 0
+        var ss = scheduleView?.curSunsetMode ?: 0
+        val m = if (insert) 1 else 2
+        if (rising) sr = m else ss = m
+        Thread { HgeNative.nativeSetBandMode(sr, ss) }.start()
+    }
+
+    // 撮影周期をキーボード入力(秒)。最小周期(最長ss+2)未満は警告して反映しない。
+    private fun editInterval() {
+        val cur = try { JSONObject(latestSchedule).optInt("interval", 15) } catch (_: Exception) { 15 }
+        val et = EditText(this)
+        et.inputType = InputType.TYPE_CLASS_NUMBER
+        et.setText(cur.toString())
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("撮影周期(秒)")
+            .setView(et)
+            .setPositiveButton("OK") { _, _ ->
+                val sec = et.text.toString().toDoubleOrNull() ?: return@setPositiveButton
+                Thread {
+                    val r = HgeNative.nativeSetPlanInterval(sec)
+                    runOnUiThread {
+                        if (r != 0) Toast.makeText(this, "先にシャッター速度を変更してください(最小周期未満)", Toast.LENGTH_LONG).show()
+                    }
+                }.start()
+            }
+            .setNegativeButton("キャンセル", null)
+            .show()
+    }
+
+    // センサー/レンズ定数を変更する(機材リストに無い値の参考用。NPF/画角が再計算される)。
+    private fun editGearConst() {
+        val o = try { JSONObject(latestSchedule) } catch (_: Exception) { JSONObject() }
+        val box = LinearLayout(this); box.orientation = LinearLayout.VERTICAL; box.setPadding(dp(16), dp(8), dp(16), dp(8))
+        fun row(label: String, value: String): EditText {
+            val t = TextView(this); t.text = label; t.textSize = 12f; box.addView(t)
+            val e = EditText(this); e.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            e.setText(value); box.addView(e); return e
+        }
+        val eW = row("センサー横[mm]", o.optDouble("sensorW").toString())
+        val eH = row("センサー縦[mm]", o.optDouble("sensorH").toString())
+        val eP = row("センサー横[pixel]", o.optInt("pixelW").toString())
+        val eF = row("焦点距離[mm]", o.optInt("focalLength").toString())
+        val eN = row("開放F値", o.optDouble("fn").toString())
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("センサー/レンズ定数")
+            .setView(box)
+            .setPositiveButton("適用") { _, _ ->
+                val j = JSONObject()
+                eW.text.toString().toDoubleOrNull()?.let { j.put("sensorW", it) }
+                eH.text.toString().toDoubleOrNull()?.let { j.put("sensorH", it) }
+                eP.text.toString().toIntOrNull()?.let { j.put("pixelW", it) }
+                eF.text.toString().toDoubleOrNull()?.let { j.put("focalLength", it) }
+                eN.text.toString().toDoubleOrNull()?.let { j.put("fn", it) }
+                Thread { HgeNative.nativeSetPlanGearConst(j.toString()) }.start()
+            }
+            .setNegativeButton("キャンセル", null)
+            .show()
     }
 
     // --- エッジ端末 ---

@@ -170,6 +170,9 @@ namespace
 		j += ",\"sensorH\":" + std::string(num);
 		std::snprintf(num, sizeof(num), "%.0f", g_plan.lens.focalLength);
 		j += ",\"focalLength\":" + std::string(num);
+		j += ",\"pixelW\":" + std::to_string(g_plan.camera.sensorPixel);
+		std::snprintf(num, sizeof(num), "%.1f", g_plan.lens.fn);
+		j += ",\"fn\":" + std::string(num);
 		astro::fov fovDeg = astro::calcFov(g_plan.camera, g_plan.lens, g_plan.landscape);
 		std::snprintf(num, sizeof(num), "%.1f", fovDeg.h);
 		j += ",\"fovH\":" + std::string(num);
@@ -216,10 +219,16 @@ namespace
 			const auto& w = g_plan.ccmList[i];
 			int ct = w.ccm ? static_cast<int>(w.ccm->type) : 0;
 			std::string nm = w.ccm ? w.ccm->name : "";
+			double sa = astro::sunHoriz(w.start, g_offMin, g_plan.place).altitude;	// 境目(開始)の太陽高度
+			double ea = astro::sunHoriz(w.end,   g_offMin, g_plan.place).altitude;	// 境目(終了)の太陽高度
+			char ab[32];
 			j += "{\"type\":" + std::to_string(ct) +
 			     ",\"name\":\"" + jesc(nm) + "\"" +
 			     ",\"start\":\"" + dtToStr(w.start) + "\"" +
-			     ",\"end\":\"" + dtToStr(w.end) + "\"}";
+			     ",\"end\":\"" + dtToStr(w.end) + "\"";
+			std::snprintf(ab, sizeof(ab), "%.1f", sa); j += ",\"startAlt\":" + std::string(ab);
+			std::snprintf(ab, sizeof(ab), "%.1f", ea); j += ",\"endAlt\":" + std::string(ab);
+			j += "}";
 		}
 		j += "]}";
 		g_schedJson = j;
