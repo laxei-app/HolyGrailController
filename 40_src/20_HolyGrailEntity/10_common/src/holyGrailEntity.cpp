@@ -1436,11 +1436,11 @@ int32_t hge_addOwnedDetected(int32_t index)
 int32_t hge_getProgressJson(char* buf, int32_t* inoutLen)
 {
 	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
-	char tmp[256];
+	char tmp[320];
 	std::snprintf(tmp, sizeof(tmp),
-		"{\"state\":%d,\"frame\":%d,\"total\":%d,\"remainSec\":%d,\"elapsedSec\":%d,"
+		"{\"state\":%d,\"name\":\"%s\",\"frame\":%d,\"total\":%d,\"remainSec\":%d,\"elapsedSec\":%d,"
 		"\"ccm\":\"%s\",\"iso\":\"%s\",\"ss\":\"%s\",\"fn\":\"%s\"}",
-		g_state.load(), g_pgFrame, g_pgTotal, g_pgRemain, g_pgElapsed,
+		g_state.load(), jesc(g_plan.name).c_str(), g_pgFrame, g_pgTotal, g_pgRemain, g_pgElapsed,
 		jesc(g_pgCcm).c_str(), g_pgExp.iso.c_str(), g_pgExp.ss.c_str(), g_pgExp.fn.c_str());
 	int32_t need = static_cast<int32_t>(std::strlen(tmp)) + 1;
 	if (buf == nullptr || *inoutLen < need)

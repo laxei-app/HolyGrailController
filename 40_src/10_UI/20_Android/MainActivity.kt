@@ -158,6 +158,47 @@ class MainActivity : AppCompatActivity(), HgeListener {
         wireListeners()
         restorePlan()    // 保存済み計画があれば復元、無ければ出荷時計画を表示(再生成しない)
         refreshPlanList()   // 複数計画リスト(分割バー上)を構築
+        restoreEdgeState()  // 再起動時: エッジが撮影中なら状態を復元(item9)
+    }
+
+    // アプリ再起動時、ネットワーク上のエッジ端末が撮影中なら状態を復元する(§7.3.3/§8)。
+    private fun restoreEdgeState() {
+        Thread {
+            val js = HgeNative.nativeEdgeSearch(2500)
+            val found = ArrayList<Edge>()
+            try {
+                val arr = JSONArray(js)
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    found.add(Edge(o.optString("name", "エッジ端末"), o.optString("ip"), o.optInt("port", 50506)))
+                }
+            } catch (_: Exception) {}
+            for (ed in found) {
+                val pj = HgeNative.nativeEdgeProgress(ed.ip, ed.port)
+                if (pj.isEmpty()) continue
+                try {
+                    val o = JSONObject(pj)
+                    val st = o.optInt("state")
+                    if (st == HgeNative.ST_CAPTURING || st == HgeNative.ST_SEARCHING) {
+                        val nm = o.optString("name")
+                        var pid = ""
+                        try {
+                            val pa = JSONArray(HgeNative.nativeListPlans())
+                            for (k in 0 until pa.length()) { val po = pa.getJSONObject(k); if (po.optString("name") == nm) { pid = po.optString("id"); break } }
+                        } catch (_: Exception) {}
+                        runOnUiThread {
+                            edges.clear(); edges.add(ed); refreshEdgeSpinner()
+                            try { edgeSpinner.setSelection(1) } catch (_: Exception) {}
+                            edgeCapturing = true; edgeCapturingPlanId = pid
+                            if (pid.isNotEmpty()) { capturingPlans.add(pid); startBlink(); refreshPlanList(); updateReadOnly() }
+                            captureStatus.text = "● エッジ撮影中(復元)"; captureStatus.visibility = View.VISIBLE
+                            handler.postDelayed(edgePoll, 2000)
+                        }
+                        return@Thread
+                    }
+                } catch (_: Exception) {}
+            }
+        }.start()
     }
 
     // Entity が持つ計画(保存済み or 出荷時)の時刻・内容を画面に反映する。
