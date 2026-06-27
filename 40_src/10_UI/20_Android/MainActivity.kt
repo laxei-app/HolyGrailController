@@ -414,7 +414,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
         moonLimit.set(o.optJSONObject("limitBright"), o.optJSONObject("limitDark"),
             o.optJSONArray("priority"), o.optJSONObject("initial"),
             moonMode = true, nightLimit = nightLimit)
-        val cancelBtn = addPresetTopRow(R.id.moon_content) { cancelMoonEdit() }   // 優先チェック+変更の取り消し
+        val onPick: (() -> Unit)? = if (editingPlanCcm) ({
+            showPresetPicker("moon") { preset ->
+                val all = ccmJson ?: return@showPresetPicker
+                val merged = JSONObject(preset.toString()); merged.put("type", 5)
+                all.put("moon", merged); openMoonEdit()
+            }
+        }) else null
+        val cancelBtn = addPresetTopRow(R.id.moon_content, { cancelMoonEdit() }, onPick)
         startDirtyWatch(cancelBtn) { buildMoonEditJson()?.toString() ?: "" }      // item8
         flipper.displayedChild = 4
     }
@@ -711,13 +718,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
         rebuildPresetList()
     }
 
-    // エディタ内容の先頭に [優先的な初期値にする] [変更の取り消し(赤)] の行を差し込む。
-    // 戻り値=変更の取り消しボタン(dirty 連動の監視に使う)。
-    private fun addPresetTopRow(contentId: Int, onCancel: () -> Unit): Button {
+    // エディタ内容の先頭に [初期値リストから選択] [優先的な初期値にする] [変更の取り消し(赤)] の行を差し込む。
+    // 戻り値=変更の取り消しボタン(dirty 連動の監視に使う)。onPickPreset!=null で「初期値リストから選択」を出す。
+    private fun addPresetTopRow(contentId: Int, onCancel: () -> Unit, onPickPreset: (() -> Unit)? = null): Button {
         val box = findViewById<LinearLayout>(contentId)
         box.findViewWithTag<View>("ptop")?.let { box.removeView(it) }
         presetPreferCheck = null
         val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL; row.gravity = Gravity.CENTER_VERTICAL; row.tag = "ptop"
+        if (onPickPreset != null) {
+            val pick = Button(this); pick.text = "初期値リストから選択"; pick.isAllCaps = false; pick.textSize = 12f
+            pick.setOnClickListener { onPickPreset() }
+            row.addView(pick, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
         if (!editingPlanCcm) {
             val cb = CheckBox(this); cb.text = "優先的な初期値にする"
             cb.isChecked = selPresetName == HgeNative.nativeGetPreferredCcm(presetType)
@@ -765,6 +777,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
         btn.background = androidx.core.content.ContextCompat.getDrawable(
             this, if (enabled) R.drawable.btn_cancel_double else R.drawable.btn_cancel_gray)
         btn.setTextColor(if (enabled) Color.WHITE else 0xFFEEEEEE.toInt())
+    }
+
+    // 初期値リストから選択(§7.4.1)。型のプリセット名一覧をポップアップし、選んだ内容を
+    // 現在編集中の撮影制御方法に反映する(以後そこから変更してこの計画の設定とする)。
+    private fun showPresetPicker(type: String, onApply: (JSONObject) -> Unit) {
+        val arr = try { JSONArray(HgeNative.nativeGetCcmPresets(type)) } catch (e: Exception) { JSONArray() }
+        val names = ArrayList<String>(); val objs = ArrayList<JSONObject>()
+        for (i in 0 until arr.length()) { val o = arr.getJSONObject(i); names.add(o.optString("name")); objs.add(o) }
+        if (names.isEmpty()) { Toast.makeText(this, "初期値がありません", Toast.LENGTH_SHORT).show(); return }
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("初期値リストから選択")
+            .setItems(names.toTypedArray()) { _, which -> onApply(objs[which]) }
+            .setNegativeButton("キャンセル", null)
+            .show()
     }
 
     // 「変更の取り消し」ボタン共通スタイル: 赤の丸ボタン + 白の内側リング(2重)。文字は白。
@@ -1604,7 +1630,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
             setSliderProgress(R.id.edit_ma_seek, mp)
             findViewById<TextView>(R.id.edit_ma_val).text = maLabel(mp)
         }
-        val cancelBtn = addPresetTopRow(R.id.edit_content) { cancelCcmEdit() }   // 優先チェック+変更の取り消し
+        // 計画固有編集では「初期値リストから選択」ボタンを出す(§7.4.1)。
+        val onPick: (() -> Unit)? = if (editingPlanCcm) ({
+            showPresetPicker(editingKey) { preset ->
+                val all = ccmJson ?: return@showPresetPicker
+                val merged = JSONObject(preset.toString()); merged.put("type", keyType(editingKey))
+                all.put(editingKey, merged); openCcmEdit(editingKey)   // プリセット値を読み込む(以後変更可)
+            }
+        }) else null
+        val cancelBtn = addPresetTopRow(R.id.edit_content, { cancelCcmEdit() }, onPick)
         startDirtyWatch(cancelBtn) { buildCcmEditJson()?.toString() ?: "" }      // item8: 変更で赤・未変更でグレー
         flipper.displayedChild = 3
     }
