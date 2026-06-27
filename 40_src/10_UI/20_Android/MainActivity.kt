@@ -69,6 +69,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private var currentPlanId = ""          // 編集対象の計画 id
     private var capturingPlanId = ""        // 撮影中の計画 id(ローカル/エッジ)
     private var scheduleView: ScheduleView? = null   // §7.3.2 スケジュール表示/編集ビュー
+    private lateinit var captureStatus: TextView     // 撮影中ステータス(plan画面内)
+    private var planReadOnly = false                 // 撮影中の計画を表示中=編集不可(item7)
     private var blinkOn = true              // 撮影中カメラアイコンの点滅状態
     private lateinit var planStartButton: Button
     private lateinit var edgeSpinner: Spinner
@@ -199,6 +201,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         planSchedule = findViewById(R.id.plan_scheduleContainer)
         planListScroll = findViewById(R.id.plan_listScroll)
         planListContainer = findViewById(R.id.plan_listContainer)
+        captureStatus = findViewById(R.id.plan_captureStatus)
         planStartButton = findViewById(R.id.plan_startButton)
         edgeSpinner = findViewById(R.id.plan_edgeSpinner)
         edgeSearchButton = findViewById(R.id.plan_edgeSearchButton)
@@ -240,13 +243,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             }.start()
         }
         planStartButton.setOnClickListener {
-            val e = selectedEdge()
-            if (e == null) {
-                HgeNative.nativeCaptureStart()
-                flipper.displayedChild = 1
-            } else {
-                startOnEdge(e)
-            }
+            if (planReadOnly) return@setOnClickListener
+            startPlan(currentPlanId)   // 撮影中も同じ計画画面のまま(読取専用)
         }
         capStopButton.setOnClickListener {
             val e = selectedEdge()
@@ -2187,7 +2185,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         Thread {
             val js = HgeNative.nativeListPlans()
             val cur = HgeNative.nativeCurrentPlanId()
-            runOnUiThread { currentPlanId = cur; buildPlanList(js) }
+            runOnUiThread { currentPlanId = cur; buildPlanList(js); updateReadOnly() }
         }.start()
     }
 
@@ -2275,13 +2273,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
             runOnUiThread {
                 currentPlanId = id
                 capturingPlanId = id
-                if (e == null) {
-                    HgeNative.nativeCaptureStart()
-                    flipper.displayedChild = 1
-                } else {
-                    startOnEdge(e)
-                }
-                startBlink(); refreshPlanList()
+                // 撮影中も撮影計画画面のまま(item7: 別画面を用意しない)。読取専用にする。
+                if (e == null) HgeNative.nativeCaptureStart() else startOnEdge(e)
+                startBlink(); refreshPlanList(); updateReadOnly()
             }
         }.start()
     }
@@ -2365,18 +2359,22 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 HgeNative.EV_STATE -> {
                     val st = JSONObject(json).optInt("state", HgeNative.ST_IDLE)
                     capState.text = "state: ${HgeNative.stateName(st)}"
-                    // ローカル撮影が終了/失敗したら計画画面へ戻し、リストの撮影中表示を解除。
+                    captureStatus.text = "● 撮影中 (${HgeNative.stateName(st)})"
                     if (!edgeCapturing && (st == HgeNative.ST_IDLE || st == HgeNative.ST_ERROR)) {
                         if (capturingPlanId.isNotEmpty()) {
-                            capturingPlanId = ""; stopBlink(); refreshPlanList()
+                            capturingPlanId = ""; stopBlink(); refreshPlanList(); updateReadOnly()
                         }
-                        if (flipper.displayedChild == 1) { flipper.displayedChild = 0 }
+                        captureStatus.visibility = View.GONE
+                    } else if (st == HgeNative.ST_CAPTURING || st == HgeNative.ST_SEARCHING) {
+                        captureStatus.visibility = View.VISIBLE
                     }
                 }
                 HgeNative.EV_PROGRESS -> {
                     val o = JSONObject(json)
                     capProgress.text = "frame ${o.optInt("frame")}/${o.optInt("total")}  " +
                         "elapsed ${o.optInt("elapsedSec")}s  remain ${o.optInt("remainSec")}s"
+                    captureStatus.text = "● 撮影中  ${o.optInt("frame")}/${o.optInt("total")}枚  残り${o.optInt("remainSec")}秒"
+                    captureStatus.visibility = View.VISIBLE
                 }
                 HgeNative.EV_CAPTURED -> {
                     val o = JSONObject(json)
@@ -2630,6 +2628,22 @@ class MainActivity : AppCompatActivity(), HgeListener {
             }
         }
         sv.setData(blocks)
+    }
+
+    // 撮影中の計画を表示しているときは一切編集できない(item7)。各操作部の有効/無効を切替。
+    private fun updateReadOnly() {
+        planReadOnly = capturingPlanId.isNotEmpty() && currentPlanId == capturingPlanId
+        val ed = !planReadOnly
+        intArrayOf(R.id.plan_startDate, R.id.plan_startTime, R.id.plan_endDate, R.id.plan_endTime,
+            R.id.plan_resetButton, R.id.plan_saveButton, R.id.plan_startButton, R.id.plan_gearConst,
+            R.id.plan_edgeSearchButton, R.id.searchButton, R.id.connectButton)
+            .forEach { findViewById<View>(it).isEnabled = ed }
+        intervalText.isEnabled = ed; landscapeCheck.isEnabled = ed
+        cameraText.isEnabled = ed; lensText.isEnabled = ed; edgeSpinner.isEnabled = ed
+        compass.isEnabled = ed; elevationView.isEnabled = ed; scheduleView?.isEnabled = ed
+        findViewById<LinearLayout>(R.id.plan_ccmButtons).let { for (i in 0 until it.childCount) it.getChildAt(i).isEnabled = ed }
+        findViewById<View>(R.id.plan_startButton).alpha = if (ed) 1f else 0.4f
+        findViewById<View>(R.id.plan_saveButton).alpha = if (ed) 1f else 0.4f
     }
 
     // 夕日/朝日の帯を挿入(insert=true)/排除(insert=false)。他方の帯モードは保持する。

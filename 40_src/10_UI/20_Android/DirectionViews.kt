@@ -105,6 +105,7 @@ class CompassView @JvmOverloads constructor(context: Context, attrs: AttributeSe
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        if (!isEnabled) return false   // 撮影中(読取専用)は方向変更不可
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
                 parent?.requestDisallowInterceptTouchEvent(true)
@@ -174,6 +175,7 @@ class ElevationView @JvmOverloads constructor(context: Context, attrs: Attribute
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        if (!isEnabled) return false   // 撮影中(読取専用)は仰角変更不可
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 parent?.requestDisallowInterceptTouchEvent(true)

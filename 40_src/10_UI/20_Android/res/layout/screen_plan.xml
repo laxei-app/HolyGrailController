@@ -76,6 +76,17 @@
                 android:textSize="18sp"
                 android:textStyle="bold" />
 
+            <!-- 撮影中ステータス(撮影中のみ表示。読取専用) -->
+            <TextView
+                android:id="@+id/plan_captureStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:visibility="gone"
+                android:textColor="#D32F2F"
+                android:textStyle="bold"
+                android:textSize="13sp"
+                android:text="撮影中" />
+
             <!-- 撮影開始/終了 -->
             <LinearLayout
                 android:layout_width="match_parent"

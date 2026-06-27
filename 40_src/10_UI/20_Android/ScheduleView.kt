@@ -194,6 +194,7 @@ class ScheduleView(context: Context) : View(context) {
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        if (!isEnabled) return false   // 撮影中(読取専用)は編集不可。親スクロールへ委ねる。
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 downX = e.x; downY = e.y; curMidX = e.x; curMidY = e.y
