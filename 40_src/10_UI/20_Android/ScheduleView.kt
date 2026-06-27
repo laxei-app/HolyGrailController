@@ -87,10 +87,18 @@ class ScheduleView(context: Context) : View(context) {
     private fun ccmX0() = axisLabelW + bandW + markW
     private fun usedX1() = ccmX0() + (width - ccmX0()) * 0.6f
 
+    private val previewPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = dp(2f); color = 0xFFD32F2F.toInt() }
+
     override fun onDraw(c: Canvas) {
         super.onDraw(c)
         if (blocks.isEmpty() || width == 0) return
         for (bi in blocks.indices) drawBlock(c, bi)
+        // 2本指縦ドラッグ中の境目プレビュー線
+        if (previewY >= 0f) {
+            c.drawLine(axisLabelW + bandW, previewY, width.toFloat(), previewY, previewPaint)
+            val bi = targetBi
+            if (bi >= 0) { markTxt.color = 0xFFD32F2F.toInt(); c.drawText("%.1f°".format(altOfY(bi, previewY)), axisLabelW + bandW + dp(2f), previewY - dp(3f), markTxt); markTxt.color = 0xFF263238.toInt() }
+        }
     }
 
     private fun drawBlock(c: Canvas, bi: Int) {
@@ -156,6 +164,8 @@ class ScheduleView(context: Context) : View(context) {
     private var hintShown = false
     private var downX = 0f; private var downY = 0f
     private var startMidX = 0f; private var startMidY = 0f
+    private var curMidX = 0f; private var curMidY = 0f
+    private var previewY = -1f   // 2本指縦ドラッグ中の境目プレビュー
     private var targetBi = -1; private var targetBoundary = -1; private var targetSeg = -1
 
     private fun midX(e: MotionEvent) = if (e.pointerCount >= 2) (e.getX(0) + e.getX(1)) / 2f else e.x
@@ -186,28 +196,37 @@ class ScheduleView(context: Context) : View(context) {
     override fun onTouchEvent(e: MotionEvent): Boolean {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                downX = e.x; downY = e.y; twoFinger = false; hintShown = false
+                downX = e.x; downY = e.y; curMidX = e.x; curMidY = e.y
+                twoFinger = false; hintShown = false; previewY = -1f
                 targetBi = -1; targetBoundary = -1; targetSeg = -1
-                return true   // 取得は続けるが親スクロールは止めない(1本指縦移動で親へ委譲)
+                // まずジェスチャを保持(2本指を確実に拾う)。1本指で動いたら親へ返す。
+                parent?.requestDisallowInterceptTouchEvent(true)
+                return true
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
                 if (e.pointerCount >= 2) {
                     twoFinger = true
                     parent?.requestDisallowInterceptTouchEvent(true)
-                    startMidX = midX(e); startMidY = midY(e)
-                    val bi = blockAt(startMidY); targetBi = bi
-                    if (bi >= 0) {
-                        // 最寄りの境目(±dp16)を掴む
-                        var best = -1; var bestD = dp(16f); val bs = boundaries()
-                        for (idx in bs.indices) { if (bs[idx].bi == bi) { val d = abs(bs[idx].y - startMidY); if (d < bestD) { bestD = d; best = idx } } }
+                    startMidX = midX(e); startMidY = midY(e); curMidX = startMidX; curMidY = startMidY
+                    targetBi = blockAt(startMidY)
+                    // 最寄りの境目を掴む(距離制限なし=近いものを選ぶ)。
+                    targetBoundary = -1; targetSeg = -1
+                    if (targetBi >= 0) {
+                        var best = -1; var bestD = Float.MAX_VALUE; val bs = boundaries()
+                        for (idx in bs.indices) { if (bs[idx].bi == targetBi) { val d = abs(bs[idx].y - startMidY); if (d < bestD) { bestD = d; best = idx } } }
                         targetBoundary = best
-                        if (best < 0) targetSeg = segAt(bi, startMidY)
+                        targetSeg = segAt(targetBi, startMidY)
                     }
                 }
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
-                if (twoFinger) return true   // 値確定は UP(プレビュー省略)
+                if (twoFinger) {
+                    if (e.pointerCount >= 2) { curMidX = midX(e); curMidY = midY(e) }
+                    // 縦移動が優勢なら境目プレビュー線を出す
+                    if (targetBoundary >= 0 && abs(curMidY - startMidY) >= abs(curMidX - startMidX)) { previewY = curMidY; invalidate() }
+                    return true
+                }
                 // 1本指で動いたらヒント+親スクロールへ委譲
                 if (abs(e.x - downX) > dp(10f) || abs(e.y - downY) > dp(10f)) {
                     if (!hintShown) { hintShown = true; onNeedTwoFinger?.invoke() }
@@ -215,29 +234,29 @@ class ScheduleView(context: Context) : View(context) {
                 }
                 return true
             }
-            MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+            MotionEvent.ACTION_POINTER_UP -> { return true }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 if (e.actionMasked == MotionEvent.ACTION_UP && twoFinger) {
-                    commitEdit(e)
+                    commitEdit()
                 } else if (e.actionMasked == MotionEvent.ACTION_UP && !twoFinger &&
                            abs(e.x - downX) < dp(10f) && abs(e.y - downY) < dp(10f)) {
-                    // 1本指タップ=編集へ
                     val bi = blockAt(e.y); if (bi >= 0) { val si = segAt(bi, e.y); if (si >= 0) onTapType?.invoke(blocks[bi].segs[si].type) }
                 }
-                if (e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_CANCEL) twoFinger = false
+                twoFinger = false; previewY = -1f; invalidate()
                 return true
             }
         }
         return super.onTouchEvent(e)
     }
 
-    private fun commitEdit(e: MotionEvent) {
+    private fun commitEdit() {
         val bi = targetBi
         if (bi < 0) return
-        val mvx = midX(e) - startMidX; val mvy = midY(e) - startMidY
-        if (targetBoundary >= 0 && abs(mvy) >= abs(mvx)) {
+        val mvx = curMidX - startMidX; val mvy = curMidY - startMidY
+        if (targetBoundary >= 0 && abs(mvy) >= abs(mvx) && abs(mvy) > dp(8f)) {
             // 縦ドラッグ=境目の時刻(=高度)変更
             val bnd = boundaries().getOrNull(targetBoundary) ?: return
-            val newAlt = altOfY(bi, midY(e))
+            val newAlt = altOfY(bi, curMidY)
             val rising = if (blocks[bi].axisDown) 0 else 1
             onMoveBoundary?.invoke(bnd.before, bnd.after, bnd.occ, newAlt, rising)
         } else if (targetSeg >= 0 && abs(mvx) > abs(mvy) && abs(mvx) > dp(20f)) {
@@ -245,8 +264,8 @@ class ScheduleView(context: Context) : View(context) {
             val s = blocks[bi].segs.getOrNull(targetSeg) ?: return
             val rising = !blocks[bi].axisDown
             val right = mvx > 0
-            if ((s.type == 2 || s.type == 3) && right) onSetBand?.invoke(rising, false)         // 朝日/夕日を右=排除
-            else if (s.type == 4 && !right) onSetBand?.invoke(rising, true)                       // 日中を左=挿入
+            if ((s.type == 2 || s.type == 3) && right) onSetBand?.invoke(rising, false)
+            else if (s.type == 4 && !right) onSetBand?.invoke(rising, true)
         }
     }
 }
