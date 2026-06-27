@@ -233,9 +233,8 @@ namespace
 			if (!down && g_plan.sunriseMode == hgc::bandMode::off && g_planCcm.sunrise) exC = g_planCcm.sunrise.get();
 			if (exC)
 			{
-				double aTop = TOP, aBot = -6.0;
-				if (exC->type == hgc::ccmType::sunset) { const auto* s = static_cast<const hgc::ccmSunset*>(exC); aTop = std::max(s->sunAltitude, s->sunAltitudeEnd); aBot = std::min(s->sunAltitude, s->sunAltitudeEnd); }
-				else if (exC->type == hgc::ccmType::sunrise) { const auto* s = static_cast<const hgc::ccmSunrise*>(exC); aTop = std::max(s->sunAltitude, s->sunAltitudeEnd); aBot = std::min(s->sunAltitude, s->sunAltitudeEnd); }
+				// 排除した夕日/朝日は仕様の帯範囲 +6°〜0° で「使用しない」列に表示する。
+				double aTop = 6.0, aBot = 0.0;
 				char nb[64];
 				if (!fseg) out += ","; fseg = false;
 				out += "{\"type\":" + std::to_string(static_cast<int>(exC->type)) + ",\"name\":\"" + jesc(exC->name) + "\"";
@@ -1089,6 +1088,19 @@ int32_t hge_setBoundaryByAlt(int32_t beforeType, int32_t afterType, int32_t occ,
 			int at = g_plan.ccmList[i + 1].ccm ? static_cast<int>(g_plan.ccmList[i + 1].ccm->type) : 0;
 			if (bt == beforeType && at == afterType) { if (cnt == occ) { base = g_plan.ccmList[i].end; break; } ++cnt; }
 		}
+	}
+	// 撮影制御方法移動範囲(仕様 7.3.2 追加)。境界に接する種別ペアで可動高度をクランプする。
+	//  night=1 sunrise=2 sunset=3 day=4 preNight=6 postNight=7
+	{
+		auto has = [&](int t) { return beforeType == t || afterType == t; };
+		double lo = -24.0, hi = 6.0;
+		bool sun = has(2) || has(3), trans = has(6) || has(7);
+		if (has(4) && sun)            { lo = 0.0;   hi = 6.0;   }  // 日中↔夕日/朝日(夕日朝日 +6〜0)
+		else if (sun && trans)        { lo = -11.5; hi = -4.5;  }  // 夕日/朝日↔移行(移行前後の境界)
+		else if (has(4) && trans)     { lo = -3.0;  hi = 4.0;   }  // 日中↔移行(日中撮影との境界)
+		else if (has(1) && trans)     { lo = -19.0; hi = -12.0; }  // 夜間↔移行(夜間撮影との境界)
+		if (altDeg < lo) altDeg = lo;
+		if (altDeg > hi) altDeg = hi;
 	}
 	astro::altTime at = astro::sunAltitudeTime(g_plan.place, base, altDeg, rising != 0, g_offMin);
 	if (!at.valid) { return ERR_HGC_NOT_FOUND; }

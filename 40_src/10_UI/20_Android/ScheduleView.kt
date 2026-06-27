@@ -38,7 +38,7 @@ class ScheduleView(context: Context) : View(context) {
 
     private val TOP = 6.0; private val BOT = -24.0; private val RANGE = TOP - BOT  // 30°
     private val headerH get() = dp(34f)
-    private val blockH get() = dp(300f)
+    private val blockH get() = dp(450f)   // 指操作しやすいよう縦を拡大(従来比1.5倍)
     private val axisLabelW get() = dp(26f)
     private val bandW get() = dp(40f)
     private val markW get() = dp(94f)
