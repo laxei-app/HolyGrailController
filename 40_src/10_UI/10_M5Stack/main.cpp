@@ -7,6 +7,8 @@
 
 #include <M5Unified.h>
 #include <WiFi.h>
+#include <Preferences.h>
+#include <esp_random.h>
 #include <json/nlohmann/json.hpp>
 #include <cstdio>
 #include <cstdlib>
@@ -30,9 +32,45 @@ using json = nlohmann::json;
 // オーバーフローするため。setup() で hge_loadFixedPlan() が buildSchedule() を同期実行する。
 SET_LOOP_TASK_STACK_SIZE(16 * 1024);
 
-// 実機接続時に設定する(カメラの AP もしくは同一LANのSSID)。
+// WiFi 認証情報のフォールバック(NVS未設定時)。実運用では設定(QR+PoP)でNVSへ保存する。
 static const char* WIFI_SSID = "Buffalo-G-D850";
 static const char* WIFI_PASS = "rnhcftfbk75tf";
+
+// NVS に保存する接続情報(仕様8.2.1: 端末識別名 / SSID / password)。
+static std::string g_ssid    = WIFI_SSID;
+static std::string g_pass    = WIFI_PASS;
+static std::string g_devName = "エッジ端末";
+static bool        g_provMode = false;	// プロビジョニング表示(QR)中か
+static std::string g_pop;				// 現在のPoP(乱数)
+
+// NVS(Preferences 名前空間 "hgc")から接続情報を読み込む。
+static void loadEdgeCreds(void)
+{
+	Preferences p;
+	if (p.begin("hgc", true))
+	{
+		String s = p.getString("ssid", ""), w = p.getString("pass", ""), n = p.getString("devname", "");
+		if (s.length()) { g_ssid = s.c_str(); }
+		if (w.length()) { g_pass = w.c_str(); }
+		if (n.length()) { g_devName = n.c_str(); }
+		p.end();
+	}
+}
+// 接続情報を NVS へ保存して反映する(プロビジョニング受信時に呼ぶ)。
+void saveEdgeCreds(const std::string& ssid, const std::string& pass, const std::string& name)
+{
+	Preferences p;
+	if (p.begin("hgc", false))
+	{
+		p.putString("ssid", ssid.c_str());
+		p.putString("pass", pass.c_str());
+		p.putString("devname", name.c_str());
+		p.end();
+	}
+	g_ssid = ssid; g_pass = pass; if (!name.empty()) { g_devName = name; }
+}
+// 現在の PoP を返す(BLEプロビジョニングの復号鍵導出に使う)。
+const std::string& edgePop(void) { return g_pop; }
 
 // ── 画面状態 ──────────────────────────────────────────────
 enum { SCR_PLAN = 0, SCR_CCM = 1 };
@@ -370,15 +408,40 @@ static void renderCcm(void)
 	g_cv.pushSprite(0, 0);
 }
 
-static void redraw(void)
+// ── プロビジョニング(QR+PoP)表示。仕様8.2.2 ─────────────────
+static void enterProv(void)
 {
-	renderPlan();	// 仕様8.1: エッジは計画名+開始/停止のみ(別画面は用意しない)
+	char pop[9];
+	for (int i = 0; i < 8; ++i) { uint32_t r = esp_random() % 36; pop[i] = (r < 10) ? char('0' + r) : char('A' + (r - 10)); }
+	pop[8] = 0;
+	g_pop = pop; g_provMode = true; g_dirty = true;
+}
+static void renderProv(void)
+{
+	g_cv.fillScreen(TFT_WHITE);
+	// QR内容: 端末名 + PoP(スマホはこれを読み、PoP由来鍵で暗号化してBLE送信する)。
+	std::string qr = std::string("{\"n\":\"") + g_devName + "\",\"pop\":\"" + g_pop + "\"}";
+	g_cv.qrcode(qr.c_str(), 76, 14, 168, 4);
+	g_cv.setFont(&fonts::efontJA_16);
+	g_cv.setTextColor(TFT_BLACK);
+	g_cv.setTextDatum(textdatum_t::middle_center);
+	g_cv.drawString("スマホでQRを読み取り設定", 160, 198);
+	g_cv.drawString("(画面タップで戻る)", 160, 220);
+	g_cv.setTextDatum(textdatum_t::top_left);
+	g_cv.pushSprite(0, 0);
 }
 
-// ── タップ処理(フッタの開始/停止のみ) ───────────────────────
+static void redraw(void)
+{
+	if (g_provMode) { renderProv(); }	// 仕様8.2: 設定(QR+PoP)表示
+	else            { renderPlan(); }	// 仕様8.1: 計画名+開始/停止のみ
+}
+
+// ── タップ処理(フッタの開始/停止のみ。プロビジョニング表示中は戻る) ──
 static void onTap(int x, int y)
 {
 	(void)x;
+	if (g_provMode) { g_provMode = false; g_dirty = true; return; }
 	if (y >= VIEW_BOT)
 	{
 		if (isCapturing()) { hge_captureStop(); }
@@ -465,6 +528,7 @@ void setup(void)
 	g_cv.createSprite(320, 240);
 	g_cv.setFont(&fonts::efontJA_16);
 
+	loadEdgeCreds();	// NVS から SSID/password/端末名(無ければフォールバック)
 	wifiConnect::setup();
 
 	hge_init();
@@ -483,8 +547,8 @@ void loop(void)
 	// WiFi 切断時は再接続を試みる(実機運用時に SSID/PASS を設定する)
 	if (wifiConnect::getStatus() == wifiConnect::wifiStatus::cuttingOff)
 	{
-		Serial.printf("[WIFI] connecting to %s ...\n", WIFI_SSID);
-		bool ok = wifiConnect::connect(WIFI_SSID, WIFI_PASS);
+		Serial.printf("[WIFI] connecting to %s ...\n", g_ssid.c_str());
+		bool ok = wifiConnect::connect(g_ssid.c_str(), g_pass.c_str());
 		if (ok)
 		{
 			Serial.printf("[WIFI] connected. IP=%s RSSI=%d\n",
@@ -512,6 +576,7 @@ void loop(void)
 		int c = Serial.read();
 		if (c == 's') { hge_captureStart(); }
 		else if (c == 'x') { hge_captureStop(); }
+		else if (c == 'p') { enterProv(); }	// 検証用: プロビジョニングQR表示(本番はBLEから)
 		// 検証用: timeコマンド受信を模擬してUTCオフセットを設定・永続化し固定計画を再生成。
 		else if (c == 'j') { hge_setUtcOffset(540); hge_loadFixedPlan(); g_state = hge_getState(); g_dirty = true; }	// JST(+9h)
 		else if (c == 'u') { hge_setUtcOffset(0);   hge_loadFixedPlan(); g_state = hge_getState(); g_dirty = true; }	// UTC
