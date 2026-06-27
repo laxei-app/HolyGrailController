@@ -867,11 +867,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 MotionEvent.ACTION_MOVE -> {
                     val root = list.parent as ViewGroup
                     val headerH = root.getChildAt(0).height
-                    val minH = dp(48)                                                   // 1行が見える
-                    val maxH = root.height - headerH - divider.height - resources.displayMetrics.heightPixels / 4
+                    val minH = dp(48)                                                   // 1行が見える(最初の項目まで上げられる)
+                    // 画面3/4より下には下げない上限。
+                    val quarterMax = root.height - headerH - divider.height - resources.displayMetrics.heightPixels / 4
+                    // リスト内容の実高さ(ScrollViewの子)。これ以上は下げない=リスト最下段で止める(item6)。
+                    val contentH = (list as? ScrollView)?.getChildAt(0)?.height ?: list.height
+                    var maxH = if (contentH > 0) minOf(quarterMax, contentH) else quarterMax
+                    if (maxH < minH) maxH = minH
                     var h = (startH + (ev.rawY - startY)).toInt()
                     if (h < minH) h = minH
-                    if (maxH > minH && h > maxH) h = maxH
+                    if (h > maxH) h = maxH
                     val lp = list.layoutParams; lp.height = h; list.layoutParams = lp
                     true
                 }
@@ -2166,6 +2171,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val arr = JSONArray(js)
             for (i in 0 until arr.length()) { planListContainer.addView(buildPlanRow(arr.getJSONObject(i))) }
         } catch (_: Exception) {}
+        // リスト件数が少なければ内容ぴったりまで縮める(item6: リスト最下段で止める)。
+        setInitialSplit(R.id.plan_listScroll, R.id.plan_listContainer)
     }
 
     private fun buildPlanRow(p: JSONObject): View {
