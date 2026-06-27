@@ -2778,13 +2778,45 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private var edgeCapturingPlanId = ""   // エッジで撮影中の計画 id
 
+    // 計画名をモノクロ2値ビットマップ(width u16LE, height u16LE, 1bpp MSB先頭, 1=白)に変換する。
+    // エッジ端末はフォントに依存せず名称を表示できる(§8.2.1 多言語対応)。
+    private fun makeNameBitmapBytes(name: String): ByteArray {
+        val paint = android.graphics.Paint().apply {
+            textSize = 40f; color = Color.WHITE; isAntiAlias = false; typeface = Typeface.DEFAULT_BOLD
+        }
+        val w = Math.ceil(paint.measureText(name).toDouble()).toInt().coerceIn(1, 300)
+        val fm = paint.fontMetrics
+        val h = Math.ceil((fm.bottom - fm.top).toDouble()).toInt().coerceIn(1, 100)
+        val bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+        val cv = android.graphics.Canvas(bmp); cv.drawColor(Color.BLACK)
+        cv.drawText(name, 0f, -fm.top, paint)
+        val bpr = (w + 7) / 8
+        val out = java.io.ByteArrayOutputStream()
+        out.write(w and 0xFF); out.write((w shr 8) and 0xFF)
+        out.write(h and 0xFF); out.write((h shr 8) and 0xFF)
+        val px = IntArray(w); val row = ByteArray(bpr)
+        for (y in 0 until h) {
+            java.util.Arrays.fill(row, 0)
+            bmp.getPixels(px, 0, w, 0, y, w, 1)
+            for (x in 0 until w) {
+                val p = px[x]; val lum = ((p shr 16 and 0xFF) + (p shr 8 and 0xFF) + (p and 0xFF)) / 3
+                if (lum > 128) row[x / 8] = (row[x / 8].toInt() or (0x80 shr (x and 7))).toByte()
+            }
+            out.write(row)
+        }
+        bmp.recycle()
+        return out.toByteArray()
+    }
+
     private fun startOnEdge(e: Edge, planId: String) {
         // 時刻同期(C_TIME)はエッジ端末の時計を「現在時刻」に合わせるためのもの。現在時刻を送る。
         val nowCal = Calendar.getInstance()
         val s = fmtIso.format(nowCal.time)
         val off = TimeZone.getDefault().getOffset(nowCal.timeInMillis) / 60000
+        val name = try { JSONObject(latestSchedule).optString("name") } catch (_: Exception) { "" }
+        val nameBmp = makeNameBitmapBytes(if (name.isEmpty()) "撮影計画" else name)
         Thread {
-            val r = HgeNative.nativeEdgeStart(e.ip, e.port, s, off)
+            val r = HgeNative.nativeEdgeStart(e.ip, e.port, s, off, nameBmp)
             runOnUiThread {
                 if (r == 0) {
                     edgeCapturing = true; edgeCapturingPlanId = planId   // 撮影中も計画画面のまま

@@ -99,7 +99,7 @@ object HgeNative {
 
     // --- エッジ端末(ETP §6) ---
     external fun nativeEdgeSearch(timeoutMs: Int): String           // edgeInfo の JSON 配列
-    external fun nativeEdgeStart(host: String, port: Int, datetime: String, offMin: Int): Int
+    external fun nativeEdgeStart(host: String, port: Int, datetime: String, offMin: Int, nameBmp: ByteArray): Int
     external fun nativeEdgeStop(host: String, port: Int): Int
     external fun nativeEdgeProgress(host: String, port: Int): String // progress の JSON
 

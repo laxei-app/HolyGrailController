@@ -151,7 +151,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeSearch(JNIEnv* env, jobject, jint t
 // エッジ端末へ time→capturePlan→action を送って撮影開始させる。return: 0=成功。
 JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring host_, jint port,
-                                                   jstring datetime_, jint offMin)
+                                                   jstring datetime_, jint offMin, jbyteArray nameBmp)
 {
 	const char* host = env->GetStringUTFChars(host_, nullptr);
 	const char* dt   = env->GetStringUTFChars(datetime_, nullptr);
@@ -181,6 +181,19 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring
 			{ result = -3; }
 		}
 		else { result = -3; }
+	}
+
+	// 2.5) 計画名ビットマップ(あれば送る。失敗は致命的でない)
+	if (result == 0 && nameBmp != nullptr)
+	{
+		jsize nlen = env->GetArrayLength(nameBmp);
+		if (nlen > 0)
+		{
+			jbyte* nb = env->GetByteArrayElements(nameBmp, nullptr);
+			std::string bmpData(reinterpret_cast<const char*>(nb), static_cast<size_t>(nlen));
+			env->ReleaseByteArrayElements(nameBmp, nb, JNI_ABORT);
+			tcpRequest(fd, etp::C_NAME_BMP, etp::M_PUT, bmpData, rd);
+		}
 	}
 
 	// 3) 撮影開始
