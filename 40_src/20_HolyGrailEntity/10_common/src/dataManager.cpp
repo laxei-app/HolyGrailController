@@ -23,7 +23,6 @@ astro::ccmSet dataManager::factoryCcmSet(void)
 	auto night = std::make_shared<hgc::ccmNight>();
 	night->name = "night";
 	night->sunAltitude = -18.0;
-	night->autoEdge = true;
 	night->limitBright = night->limitDark = hgc::exposure{ "1600", "8", "1.4" };	// 固定露出(3.2)
 	night->initial = night->limitBright;	// 夜間の基準=固定露出
 	set.night = night;
@@ -157,6 +156,44 @@ namespace
 		std::string d = osfile::dir("plan");
 		return d.empty() ? std::string() : (d + "/plan.json");
 	}
+	// plan_<id>.json のフルパス。
+	std::string planFilePath(const std::string& id)
+	{
+		std::string d = osfile::dir("plan");
+		return d.empty() ? std::string() : (d + "/plan_" + id + ".json");
+	}
+}
+
+bool dataManager::savePlanFile(const std::string& id, const std::string& wrappedJson)
+{
+	std::string p = planFilePath(id);
+	if (p.empty() || id.empty()) { return false; }
+	return osfile::writeAll(p, wrappedJson.data(), wrappedJson.size());
+}
+
+bool dataManager::loadPlanFile(const std::string& id, std::string& out)
+{
+	std::string p = planFilePath(id);
+	return !p.empty() && !id.empty() && osfile::readAll(p, out);
+}
+
+bool dataManager::deletePlanFile(const std::string& id)
+{
+	if (id.empty()) { return false; }
+	return osfile::removeFile("plan", "plan_" + id + ".json");
+}
+
+std::vector<std::string> dataManager::listPlanIds(void)
+{
+	std::vector<std::string> ids;
+	for (const std::string& n : osfile::listFiles("plan", "plan_", ".json"))
+	{
+		// "plan_<id>.json" → "<id>"
+		std::string id = n.substr(5, n.size() - 5 - 5);	// 前"plan_"(5) 後".json"(5)
+		if (!id.empty()) { ids.push_back(id); }
+	}
+	std::sort(ids.begin(), ids.end());
+	return ids;
 }
 
 bool dataManager::savePlanJson(const std::string& json)
@@ -170,6 +207,11 @@ bool dataManager::loadPlanJson(std::string& out)
 {
 	std::string p = planPath();
 	return !p.empty() && osfile::readAll(p, out);
+}
+
+bool dataManager::removeLegacyPlan(void)
+{
+	return osfile::removeFile("plan", "plan.json");
 }
 
 bool dataManager::splitSavedPlan(const std::string& wrapped, std::string& planOut, std::string& ccmOut)

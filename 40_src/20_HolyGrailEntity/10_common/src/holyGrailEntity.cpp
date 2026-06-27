@@ -10,7 +10,10 @@
 #include "osSystemCall.h"
 #include "cs.h"
 #include "ccm.h"
+#include "exposureMath.h"
+#include <json/nlohmann/json.hpp>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <ctime>
 #include <mutex>
@@ -31,6 +34,7 @@ namespace
 	bool                  g_planReady = false;
 	int                   g_offMin = 0;
 	std::string           g_schedJson;
+	std::string           g_editId;	// 編集対象の撮影計画 id(plan_<id>.json)。空=未保存
 	// 計画固有の撮影制御方法(初期値ccmとは別管理)。計画作成時に初期値をコピーし、以後独立に編集する。
 	astro::ccmSet                 g_planCcm;
 	std::shared_ptr<hgc::ccmMoon> g_planMoon;
@@ -125,6 +129,20 @@ namespace
 		return o;
 	}
 
+	// 全撮影制御方法の最長ss[秒] + 2 を最小撮影周期として返す(仕様 7.4.2)。
+	// 最長ss = 各窓の明るい方向の限界(=最も露出の多い側 limitBright)の ss。
+	int minIntervalSec(const hgc::cs& plan)
+	{
+		double maxSs = 0.0;
+		for (const auto& w : plan.ccmList)
+		{
+			if (!w.ccm) { continue; }
+			double s = expo::parseValue(w.ccm->limitBright.ss, expo::expoKind::ss);
+			if (s > maxSs) { maxSs = s; }
+		}
+		return static_cast<int>(std::ceil(maxSs)) + 2;
+	}
+
 	// --- スケジュールの JSON 生成 ---
 	void buildScheduleJson(void)
 	{
@@ -157,6 +175,14 @@ namespace
 		j += ",\"fovH\":" + std::string(num);
 		std::snprintf(num, sizeof(num), "%.1f", fovDeg.v);
 		j += ",\"fovV\":" + std::string(num);
+		// NPF シャッター速度[秒](参考表示)と最小撮影周期[秒](最長ss+2)、帯モード。
+		double npf = expo::npfShutterSec(g_plan.camera.sensorSize, static_cast<double>(g_plan.camera.sensorPixel),
+		                                 g_plan.lens.focalLength, g_plan.lens.fn);
+		std::snprintf(num, sizeof(num), "%.2f", npf);
+		j += ",\"npf\":" + std::string(num);
+		j += ",\"minInterval\":" + std::to_string(minIntervalSec(g_plan));
+		j += ",\"sunriseMode\":" + std::to_string(static_cast<int>(g_plan.sunriseMode));
+		j += ",\"sunsetMode\":"  + std::to_string(static_cast<int>(g_plan.sunsetMode));
 		// 太陽/月の出没方位(方位磁石マーカー用)。範囲内に該当イベントがあれば付与。
 		for (const auto& ev : g_plan.events)
 		{
@@ -245,8 +271,90 @@ namespace
 		d.sec   = static_cast<uint16_t>(g.tm_sec);
 	}
 
-	// 固定データの撮影計画を生成する。開始=現在、終了=2時間後。
-	// 機材・場所・撮影制御方法などの出荷時設定は dataManager から取得する。
+	// --- 複数撮影計画(§7.4)の補助 ---
+	// 撮影計画 id を現在のローカル時刻から採番する(yyyyMMdd-HHmmss、衝突時 -NN)。
+	std::string makePlanId(void)
+	{
+		time_t now = std::time(nullptr);
+		hgc::dateTime d; int off = 0;
+		localFromTime(now, d, off);
+		char base[20];
+		std::snprintf(base, sizeof(base), "%04u%02u%02u-%02u%02u%02u",
+		              d.year, d.month, d.day, d.hour, d.min, d.sec);
+		std::vector<std::string> ids = dataManager::listPlanIds();
+		auto exists = [&](const std::string& x) {
+			for (const auto& e : ids) { if (e == x) { return true; } }
+			return false;
+		};
+		if (!exists(base)) { return std::string(base); }
+		for (int n = 2; n < 100; ++n)
+		{
+			char s[24];
+			std::snprintf(s, sizeof(s), "%s-%02d", base, n);
+			if (!exists(s)) { return std::string(s); }
+		}
+		return std::string(base);
+	}
+
+	// 現在(編集対象)の計画を保存ラッパー JSON {"planCcm":..,"plan":..} にする。
+	std::string wrapCurrentPlan(void)
+	{
+		return "{\"planCcm\":" + dataManager::ccmSetToJson(g_planCcm, g_planMoon) +
+		       ",\"plan\":" + csjson::toJson(g_plan) + "}";
+	}
+
+	// 現在の計画を plan_<g_editId>.json へ保存する(id 未割当なら採番)。
+	errCode saveCurrentPlan(void)
+	{
+		if (g_editId.empty()) { g_editId = makePlanId(); }
+		return dataManager::savePlanFile(g_editId, wrapCurrentPlan()) ? ERR_HGC_OK : ERR_HGC_INVALID_STATE;
+	}
+
+	// plan_<id>.json を編集対象として読み込み、スケジュールを再生成する。成功で g_editId=id。
+	// 機材は出荷時で上書きする(現行 MVP 方針を踏襲。計画ごとのカメラ束縛は Phase3 で対応)。
+	errCode loadPlanById(const std::string& id)
+	{
+		std::string saved, planJson, ccmJson;
+		if (!dataManager::loadPlanFile(id, saved) ||
+		    !dataManager::splitSavedPlan(saved, planJson, ccmJson) ||
+		    !csjson::fromJson(planJson, g_plan)) { return ERR_HGC_NO_ELEMENT; }
+		// 保存済みの機材(カメラ/レンズ)を尊重する(計画ごとの機材束縛/定数編集の永続化)。
+		// 機種が空(壊れた保存)のときだけ出荷時で補う。
+		if (g_plan.camera.model.empty())
+		{
+			hgc::cs fp; dataManager::factoryFixedPlan(fp);
+			g_plan.camera = fp.camera;
+			g_plan.lens   = fp.lens;
+		}
+		if (ccmJson.empty() || !dataManager::parseCcmSetJson(ccmJson, g_planCcm, g_planMoon))
+		{ dataManager::parseCcmSetJson(dataManager::ccmDefaultsJson(), g_planCcm, g_planMoon); }
+		if (!g_planMoon) { g_planMoon = dataManager::factoryMoon(); }
+		astro::buildSchedule(g_plan, g_planCcm, g_offMin);
+		buildScheduleJson();
+		g_editId = id;
+		g_planReady = true;
+		return ERR_HGC_OK;
+	}
+
+	// 出荷時の固定計画を新規生成して現在(編集対象)に据える(開始=現在-60秒、終了=2時間後)。
+	void makeFactoryCurrent(const char* name)
+	{
+		time_t now = std::time(nullptr);
+		g_plan = hgc::cs{};
+		dataManager::factoryFixedPlan(g_plan);
+		if (name) { g_plan.name = name; }
+		hgc::dateTime startDt; int o1 = 0; localFromTime(now - 60, startDt, o1);
+		hgc::dateTime endDt;   int o2 = 0; localFromTime(now + 2 * 3600, endDt, o2);
+		g_plan.start = startDt;
+		g_plan.end   = endDt;
+		dataManager::parseCcmSetJson(dataManager::ccmDefaultsJson(), g_planCcm, g_planMoon);
+		if (!g_planMoon) { g_planMoon = dataManager::factoryMoon(); }
+		astro::buildSchedule(g_plan, g_planCcm, g_offMin);
+		buildScheduleJson();
+	}
+
+	// 起動時の撮影計画準備。旧 plan.json があれば新形式へ移行し、既存計画があれば最新を復元、
+	// 無ければ出荷時の固定計画を新規作成して保存する。
 	errCode loadFixedPlanImpl(void)
 	{
 		// 端末のローカルオフセット(TZは安定)を先に求めておく。
@@ -256,48 +364,27 @@ namespace
 		g_offMin = off;
 		dataManager::setLogOffset(g_offMin);
 
-		// 保存済み撮影計画があれば復元する(案A 最小: 単一ファイル)。計画固有ccmも一緒に復元。
-		std::string saved, planJson, ccmJson;
-		if (dataManager::loadPlanJson(saved) &&
-		    dataManager::splitSavedPlan(saved, planJson, ccmJson) &&
-		    csjson::fromJson(planJson, g_plan))
+		// 旧単一ファイル plan.json があれば新形式 plan_<id>.json へ移行する。
 		{
-			// 機材(カメラ/レンズ/センサー)はMVPでは出荷時固定。古い保存値(焦点距離16mm等)へ
-			// 戻らないよう、復元後に出荷時設定で上書きする(撮影方向/仰角/時刻/場所は保存値を維持)。
-			hgc::cs fp; dataManager::factoryFixedPlan(fp);
-			g_plan.camera = fp.camera;
-			g_plan.lens   = fp.lens;
-			if (!(ccmJson.empty() || dataManager::parseCcmSetJson(ccmJson, g_planCcm, g_planMoon)))
-			{ dataManager::parseCcmSetJson(dataManager::ccmDefaultsJson(), g_planCcm, g_planMoon); }
-			if (ccmJson.empty())
-			{ dataManager::parseCcmSetJson(dataManager::ccmDefaultsJson(), g_planCcm, g_planMoon); }
-			if (!g_planMoon) { g_planMoon = dataManager::factoryMoon(); }
-			// 保存済みの ccmList は生成時のロジックに依存する派生データなので、
-			// 復元した start/end/方向/機材と現在の撮影制御方法で作り直す(分類仕様の更新を反映)。
-			astro::buildSchedule(g_plan, g_planCcm, g_offMin);
-			buildScheduleJson();
-			g_planReady = true;
+			std::string legacy;
+			if (dataManager::loadPlanJson(legacy))
+			{
+				std::string id = makePlanId();
+				if (dataManager::savePlanFile(id, legacy)) { dataManager::removeLegacyPlan(); }
+			}
+		}
+
+		// 既存計画があれば最新(id 昇順の末尾)を編集対象として復元する。
+		std::vector<std::string> ids = dataManager::listPlanIds();
+		if (!ids.empty() && loadPlanById(ids.back()) == ERR_HGC_OK)
+		{
 			return ERR_HGC_OK;
 		}
 
-		// 無ければ出荷時の固定計画(開始=現在-60秒、終了=2時間後)。
-		g_plan = hgc::cs{};
-		dataManager::factoryFixedPlan(g_plan);
-		hgc::dateTime startDt; int o1 = 0;
-		localFromTime(now - 60, startDt, o1);
-		hgc::dateTime endDt; int o2 = 0;
-		localFromTime(now + 2 * 3600, endDt, o2);
-		g_plan.start = startDt;
-		g_plan.end   = endDt;
-
-		// 計画固有ccm = 初期値ccmのコピー(JSON往復で深いコピー)。
-		dataManager::parseCcmSetJson(dataManager::ccmDefaultsJson(), g_planCcm, g_planMoon);
-		if (!g_planMoon) { g_planMoon = dataManager::factoryMoon(); }
-
-		errCode e = astro::buildSchedule(g_plan, g_planCcm, g_offMin);
-		if (e != ERR_HGC_OK) { return e; }
-
-		buildScheduleJson();
+		// 無ければ出荷時の固定計画を作成して保存する。
+		makeFactoryCurrent(nullptr);
+		g_editId = makePlanId();
+		dataManager::savePlanFile(g_editId, wrapCurrentPlan());
 		g_planReady = true;
 		return ERR_HGC_OK;
 	}
@@ -436,6 +523,9 @@ namespace
 //  extern "C" インターフェース
 // ============================================================================
 extern "C" {
+
+// 文字列をバッファ規約で返す共通処理(定義は機材セクション。先行使用のため前方宣言)。
+static int32_t copyOut(const std::string& s, char* buf, int32_t* inoutLen);
 
 int32_t hge_init(void)
 {
@@ -620,10 +710,100 @@ int32_t hge_savePlan(void)
 		errCode e = loadFixedPlanImpl();
 		if (e != ERR_HGC_OK) { return e; }
 	}
-	// 計画固有ccmと計画(cs)をまとめて保存する: {"planCcm":..,"plan":..}
-	std::string wrapped = "{\"planCcm\":" + dataManager::ccmSetToJson(g_planCcm, g_planMoon) +
-	                      ",\"plan\":" + csjson::toJson(g_plan) + "}";
-	return dataManager::savePlanJson(wrapped) ? ERR_HGC_OK : ERR_HGC_INVALID_STATE;
+	return saveCurrentPlan();	// plan_<g_editId>.json へ保存(id 未割当なら採番)
+}
+
+// --- 複数撮影計画(§7.4) ---
+int32_t hge_listPlansJson(char* buf, int32_t* inoutLen)
+{
+	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
+	if (!g_planReady) { loadFixedPlanImpl(); }
+	time_t now = std::time(nullptr);
+	std::string j = "[";
+	bool first = true;
+	for (const std::string& id : dataManager::listPlanIds())
+	{
+		std::string saved, planJson, ccmJson; hgc::cs cs;
+		if (!dataManager::loadPlanFile(id, saved) ||
+		    !dataManager::splitSavedPlan(saved, planJson, ccmJson) ||
+		    !csjson::fromJson(planJson, cs)) { continue; }
+		long long endU = hgc::toUnixUtc(cs.end, g_offMin);
+		bool capturable = endU > static_cast<long long>(now);
+		int st = (id == g_editId) ? g_state.load() : static_cast<int>(HGE_ST_IDLE);
+		if (!first) { j += ","; }
+		first = false;
+		j += "{\"id\":\"" + jesc(id) + "\",\"name\":\"" + jesc(cs.name) + "\"" +
+		     ",\"start\":\"" + dtToStr(cs.start) + "\",\"end\":\"" + dtToStr(cs.end) + "\"" +
+		     ",\"capturable\":" + std::string(capturable ? "true" : "false") +
+		     ",\"state\":" + std::to_string(st) + "}";
+	}
+	j += "]";
+	return copyOut(j, buf, inoutLen);
+}
+
+int32_t hge_newPlan(const char* presetName)
+{
+	(void)presetName;	// Phase0: 出荷時設定のみ(プリセット連携は後続フェーズ)
+	if (!g_planReady) { loadFixedPlanImpl(); }	// g_offMin 確保
+	makeFactoryCurrent("新規撮影計画");
+	g_editId = makePlanId();
+	g_planReady = true;
+	dataManager::savePlanFile(g_editId, wrapCurrentPlan());
+	notify(HGE_EV_SCHEDULE, g_schedJson);
+	return ERR_HGC_OK;
+}
+
+int32_t hge_copyPlan(const char* id)
+{
+	if (id == nullptr || id[0] == '\0') { return ERR_HGC_INVALID_ARG; }
+	if (!g_planReady) { loadFixedPlanImpl(); }
+	errCode e = loadPlanById(std::string(id));	// 元計画を現在へ読み込む
+	if (e != ERR_HGC_OK) { return e; }
+	g_plan.name += " コピー";
+	g_editId = makePlanId();			// 別 id で複製保存
+	buildScheduleJson();				// 名称変更を反映
+	dataManager::savePlanFile(g_editId, wrapCurrentPlan());
+	notify(HGE_EV_SCHEDULE, g_schedJson);
+	return ERR_HGC_OK;
+}
+
+int32_t hge_deletePlan(const char* id)
+{
+	if (id == nullptr || id[0] == '\0') { return ERR_HGC_INVALID_ARG; }
+	if (!dataManager::deletePlanFile(std::string(id))) { return ERR_HGC_NO_ELEMENT; }
+	if (g_editId == std::string(id))
+	{
+		// 編集対象を消した → 残りの最新へ。無ければ出荷時を新規作成。
+		g_editId.clear();
+		std::vector<std::string> ids = dataManager::listPlanIds();
+		if (!ids.empty()) { loadPlanById(ids.back()); }
+		else
+		{
+			makeFactoryCurrent(nullptr);
+			g_editId = makePlanId();
+			g_planReady = true;
+			dataManager::savePlanFile(g_editId, wrapCurrentPlan());
+		}
+		notify(HGE_EV_SCHEDULE, g_schedJson);
+	}
+	return ERR_HGC_OK;
+}
+
+int32_t hge_selectPlan(const char* id)
+{
+	if (id == nullptr || id[0] == '\0') { return ERR_HGC_INVALID_ARG; }
+	if (!g_planReady) { loadFixedPlanImpl(); }	// g_offMin 確保
+	errCode e = loadPlanById(std::string(id));
+	if (e != ERR_HGC_OK) { return e; }
+	notify(HGE_EV_SCHEDULE, g_schedJson);
+	return ERR_HGC_OK;
+}
+
+int32_t hge_getCurrentPlanId(char* buf, int32_t* inoutLen)
+{
+	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
+	if (!g_planReady) { loadFixedPlanImpl(); }
+	return copyOut(g_editId, buf, inoutLen);
 }
 
 // 計画固有の撮影制御方法(night/sunrise/sunset/day/moon)を JSON で取得(バッファ規約)。
@@ -650,6 +830,100 @@ int32_t hge_setPlanCcmJson(const char* json, int32_t len)
 	{ return ERR_HGC_JSON_PARSE; }
 	g_planCcm  = set;
 	g_planMoon = moon ? moon : dataManager::factoryMoon();
+	errCode e = astro::buildSchedule(g_plan, g_planCcm, g_offMin);
+	if (e != ERR_HGC_OK) { return e; }
+	// 仕様 7.4.2: ssが撮影周期-2を超えたら撮影周期を自動的に最長ss+2へ伸ばす。
+	int mn = minIntervalSec(g_plan);
+	if (g_plan.interval < static_cast<double>(mn)) { g_plan.interval = mn; }
+	buildScheduleJson();
+	notify(HGE_EV_SCHEDULE, g_schedJson);
+	return ERR_HGC_OK;
+}
+
+int32_t hge_setPlanInterval(double seconds)
+{
+	if (!g_planReady) { errCode e = loadFixedPlanImpl(); if (e != ERR_HGC_OK) { return e; } }
+	int mn = minIntervalSec(g_plan);
+	if (seconds < static_cast<double>(mn)) { return ERR_HGC_INVALID_ARG; }	// 最小未満は不可(UIで「先にssを変更」警告)
+	g_plan.interval = seconds;
+	buildScheduleJson();
+	notify(HGE_EV_SCHEDULE, g_schedJson);
+	return ERR_HGC_OK;
+}
+
+int32_t hge_setPlanLandscape(int32_t landscape)
+{
+	if (!g_planReady) { errCode e = loadFixedPlanImpl(); if (e != ERR_HGC_OK) { return e; } }
+	g_plan.landscape = (landscape != 0);
+	errCode e = astro::buildSchedule(g_plan, g_planCcm, g_offMin);	// 画角が変わる
+	if (e != ERR_HGC_OK) { return e; }
+	buildScheduleJson();
+	notify(HGE_EV_SCHEDULE, g_schedJson);
+	return ERR_HGC_OK;
+}
+
+int32_t hge_setPlanGearConstJson(const char* json)
+{
+	if (json == nullptr) { return ERR_HGC_INVALID_ARG; }
+	if (!g_planReady) { errCode e = loadFixedPlanImpl(); if (e != ERR_HGC_OK) { return e; } }
+	nlohmann::json o = nlohmann::json::parse(json, nullptr, false);
+	if (o.is_discarded() || !o.is_object()) { return ERR_HGC_JSON_PARSE; }
+	if (o.contains("sensorW"))     { g_plan.camera.sensorSize  = o.value("sensorW", g_plan.camera.sensorSize); }
+	if (o.contains("sensorH"))     { g_plan.camera.sensorSizeV = o.value("sensorH", g_plan.camera.sensorSizeV); }
+	if (o.contains("pixelW"))      { g_plan.camera.sensorPixel = o.value("pixelW", g_plan.camera.sensorPixel); }
+	if (o.contains("focalLength")) { g_plan.lens.focalLength   = o.value("focalLength", g_plan.lens.focalLength); }
+	if (o.contains("fn"))          { g_plan.lens.fn            = o.value("fn", g_plan.lens.fn); }
+	errCode e = astro::buildSchedule(g_plan, g_planCcm, g_offMin);
+	if (e != ERR_HGC_OK) { return e; }
+	buildScheduleJson();
+	notify(HGE_EV_SCHEDULE, g_schedJson);
+	return ERR_HGC_OK;
+}
+
+int32_t hge_setBandMode(int32_t sunriseMode, int32_t sunsetMode)
+{
+	if (!g_planReady) { errCode e = loadFixedPlanImpl(); if (e != ERR_HGC_OK) { return e; } }
+	auto cl = [](int32_t m) { return (m < 0 || m > 2) ? hgc::bandMode::autoDetect : static_cast<hgc::bandMode>(m); };
+	g_plan.sunriseMode = cl(sunriseMode);
+	g_plan.sunsetMode  = cl(sunsetMode);
+	errCode e = astro::buildSchedule(g_plan, g_planCcm, g_offMin);
+	if (e != ERR_HGC_OK) { return e; }
+	buildScheduleJson();
+	notify(HGE_EV_SCHEDULE, g_schedJson);
+	return ERR_HGC_OK;
+}
+
+int32_t hge_setBoundary(int32_t beforeType, int32_t afterType, int32_t occ, const char* whenIso)
+{
+	if (whenIso == nullptr) { return ERR_HGC_INVALID_ARG; }
+	if (!g_planReady) { errCode e = loadFixedPlanImpl(); if (e != ERR_HGC_OK) { return e; } }
+	hgc::dateTime w{};
+	if (std::sscanf(whenIso, "%hu-%hu-%huT%hu:%hu:%hu",
+	                &w.year, &w.month, &w.day, &w.hour, &w.min, &w.sec) != 6) { return ERR_HGC_INVALID_ARG; }
+	hgc::boundaryOverride bo;
+	bo.before = static_cast<hgc::ccmType>(beforeType);
+	bo.after  = static_cast<hgc::ccmType>(afterType);
+	bo.occ    = static_cast<uint16_t>(occ < 0 ? 0 : occ);
+	bo.when   = w;
+	bool replaced = false;
+	for (auto& b : g_plan.boundaries)
+	{
+		if (b.before == bo.before && b.after == bo.after && b.occ == bo.occ) { b.when = w; replaced = true; break; }
+	}
+	if (!replaced) { g_plan.boundaries.push_back(bo); }
+	errCode e = astro::buildSchedule(g_plan, g_planCcm, g_offMin);
+	if (e != ERR_HGC_OK) { return e; }
+	buildScheduleJson();
+	notify(HGE_EV_SCHEDULE, g_schedJson);
+	return ERR_HGC_OK;
+}
+
+int32_t hge_clearScheduleEdits(void)
+{
+	if (!g_planReady) { errCode e = loadFixedPlanImpl(); if (e != ERR_HGC_OK) { return e; } }
+	g_plan.sunriseMode = hgc::bandMode::autoDetect;
+	g_plan.sunsetMode  = hgc::bandMode::autoDetect;
+	g_plan.boundaries.clear();
 	errCode e = astro::buildSchedule(g_plan, g_planCcm, g_offMin);
 	if (e != ERR_HGC_OK) { return e; }
 	buildScheduleJson();

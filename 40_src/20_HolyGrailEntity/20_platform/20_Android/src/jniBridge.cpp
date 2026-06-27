@@ -134,6 +134,65 @@ Java_app_laxei_holygrail_HgeNative_nativeSavePlan(JNIEnv* /*env*/, jobject /*thi
 	return hge_savePlan();
 }
 
+// --- 複数撮影計画(§7.4) ---
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeListPlans(JNIEnv* env, jobject /*thiz*/)
+{
+	int32_t len = 0;
+	hge_listPlansJson(nullptr, &len);
+	if (len <= 0) { return env->NewStringUTF("[]"); }
+	std::vector<char> buf(static_cast<size_t>(len));
+	if (hge_listPlansJson(buf.data(), &len) != 0) { return env->NewStringUTF("[]"); }
+	return env->NewStringUTF(buf.data());
+}
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeNewPlan(JNIEnv* env, jobject /*thiz*/, jstring presetName)
+{
+	const char* p = presetName ? env->GetStringUTFChars(presetName, nullptr) : nullptr;
+	jint r = hge_newPlan(p ? p : "");
+	if (p) { env->ReleaseStringUTFChars(presetName, p); }
+	return r;
+}
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeCopyPlan(JNIEnv* env, jobject /*thiz*/, jstring id)
+{
+	const char* s = env->GetStringUTFChars(id, nullptr);
+	jint r = hge_copyPlan(s ? s : "");
+	env->ReleaseStringUTFChars(id, s);
+	return r;
+}
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeDeletePlan(JNIEnv* env, jobject /*thiz*/, jstring id)
+{
+	const char* s = env->GetStringUTFChars(id, nullptr);
+	jint r = hge_deletePlan(s ? s : "");
+	env->ReleaseStringUTFChars(id, s);
+	return r;
+}
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSelectPlan(JNIEnv* env, jobject /*thiz*/, jstring id)
+{
+	const char* s = env->GetStringUTFChars(id, nullptr);
+	jint r = hge_selectPlan(s ? s : "");
+	env->ReleaseStringUTFChars(id, s);
+	return r;
+}
+
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeCurrentPlanId(JNIEnv* env, jobject /*thiz*/)
+{
+	int32_t len = 0;
+	hge_getCurrentPlanId(nullptr, &len);
+	if (len <= 0) { return env->NewStringUTF(""); }
+	std::vector<char> buf(static_cast<size_t>(len));
+	if (hge_getCurrentPlanId(buf.data(), &len) != 0) { return env->NewStringUTF(""); }
+	return env->NewStringUTF(buf.data());
+}
+
 JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeSetPlanTimes(JNIEnv* env, jobject /*thiz*/,
                                                       jstring start_, jstring end_, jint offMin)
@@ -151,6 +210,50 @@ Java_app_laxei_holygrail_HgeNative_nativeSetPlanDirection(JNIEnv* /*env*/, jobje
                                                           jdouble azimuth, jdouble elevation)
 {
 	return hge_setPlanDirection(azimuth, elevation);
+}
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetPlanInterval(JNIEnv* /*env*/, jobject /*thiz*/, jdouble seconds)
+{
+	return hge_setPlanInterval(seconds);
+}
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetPlanLandscape(JNIEnv* /*env*/, jobject /*thiz*/, jint landscape)
+{
+	return hge_setPlanLandscape(landscape);
+}
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetPlanGearConst(JNIEnv* env, jobject /*thiz*/, jstring json_)
+{
+	const char* j = env->GetStringUTFChars(json_, nullptr);
+	jint r = hge_setPlanGearConstJson(j ? j : "");
+	env->ReleaseStringUTFChars(json_, j);
+	return r;
+}
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetBandMode(JNIEnv* /*env*/, jobject /*thiz*/,
+                                                     jint sunriseMode, jint sunsetMode)
+{
+	return hge_setBandMode(sunriseMode, sunsetMode);
+}
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetBoundary(JNIEnv* env, jobject /*thiz*/,
+                                                     jint beforeType, jint afterType, jint occ, jstring whenIso)
+{
+	const char* w = env->GetStringUTFChars(whenIso, nullptr);
+	jint r = hge_setBoundary(beforeType, afterType, occ, w ? w : "");
+	env->ReleaseStringUTFChars(whenIso, w);
+	return r;
+}
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeClearScheduleEdits(JNIEnv* /*env*/, jobject /*thiz*/)
+{
+	return hge_clearScheduleEdits();
 }
 
 JNIEXPORT jstring JNICALL

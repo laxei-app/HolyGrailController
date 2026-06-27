@@ -40,7 +40,21 @@ object HgeNative {
     external fun nativeGetPlanJson(): String
     external fun nativeSetPlanTimes(start: String, end: String, offMin: Int): Int
     external fun nativeSetPlanDirection(azimuth: Double, elevation: Double): Int  // 撮影方向/仰角を設定し再生成
+    external fun nativeSetPlanInterval(seconds: Double): Int   // 撮影周期。最小(最長ss+2)未満は失敗
+    external fun nativeSetPlanLandscape(landscape: Int): Int   // 横向き(ランドスケープ)。再生成
+    external fun nativeSetPlanGearConst(json: String): Int     // センサー/レンズ定数の上書き(sensorW/H/pixelW/focalLength/fn)
+    // スケジュール手動編集(7.3.2)
+    external fun nativeSetBandMode(sunriseMode: Int, sunsetMode: Int): Int  // 0=自動,1=挿入,2=排除
+    external fun nativeSetBoundary(beforeType: Int, afterType: Int, occ: Int, whenIso: String): Int
+    external fun nativeClearScheduleEdits(): Int
     external fun nativeSavePlan(): Int
+    // --- 複数撮影計画(§7.4) ---
+    external fun nativeListPlans(): String           // [{"id","name","start","end","capturable","state"},...]
+    external fun nativeNewPlan(presetName: String): Int   // 新規作成→編集対象に切替(EV_SCHEDULE通知)
+    external fun nativeCopyPlan(id: String): Int          // 複製→編集対象に切替
+    external fun nativeDeletePlan(id: String): Int
+    external fun nativeSelectPlan(id: String): Int        // 編集対象に切替(EV_SCHEDULE通知)
+    external fun nativeCurrentPlanId(): String            // 現在(編集対象)の計画 id
     external fun nativeGetCcmDefaults(): String      // 参照専用の初期値(コード上の出荷時設定)
     external fun nativeGetPlanCcm(): String          // 計画固有ccm(初期値とは別)
     external fun nativeSetPlanCcm(json: String): Int

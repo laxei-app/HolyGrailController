@@ -257,8 +257,12 @@ namespace astro
 				if (samples[j].inF) { any = true; }
 				++j;
 			}
-			const hgc::ccmType ct = any ? (rising ? hgc::ccmType::sunrise : hgc::ccmType::sunset)
-			                            : hgc::ccmType::day;
+			// 帯モード(7.3.2): auto=画角侵入で判定 / on=挿入(強制) / off=排除(日中)。
+			const hgc::bandMode mode = rising ? plan.sunriseMode : plan.sunsetMode;
+			hgc::ccmType ct;
+			if (mode == hgc::bandMode::off)     { ct = hgc::ccmType::day; }
+			else if (mode == hgc::bandMode::on) { ct = rising ? hgc::ccmType::sunrise : hgc::ccmType::sunset; }
+			else { ct = any ? (rising ? hgc::ccmType::sunrise : hgc::ccmType::sunset) : hgc::ccmType::day; }
 			for (size_t k = i; k < j; ++k) { types[k] = ct; }
 			i = j;
 		}
@@ -285,6 +289,36 @@ namespace astro
 			}
 		}
 		flushRun(tEnd);
+
+		// --- 境目の時刻上書き(7.3.2)。隣接窓の (before,after) 型ペアの occ 番目を when へ動かす。---
+		auto typeAt = [&](size_t idx) -> hgc::ccmType {
+			return plan.ccmList[idx].ccm ? plan.ccmList[idx].ccm->type : hgc::ccmType::invalid;
+		};
+		for (size_t i = 0; i + 1 < plan.ccmList.size(); ++i)
+		{
+			const hgc::ccmType bt = typeAt(i);
+			const hgc::ccmType at = typeAt(i + 1);
+			// この型ペアの出現順(これ以前に同じ (bt,at) 境目がいくつあったか)。
+			uint16_t occ = 0;
+			for (size_t k = 0; k < i; ++k) { if (typeAt(k) == bt && typeAt(k + 1) == at) { ++occ; } }
+			for (const auto& bo : plan.boundaries)
+			{
+				if (bo.before != bt || bo.after != at || bo.occ != occ) { continue; }
+				astro_time_t lo = toAstro(plan.ccmList[i].start, off);
+				astro_time_t hi = toAstro(plan.ccmList[i + 1].end, off);
+				astro_time_t w  = toAstro(bo.when, off);
+				const double minGap = 60.0 / 86400.0;	// 1分は最低残す
+				double wut = w.ut;
+				if (wut < lo.ut + minGap) { wut = lo.ut + minGap; }
+				if (wut > hi.ut - minGap) { wut = hi.ut - minGap; }
+				if (wut <= lo.ut || wut >= hi.ut) { break; }	// 縮退(隣接窓が短すぎ)→無視
+				astro_time_t wc = Astronomy_AddDays(w, wut - w.ut);
+				hgc::dateTime nd = fromAstro(wc, off);
+				plan.ccmList[i].end       = nd;
+				plan.ccmList[i + 1].start = nd;
+				break;
+			}
+		}
 
 		// 開始(plan.start)直前に効いていたはずの撮影制御方法を求める(移行中開始の1枚目シード用)。
 		// 最初の窓と異なる種別が出るまで tStart から後方へ走査する(夜間前→日中/夕日, 夜間後→夜間)。

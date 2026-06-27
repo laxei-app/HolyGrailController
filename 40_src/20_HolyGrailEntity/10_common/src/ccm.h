@@ -51,7 +51,6 @@ namespace hgc
 	struct ccmNight : ccmBase
 	{
 		double sunAltitude = -18.0;	// 開始終了の太陽高度[°]
-		bool   autoEdge    = true;	// 開始終了の自動判別
 		double postNightEv = 0.0;	// 夜間後移行(仕様3.9/7.4.10)の露出補正[ev]。範囲 -5.0〜+5.0
 		double preNightEv  = 0.0;	// 夜間前移行(仕様3.7)の露出補正[ev]。範囲 -5.0〜+5.0
 

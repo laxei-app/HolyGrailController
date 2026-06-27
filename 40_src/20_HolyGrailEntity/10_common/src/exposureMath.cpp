@@ -57,6 +57,13 @@ namespace expo
 		return (end != v.c_str() && r > 0.0) ? r : -1.0;
 	}
 
+	double npfShutterSec(double sensorW_mm, double pixelW, double focal_mm, double fn)
+	{
+		if (sensorW_mm <= 0.0 || pixelW <= 0.0 || focal_mm <= 0.0 || fn <= 0.0) { return 0.0; }
+		double pitchUm = sensorW_mm / pixelW * 1000.0;	// 画素ピッチ[µm]
+		return (35.0 * fn + 30.0 * pitchUm) / focal_mm;
+	}
+
 	namespace
 	{
 		double apexOf(double real, expoKind k)

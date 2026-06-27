@@ -123,6 +123,40 @@ namespace osfile
 		return "none";
 	}
 
+	std::vector<std::string> listFiles(const std::string& subdir,
+	                                   const std::string& prefix,
+	                                   const std::string& suffix)
+	{
+		ensureInit();
+		std::vector<std::string> out;
+		if (g_fs == nullptr) { return out; }
+		std::string dpath = "/" + subdir;
+		File d = g_fs->open(dpath.c_str());
+		if (!d) { return out; }
+		if (!d.isDirectory()) { d.close(); return out; }
+		for (File f = d.openNextFile(); f; f = d.openNextFile())
+		{
+			std::string nm = f.name();
+			size_t slash = nm.find_last_of('/');
+			std::string base = (slash == std::string::npos) ? nm : nm.substr(slash + 1);
+			bool okPre = prefix.empty() || base.rfind(prefix, 0) == 0;
+			bool okSuf = suffix.empty() ||
+			             (base.size() >= suffix.size() && base.compare(base.size() - suffix.size(), suffix.size(), suffix) == 0);
+			if (okPre && okSuf) { out.push_back(base); }
+			f.close();
+		}
+		d.close();
+		return out;
+	}
+
+	bool removeFile(const std::string& subdir, const std::string& name)
+	{
+		ensureInit();
+		if (g_fs == nullptr) { return false; }
+		std::string p = "/" + subdir + "/" + name;
+		return g_fs->remove(p.c_str());
+	}
+
 	std::vector<std::string> logFileNames(void)
 	{
 		ensureInit();

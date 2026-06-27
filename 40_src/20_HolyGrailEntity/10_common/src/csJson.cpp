@@ -150,7 +150,7 @@ namespace csjson
 			case hgc::ccmType::night:
 			{
 				const auto& n = static_cast<const hgc::ccmNight&>(c);
-				j["sunAltitude"] = n.sunAltitude; j["autoEdge"] = n.autoEdge;
+				j["sunAltitude"] = n.sunAltitude;
 				j["postNightEv"] = n.postNightEv;
 				j["preNightEv"]  = n.preNightEv;
 				break;
@@ -201,7 +201,6 @@ namespace csjson
 			{
 				auto n = std::make_shared<hgc::ccmNight>();
 				n->sunAltitude = j.value("sunAltitude", -18.0);
-				n->autoEdge    = j.value("autoEdge", true);
 				n->postNightEv = j.value("postNightEv", 0.0);
 				n->preNightEv  = j.value("preNightEv", 0.0);
 				c = n; break;
@@ -266,6 +265,16 @@ namespace csjson
 		j["azimuth"]   = plan.azimuth;
 		j["elevation"] = plan.elevation;
 		j["landscape"] = plan.landscape;
+		// スケジュール手動編集(7.3.2)
+		j["sunriseMode"] = static_cast<int>(plan.sunriseMode);
+		j["sunsetMode"]  = static_cast<int>(plan.sunsetMode);
+		json bl = json::array();
+		for (const auto& b : plan.boundaries)
+		{
+			bl.push_back(json{ {"before", static_cast<int>(b.before)}, {"after", static_cast<int>(b.after)},
+			                   {"occ", b.occ}, {"when", dtToJson(b.when)} });
+		}
+		j["boundaries"] = bl;
 
 		json ev = json::array();
 		for (const auto& e : plan.events)
@@ -305,6 +314,21 @@ namespace csjson
 		plan.azimuth   = j.value("azimuth", 0.0);
 		plan.elevation = j.value("elevation", 0.0);
 		plan.landscape = j.value("landscape", true);
+		// スケジュール手動編集(7.3.2)
+		plan.sunriseMode = static_cast<hgc::bandMode>(j.value("sunriseMode", 0));
+		plan.sunsetMode  = static_cast<hgc::bandMode>(j.value("sunsetMode", 0));
+		if (j.contains("boundaries") && j["boundaries"].is_array())
+		{
+			for (const auto& b : j["boundaries"])
+			{
+				hgc::boundaryOverride bo;
+				bo.before = static_cast<hgc::ccmType>(b.value("before", 0));
+				bo.after  = static_cast<hgc::ccmType>(b.value("after", 0));
+				bo.occ    = b.value("occ", 0);
+				if (b.contains("when")) { bo.when = dtFromJson(b["when"]); }
+				plan.boundaries.push_back(bo);
+			}
+		}
 
 		if (j.contains("events") && j["events"].is_array())
 		{

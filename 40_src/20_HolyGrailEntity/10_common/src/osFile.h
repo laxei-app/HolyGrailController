@@ -35,6 +35,16 @@ namespace osfile
 	// 現在採用しているファイルシステム名("SD"/"LittleFS"/"none")を返す(検証用)。
 	const char* backendName(void);
 
+	// 指定サブディレクトリ(例 "plan")内のファイル名のうち、prefix で始まり suffix で終わる
+	// ものをベース名で返す(撮影計画 plan_<id>.json の列挙など)。prefix/suffix が空なら無条件。
+	// フルパスは dir(subdir) + "/" + 返り値 で構成する。
+	std::vector<std::string> listFiles(const std::string& subdir,
+	                                   const std::string& prefix,
+	                                   const std::string& suffix);
+
+	// 指定サブディレクトリ内のファイルを削除する(plan_<id>.json の削除など)。return: 成功。
+	bool removeFile(const std::string& subdir, const std::string& name);
+
 	// ログディレクトリ(logDir)内のログファイル名一覧(例 "hg_2026-06-21.log")。
 	std::vector<std::string> logFileNames(void);
 	// ログディレクトリ内の指定名のログファイルを削除する。return: 成功。

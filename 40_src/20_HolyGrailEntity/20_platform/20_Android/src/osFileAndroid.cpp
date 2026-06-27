@@ -90,6 +90,36 @@ namespace osfile
 		return true;
 	}
 
+	std::vector<std::string> listFiles(const std::string& subdir,
+	                                   const std::string& prefix,
+	                                   const std::string& suffix)
+	{
+		std::vector<std::string> out;
+		std::string d = dir(subdir);
+		if (d.empty()) { return out; }
+		DIR* dp = opendir(d.c_str());
+		if (dp == nullptr) { return out; }
+		struct dirent* e;
+		while ((e = readdir(dp)) != nullptr)
+		{
+			std::string n = e->d_name;
+			if (n == "." || n == "..") { continue; }
+			bool okPre = prefix.empty() || n.rfind(prefix, 0) == 0;
+			bool okSuf = suffix.empty() ||
+			             (n.size() >= suffix.size() && n.compare(n.size() - suffix.size(), suffix.size(), suffix) == 0);
+			if (okPre && okSuf) { out.push_back(n); }
+		}
+		closedir(dp);
+		return out;
+	}
+
+	bool removeFile(const std::string& subdir, const std::string& name)
+	{
+		std::string d = dir(subdir);
+		if (d.empty()) { return false; }
+		return std::remove((d + "/" + name).c_str()) == 0;
+	}
+
 	std::vector<std::string> logFileNames(void)
 	{
 		std::vector<std::string> out;

@@ -59,6 +59,11 @@ namespace expo
 	// 文字列→実数。iso:整数, fn:小数, ss:"1/4000"/"8"/"0.5"等。無効("Bulb"等)は負を返す。
 	double parseValue(const std::string& v, expoKind k);
 
+	// NPF ルールのシャッター速度[秒](点像を保つ目安。仕様 7.3.3 参考表示)。
+	//  sensorW_mm: センサー横[mm], pixelW: センサー横[pixel], focal_mm: 焦点距離[mm], fn: 開放F値。
+	//  t = (35*N + 30*p) / f、p[µm] = sensorW_mm / pixelW * 1000。算出できなければ 0。
+	double npfShutterSec(double sensorW_mm, double pixelW, double focal_mm, double fn);
+
 	// 値文字列群からテーブルを作る(§4.2)。apexを算出し1/3段にスナップ、apex昇順ソート。無効値は除外。
 	std::vector<expoEntry> buildTable(const std::vector<std::string>& values, expoKind k);
 

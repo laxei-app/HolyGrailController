@@ -43,6 +43,21 @@ namespace hgc
 		std::shared_ptr<ccmBase> ccm;	// 撮影制御方法(実体)
 	};
 
+	// 7.3.2 スケジュール手動編集
+	// 朝日/夕日の帯モード。auto=画角侵入で自動判定 / on=挿入(強制で朝日/夕日) / off=排除(強制で日中)。
+	enum class bandMode : uint8_t { autoDetect = 0, on = 1, off = 2 };
+
+	// 撮影制御方法の境目(隣接する窓の境界)の時刻を手動で上書きする指定。
+	// (before→after) の型ペアの occ 番目(0始まり)の境目を when の時刻へ動かす。
+	// スケジュール再生成(時刻/方向/機材変更)後も型ペア+出現順で同定して再適用する。
+	struct boundaryOverride
+	{
+		ccmType  before = ccmType::invalid;	// 境目の前の窓の種別
+		ccmType  after  = ccmType::invalid;	// 境目の後の窓の種別
+		uint16_t occ    = 0;				// 同じ型ペアの出現順(0始まり)
+		dateTime when;						// 上書きする境目の時刻
+	};
+
 	// 4.5 撮影計画
 	struct cs
 	{
@@ -58,6 +73,10 @@ namespace hgc
 		bool        landscape = true;	// 横向きで撮る(ランドスケープ)
 		std::vector<eventItem> events;	// 撮影計画のイベント
 		std::vector<ccmWindow> ccmList;	// 撮影制御方法(実体をコピー)
+		// --- スケジュール手動編集(7.3.2。UIの帯ドラッグで設定) ---
+		bandMode sunriseMode = bandMode::autoDetect;	// 朝日撮影の挿入/排除
+		bandMode sunsetMode  = bandMode::autoDetect;	// 夕日撮影の挿入/排除
+		std::vector<boundaryOverride> boundaries;		// 境目の時刻上書き
 		// 撮影開始(start)直前に効いていたはずの撮影制御方法。開始が移行(夜間前/後)の途中のとき、
 		// 1枚目の初期露出のシードに使う(夜間前=日中/夕日, 夜間後=夜間)。無ければ null。
 		std::shared_ptr<ccmBase> startLeadCcm;

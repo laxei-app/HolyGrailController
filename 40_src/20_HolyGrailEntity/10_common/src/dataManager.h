@@ -103,11 +103,22 @@ public:
 	// master(model)＋device から所持カメラを自動作成して保存(1台運用で無設定OK)。
 	static bool recordConnectedCamera(const device& dev);
 
-	// --- 撮影計画の永続化(案A /plan、当面は単一ファイル plan.json) ---
+	// --- 撮影計画の永続化(案A /plan。1計画1ファイル plan_<id>.json。§7.4) ---
+	// 撮影計画(cs)の自己完結JSON(ラッパー {"plan":..,"planCcm":..})を保存/読込/削除する。
+	// id は作成時刻 yyyyMMdd-HHmmss(衝突時 -NN)。dataManager は id の規則は関知しない。
+	static bool savePlanFile(const std::string& id, const std::string& wrappedJson);
+	static bool loadPlanFile(const std::string& id, std::string& out);
+	static bool deletePlanFile(const std::string& id);
+	// 保存済み撮影計画の id 一覧(昇順)。plan_<id>.json から id 部分を取り出す。
+	static std::vector<std::string> listPlanIds(void);
+
+	// --- 旧単一ファイル(plan.json)の移行用(後方互換) ---
 	// 撮影計画(cs)の自己完結JSONを /plan/plan.json へ保存する。
 	static bool savePlanJson(const std::string& json);
 	// 保存済み撮影計画JSONを読み込む。無ければ false。
 	static bool loadPlanJson(std::string& out);
+	// 旧 plan.json を削除する(移行後の後始末)。return: 成功。
+	static bool removeLegacyPlan(void);
 
 	// 任意の ccmSet+moon を JSON 化/復元する(初期値ccmと計画固有ccmで共用)。
 	static std::string ccmSetToJson(const astro::ccmSet& set, const std::shared_ptr<hgc::ccmMoon>& moon);

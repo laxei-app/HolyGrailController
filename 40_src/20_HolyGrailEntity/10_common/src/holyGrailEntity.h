@@ -78,6 +78,25 @@ int32_t hge_setPlanTimes(const char* startIso, const char* endIso, int32_t offMi
 // 結果は HGE_EV_SCHEDULE で通知する。
 int32_t hge_setPlanDirection(double azimuth, double elevation);
 
+// 撮影周期[秒]を設定する。最小撮影周期(全ccmの最長ss+2)未満は ERR_HGC_INVALID_ARG(UIで警告)。
+int32_t hge_setPlanInterval(double seconds);
+
+// 横向き(ランドスケープ)を設定する。画角が変わるためスケジュールを再生成し通知する。
+int32_t hge_setPlanLandscape(int32_t landscape);
+
+// 計画のセンサー/レンズ定数を上書きする(機材リストに無い値の参考用。仕様 7.3 §センサーレンズ定数)。
+// JSONキー: sensorW/sensorH/pixelW/focalLength/fn。スケジュールを再生成して通知する。
+int32_t hge_setPlanGearConstJson(const char* json);
+
+// --- スケジュール手動編集(7.3.2) ---
+// 朝日/夕日の帯モード(0=自動判定, 1=挿入(強制), 2=排除(日中))。再生成して通知する。
+int32_t hge_setBandMode(int32_t sunriseMode, int32_t sunsetMode);
+// 境目の時刻上書きを追加/置換する。before/after=種別(ccmType), occ=同型ペアの出現順,
+// whenIso="YYYY-MM-DDThh:mm:ss"(ローカル)。再生成して通知する。
+int32_t hge_setBoundary(int32_t beforeType, int32_t afterType, int32_t occ, const char* whenIso);
+// スケジュール手動編集をすべて解除する(帯モード=自動, 境目上書き消去)。再生成して通知する。
+int32_t hge_clearScheduleEdits(void);
+
 // 撮影計画のスケジュールを JSON で取得(バッファ規約)。
 //  buf が null か容量不足なら必要バイト数を *inoutLen に格納し ERR_HGC_BUF_SHORT。
 int32_t hge_getScheduleJson(char* buf, int32_t* inoutLen);
@@ -86,9 +105,32 @@ int32_t hge_getScheduleJson(char* buf, int32_t* inoutLen);
 // スマホがエッジ端末へ capturePlan 転送する際に使う(csjson::toJson)。
 int32_t hge_getPlanJson(char* buf, int32_t* inoutLen);
 
-// 現在の撮影計画を永続化する(案A 最小: /plan/plan.json へ単一保存)。
-// 次回起動時 loadFixedPlanImpl が自動復元する。計画固有ccmも一緒に保存する。
+// 現在(編集対象)の撮影計画を永続化する(/plan/plan_<id>.json。1計画1ファイル §7.4)。
+// id 未割当なら作成時刻から採番する。計画固有ccmも一緒に保存する。
 int32_t hge_savePlan(void);
+
+// --- 複数撮影計画(§7.4) ---
+// 保存済み撮影計画の一覧を JSON 配列で取得(バッファ規約)。
+//  [{"id","name","start","end","capturable":bool,"state":int},...]
+//  capturable=撮影終了が現在より未来。state=その計画の撮影状態(hgeState)。
+int32_t hge_listPlansJson(char* buf, int32_t* inoutLen);
+
+// 新規撮影計画を作成する(presetName で初期化。空/未知は出荷時設定)。
+// 採番→保存→編集対象に切替し、HGE_EV_SCHEDULE を通知する。作成した id は
+// hge_getCurrentPlanId で取得できる。
+int32_t hge_newPlan(const char* presetName);
+
+// 既存計画(id)を複製して新規作成する(名前に「 コピー」を付す)。編集対象に切替。
+int32_t hge_copyPlan(const char* id);
+
+// 撮影計画(id)を削除する。編集対象だった場合は別計画(無ければ新規出荷時)へ切替。
+int32_t hge_deletePlan(const char* id);
+
+// 撮影計画(id)を編集対象として読み込む。HGE_EV_SCHEDULE を通知する。
+int32_t hge_selectPlan(const char* id);
+
+// 現在(編集対象)の撮影計画 id を取得(バッファ規約)。
+int32_t hge_getCurrentPlanId(char* buf, int32_t* inoutLen);
 
 // 計画固有の撮影制御方法(初期値ccmとは別)の取得/設定。形式は ccmDefaults と同じ。
 // setPlanCcm はスケジュールを再生成して HGE_EV_SCHEDULE で通知する。
