@@ -1,0 +1,236 @@
+<resources>
+    <string name="app_name">CCAPI Sample Ver.1.3.0</string>
+
+    <!-- TODO: Remove or change this placeholder text -->
+    <string name="hello_blank_fragment">Hello blank fragment</string>
+    <string name="title_activity_fragment_main">FragmentMainActivity</string>
+
+    <string name="navigation_drawer_open">Open navigation drawer</string>
+    <string name="navigation_drawer_close">Close navigation drawer</string>
+
+    <string name="action_settings">Settings</string>
+    <string name="title_activity_sample_navi">SampleNaviActivity</string>
+    <string name="autopoweroff">autopoweroff</string>
+
+    <string-array name="on_off">
+        <item>on</item>
+        <item>off</item>
+    </string-array>
+
+    <string-array name="disable_enable">
+        <item>disable</item>
+        <item>enable</item>
+    </string-array>
+
+    <string-array name="event_items">
+        <item>polling</item>
+        <item>polling(continue=on)</item>
+        <item>monitoring</item>
+    </string-array>
+
+    <string-array name="event_ver110_items">
+        <item>polling(timeout=short)</item>
+        <item>polling(timeout=long)</item>
+        <item>polling(timeout=immediately)</item>
+        <item>monitoring</item>
+    </string-array>
+
+    <string-array name="drive_focus">
+        <item>near1</item>
+        <item>near2</item>
+        <item>near3</item>
+        <item>far1</item>
+        <item>far2</item>
+        <item>far3</item>
+    </string-array>
+
+    <string-array name="start_cancel">
+        <item>start</item>
+        <item>cancel</item>
+    </string-array>
+
+    <string-array name="lv_method">
+        <item>Flip</item>
+        <item>Scroll</item>
+        <item>RTP</item>
+    </string-array>
+
+    <string-array name="lv_kind">
+        <item>Image</item>
+        <item>Image and Info</item>
+        <item>Info</item>
+    </string-array>
+
+    <string-array name="channel">
+        <item>auto</item>
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+        <item>5</item>
+        <item>6</item>
+        <item>7</item>
+        <item>8</item>
+        <item>9</item>
+        <item>10</item>
+        <item>11</item>
+        <item>12</item>
+        <item>13</item>
+        <item>36</item>
+        <item>40</item>
+        <item>44</item>
+        <item>48</item>
+        <item>52</item>
+        <item>56</item>
+        <item>60</item>
+        <item>64</item>
+        <item>100</item>
+        <item>104</item>
+        <item>108</item>
+        <item>112</item>
+        <item>116</item>
+        <item>120</item>
+        <item>124</item>
+        <item>128</item>
+        <item>132</item>
+        <item>136</item>
+        <item>140</item>
+        <item>149</item>
+        <item>153</item>
+        <item>157</item>
+        <item>161</item>
+        <item>165</item>
+    </string-array>
+
+    <string-array name="key_index">
+        <item>1</item>
+        <item>2</item>
+        <item>3</item>
+        <item>4</item>
+    </string-array>
+
+    <string-array name="lantype">
+        <item>ether</item>
+        <item>wft</item>
+        <item>wifi</item>
+    </string-array>
+
+    <string-array name="currentconnection">
+        <item>set01</item>
+        <item>set02</item>
+        <item>set03</item>
+        <item>set04</item>
+        <item>set05</item>
+        <item>set06</item>
+        <item>set07</item>
+        <item>set08</item>
+        <item>set09</item>
+        <item>set10</item>
+        <item>set11</item>
+        <item>set12</item>
+        <item>set13</item>
+        <item>set14</item>
+        <item>set15</item>
+        <item>set16</item>
+        <item>set17</item>
+        <item>set18</item>
+        <item>set19</item>
+        <item>set20</item>
+    </string-array>
+
+    <string-array name="nw_index">
+        <item>unspecified</item>
+        <item>nw01</item>
+        <item>nw02</item>
+        <item>nw03</item>
+        <item>nw04</item>
+        <item>nw05</item>
+        <item>nw06</item>
+        <item>nw07</item>
+        <item>nw08</item>
+        <item>nw09</item>
+        <item>nw10</item>
+        <item>nw11</item>
+        <item>nw12</item>
+        <item>nw13</item>
+        <item>nw14</item>
+        <item>nw15</item>
+        <item>nw16</item>
+        <item>nw17</item>
+        <item>nw18</item>
+        <item>nw19</item>
+        <item>nw20</item>
+        <item>nw21</item>
+        <item>nw22</item>
+        <item>nw23</item>
+        <item>nw24</item>
+        <item>nw25</item>
+    </string-array>
+
+    <string-array name="mode_index">
+        <item>unspecified</item>
+        <item>mode01</item>
+        <item>mode02</item>
+        <item>mode03</item>
+        <item>mode04</item>
+        <item>mode05</item>
+        <item>mode06</item>
+        <item>mode07</item>
+        <item>mode08</item>
+        <item>mode09</item>
+        <item>mode10</item>
+        <item>mode11</item>
+        <item>mode12</item>
+        <item>mode13</item>
+        <item>mode14</item>
+        <item>mode15</item>
+        <item>mode16</item>
+        <item>mode17</item>
+        <item>mode18</item>
+        <item>mode19</item>
+        <item>mode20</item>
+        <item>mode21</item>
+        <item>mode22</item>
+        <item>mode23</item>
+        <item>mode24</item>
+        <item>mode25</item>
+    </string-array>
+
+    <string-array name="function_index">
+        <item>unspecified</item>
+        <item>ccapi</item>
+        <item>eos_utility</item>
+        <item>browserremote</item>
+        <item>ftp_trans</item>
+        <item>smartphone</item>
+    </string-array>
+
+    <string-array name="contents_type_items">
+        <item>all</item>
+        <item>jpeg</item>
+        <item>hif</item>
+        <item>cr2</item>
+        <item>cr3</item>
+        <item>wav</item>
+        <item>mp4</item>
+        <item>mov</item>
+        <item>crm</item>
+    </string-array>
+
+    <string-array name="contents_order_items">
+        <item>asc</item>
+        <item>desc</item>
+    </string-array>
+
+    <string-array name="contents_save_type_items">
+        <item>original</item>
+        <item>display</item>
+        <item>embedded</item>
+    </string-array>
+
+    <string-array name="contents_kind_items">
+        <item>list</item>
+        <item>chunked</item>
+    </string-array>
+
+</resources>

@@ -1,0 +1,119 @@
+----------------------------------------------------------------------------------------------------
+                                     CCAPI(1.3.0d) Release Note
+                                             10/20/2023 
+                                             Canon Inc.
+----------------------------------------------------------------------------------------------------
+1. History
+
+10/20/2023
+	-CameraControlAPI Reference v1.3.0 Rev.1.4 update
+
+08/23/2023
+	-CameraControlAPI Reference v1.3.0 Rev.1.3 update
+	-Fixing Android Samples
+		-Add New Features
+			-List of supported APIs (For developers)
+
+05/25/2023
+	-CameraControlAPI Reference v1.3.0 Rev.1.2 update
+	
+12/07/2022
+	-CameraControlAPI Reference v1.3.0 Rev.1.1 update
+	
+11/09/2022
+	-CameraControlAPI Reference v1.3.0 Rev.1.0 update
+	-Fixing Android Samples
+		-Add New Features
+			-XMP area editing of JPG images
+
+10/18/2022
+	-CameraControlAPI Reference v1.2.0 Rev.1.0 update
+	-Fixing Android Samples
+		-Add New Features
+			-Root certificate
+			-Common name
+			-CORS settings
+			-CORS origin Settings
+			-Adding GPS Information
+
+06/17/2022
+	-CameraControlAPI Reference v1.1.0 Rev.1.9 update
+	-Fixing Android Samples
+		-Add New Features
+			-Ignore shooting mode dial mode
+			-Custom high speed cont
+			-Focus BKT Shooting
+
+03/28/2022
+	-CameraControlAPI Reference v1.1.0 Rev.1.8 update
+	
+01/31/2022
+	-CameraControlAPI Reference v1.1.0 Rev.1.7 update
+	-Fixing Android Samples
+		-Add New Features
+			-Sensor Cleaning
+
+12/02/2021
+	-CameraControlAPI Reference v1.1.0 Rev.1.6 update
+	-Fixing Android Samples
+		-Add New Features
+			-Supports IPv6
+				-Added IPv6 discovery functionality (link-local addresses are not supported)
+			-Supports content store destinations
+				-Added the ability to select a directory to store content
+			-Subject tracking 
+			-Still image compression ratio (M,S1,S2)
+			-Subject tracking 
+			-Movie Cropping
+			-Movie rec. format
+			-Anti-flicker shoot / HF Anti-flicker shoot
+			-Still Image / movie Separate
+			
+08/24/2021
+	-CameraControlAPI Reference v1.1.0 Rev.1.5 update
+	-Fixing Android Samples
+		-Add New Features
+			-Get movie recording mode
+	
+03/26/2021
+	-CameraControlAPI Reference v1.1.0 Rev.1.4 update
+
+10/15/2020
+	-CameraControlAPI Reference v1.1.0 Rev.1.3 update
+	-CCAPI Activation Tool for Macintosh v1.0.3 update
+
+08/20/2020
+	-CameraControlAPI Reference v1.1.0 Rev.1.2 update
+	-Fixing Android Samples
+		-Add New Features
+			-Network setting
+			-Shutter mode
+			-High frame rate setting
+			-Optical Viewfinder
+
+03/06/2020
+	-Fixing Android Samples
+		-Corrects an issue that prevents a disconnect when the Disconnect button is pressed.
+
+12/13/2019
+	-CameraControlAPI Reference v1.1.0 Rev.1.0 update
+	-CCAPI Activation Tool for Macintosh v1.0.2 update
+	-The following OS has been added to the operating environment of the CCAPI Activation Tool.
+		-Mac OS X 10.15
+
+06/10/2019
+	-CameraControlAPI Reference v1.0.0 Rev.1.1 update
+
+05/16/2019
+	-Changed the size of the disk image file of CCAPI Activation Tool for Macintosh.
+
+03/15/2019
+	-CCAPI Activation Tool for Macintosh v1.0.1 update
+	-Fixed application crashes on startup. 
+
+02/25/2019
+	-First release 
+
+2. Usage of CCAPI
+
+Please refer to Operating Guide and Reference for the detail.

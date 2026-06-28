@@ -1,2 +1,8 @@
 # Windows ショートカット（ローカル便利用・環境依存のため追跡しない）
 *.lnk
+
+# Visual Studio ビルドキャッシュ/成果物（参照SDK同梱分。巨大なため追跡しない。GitHub 100MB制限対策）
+.vs/
+*.ipch
+*.VC.db
+*.pch
