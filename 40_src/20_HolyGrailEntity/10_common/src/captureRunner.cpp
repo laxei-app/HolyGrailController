@@ -218,7 +218,7 @@ errCode captureRunner::loop(void)
 	// 作れないため、Mにしてから設定可能値を取得する。終了時に restoreShootingMode で元へ戻す。
 	{
 		errCode me = cameraController::setupShootingModeManual(*dev_);
-		if (me == ERR_HGC_OK)            { interruptibleSleep(300); }	// 反映待ち
+		if (me == ERR_HGC_OK)            { interruptibleSleep(800); }	// モード変更/ability更新の反映待ち(初回rdyShutterの取りこぼし防止)
 		else if (me == ERR_HGC_NOT_SUPPORTED) { /* モード変更非対応機。そのまま続行 */ }
 		else if (onError_)               { onError_(me, "setupShootingModeManual"); }
 	}

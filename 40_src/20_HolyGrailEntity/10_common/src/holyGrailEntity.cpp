@@ -649,9 +649,27 @@ namespace
 	errCode startSessionSequence(captureSession* S)
 	{
 		S->state = HGE_ST_SEARCHING; notifyStateP(S->planId, HGE_ST_SEARCHING); refreshAggregateState();
-		// カメラ未検出のときだけ検索する(実行中セッションの devIndex を壊さないため既存は保持)。
-		bool haveAny = false; for (auto& d : g_devices) { if (d.apiBase) { haveAny = true; break; } }
-		if (!haveAny) { g_devices.clear(); cameraController::detectTarget(g_devices); }
+		// 撮影開始の都度デバイスディスカバリ(SSDP)で現在のIPを取得する。
+		// オートパワーオフ→再起動でカメラのIPが変わる(DHCP)ため、前回のIPを使い回すと接続に失敗する。
+		// ただし他に動作中のセッションがあると g_devices を作り直すと実行中の device*(&g_devices[idx])が
+		// 無効化されるので、その場合のみ既存を保持し未検出時だけ検索する(N台同時撮影の整合性)。
+		bool othersRunning = false;
+		for (auto& s : g_sessions)
+		{
+			if (s.get() == S) { continue; }
+			int st = s->state.load();
+			if (st == HGE_ST_CAPTURING || st == HGE_ST_SEARCHING || st == HGE_ST_READY || st == HGE_ST_STOPPING) { othersRunning = true; break; }
+		}
+		if (!othersRunning)
+		{
+			g_devices.clear();
+			cameraController::detectTarget(g_devices);	// 毎回SSDP検索 → 現在のIPで再接続
+		}
+		else
+		{
+			bool haveAny = false; for (auto& d : g_devices) { if (d.apiBase) { haveAny = true; break; } }
+			if (!haveAny) { g_devices.clear(); cameraController::detectTarget(g_devices); }
+		}
 		int idx = assignDeviceIndex(S);
 		if (idx < 0)
 		{
