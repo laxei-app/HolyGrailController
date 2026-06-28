@@ -20,6 +20,7 @@
 #include "errorCode.h"
 #include "WiFi_Connect.h"
 #include "etpEdge.h"
+#include "edgeProv.h"
 #include "dataManager.h"
 #include "osFile.h"
 #include "osClock.h"
@@ -416,6 +417,20 @@ static void enterProv(void)
 	pop[8] = 0;
 	g_pop = pop; g_provMode = true; g_dirty = true;
 }
+
+// ── BLEプロビジョニング(edgeProv)との連携(仕様8.2.2) ──
+// BLEの "start" 受信時: PoP生成+QR表示。
+void edgeProvShowQr(void) { enterProv(); }
+// 復号できた認証情報を保存し、新しいSSID/passwordでWiFi再接続する。
+void edgeProvApply(const char* name, const char* ssid, const char* pass)
+{
+	if (ssid == nullptr || ssid[0] == 0) { Serial.println("[PROV] empty ssid, skip"); return; }
+	saveEdgeCreds(ssid, pass ? pass : "", name ? name : "");
+	g_provMode = false; g_dirty = true;
+	bool ok = wifiConnect::connect(g_ssid.c_str(), g_pass.c_str());
+	Serial.printf("[PROV] applied creds. wifi reconnect=%d ssid=%s ip=%s\n",
+	              (int)ok, g_ssid.c_str(), WiFi.localIP().toString().c_str());
+}
 static void renderProv(void)
 {
 	g_cv.fillScreen(TFT_WHITE);
@@ -530,6 +545,7 @@ void setup(void)
 
 	loadEdgeCreds();	// NVS から SSID/password/端末名(無ければフォールバック)
 	wifiConnect::setup();
+	edgeProv::begin(g_devName);	// 設定プロビジョニング BLE GATT(仕様8.2.2)
 
 	hge_init();
 	hge_setNotify(notifyCb, nullptr);
@@ -566,6 +582,9 @@ void loop(void)
 
 	// ETP サーバのポーリング(スマホからの検索/制御を処理)
 	if (g_edgeUp) { etpEdge::loop(); }
+
+	// BLE 設定プロビジョニングの保留要求処理(仕様8.2.2)
+	edgeProv::loop();
 
 	// タッチ操作(スクロール/タップ)
 	handleTouch();

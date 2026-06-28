@@ -1,8 +1,13 @@
 package app.laxei.holygrail
 
+import android.Manifest
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
+import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.os.Build
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Bundle
@@ -27,7 +32,11 @@ import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import android.widget.ViewFlipper
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import com.google.android.material.slider.LabelFormatter
 import com.google.android.material.slider.RangeSlider
 import com.google.android.material.slider.Slider
@@ -132,6 +141,27 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private val edges = mutableListOf<Edge>()
     private val handler = Handler(Looper.getMainLooper())
     private var edgeCapturing = false
+
+    // エッジ設定(QR+PoP §8.2.2)。スキャンしたPoP/端末名を保持。
+    private var scannedPop = ""
+    private var scannedName = ""
+    private var pendingBleAction: (() -> Unit)? = null
+    private val BLE_PERM_REQ = 4711
+    private fun ensureBlePermissions(action: () -> Unit) {
+        val perms = if (Build.VERSION.SDK_INT >= 31)
+            arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+        else arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        val missing = perms.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+        if (missing.isEmpty()) action() else { pendingBleAction = action; ActivityCompat.requestPermissions(this, missing.toTypedArray(), BLE_PERM_REQ) }
+    }
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == BLE_PERM_REQ) {
+            if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) pendingBleAction?.invoke()
+            else Toast.makeText(this, "BLE権限が必要です", Toast.LENGTH_LONG).show()
+            pendingBleAction = null
+        }
+    }
 
     private val fmtDate = SimpleDateFormat("yyyy-MM-dd", Locale.US)
     private val fmtTime = SimpleDateFormat("HH:mm", Locale.US)
@@ -564,6 +594,98 @@ class MainActivity : AppCompatActivity(), HgeListener {
         gearBand(box, "所持機材")
         gearItem(box, "カメラリスト") { openCameraList() }
         gearItem(box, "レンズリスト") { openLensList() }
+        gearBand(box, "エッジ端末")
+        gearItem(box, "エッジ端末設定") { openEdgeSettings() }
+    }
+
+    // ---------- 8.2 エッジ端末設定(QR+PoP プロビジョニング) ----------
+    // エッジが表示する QR {"n":端末名,"pop":乱数} を読み取り、端末識別名/SSID/password を
+    // PoP 由来鍵で暗号化して BLE 送信する(送信本体は M3)。ここでは入力とQR読取まで。
+    private fun openEdgeSettings() {
+        val ctx = this
+        val d = resources.displayMetrics.density
+        val pad = (16 * d).toInt()
+        val box = LinearLayout(ctx); box.orientation = LinearLayout.VERTICAL; box.setPadding(pad, pad, pad, 0)
+        fun field(label: String, init: String, pw: Boolean): EditText {
+            box.addView(TextView(ctx).apply { text = label; setPadding(0, (8 * d).toInt(), 0, 0) })
+            val e = EditText(ctx); e.setText(init)
+            if (pw) e.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            box.addView(e); return e
+        }
+        val nameE = field("端末識別名", scannedName, false)
+        val ssidE = field("接続先 SSID", "", false)
+        val passE = field("接続先 password", "", true)
+        val popView = TextView(ctx).apply {
+            setPadding(0, (12 * d).toInt(), 0, 0)
+            text = if (scannedPop.isEmpty()) "PoP: 未取得 — QRをスキャンしてください" else "PoP: $scannedPop"
+        }
+        box.addView(popView)
+        val scanBtn = Button(ctx).apply { text = "エッジのQRをスキャン" }
+        box.addView(scanBtn)
+
+        val dlg = AlertDialog.Builder(ctx)
+            .setTitle("エッジ端末設定 (§8.2)")
+            .setView(ScrollView(ctx).apply { addView(box) })
+            .setPositiveButton("送信", null)
+            .setNegativeButton("閉じる", null)
+            .create()
+
+        scanBtn.setOnClickListener {
+            val options = GmsBarcodeScannerOptions.Builder()
+                .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+                .build()
+            val scanner = GmsBarcodeScanning.getClient(ctx, options)
+            scanner.startScan()
+                .addOnSuccessListener { barcode ->
+                    val contents = barcode.rawValue ?: ""
+                    try {
+                        val o = JSONObject(contents)
+                        scannedPop = o.optString("pop", "")
+                        scannedName = o.optString("n", "")
+                        if (scannedName.isNotEmpty() && nameE.text.isNullOrEmpty()) nameE.setText(scannedName)
+                        popView.text = "PoP: $scannedPop"
+                        android.util.Log.i("EdgeProv", "QR decoded: name=$scannedName pop=$scannedPop raw=$contents")
+                        Toast.makeText(ctx, "QR読取 OK: $scannedName / PoP=$scannedPop", Toast.LENGTH_LONG).show()
+                    } catch (e: Exception) {
+                        android.util.Log.w("EdgeProv", "QR parse failed raw=$contents")
+                        Toast.makeText(ctx, "QR内容が不正: $contents", Toast.LENGTH_LONG).show()
+                    }
+                }
+                .addOnCanceledListener {
+                    Toast.makeText(ctx, "QRスキャンを中止しました", Toast.LENGTH_SHORT).show()
+                }
+                .addOnFailureListener { e ->
+                    android.util.Log.w("EdgeProv", "scan failed: ${e.message}")
+                    Toast.makeText(ctx, "スキャン失敗: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+        }
+
+        dlg.setOnShowListener {
+            dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                if (scannedPop.isEmpty()) {
+                    Toast.makeText(ctx, "先にQRスキャンでPoPを取得してください", Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
+                val name = nameE.text.toString()
+                val ssid = ssidE.text.toString()
+                val pass = passE.text.toString()
+                if (ssid.isEmpty()) { Toast.makeText(ctx, "SSIDを入力してください", Toast.LENGTH_SHORT).show(); return@setOnClickListener }
+                val json = JSONObject().put("name", name).put("ssid", ssid).put("pass", pass).toString()
+                ensureBlePermissions {
+                    popView.text = "BLE送信中..."
+                    EdgeBle(ctx,
+                        log = { m -> runOnUiThread { popView.text = m } },
+                        result = { ok, m -> runOnUiThread {
+                            android.util.Log.i("EdgeProv", "provision result ok=$ok msg=$m")
+                            Toast.makeText(ctx, m, Toast.LENGTH_LONG).show()
+                            popView.text = m
+                            if (ok) dlg.dismiss()
+                        } }
+                    ).provision(scannedPop, json)
+                }
+            }
+        }
+        dlg.show()
     }
 
     // ---------- 602 色の設定(文字色/背景色。jaredrummler ColorPicker) ----------
