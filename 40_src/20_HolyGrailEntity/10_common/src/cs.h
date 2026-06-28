@@ -80,6 +80,12 @@ namespace hgc
 		// 撮影開始(start)直前に効いていたはずの撮影制御方法。開始が移行(夜間前/後)の途中のとき、
 		// 1枚目の初期露出のシードに使う(夜間前=日中/夕日, 夜間後=夜間)。無ければ null。
 		std::shared_ptr<ccmBase> startLeadCcm;
+		// 夜間撮影の固定露出と移行目標ev。スケジュールに夜間ウィンドウが無くても(終了時刻が夜間より前でも)
+		// 夜間前/後移行のクランプ(暗所限界)・基準(home)・ss上限として常に使えるよう、
+		// buildSchedule が夜間プリセットから設定し csJson で永続/転送する(仕様3.7/3.9)。
+		exposure nightFixedExposure;		// 夜間撮影の固定露出(=暗所限界/基準/ss上限の基準)
+		double   nightPreNightEv  = 0.0;	// 夜間前移行の目標ev(夜間プリセット由来)
+		double   nightPostNightEv = 0.0;	// 夜間後移行の目標ev(夜間プリセット由来)
 	};
 
 	// 4.6 撮影計画プリセット (実体は持たず名称で関連付ける)

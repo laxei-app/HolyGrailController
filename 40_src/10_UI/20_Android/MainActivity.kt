@@ -2544,6 +2544,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 HgeNative.EV_CAPTURED -> {
                     val o = JSONObject(json)
                     capCaptured.text = "iso ${o.optString("iso")}  ss ${o.optString("ss")}  f ${o.optString("fn")}"
+                    android.util.Log.i("HGCapture", "CAPTURED $json")
                 }
                 HgeNative.EV_SCHEDULE -> { latestSchedule = json; updatePlanDisplay(json) }
                 HgeNative.EV_DEVICE -> {}

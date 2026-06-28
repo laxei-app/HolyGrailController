@@ -146,6 +146,16 @@ errCode cameraController::alzMetering(const class device& device, cmdt::HISTOGRA
 	return device.apiBase->alzMetering(hist);
 }
 
+errCode cameraController::setupShootingModeManual(const class device& device)
+{
+	return device.apiBase->setupShootingModeManual();
+}
+
+errCode cameraController::restoreShootingMode(const class device& device)
+{
+	return device.apiBase->restoreShootingMode();
+}
+
 // 撮影開始
 // device :対象デバイス
 // return : ERR_HGC_OK: 成功

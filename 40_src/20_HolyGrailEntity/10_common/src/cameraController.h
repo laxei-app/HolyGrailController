@@ -25,6 +25,9 @@ public:
 	static errCode getSettings(const class device& device, cmdt::shotRange& settings);
 	static errCode rdyMetering(const class device& device);
 	static errCode alzMetering(const class device& device, cmdt::HISTOGRAM& hist);
+	// 撮影開始時にカメラをM(ダイアル無視)に設定し、終了時に元へ戻す(仕様8/CCAPI)。
+	static errCode setupShootingModeManual(const class device& device);
+	static errCode restoreShootingMode(const class device& device);
 
 protected:
 };

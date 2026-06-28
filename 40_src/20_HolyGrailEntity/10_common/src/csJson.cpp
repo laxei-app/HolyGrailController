@@ -294,6 +294,10 @@ namespace csjson
 		}
 		j["ccmList"] = wl;
 		if (plan.startLeadCcm) { j["startLeadCcm"] = ccmToJsonObj(*plan.startLeadCcm); }
+		// 夜間の固定露出と移行目標ev(夜間ウィンドウが無くても移行のクランプ/基準に使う。仕様3.7/3.9)。
+		j["nightFixedExposure"] = expToJson(plan.nightFixedExposure);
+		j["nightPreNightEv"]    = plan.nightPreNightEv;
+		j["nightPostNightEv"]   = plan.nightPostNightEv;
 
 		return j.dump();
 	}
@@ -352,6 +356,9 @@ namespace csjson
 			}
 		}
 		if (j.contains("startLeadCcm")) { plan.startLeadCcm = ccmFromJsonObj(j["startLeadCcm"]); }
+		if (j.contains("nightFixedExposure")) { plan.nightFixedExposure = expFromJson(j["nightFixedExposure"]); }
+		plan.nightPreNightEv  = j.value("nightPreNightEv", 0.0);
+		plan.nightPostNightEv = j.value("nightPostNightEv", 0.0);
 		return true;
 	}
 

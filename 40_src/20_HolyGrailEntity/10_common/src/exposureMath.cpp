@@ -268,6 +268,18 @@ namespace expo
 		rebuildCurrent();
 	}
 
+	void exposureCtl::capLongestSs(double maxSsSec)
+	{
+		if (maxSsSec <= 0.0) { return; }
+		if (limBSs_ == 0.0 || maxSsSec < limBSs_) { limBSs_ = maxSsSec; }	// 最長ss(明側=最多露出)を締める
+		// 現在ssが上限を超えていれば上限以内へ引き下げる(idx↑=長秒)。
+		if (!ss_.e.empty())
+		{
+			while (ss_.idx > 0 && ss_.e[ss_.idx].real > limBSs_) { --ss_.idx; }
+			rebuildCurrent();
+		}
+	}
+
 	bool exposureCtl::stepIso(bool bright)
 	{
 		if (iso_.e.empty()) { return false; }

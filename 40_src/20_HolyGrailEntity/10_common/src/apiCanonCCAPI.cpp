@@ -402,6 +402,102 @@ errCode apiCanonCCAPI::setIso(const std::string& iso)
     return ERR_HGC_HTTP_PUT;	// 失敗を握りつぶさず返す
 }
 
+// funcList に登録済み(カタログに存在)で指定 verb を持つか。
+bool apiCanonCCAPI::hasFunc(funcNum n, verb::type v)
+{
+    auto it = funcList.find(n);
+    return it != funcList.end() && it->second.verb == v;
+}
+
+// 撮影モードをマニュアル(M)にする。元の値を保存し restoreShootingMode で戻す(仕様8/CCAPI 4.8.3/4.9)。
+//  ダイアル搭載機: ignoreshootingmodedialmode を on にしてから shootingmodedial="m"。
+//  ダイアル非搭載機: shootingmode="m" を直接 PUT。
+//  どちらの API も無い機種は NOT_SUPPORTED(致命的ではない。呼び出し側で握る)。
+errCode apiCanonCCAPI::setupShootingModeManual(void)
+{
+    shootModeChanged_ = false;
+    savedShootMode_.clear();
+
+    // --- ダイアル搭載機 ---
+    if (hasFunc(funcNum::SHOOTMODE_DIAL, verb::PUT))
+    {
+        std::string ans;
+        if (netThread::httpGet(funcList[funcNum::SHOOTMODE_DIAL].url, ans))
+        {
+            try { savedShootMode_ = json::parse(ans).value("value", std::string()); } catch (...) {}
+        }
+        // ダイアル無視モード ON(これをしないと shootingmodedial の PUT は 503 になる)
+        if (hasFunc(funcNum::IGNORE_DIAL, verb::POS))
+        {
+            json b; b["action"] = "on"; std::string resp;
+            netThread::httpPost(funcList[funcNum::IGNORE_DIAL].url, b.dump(), resp);
+        }
+        if (savedShootMode_ == "m") { shootModeChanged_ = true; savedIsDial_ = true; return ERR_HGC_OK; } // 既にM
+        json b; b["value"] = "m"; std::string resp;
+        if (!netThread::httpPut(funcList[funcNum::SHOOTMODE_DIAL].url, b.dump(), resp))
+        {
+            DBGLN(col::RED, "setMode(dial) NG %s", resp.c_str());
+            return ERR_HGC_HTTP_PUT;
+        }
+        savedIsDial_ = true; shootModeChanged_ = true;
+        return ERR_HGC_OK;
+    }
+
+    // --- ダイアル非搭載機 ---
+    if (hasFunc(funcNum::SHOOTMODE, verb::PUT))
+    {
+        std::string ans;
+        if (netThread::httpGet(funcList[funcNum::SHOOTMODE].url, ans))
+        {
+            try { savedShootMode_ = json::parse(ans).value("value", std::string()); } catch (...) {}
+        }
+        if (savedShootMode_ == "m") { shootModeChanged_ = true; savedIsDial_ = false; return ERR_HGC_OK; }
+        json b; b["value"] = "m"; std::string resp;
+        if (!netThread::httpPut(funcList[funcNum::SHOOTMODE].url, b.dump(), resp))
+        {
+            DBGLN(col::RED, "setMode NG %s", resp.c_str());
+            return ERR_HGC_HTTP_PUT;
+        }
+        savedIsDial_ = false; shootModeChanged_ = true;
+        return ERR_HGC_OK;
+    }
+
+    return ERR_HGC_NOT_SUPPORTED;	// モード変更APIを持たない機種
+}
+
+// setupShootingModeManual で変更した撮影モードを元に戻す。
+errCode apiCanonCCAPI::restoreShootingMode(void)
+{
+    if (!shootModeChanged_) { return ERR_HGC_OK; }
+    shootModeChanged_ = false;
+    errCode rc = ERR_HGC_OK;
+
+    if (savedIsDial_)
+    {
+        // 元のモードへ戻す(保存値が空 or "m" ならスキップ)。
+        if (!savedShootMode_.empty() && savedShootMode_ != "m" && hasFunc(funcNum::SHOOTMODE_DIAL, verb::PUT))
+        {
+            json b; b["value"] = savedShootMode_; std::string resp;
+            if (!netThread::httpPut(funcList[funcNum::SHOOTMODE_DIAL].url, b.dump(), resp)) { rc = ERR_HGC_HTTP_PUT; }
+        }
+        // ダイアル無視モード OFF(ダイアル位置に従う通常状態へ)。
+        if (hasFunc(funcNum::IGNORE_DIAL, verb::POS))
+        {
+            json b; b["action"] = "off"; std::string resp;
+            netThread::httpPost(funcList[funcNum::IGNORE_DIAL].url, b.dump(), resp);
+        }
+    }
+    else
+    {
+        if (!savedShootMode_.empty() && savedShootMode_ != "m" && hasFunc(funcNum::SHOOTMODE, verb::PUT))
+        {
+            json b; b["value"] = savedShootMode_; std::string resp;
+            if (!netThread::httpPut(funcList[funcNum::SHOOTMODE].url, b.dump(), resp)) { rc = ERR_HGC_HTTP_PUT; }
+        }
+    }
+    return rc;
+}
+
 // 撮影した画像を取得する。
 // jpg    : 撮影した画像データ
 // return : ERR_HGC_OK:成功

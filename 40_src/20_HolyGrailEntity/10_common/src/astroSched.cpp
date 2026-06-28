@@ -361,6 +361,15 @@ namespace astro
 		std::sort(plan.events.begin(), plan.events.end(),
 		          [](const hgc::eventItem& a, const hgc::eventItem& b) { return sortKey(a.when) < sortKey(b.when); });
 
+		// 夜間撮影の固定露出・移行目標evを、夜間ウィンドウの有無に関わらず常に保持する(仕様3.7/3.9)。
+		// 夜間前/後移行のクランプ(暗所限界)・基準(home)・ss上限の基準として captureRunner が使う。
+		if (set.night)
+		{
+			plan.nightFixedExposure = set.night->limitBright;	// 夜間=固定露出(limitBright==limitDark)
+			plan.nightPreNightEv    = set.night->preNightEv;
+			plan.nightPostNightEv   = set.night->postNightEv;
+		}
+
 		return ERR_HGC_OK;
 	}
 }

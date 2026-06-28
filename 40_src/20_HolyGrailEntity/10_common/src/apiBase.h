@@ -18,6 +18,9 @@ public:
 	virtual errCode getSettings(cmdt::shotRange& settings)	{ return ERR_HGC_NOT_SUPPORTED; }
 	virtual errCode rdyMetering(void)						{ return ERR_HGC_NOT_SUPPORTED; };
 	virtual errCode alzMetering(cmdt::HISTOGRAM& hist)		{ return ERR_HGC_NOT_SUPPORTED; };
+	// 撮影開始時にカメラを当アプリ都合(マニュアル露出)に設定し、終了時に元へ戻す(仕様8/CCAPI)。
+	virtual errCode setupShootingModeManual(void)			{ return ERR_HGC_NOT_SUPPORTED; };
+	virtual errCode restoreShootingMode(void)				{ return ERR_HGC_NOT_SUPPORTED; };
 
 
 };

@@ -120,7 +120,9 @@ hgc::exposure captureRunner::nightGoalAfter(long long nowSec) const
 		if (s >= nowSec && (best == nullptr || s < bestStart)) { best = &w; bestStart = s; }
 	}
 	if (best) { return best->ccm->limitBright; }	// 固定露出(limitBright==limitDark)
-	return hgc::exposure{};
+	// 夜間ウィンドウがスケジュールに無くても(終了時刻が夜間より前でも)、夜間前/後移行の
+	// クランプ・基準として夜間プリセット露出を返す(仕様3.7/3.9。buildSchedule が設定済み)。
+	return plan_.nightFixedExposure;
 }
 
 // 最初の補正(仕様 4.4)を反復収束で行う。撮影開始直後は初期露出が不定なので、
@@ -211,6 +213,16 @@ errCode captureRunner::loop(void)
 		return err;
 	}
 
+	// カメラを当アプリ都合の設定にする(撮影モードダイアル無視ON+マニュアル露出)。仕様8/CCAPI。
+	// getSettings(設定可能値テーブル作成)より前に行う: Av等ではtvのabilityが空になり ss テーブルが
+	// 作れないため、Mにしてから設定可能値を取得する。終了時に restoreShootingMode で元へ戻す。
+	{
+		errCode me = cameraController::setupShootingModeManual(*dev_);
+		if (me == ERR_HGC_OK)            { interruptibleSleep(300); }	// 反映待ち
+		else if (me == ERR_HGC_NOT_SUPPORTED) { /* モード変更非対応機。そのまま続行 */ }
+		else if (onError_)               { onError_(me, "setupShootingModeManual"); }
+	}
+
 	// 設定可能値を取得して設定可能値テーブルを作る(仕様 4.2)
 	cmdt::shotRange range;
 	if (cameraController::getSettings(*dev_, range) == ERR_HGC_OK &&
@@ -231,6 +243,12 @@ errCode captureRunner::loop(void)
 	const double interval = (plan_.interval > 0.0) ? plan_.interval : 15.0;
 	int total = static_cast<int>((endSec - startSec) / interval);
 	if (total < 1) { total = 1; }
+
+	// 最長ss上限(仕様7.4.2/今回の指示3): ss は「夜間ssを超えない」かつ「撮影周期-2秒以内」。
+	// 夜間がスケジュール窓に無くても周期決定パラメータとして守る。各 ctl.init 後に capLongestSs で適用。
+	const double nightSsSec = expo::parseValue(plan_.nightFixedExposure.ss, expo::expoKind::ss);
+	const double ivCap      = (interval > 2.0) ? (interval - 2.0) : interval;
+	const double maxSsCap   = (nightSsSec > 0.0) ? std::min(nightSsSec, ivCap) : ivCap;
 
 	const hgc::ccmWindow* curWin = nullptr;
 	expo::exposureCtl autoCtl;		// 自動露出用
@@ -316,13 +334,14 @@ errCode captureRunner::loop(void)
 			//    現在→夜間の所要フレーム数(1/3段/枚)以下になったら測光を止め 1/3 段ずつ収束する。
 			const hgc::ccmBase*  prevC    = prevAutoCcmBefore(now);
 			const hgc::ccmNight* nC       = nightCcmAfter(now);
-			hgc::exposure        nightExp = nightGoalAfter(now);
-			const double         preEv    = nC ? nC->preNightEv : 0.0;
+			hgc::exposure        nightExp = nightGoalAfter(now);	// 夜間窓が無くてもプリセット夜間露出
+			const double         preEv    = nC ? nC->preNightEv : plan_.nightPreNightEv;
 			if (windowChanged)
 			{
 				// 上限=夜間露出(暗所限界)。下限(明所限界)・優先度は直前ccm(日中/夕日)。
 				preCtl.init(tables_, nightExp, prevC ? prevC->limitDark : hgc::exposure{},
 				            prevC ? prevC->priority : ccm->priority);
+				preCtl.capLongestSs(maxSsCap);	// ss は夜間ss/周期-2秒を超えない(指示3)
 				avgBuf.clear();
 				preNightConverge = false;
 				if (validExposure(lastExp)) { preCtl.setCurrent(lastExp); }	// 直前(日中/夕日)から継続
@@ -402,8 +421,9 @@ errCode captureRunner::loop(void)
 			hgc::exposure goal = nextC ? (validExposure(nextC->initial) ? nextC->initial : nightGoalAfter(now))	/* 次の制御方法の基準へ向かう(仕様3.9) */
 			                           : hgc::exposure{};
 			// 直前の夜間撮影の固定露出(=露出の上限)と夜間後露出補正(=目標ev)を取得する。
+			// 夜間ウィンドウが無くてもプリセット値(plan_.nightFixedExposure/nightPostNightEv)へフォールバック。
 			hgc::exposure nightExp{};
-			double postEv = 0.0;
+			double postEv = plan_.nightPostNightEv;
 			for (const auto& ww : plan_.ccmList)
 			{
 				if (!ww.ccm || ww.ccm->type != hgc::ccmType::night) { continue; }
@@ -413,12 +433,13 @@ errCode captureRunner::loop(void)
 					postEv   = static_cast<const hgc::ccmNight*>(ww.ccm.get())->postNightEv;
 				}
 			}
-			if (!validExposure(nightExp)) { nightExp = nightGoalAfter(now); }
+			if (!validExposure(nightExp)) { nightExp = nightGoalAfter(now); }	// 窓が無くてもプリセット夜間露出
 			if (windowChanged)
 			{
 				// 上限(暗所限界=最も露出の多い側)=夜間露出にクランプ。下限(明所限界)・優先度は次ccm。
 				postCtl.init(tables_, nightExp, nextC ? nextC->limitDark : hgc::exposure{},
 				             nextC ? nextC->priority : ccm->priority);
+				postCtl.capLongestSs(maxSsCap);	// ss は夜間ss/周期-2秒を超えない(指示3)
 				avgBuf.clear();
 				if (validExposure(lastExp)) { postCtl.setCurrent(lastExp); }	// 夜間から継続
 				else
@@ -481,6 +502,7 @@ errCode captureRunner::loop(void)
 			if (windowChanged)
 			{
 				autoCtl.init(tables_, ccm->limitBright, ccm->limitDark, ccm->priority);
+				autoCtl.capLongestSs(maxSsCap);	// ss は夜間ss/周期-2秒を超えない(指示3)
 				avgBuf.clear();
 				// 項目8: 自動露出→自動露出の切替で目標evが急変するとオーバーシュートするため、
 				// 実効目標evは前窓の値を保持して以降 1/3 段/枚で寄せる。不連続(開始/非自動から)は即適用。
@@ -605,6 +627,9 @@ errCode captureRunner::loop(void)
 		long waitMs = static_cast<long>(interval * 1000.0) - static_cast<long>(spent);
 		interruptibleSleep(waitMs);
 	}
+
+	// 撮影終了: カメラの撮影モードを元に戻す(ダイアル無視OFF含む)。仕様8/CCAPI。
+	cameraController::restoreShootingMode(*dev_);
 
 	running_ = false;
 	if (onState_) { onState_(ST_IDLE); }

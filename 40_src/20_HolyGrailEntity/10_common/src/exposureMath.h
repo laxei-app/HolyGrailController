@@ -145,6 +145,10 @@ namespace expo
 		void setToBrightLimit();
 		void setToDarkLimit();
 
+		// 最長ss(=最も露出の多い側のss)の上限を maxSsSec[秒] に締める(仕様7.4.2)。
+		// 夜間ssや「撮影周期-2秒」を超えてssが伸びないようにする。現在ssが超過していれば引き下げる。
+		void capLongestSs(double maxSsSec);
+
 		hgc::exposure current() const { return cur_; }
 
 		// 1/3 段 明るく/暗くする。優先度順(reversePriority=true で逆順)に限界まで変更。変更不可なら false。

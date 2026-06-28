@@ -31,6 +31,9 @@ protected:
 		STRAGE_STA,					// strage 全体の状態取得
 		DIR_ACT,					// 保存先のディレクトリ path を取得する
 		L_FILE,						// ファイルリスト
+		IGNORE_DIAL,				// 撮影モードダイアル無視モード(control/ignoreshootingmodedialmode)
+		SHOOTMODE_DIAL,				// 撮影モード(ダイアル搭載機: settings/shootingmodedial)
+		SHOOTMODE,					// 撮影モード(ダイアル非搭載機: settings/shootingmode)
 
 		// 全体の要素数
 		NUM,
@@ -98,6 +101,11 @@ protected:
 	std::vector<sendMap> isoSend_;	// ISO
 	std::vector<sendMap> fnSend_;	// F値
 
+	// 撮影モード変更の復元用(setupShootingModeManual で保存)。
+	std::string savedShootMode_;	// 元の撮影モード値("av"等)
+	bool        savedIsDial_  = false;	// ダイアル搭載機(shootingmodedial)で変更したか
+	bool        shootModeChanged_ = false;	// 変更したか(restore要否)
+
 protected:
 
 public:
@@ -112,6 +120,8 @@ public:
 	errCode rdyShutter(const cmdt::shotSet& shotSet);	// シャッター設定
 	errCode actShutter(void);							// シャッターを切る動作
 	errCode startShooting(void);						// 撮影開始
+	errCode setupShootingModeManual(void) override;		// 撮影モードをM(ダイアル無視ON)へ。元値を保存
+	errCode restoreShootingMode(void) override;			// 保存した撮影モードへ戻す(ダイアル無視OFF)
 
 	// 情報を知る
 	errCode getSettings(cmdt::shotRange& settings);		// 設定値を取得する
@@ -138,6 +148,9 @@ protected:
 
 	// 送信用テーブルから real に最も近い「カメラが広告した文字列」を返す。空=該当なし。
 	std::string sendFor(const std::vector<sendMap>& map, double real) const;
+
+	// funcList に登録済み(カタログに存在)で指定 verb を持つか。
+	bool hasFunc(funcNum n, verb::type v);
 
 	// データ解析
 	errCode analizeUseFunction(class device& device, std::string& catalog);			// 使用するコマンドを探す
@@ -182,6 +195,9 @@ protected:
 		{false, funcNum::STRAGE_ACT,		"/devicestatus/currentstorage"},// 現在のストレージパス取得
 		{false, funcNum::DIR_ACT,			"/devicestatus/currentdirectory"},		// ディレクトリパス取得
 		{false, funcNum::L_FILE,			"/contents"},					// 状態取得
+		{false, funcNum::IGNORE_DIAL,		"control/ignoreshootingmodedialmode"},	// 撮影モードダイアル無視
+		{false, funcNum::SHOOTMODE_DIAL,	"settings/shootingmodedial"},	// 撮影モード(ダイアル機)
+		{false, funcNum::SHOOTMODE,			"settings/shootingmode"},		// 撮影モード(ダイアル無し機)
 	};
 
 };
