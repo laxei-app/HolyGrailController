@@ -10,6 +10,20 @@ namespace expo
 		return std::round(apex * 3.0) / 3.0;
 	}
 
+	// 測光リニア輝度とその露出設定から ev0 のリニア輝度を求める(仕様 4.3.3 環境光 + 4.3.4)。
+	double ev0LinearForMeasure(double linear, const hgc::exposure& e, const ev0Sigmoid& s)
+	{
+		double iso = parseValue(e.iso, expoKind::iso);
+		double ss  = parseValue(e.ss,  expoKind::ss);
+		double fn  = parseValue(e.fn,  expoKind::fn);
+		if (linear <= 0.0 || iso <= 0.0 || ss <= 0.0 || fn <= 0.0)
+		{
+			return s.linearHi;	// 露出/測光が無効 → 従来どおり 18%(安全側)
+		}
+		double bv = ambientBv(linear, avFromFn(fn), tvFromSs(ss), svFromIso(iso));
+		return ev0LinearFromBv(bv, s);
+	}
+
 	// ヒストグラム中央値(0.0～1.0)。仕様 4.3.1。
 	double histMedian(const uint16_t* lumBins, int nBins)
 	{

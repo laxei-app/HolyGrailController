@@ -132,8 +132,6 @@ hgc::exposure captureRunner::nightGoalAfter(long long nowSec) const
 // ctl は呼び出し前に init 済みであること。戻り値=1枚目の露出(ctl もその値になる)。
 hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::exposure& initial, double evT)
 {
-	const double linT = expo::linearFromEv(evT);	// 目標リニア輝度(ev0=0.18 基準)
-
 	// 許容範囲を段で取り、ブラケットの初期値とする(明側=最も明るい/暗側=最も暗い)。
 	ctl.setToBrightLimit();
 	double hiB = expo::brightnessStops(ctl.current(), tables_);
@@ -171,7 +169,10 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 			continue;
 		}
 
-		const double err = expo::evFromLinear(linT, linear);	// log2(linear/linT): + 明るすぎ / - 暗すぎ
+		// ev0 のリニア輝度は環境光依存(§4.3.3/4.3.4)。測光値と測光時の露出から都度求める。
+		const double lin0 = expo::ev0LinearForMeasure(linear, cur, expo::ev0Cfg());
+		const double linT = expo::linearFromEvBase(evT, lin0);	// 目標リニア輝度
+		const double err  = expo::evFromLinear(linT, linear);	// log2(linear/linT): + 明るすぎ / - 暗すぎ
 		if (std::fabs(err) < bestAbsErr) { bestAbsErr = std::fabs(err); best = cur; }
 		if (std::fabs(err) <= kInitConvergeTolStops) { break; }	// 目標 ev に十分近い(手順5)
 
@@ -372,8 +373,9 @@ errCode captureRunner::loop(void)
 					double avg = 0.0;
 					for (double v : avgBuf) { avg += v; }
 					avg /= static_cast<double>(avgBuf.size());
-					double linU = expo::linearFromEv(preEv + smooth_.hysteresis / 2.0);
-					double linD = expo::linearFromEv(preEv - smooth_.hysteresis / 2.0);
+					double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : preCtl.current(), expo::ev0Cfg());
+					double linU = expo::linearFromEvBase(preEv + smooth_.hysteresis / 2.0, lin0);
+					double linD = expo::linearFromEvBase(preEv - smooth_.hysteresis / 2.0, lin0);
 					double cB   = expo::brightnessStops(preCtl.current(), tables_);
 					if (avg > linU)      { if (haveHome && cB > homeB) { preCtl.stepHome(false, nightExp); } else { preCtl.darken(); } }
 					else if (avg < linD) { if (haveHome && cB < homeB) { preCtl.stepHome(true, nightExp); } else { preCtl.brighten(); } }
@@ -447,8 +449,9 @@ errCode captureRunner::loop(void)
 				double avg = 0.0;
 				for (double v : avgBuf) { avg += v; }
 				avg /= static_cast<double>(avgBuf.size());
-				double linU = expo::linearFromEv(postEv + smooth_.hysteresis / 2.0);
-				double linD = expo::linearFromEv(postEv - smooth_.hysteresis / 2.0);
+				double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : postCtl.current(), expo::ev0Cfg());
+				double linU = expo::linearFromEvBase(postEv + smooth_.hysteresis / 2.0, lin0);
+				double linD = expo::linearFromEvBase(postEv - smooth_.hysteresis / 2.0, lin0);
 				double curB = expo::brightnessStops(postCtl.current(), tables_);
 				if (avg > linU)      { if (haveHome && curB > homeB) { postCtl.stepHome(false, goal); } else { postCtl.darken(); } }
 				else if (avg < linD) { if (haveHome && curB < homeB) { postCtl.stepHome(true, goal); } else { postCtl.brighten(); } }
@@ -532,8 +535,9 @@ errCode captureRunner::loop(void)
 					for (double v : avgBuf) { avg += v; }
 					avg /= static_cast<double>(avgBuf.size());
 
-					double linU = expo::linearFromEv(evT + effHyst / 2.0);
-					double linD = expo::linearFromEv(evT - effHyst / 2.0);
+					double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : autoCtl.current(), expo::ev0Cfg());
+					double linU = expo::linearFromEvBase(evT + effHyst / 2.0, lin0);
+					double linD = expo::linearFromEvBase(evT - effHyst / 2.0, lin0);
 						double curB = expo::brightnessStops(autoCtl.current(), tables_);
 					if (avg > linU)      { if (haveHome && curB > homeB) { autoCtl.stepHome(false, ccm->initial); } else { autoCtl.darken(); } }
 					else if (avg < linD) { if (haveHome && curB < homeB) { autoCtl.stepHome(true, ccm->initial); } else { autoCtl.brighten(); } }

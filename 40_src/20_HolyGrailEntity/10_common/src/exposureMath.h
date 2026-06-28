@@ -15,8 +15,8 @@
 
 namespace expo
 {
-	// ev0(中庸グレー)のリニア輝度。仕様 4.3: ヒストグラム中央値 0.18 が ev0。
-	inline constexpr double EV0_LINEAR = 0.18;
+	// 昼間のリニア輝度 18%。環境光 Bv 算出の基準(APEX)に使う(仕様 4.3.3)。
+	inline constexpr double DAY_LINEAR_18 = 0.18;
 
 	// --- sRGB 逆補正(デガンマ) 仕様 4.3.2 ---
 	inline double srgbToLinear(double x)
@@ -31,16 +31,54 @@ namespace expo
 	{
 		return std::log2(linearT / linearN);
 	}
-	// ev に対応するリニア輝度(ev0=0.18 基準)。
-	inline double linearFromEv(double ev)
-	{
-		return EV0_LINEAR * std::pow(2.0, ev);
-	}
 
 	// --- APEX 値 仕様 4.2 ---
 	inline double svFromIso(double iso) { return std::log2(iso / 100.0); }	// 感度
 	inline double avFromFn (double fn)  { return std::log2(fn * fn); }		// 絞り
 	inline double tvFromSs (double ss)  { return std::log2(1.0 / ss); }		// 時間
+
+	// 文字列→実数。iso:整数, fn:小数, ss:"1/4000"/"8"/"0.5"等。無効("Bulb"等)は負を返す。
+	enum class expoKind : uint8_t;
+	double parseValue(const std::string& v, expoKind k);
+
+	// === ev0(人が適正と感じる露出)のリニア輝度 — 環境光依存 仕様 4.3.3 / 4.3.4 ===
+	// 旧仕様は ev0 を固定で 18%(0.18) としていたが、環境光(Bv)が暗いほど人が適正と感じる
+	// リニア輝度は下がる(夕暮れが明るすぎる問題への対処)。Bv→ev0リニア輝度をシグモイドで求める。
+
+	// 環境光 Bv(APEX) 仕様 4.3.3。測光リニア輝度と、その測光時の露出設定(APEX)から求める。
+	//  Bv = Av + Tv - Sv + log2(linear / 0.18)
+	inline double ambientBv(double linear, double av, double tv, double sv)
+	{
+		return av + tv - sv + std::log2(linear / DAY_LINEAR_18);
+	}
+
+	// ev0 リニア輝度のシグモイド係数 仕様 4.3.4(実装時に調整しうるので変更可能にする)。
+	struct ev0Sigmoid
+	{
+		double linearHi = 0.18;   // 上限(昼間 18%)
+		double linearLo = 0.025;  // 下限(2.5%)
+		double bm       = -3.7;   // 環境光の中心位置
+		double k        = 1.0;    // カーブの急峻さ
+	};
+	// プロセス共通の調整可能インスタンス(将来 設定/アセットから上書きできるよう参照を返す)。
+	inline ev0Sigmoid& ev0Cfg() { static ev0Sigmoid c; return c; }
+
+	// Bv → ev0 のリニア輝度 仕様 4.3.4。
+	//  linear0 = lo + (hi - lo) / (1 + exp(-k(Bv - Bm)))
+	inline double ev0LinearFromBv(double bv, const ev0Sigmoid& s)
+	{
+		return s.linearLo + (s.linearHi - s.linearLo) / (1.0 + std::exp(-s.k * (bv - s.bm)));
+	}
+
+	// 測光リニア輝度とその露出(iso/ss/fn)から ev0 のリニア輝度を求める(4.3.3 + 4.3.4)。
+	// 露出値が無効なら従来どおり 18% を ev0 リニア輝度として返す(安全側)。
+	double ev0LinearForMeasure(double linear, const hgc::exposure& meteredAt, const ev0Sigmoid& s);
+
+	// ev に対応する目標リニア輝度。ev0 リニア輝度(環境光依存)を基準に算出する。
+	inline double linearFromEvBase(double ev, double linear0)
+	{
+		return linear0 * std::pow(2.0, ev);
+	}
 
 	// APEX 値を 1/3 段グリッドに量子化する(最近傍)。
 	double snapThird(double apex);
