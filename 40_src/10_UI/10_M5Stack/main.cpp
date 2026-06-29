@@ -18,6 +18,7 @@
 #include <map>
 #include <set>
 #include "common.h"
+#include "edgeIcons.h"   // スマホUIと同じ 開始/撮影中 アイコン(RGB565)
 #include "holyGrailEntity.h"
 #include "errorCode.h"
 #include "WiFi_Connect.h"
@@ -336,16 +337,14 @@ static void renderPlan(void)
 		int ry0 = y, ry1 = y + rowH;
 		if (ry1 > top && ry0 < bot)
 		{
-			int icx = 24, icy = ry0 + rowH / 2;
+			// 開始/撮影中アイコンはスマホUIと同じ画像(ICON_START=クラッパーREC, ICON_CAPTURING=緑カメラ)。
 			if (capturing)
 			{
-				g_cv.fillRoundRect(6, ry0 + 6, 36, rowH - 12, 4, M5.Display.color565(0xC6, 0x28, 0x28));
-				g_cv.fillRect(icx - 7, icy - 7, 14, 14, TFT_WHITE);				// ■ 停止
+				g_cv.pushImage(6, ry0 + (rowH - ICON_CAPTURING_H) / 2, ICON_CAPTURING_W, ICON_CAPTURING_H, ICON_CAPTURING);
 			}
 			else if (capturable)
 			{
-				g_cv.fillRoundRect(6, ry0 + 6, 36, rowH - 12, 4, M5.Display.color565(0x2E, 0x7D, 0x32));
-				g_cv.fillTriangle(icx - 6, icy - 8, icx - 6, icy + 8, icx + 9, icy, TFT_WHITE);	// ▶ 開始
+				g_cv.pushImage(6, ry0 + (rowH - ICON_START_H) / 2, ICON_START_W, ICON_START_H, ICON_START);
 			}
 			// 計画名: スマホから受信したモノクロ2値ビットマップで描画(無ければテキストにフォールバック)。
 			auto it = g_nameBmps.find(id);
