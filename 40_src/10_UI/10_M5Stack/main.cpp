@@ -15,6 +15,8 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <map>
+#include <set>
 #include "common.h"
 #include "holyGrailEntity.h"
 #include "errorCode.h"
@@ -79,6 +81,7 @@ static int  g_scr      = SCR_PLAN;
 static int  g_ccmType  = 1;		// CCM詳細画面で表示中の種別
 static int  g_scroll   = 0;		// 計画画面の縦スクロール量[px]
 static int  g_maxScroll = 0;	// スクロール上限(描画時に算出)
+static bool g_listDirty = true;	// 計画リスト(hge_listPlansJson)の再取得が必要
 
 static volatile int g_state = HGE_ST_IDLE;
 static char  g_prog[64] = "";
@@ -87,11 +90,19 @@ static char  g_msg[80]  = "";
 static bool  g_dirty = true;
 static bool  g_edgeUp = false;	// ETPサーバ起動済みか(WiFi接続後に一度)
 
-// 計画名ビットマップ(スマホから ETP C_NAME_BMP で受信。1bpp MSB先頭, 1=白)。
-int      g_nameBmpW = 0, g_nameBmpH = 0;
-uint8_t* g_nameBmp  = nullptr;
-// 受信データ width(u16LE) height(u16LE) pixels[ceil(w/8)*h] を取り込む。
-void edgeSetNameBitmap(const uint8_t* data, int len)
+// スマホから受信した計画 id のみリスト表示する(エッジ自身の FixedPlan 等は出さない)。
+static std::set<std::string> g_recvPlans;
+void edgeAddReceivedPlan(const std::string& id)
+{
+	if (!id.empty()) { g_recvPlans.insert(id); g_listDirty = true; g_dirty = true; }
+}
+
+// 計画名ビットマップ(スマホから ETP C_NAME_BMP で計画idごとに受信。1bpp MSB先頭, 1=白)。
+struct nameBmp { int w = 0, h = 0; uint8_t* px = nullptr; };
+static std::map<std::string, nameBmp> g_nameBmps;	// 計画id -> 名前ビットマップ
+
+// 受信データ width(u16LE) height(u16LE) pixels[ceil(w/8)*h] を計画 id に紐づけて取り込む。
+void edgeSetNameBitmap(const std::string& id, const uint8_t* data, int len)
 {
 	if (data == nullptr || len < 4) { return; }
 	int w = data[0] | (data[1] << 8);
@@ -102,8 +113,9 @@ void edgeSetNameBitmap(const uint8_t* data, int len)
 	uint8_t* nb = (uint8_t*)malloc((size_t)(bpr * h));
 	if (!nb) { return; }
 	memcpy(nb, data + 4, (size_t)(bpr * h));
-	if (g_nameBmp) { free(g_nameBmp); }
-	g_nameBmp = nb; g_nameBmpW = w; g_nameBmpH = h;
+	nameBmp& slot = g_nameBmps[id];
+	if (slot.px) { free(slot.px); }
+	slot.px = nb; slot.w = w; slot.h = h;
 	g_dirty = true;
 }
 
@@ -117,6 +129,10 @@ static M5Canvas g_cv(&M5.Display);	// ダブルバッファ(ちらつき防止)
 // タップ判定用: 撮影制御方法の行(画面座標 + 種別)
 struct hitRow { int y0; int y1; int type; };
 static std::vector<hitRow> g_hits;
+
+// タップ判定用: 撮影計画リストの行(画面座標 + 計画id + 状態)
+struct planHit { int y0; int y1; std::string id; bool capturing; bool capturable; };
+static std::vector<planHit> g_planHits;
 
 // 撮影中(開始シーケンス〜停止処理中まで)か。フッタのボタン表示と操作の切替に使う。
 static bool isCapturing(void)
@@ -215,6 +231,36 @@ static bool getSchedule(json*& out)
 	return cacheOk;
 }
 
+// 撮影計画リスト(hge_listPlansJson)をキャッシュ付きで取得する。g_listDirty が立つと再取得する
+// (スクロール中の毎フレーム再読込=全計画ファイル読み直しを避ける)。
+static const json& planList(void)
+{
+	static json cache = json::array();
+	if (g_listDirty)
+	{
+		cache = json::array();
+		int32_t len = 0;
+		hge_listPlansJson(nullptr, &len);
+		if (len > 0)
+		{
+			std::vector<char> buf(static_cast<size_t>(len));
+			if (hge_listPlansJson(buf.data(), &len) == ERR_HGC_OK)
+			{
+				json j = json::parse(buf.data(), nullptr, false);
+				if (!j.is_discarded() && j.is_array())
+				{	// 受信した計画(g_recvPlans)だけ残す。エッジ自身の FixedPlan 等は除外。
+					for (const auto& p : j)
+					{
+						if (g_recvPlans.count(p.value("id", std::string())) > 0) { cache.push_back(p); }
+					}
+				}
+			}
+		}
+		g_listDirty = false;
+	}
+	return cache;
+}
+
 // 計画固有の撮影制御方法 JSON を取得する。
 static bool getPlanCcm(json& out)
 {
@@ -254,64 +300,87 @@ static int rowBar(int y, uint16_t bg, uint16_t fg, const std::string& s)
 // ── 撮影計画画面(簡素化: 計画名 + 開始/停止のみ。仕様 8.1) ─────────────
 // 計画名はスマホからモノクロ2値ビットマップで受信していればそれを、無ければ
 // スケジュールJSONの名称テキストを表示する(今後の多言語対応のため §8.2.1)。
+// 撮影計画リスト画面。各行に名称+開始/終了時刻と、左に開始/停止アイコン(終了>現在 の計画のみ)。
+// 左アイコンをタップでその計画を開始/停止する(スマホUIと同様。指示5)。
 static void renderPlan(void)
 {
-	json* jp = nullptr;
-	bool ok = getSchedule(jp);
+	const json& arr = planList();
 
 	g_cv.fillScreen(TFT_BLACK);
 	g_cv.setFont(&fonts::efontJA_16);
 
-	// ヘッダ(計画名見出し+状態)
+	// ヘッダ
 	g_cv.fillRect(0, 0, 320, HEAD_H, M5.Display.color565(0x15, 0x65, 0xC0));
 	g_cv.setTextColor(TFT_WHITE);
 	g_cv.setCursor(8, 6);   g_cv.print("撮影計画");
-	g_cv.setCursor(150, 6); g_cv.print(stName(g_state));
 	if (WiFi.status() == WL_CONNECTED) { g_cv.setCursor(276, 6); g_cv.print(g_edgeUp ? "ETP" : "WiFi"); }
 
-	// 中央: 計画名(ビットマップ優先、無ければテキスト大)
-	if (g_nameBmp && g_nameBmpW > 0 && g_nameBmpH > 0)
-	{
-		int dx = (320 - g_nameBmpW) / 2; if (dx < 0) dx = 0;
-		int dy = 96 - g_nameBmpH / 2;
-		const int bpr = (g_nameBmpW + 7) / 8;
-		for (int yy = 0; yy < g_nameBmpH; ++yy)
-			for (int xx = 0; xx < g_nameBmpW; ++xx)
-			{
-				uint8_t byte = g_nameBmp[yy * bpr + (xx >> 3)];
-				if (byte & (0x80 >> (xx & 7))) { g_cv.drawPixel(dx + xx, dy + yy, TFT_WHITE); }
-			}
-	}
-	else
-	{
-		std::string name = ok ? jp->value("name", std::string()) : "(計画なし)";
-		g_cv.setTextDatum(textdatum_t::middle_center);
-		g_cv.setTextColor(TFT_WHITE);
-		g_cv.setTextSize(2);
-		g_cv.drawString(name.c_str(), 160, 96);
-		g_cv.setTextSize(1);
-		g_cv.setTextDatum(textdatum_t::top_left);
-	}
-	if (ok)
-	{
-		std::string t = mmddhhmm(jp->value("start", std::string())) + " → " + mmddhhmm(jp->value("end", std::string()));
-		g_cv.setTextDatum(textdatum_t::middle_center);
-		g_cv.setTextColor(TFT_LIGHTGREY);
-		g_cv.drawString(t.c_str(), 160, 150);
-		g_cv.setTextDatum(textdatum_t::top_left);
-	}
+	const int rowH = 50;
+	const int top  = HEAD_H;
+	const int bot  = 240;
+	int total = static_cast<int>(arr.size()) * rowH;
+	g_maxScroll = (total > (bot - top)) ? (total - (bot - top)) : 0;
+	if (g_scroll > g_maxScroll) { g_scroll = g_maxScroll; }
 
-	// フッタ(固定): 撮影中=赤[■ 撮影停止] / それ以外=緑[▶ 撮影開始]。
-	bool cap = isCapturing();
-	uint16_t fcol = cap ? M5.Display.color565(0xC6, 0x28, 0x28) : M5.Display.color565(0x2E, 0x7D, 0x32);
-	g_cv.fillRect(0, VIEW_BOT, 320, FOOT_H, fcol);
-	int icx = 116, icy = VIEW_BOT + FOOT_H / 2;
-	if (cap) { g_cv.fillRect(icx - 7, icy - 7, 14, 14, TFT_WHITE); }
-	else     { g_cv.fillTriangle(icx - 6, icy - 8, icx - 6, icy + 8, icx + 9, icy, TFT_WHITE); }
-	g_cv.setTextColor(TFT_WHITE);
-	g_cv.setTextDatum(textdatum_t::middle_left);
-	g_cv.drawString(cap ? "撮影停止" : "撮影開始", 140, icy);
-	g_cv.setTextDatum(textdatum_t::top_left);
+	g_planHits.clear();
+	int y = top - g_scroll;
+	for (const auto& p : arr)
+	{
+		std::string id   = p.value("id",    std::string());
+		std::string name = p.value("name",  std::string());
+		std::string st   = p.value("start", std::string());
+		std::string en   = p.value("end",   std::string());
+		bool capturable  = p.value("capturable", false);
+		int  state       = p.value("state", 0);
+		bool capturing   = (state == HGE_ST_CAPTURING || state == HGE_ST_SEARCHING || state == HGE_ST_STOPPING);
+		int ry0 = y, ry1 = y + rowH;
+		if (ry1 > top && ry0 < bot)
+		{
+			int icx = 24, icy = ry0 + rowH / 2;
+			if (capturing)
+			{
+				g_cv.fillRoundRect(6, ry0 + 6, 36, rowH - 12, 4, M5.Display.color565(0xC6, 0x28, 0x28));
+				g_cv.fillRect(icx - 7, icy - 7, 14, 14, TFT_WHITE);				// ■ 停止
+			}
+			else if (capturable)
+			{
+				g_cv.fillRoundRect(6, ry0 + 6, 36, rowH - 12, 4, M5.Display.color565(0x2E, 0x7D, 0x32));
+				g_cv.fillTriangle(icx - 6, icy - 8, icx - 6, icy + 8, icx + 9, icy, TFT_WHITE);	// ▶ 開始
+			}
+			// 計画名: スマホから受信したモノクロ2値ビットマップで描画(無ければテキストにフォールバック)。
+			auto it = g_nameBmps.find(id);
+			if (it != g_nameBmps.end() && it->second.px)
+			{
+				const nameBmp& nb = it->second;
+				int dx = 52, dy = ry0 + 4;
+				int dw = nb.w > 260 ? 260 : nb.w;
+				int dh = nb.h > (rowH - 22) ? (rowH - 22) : nb.h;	// 時刻行と重ならない高さに制限
+				const int bpr = (nb.w + 7) / 8;
+				for (int yy = 0; yy < dh; ++yy)
+					for (int xx = 0; xx < dw; ++xx)
+					{
+						uint8_t byte = nb.px[yy * bpr + (xx >> 3)];
+						if (byte & (0x80 >> (xx & 7))) { g_cv.drawPixel(dx + xx, dy + yy, TFT_WHITE); }
+					}
+			}
+			else
+			{
+				g_cv.setTextColor(TFT_WHITE);
+				g_cv.setCursor(52, ry0 + 4); g_cv.print(name.c_str());
+			}
+			g_cv.setTextColor(TFT_LIGHTGREY);
+			g_cv.setCursor(52, ry0 + 30); g_cv.print((mmddhhmm(st) + " -> " + mmddhhmm(en)).c_str());
+			g_cv.drawFastHLine(0, ry1 - 1, 320, M5.Display.color565(0x33, 0x33, 0x33));
+		}
+		g_planHits.push_back({ ry0, ry1, id, capturing, capturable });
+		y += rowH;
+	}
+	if (arr.empty())
+	{
+		g_cv.setTextColor(TFT_LIGHTGREY);
+		g_cv.setCursor(16, top + 24); g_cv.print("計画なし");
+		g_cv.setCursor(16, top + 48); g_cv.print("スマホから転送してください");
+	}
 
 	g_cv.pushSprite(0, 0);
 }
@@ -452,15 +521,22 @@ static void redraw(void)
 	else            { renderPlan(); }	// 仕様8.1: 計画名+開始/停止のみ
 }
 
-// ── タップ処理(フッタの開始/停止のみ。プロビジョニング表示中は戻る) ──
+// ── タップ処理(計画リストの左アイコンで開始/停止。プロビジョニング表示中は戻る) ──
 static void onTap(int x, int y)
 {
-	(void)x;
 	if (g_provMode) { g_provMode = false; g_dirty = true; return; }
-	if (y >= VIEW_BOT)
+	for (const auto& h : g_planHits)
 	{
-		if (isCapturing()) { hge_captureStop(); }
-		else               { hge_captureStart(); }
+		if (y >= h.y0 && y < h.y1)
+		{
+			if (x < 48)	// 左の開始/停止アイコン領域のタップ
+			{
+				if (h.capturing)       { hge_captureStopPlan(h.id.c_str()); }
+				else if (h.capturable) { hge_captureStartPlan(h.id.c_str()); }
+				g_listDirty = true; g_dirty = true;
+			}
+			break;
+		}
 	}
 }
 
@@ -529,6 +605,7 @@ static void notifyCb(int32_t ev, const char* json_, int32_t len, void* user)
 	default:
 		break;	// EV_SCHEDULE 等も含め再描画させる
 	}
+	g_listDirty = true;	// 状態/計画変化を計画リストへ反映(状態列・撮影可否アイコン)
 	g_dirty = true;
 }
 
@@ -572,7 +649,7 @@ void loop(void)
 			std::snprintf(g_msg, sizeof(g_msg), "WiFi %s", WiFi.localIP().toString().c_str());
 			if (!g_edgeUp)
 			{
-				etpEdge::setup("エッジ端末");
+				etpEdge::setup(g_devName);	// プロビジョニングで設定した端末名で検索応答する(スマホは名称で探す)
 				g_edgeUp = true;
 			}
 			g_dirty = true;

@@ -67,6 +67,9 @@ int32_t hge_setUtcOffset(int32_t offMin);
 // cs は events/ccmList を含む自己完結形式(データ構造仕様書43 §4.5)。
 int32_t hge_setPlanJson(const char* json, int32_t len);
 
+// 受信した計画を指定 id の計画ファイルとして取り込む(エッジが複数計画を蓄積)。id 空なら新規採番。
+int32_t hge_importPlan(const char* id, const char* json, int32_t len);
+
 // 撮影開始/終了時刻を設定し、スケジュール(events/ccmList)を再生成する。
 // start/end は "YYYY-MM-DDThh:mm:ss"(ローカル)、offMin はUTCオフセット[分]。
 // 出荷時設定の撮影制御方法・場所・機材を用いて astro::buildSchedule で自動生成し、
@@ -80,6 +83,9 @@ int32_t hge_setPlanDirection(double azimuth, double elevation);
 
 // 撮影周期[秒]を設定する。最小撮影周期(全ccmの最長ss+2)未満は ERR_HGC_INVALID_ARG(UIで警告)。
 int32_t hge_setPlanInterval(double seconds);
+
+// 撮影計画(id指定)の名称を変更する(リストで直接リネーム)。
+int32_t hge_renamePlan(const char* id, const char* name);
 
 // 横向き(ランドスケープ)を設定する。画角が変わるためスケジュールを再生成し通知する。
 int32_t hge_setPlanLandscape(int32_t landscape);

@@ -103,6 +103,14 @@ public:
 	// master(model)＋device から所持カメラを自動作成して保存(1台運用で無設定OK)。
 	static bool recordConnectedCamera(const device& dev);
 
+	// --- §4b 撮影開始時の特定カメラ照合(同機種が複数あっても serial/friendly で1台を選ぶ) ---
+	// 計画カメラの friendly から所持リストを引き実シリアルを解決(接続済みなら serial が入る)。true=解決。
+	static bool serialForFriendly(const std::string& friendly, std::string& outSerial);
+	// 所持カメラに登録済みのシリアル一覧(空は除く)。「それ以外のカメラ」判定に使う。
+	static void ownedCameraSerials(std::vector<std::string>& out);
+	// device のモデルが計画/所持カメラ cam と同機種か(メーカー名差を吸収)。
+	static bool cameraModelMatches(const device& dev, const hgc::camera& cam);
+
 	// --- 撮影計画の永続化(案A /plan。1計画1ファイル plan_<id>.json。§7.4) ---
 	// 撮影計画(cs)の自己完結JSON(ラッパー {"plan":..,"planCcm":..})を保存/読込/削除する。
 	// id は作成時刻 yyyyMMdd-HHmmss(衝突時 -NN)。dataManager は id の規則は関知しない。

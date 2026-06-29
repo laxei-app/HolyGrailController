@@ -64,17 +64,7 @@
             android:orientation="vertical"
             android:padding="12dp">
 
-            <!-- 計画名 -->
-            <TextView
-                android:id="@+id/plan_nameText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:drawableStart="@drawable/ic_camera"
-                android:drawablePadding="6dp"
-                android:gravity="center_vertical"
-                android:text="FixedPlan"
-                android:textSize="18sp"
-                android:textStyle="bold" />
+            <!-- 計画名は撮影計画リストの行で直接編集する(分割バー下の名称表示は廃止)。 -->
 
             <!-- 撮影中ステータス(撮影中のみ表示。読取専用) -->
             <TextView
@@ -223,12 +213,7 @@
                 android:layout_marginTop="12dp"
                 android:text="この撮影計画を保存" android:textSize="16sp" />
 
-            <!-- 撮影開始 -->
-            <Button android:id="@+id/plan_startButton"
-                android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:drawableStart="@drawable/ic_start"
-                android:text="撮影開始" android:textSize="18sp" />
+            <!-- 撮影開始は撮影計画リスト左の開始アイコン(ICO開始D)タップで行う。下部の開始ボタンは廃止。 -->
 
             <!-- エミュレータ用(手動IP接続。実機では不要) -->
             <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"

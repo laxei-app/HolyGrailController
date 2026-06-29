@@ -54,7 +54,7 @@ namespace
 		astro::ccmSet                 planCcm;
 		std::shared_ptr<hgc::ccmMoon> planMoon;
 		std::unique_ptr<captureRunner> runner;
-		int                           devIndex = -1;
+		class device                  dev;					// このセッション専用のカメラ(アドレス安定。撮影開始の都度ディスカバリで再取得)
 		std::atomic<int>              state{ HGE_ST_IDLE };
 		bool                          logCapturing = false;	// START/STOP検出
 		std::string                   lastCcm;				// CCMSW検出
@@ -587,7 +587,7 @@ namespace
 	// 成功で g_devices に格納し HGE_EV_DEVICE を通知、状態 READY。
 	errCode searchSequence(void)
 	{
-		if (!g_sessions.empty())	// 撮影中はデバイス配列を作り直さない(devIndex が壊れるため)
+		if (!g_sessions.empty())	// 撮影中は手動再検索で表示用デバイス一覧を作り直さない(一覧の安定のため。各撮影は自分専用の device で動作)
 		{
 			notify(HGE_EV_DEVICE, devicesJson());
 			setState(HGE_ST_READY);
@@ -615,23 +615,6 @@ namespace
 		for (auto& s : g_sessions) { if (s->planId == planId) { return s.get(); } }
 		return nullptr;
 	}
-	bool devUsedByOther(int idx, const captureSession* self)
-	{
-		for (auto& s : g_sessions) { if (s.get() != self && s->devIndex == idx) { return true; } }
-		return false;
-	}
-	// 計画のカメラ(serial一致優先、無ければ空きデバイス)を割り当てる。-1=空き無し。
-	int assignDeviceIndex(captureSession* sess)
-	{
-		if (!sess->plan.camera.serial.empty())
-		{
-			for (size_t i = 0; i < g_devices.size(); ++i)
-				if (g_devices[i].apiBase && g_devices[i].serialno == sess->plan.camera.serial && !devUsedByOther((int)i, sess)) { return (int)i; }
-		}
-		for (size_t i = 0; i < g_devices.size(); ++i)
-			if (g_devices[i].apiBase && !devUsedByOther((int)i, sess)) { return (int)i; }
-		return -1;
-	}
 	// 集約状態(どれか撮影中なら CAPTURING 系、無ければ IDLE)。legacy hge_getState 用。
 	void refreshAggregateState(void)
 	{
@@ -649,37 +632,91 @@ namespace
 	errCode startSessionSequence(captureSession* S)
 	{
 		S->state = HGE_ST_SEARCHING; notifyStateP(S->planId, HGE_ST_SEARCHING); refreshAggregateState();
-		// 撮影開始の都度デバイスディスカバリ(SSDP)で現在のIPを取得する。
-		// オートパワーオフ→再起動でカメラのIPが変わる(DHCP)ため、前回のIPを使い回すと接続に失敗する。
-		// ただし他に動作中のセッションがあると g_devices を作り直すと実行中の device*(&g_devices[idx])が
-		// 無効化されるので、その場合のみ既存を保持し未検出時だけ検索する(N台同時撮影の整合性)。
-		bool othersRunning = false;
-		for (auto& s : g_sessions)
+		// 撮影開始(=このシーケンスの実行)の都度、計画のカメラを SSDP で検索する。
+		//  ・カメラのIPはオートパワーオフ→再起動(DHCP)で変わるため、前回のIPは使い回さず毎回探す。
+		//  ・撮影開始"時刻"ではなく「撮影開始操作をした時点」で検索する(本関数はワーカーで即実行され、
+		//    実際の露光開始までは runner が開始時刻まで待機する)。
+		//  ・複数同時撮影でも、これから撮るカメラは動作中のものとは必ず別の1台。各セッションは自分専用の
+		//    device(S->dev: アドレス安定)を持つので、検索しても実行中の他セッションを壊さない。
+		std::vector<class device> found;
+		cameraController::detectTarget(found);
+
+		const hgc::camera& pc = S->plan.camera;
+		// 他の動作中セッションが使用中のカメラ(serial)は割り当て不可(同じカメラで二重撮影しない)。
+		auto serialBusy = [&](const std::string& serial) -> bool {
+			if (serial.empty()) { return false; }
+			for (auto& s : g_sessions)
+			{
+				if (s.get() == S) { continue; }
+				int st = s->state.load();
+				bool active = (st == HGE_ST_CAPTURING || st == HGE_ST_SEARCHING || st == HGE_ST_READY || st == HGE_ST_STOPPING);
+				if (active && s->dev.apiBase && s->dev.serialno == serial) { return true; }
+			}
+			return false;
+		};
+
+		// §4b: 計画のカメラを特定する。同機種(例 EOS R10)が複数あっても、シリアルNo か フレンドリ名 で1台を選ぶ。
+		//  ・serial 指定           → そのシリアルの個体。
+		//  ・friendly 指定         → 所持リストからシリアルを解決して個体特定(未接続でserial不明なら下のモデル照合へ)。
+		//  ・どちらも無い("それ以外のEOS-R10") → 同機種で、既に識別済み(所持リストにシリアル登録済み)の個体"以外"の1台。
+		std::string wantSerial = pc.serial;
+		if (wantSerial.empty() && !pc.friendly.empty())
 		{
-			if (s.get() == S) { continue; }
-			int st = s->state.load();
-			if (st == HGE_ST_CAPTURING || st == HGE_ST_SEARCHING || st == HGE_ST_READY || st == HGE_ST_STOPPING) { othersRunning = true; break; }
+			std::string s; if (dataManager::serialForFriendly(pc.friendly, s)) { wantSerial = s; }
 		}
-		if (!othersRunning)
-		{
-			g_devices.clear();
-			cameraController::detectTarget(g_devices);	// 毎回SSDP検索 → 現在のIPで再接続
+		const bool hasModel = !pc.model.empty() || !pc.name.empty();
+
+		class device* hit = nullptr;
+		if (!wantSerial.empty())
+		{	// 特定個体(シリアル)を探す。
+			for (auto& d : found) { if (d.apiBase && d.serialno == wantSerial) { hit = &d; break; } }
+			if (hit == nullptr)
+			{	// 見つからなければ開始しない(メッセージを出す)。
+				notifyError(ERR_HGC_NOT_FOUND, ("計画のカメラが見つかりません(serial=" + wantSerial + ")").c_str());
+				S->state = HGE_ST_ERROR; notifyStateP(S->planId, HGE_ST_ERROR); refreshAggregateState();
+				return ERR_HGC_NOT_FOUND;
+			}
+			if (serialBusy(wantSerial))
+			{	// 既に撮影中のカメラを使う計画は開始しない。
+				notifyError(ERR_HGC_INVALID_STATE, "このカメラは既に撮影中です");
+				S->state = HGE_ST_ERROR; notifyStateP(S->planId, HGE_ST_ERROR); refreshAggregateState();
+				return ERR_HGC_INVALID_STATE;
+			}
+		}
+		else if (hasModel)
+		{	// シリアル未解決だが機種は指定 → 「それ以外の個体(=識別済みでない同機種)」を選ぶ。
+			std::vector<std::string> knownSerials; dataManager::ownedCameraSerials(knownSerials);
+			auto isKnown = [&](const std::string& s) -> bool { for (auto& k : knownSerials) { if (k == s) { return true; } } return false; };
+			for (auto& d : found) { if (d.apiBase && dataManager::cameraModelMatches(d, pc) && !isKnown(d.serialno) && !serialBusy(d.serialno)) { hit = &d; break; } }
+			if (hit == nullptr)	// 該当が無ければ同機種の空き1台で代替。
+			{ for (auto& d : found) { if (d.apiBase && dataManager::cameraModelMatches(d, pc) && !serialBusy(d.serialno)) { hit = &d; break; } } }
+			if (hit == nullptr)
+			{
+				notifyError(ERR_HGC_NOT_FOUND, ("計画のカメラが見つかりません(" + (pc.name.empty() ? pc.model : pc.name) + ")").c_str());
+				S->state = HGE_ST_ERROR; notifyStateP(S->planId, HGE_ST_ERROR); refreshAggregateState();
+				return ERR_HGC_NOT_FOUND;
+			}
 		}
 		else
-		{
-			bool haveAny = false; for (auto& d : g_devices) { if (d.apiBase) { haveAny = true; break; } }
-			if (!haveAny) { g_devices.clear(); cameraController::detectTarget(g_devices); }
+		{	// 計画にカメラ未指定: 他セッションが使っていない最初の1台。
+			for (auto& d : found) { if (d.apiBase && !serialBusy(d.serialno)) { hit = &d; break; } }
+			if (hit == nullptr)
+			{
+				notifyError(ERR_HGC_NOT_FOUND, "カメラが見つかりません");
+				S->state = HGE_ST_ERROR; notifyStateP(S->planId, HGE_ST_ERROR); refreshAggregateState();
+				return ERR_HGC_NOT_FOUND;
+			}
 		}
-		int idx = assignDeviceIndex(S);
-		if (idx < 0)
+
+		S->dev = *hit;	// セッション専用 device へコピー(アドレス安定。実行中の他セッションに影響しない)
+		// 表示用デバイス一覧(g_devices)も最新へ反映(同serialは更新、無ければ追加)。runner は g_devices を参照しない。
 		{
-			notifyError(ERR_HGC_NOT_FOUND, "no free camera");
-			S->state = HGE_ST_ERROR; notifyStateP(S->planId, HGE_ST_ERROR); refreshAggregateState();
-			return ERR_HGC_NOT_FOUND;
+			int gi = -1;
+			for (size_t i = 0; i < g_devices.size(); ++i) { if (g_devices[i].serialno == S->dev.serialno) { gi = (int)i; break; } }
+			if (gi >= 0) { g_devices[gi] = *hit; } else { g_devices.push_back(*hit); }
 		}
-		S->devIndex = idx;
 		notify(HGE_EV_DEVICE, devicesJson());
-		dataManager::recordConnectedCamera(g_devices[idx]);
+		dataManager::recordConnectedCamera(S->dev);
 
 		S->runner->setCallbacks(
 			[S](int s) {
@@ -729,7 +766,7 @@ namespace
 			[S](errCode e, const std::string& m) { notifyError(e, m.c_str()); });
 
 		hgc::exposureSmoothing smooth = dataManager::currentSmoothing();
-		errCode e = S->runner->ready(S->plan, &g_devices[idx], smooth, g_offMin);
+		errCode e = S->runner->ready(S->plan, &S->dev, smooth, g_offMin);
 		if (e != ERR_HGC_OK) { notifyError(e, "ready"); S->state = HGE_ST_ERROR; notifyStateP(S->planId, HGE_ST_ERROR); refreshAggregateState(); return e; }
 		return S->runner->start();
 	}
@@ -841,6 +878,17 @@ int32_t hge_setPlanJson(const char* json, int32_t len)
 	return ERR_HGC_OK;
 }
 
+// スマホから受信した計画を、指定 id の計画ファイルとして取り込む(エッジが複数計画を蓄積するため)。
+// 同じ id の再送は上書き(重複しない)。id 空なら新規採番。
+int32_t hge_importPlan(const char* id, const char* json, int32_t len)
+{
+	int32_t r = hge_setPlanJson(json, len);
+	if (r != ERR_HGC_OK) { return r; }
+	if (id != nullptr && id[0] != '\0') { g_editId = id; }
+	else if (g_editId.empty())          { g_editId = makePlanId(); }
+	return saveCurrentPlan();
+}
+
 int32_t hge_setPlanTimes(const char* startIso, const char* endIso, int32_t offMin)
 {
 	if (startIso == nullptr || endIso == nullptr) { return ERR_HGC_INVALID_ARG; }
@@ -947,25 +995,40 @@ int32_t hge_listPlansJson(char* buf, int32_t* inoutLen)
 	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
 	if (!g_planReady) { loadFixedPlanImpl(); }
 	time_t now = std::time(nullptr);
-	std::string j = "[";
-	bool first = true;
+	// 各計画を {開始時刻(ソートキー), 行JSON} に展開する。
+	std::vector<std::pair<long long, std::string>> rows;
 	for (const std::string& id : dataManager::listPlanIds())
 	{
-		std::string saved, planJson, ccmJson; hgc::cs cs;
-		if (!dataManager::loadPlanFile(id, saved) ||
-		    !dataManager::splitSavedPlan(saved, planJson, ccmJson) ||
-		    !csjson::fromJson(planJson, cs)) { continue; }
-		long long endU = hgc::toUnixUtc(cs.end, g_offMin);
+		hgc::cs cs;
+		bool got = false;
+		if (id == g_editId && g_planReady)
+		{	// 編集中の計画は未保存の変更も即反映する(名称/時刻の変更で撮影可否アイコンが即出るように)。
+			cs = g_plan; got = true;
+		}
+		else
+		{
+			std::string saved, planJson, ccmJson;
+			got = dataManager::loadPlanFile(id, saved) &&
+			      dataManager::splitSavedPlan(saved, planJson, ccmJson) &&
+			      csjson::fromJson(planJson, cs);
+		}
+		if (!got) { continue; }
+		long long startU = hgc::toUnixUtc(cs.start, g_offMin);
+		long long endU   = hgc::toUnixUtc(cs.end, g_offMin);
 		bool capturable = endU > static_cast<long long>(now);
 		captureSession* sess = sessionFor(id);
 		int st = sess ? sess->state.load() : static_cast<int>(HGE_ST_IDLE);
-		if (!first) { j += ","; }
-		first = false;
-		j += "{\"id\":\"" + jesc(id) + "\",\"name\":\"" + jesc(cs.name) + "\"" +
+		std::string o = "{\"id\":\"" + jesc(id) + "\",\"name\":\"" + jesc(cs.name) + "\"" +
 		     ",\"start\":\"" + dtToStr(cs.start) + "\",\"end\":\"" + dtToStr(cs.end) + "\"" +
 		     ",\"capturable\":" + std::string(capturable ? "true" : "false") +
 		     ",\"state\":" + std::to_string(st) + "}";
+		rows.push_back(std::make_pair(startU, o));
 	}
+	// 撮影開始時刻の新しい順(降順)に並べる(指示3: 古い計画が上に来ないように)。
+	std::stable_sort(rows.begin(), rows.end(),
+		[](const std::pair<long long, std::string>& a, const std::pair<long long, std::string>& b) { return a.first > b.first; });
+	std::string j = "[";
+	for (size_t i = 0; i < rows.size(); ++i) { if (i) { j += ","; } j += rows[i].second; }
 	j += "]";
 	return copyOut(j, buf, inoutLen);
 }
@@ -1078,6 +1141,30 @@ int32_t hge_setPlanInterval(double seconds)
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
 	return ERR_HGC_OK;
+}
+
+// 編集中の撮影計画の名称を変更する(離脱/保存で永続化。リストへは即反映)。
+// 撮影計画(id指定)の名称を変更する。編集中の計画なら g_plan も更新して通知。いずれも即永続化(リストへ即反映)。
+int32_t hge_renamePlan(const char* id, const char* name)
+{
+	if (id == nullptr || id[0] == '\0' || name == nullptr) { return ERR_HGC_INVALID_ARG; }
+	if (!g_planReady) { errCode e = loadFixedPlanImpl(); if (e != ERR_HGC_OK) { return e; } }
+	std::string sid = id;
+	if (sid == g_editId)
+	{
+		g_plan.name = name;
+		buildScheduleJson();
+		notify(HGE_EV_SCHEDULE, g_schedJson);
+		return saveCurrentPlan();
+	}
+	// 非編集中の計画はファイルの plan.name を直接書き換える。
+	std::string saved;
+	if (!dataManager::loadPlanFile(sid, saved)) { return ERR_HGC_NO_ELEMENT; }
+	nlohmann::json w = nlohmann::json::parse(saved, nullptr, false);
+	if (w.is_discarded() || !w.is_object()) { return ERR_HGC_JSON_PARSE; }
+	if (w.contains("plan") && w["plan"].is_object()) { w["plan"]["name"] = std::string(name); }
+	else { w["name"] = std::string(name); }
+	return dataManager::savePlanFile(sid, w.dump()) ? ERR_HGC_OK : ERR_HGC_INVALID_STATE;
 }
 
 int32_t hge_setPlanLandscape(int32_t landscape)
@@ -1454,7 +1541,7 @@ int32_t hge_searchDevicesListJson(char* buf, int32_t* inoutLen)
 	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
 	// バッファ規約では buf==null(サイズ問い合わせ)→ buf!=null(本取得)の順で2回呼ばれる。
 	// 検索は重いので初回(サイズ問い合わせ)だけ実行し、結果(g_devices)を両呼び出しで共有する。
-	if (buf == nullptr && g_sessions.empty())	// 撮影中は作り直さない(devIndex 保護)
+	if (buf == nullptr && g_sessions.empty())	// 撮影中は表示用一覧を作り直さない(各撮影は自分専用の device で動作)
 	{
 		g_devices.clear();
 		cameraController::detectTarget(g_devices);

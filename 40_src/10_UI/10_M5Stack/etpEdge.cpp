@@ -17,8 +17,10 @@
 
 using json = nlohmann::json;
 
-// 計画名ビットマップの取り込み(実体は main.cpp)。
-extern void edgeSetNameBitmap(const uint8_t* data, int len);
+// 計画名ビットマップの取り込み(実体は main.cpp)。計画 id ごとに保持する。
+extern void edgeSetNameBitmap(const std::string& id, const uint8_t* data, int len);
+// スマホから受信した計画 id を登録する(これだけリスト表示する。実体は main.cpp)。
+extern void edgeAddReceivedPlan(const std::string& id);
 
 namespace
 {
@@ -120,20 +122,35 @@ namespace
 			if (!applyTime(pk.data)) { rm = etp::M_NAK; }
 			break;
 		case etp::C_CAPTURE_PLAN:
-			if (hge_setPlanJson(pk.data.c_str(), static_cast<int32_t>(pk.data.size())) != ERR_HGC_OK)
+		{
+			// data = "id\t{plan json}"(id 空可)。エッジは id ごとに計画を蓄積する(複数計画をリスト表示)。
+			std::string id, body;
+			size_t tab = pk.data.find('\t');
+			if (tab != std::string::npos) { id = pk.data.substr(0, tab); body = pk.data.substr(tab + 1); }
+			else { body = pk.data; }
+			if (hge_importPlan(id.c_str(), body.c_str(), static_cast<int32_t>(body.size())) != ERR_HGC_OK)
 			{ rm = etp::M_NAK; }
-			else { hge_savePlan(); }	// 受信した計画を永続化(スマホ切断後も単独動作・再起動で復元)
+			else { edgeAddReceivedPlan(id); }	// 受信した計画だけリスト表示する
 			break;
-		case etp::C_NAME_BMP:	// 計画名のモノクロ2値ビットマップを受領して表示に使う
-			edgeSetNameBitmap(reinterpret_cast<const uint8_t*>(pk.data.data()), static_cast<int>(pk.data.size()));
+		}
+		case etp::C_NAME_BMP:	// data = "id\t<bitmap>"。計画 id ごとに名前ビットマップを保持する
+		{
+			size_t tab = pk.data.find('\t');
+			std::string id  = (tab != std::string::npos) ? pk.data.substr(0, tab) : std::string();
+			const char* p   = (tab != std::string::npos) ? pk.data.data() + tab + 1 : pk.data.data();
+			int         pl  = (tab != std::string::npos) ? static_cast<int>(pk.data.size() - tab - 1) : static_cast<int>(pk.data.size());
+			edgeSetNameBitmap(id, reinterpret_cast<const uint8_t*>(p), pl);
 			break;
+		}
 		case etp::C_CONTROL_METHOD:
 			break;	// 将来用。現状は受領のみ(ccmListは計画に内包)
-		case etp::C_ACTION:
-			hge_captureStart();
+		case etp::C_ACTION:	// data に計画 id があればその計画を開始(無ければ従来の単一開始)
+			if (!pk.data.empty()) { hge_captureStartPlan(pk.data.c_str()); }
+			else                  { hge_captureStart(); }
 			break;
 		case etp::C_STOP:
-			hge_captureStop();
+			if (!pk.data.empty()) { hge_captureStopPlan(pk.data.c_str()); }
+			else                  { hge_captureStop(); }
 			break;
 		case etp::C_PROGRESS:
 		{

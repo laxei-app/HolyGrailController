@@ -54,7 +54,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private lateinit var flipper: ViewFlipper
 
     // 330
-    private lateinit var planName: TextView
     private lateinit var startDate: Button
     private lateinit var startTime: Button
     private lateinit var endDate: Button
@@ -76,12 +75,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private lateinit var planListScroll: ScrollView
     private lateinit var planListContainer: LinearLayout
     private var currentPlanId = ""          // 編集対象の計画 id
+    // 計画の選択・改名・各種編集(g_plan/g_editIdを触る操作)は単一スレッドで直列化し競合を防ぐ
+    // (例: 改名と別計画選択が並走すると選択がファイルから古い名前を読み戻して改名が無効化される)。
+    private val planExec = java.util.concurrent.Executors.newSingleThreadExecutor()
     private val capturingPlans = mutableSetOf<String>()  // 撮影中の計画 id 群(並行撮影)
     private var scheduleView: ScheduleView? = null   // §7.3.2 スケジュール表示/編集ビュー
     private lateinit var captureStatus: TextView     // 撮影中ステータス(plan画面内)
     private var planReadOnly = false                 // 撮影中の計画を表示中=編集不可(item7)
     private var blinkOn = true              // 撮影中カメラアイコンの点滅状態
-    private lateinit var planStartButton: Button
     private lateinit var edgeSpinner: Spinner
     private lateinit var edgeSearchButton: Button
     private lateinit var searchButton: Button
@@ -138,7 +139,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // エッジ端末
     private data class Edge(val name: String, val ip: String, val port: Int)
-    private val edges = mutableListOf<Edge>()
+    private val edges = mutableListOf<Edge>()   // 登録済みエッジ端末(設定で追加、prefsに永続化、オフラインでも選択可)
+    private var suppressEdgeSel = false          // スピナーをプログラムで設定する間は選択保存を抑止
     private val handler = Handler(Looper.getMainLooper())
     private var edgeCapturing = false
 
@@ -183,6 +185,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         loadColors()
         loadExpoValues()
         buildExposureEditors()
+        loadRegisteredEdges()   // 設定で登録したエッジ端末(オフラインでも選択可)
         refreshEdgeSpinner()
 
         wireListeners()
@@ -217,8 +220,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
                             for (k in 0 until pa.length()) { val po = pa.getJSONObject(k); if (po.optString("name") == nm) { pid = po.optString("id"); break } }
                         } catch (_: Exception) {}
                         runOnUiThread {
-                            edges.clear(); edges.add(ed); refreshEdgeSpinner()
-                            try { edgeSpinner.setSelection(1) } catch (_: Exception) {}
+                            // 復元: このエッジ(名称)を登録一覧へ統合し、復元中の計画のエッジ名称として設定する。
+                            updateEdgeIp(ed.name, ed.ip, ed.port)
+                            if (pid.isNotEmpty()) setPlanEdgeName(pid, ed.name)
+                            refreshEdgeSpinner()
                             edgeCapturing = true; edgeCapturingPlanId = pid
                             if (pid.isNotEmpty()) { capturingPlans.add(pid); startBlink(); refreshPlanList(); updateReadOnly() }
                             captureStatus.text = "● エッジ撮影中(復元)"; captureStatus.visibility = View.VISIBLE
@@ -252,7 +257,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun bindViews() {
         flipper = findViewById(R.id.flipper)
-        planName = findViewById(R.id.plan_nameText)
         startDate = findViewById(R.id.plan_startDate)
         startTime = findViewById(R.id.plan_startTime)
         endDate = findViewById(R.id.plan_endDate)
@@ -273,7 +277,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         planListScroll = findViewById(R.id.plan_listScroll)
         planListContainer = findViewById(R.id.plan_listContainer)
         captureStatus = findViewById(R.id.plan_captureStatus)
-        planStartButton = findViewById(R.id.plan_startButton)
         edgeSpinner = findViewById(R.id.plan_edgeSpinner)
         edgeSearchButton = findViewById(R.id.plan_edgeSearchButton)
         searchButton = findViewById(R.id.searchButton)
@@ -306,16 +309,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
             updateTimeButtons(); pushTimesToEntity()
         }
         findViewById<Button>(R.id.plan_saveButton).setOnClickListener {
-            Thread {
+            planExec.execute {
                 val r = HgeNative.nativeSavePlan()
                 runOnUiThread {
                     Toast.makeText(this, if (r == 0) "撮影計画を保存しました" else "保存に失敗しました", Toast.LENGTH_SHORT).show()
                 }
-            }.start()
-        }
-        planStartButton.setOnClickListener {
-            if (planReadOnly) return@setOnClickListener
-            startPlan(currentPlanId)   // 撮影中も同じ計画画面のまま(読取専用)
+            }
         }
         capStopButton.setOnClickListener {
             val e = selectedEdge()
@@ -332,6 +331,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 runOnUiThread { onEdgesFound(js) }
             }.start()
         }
+        // スピナーでエッジを選ぶと、表示中の計画にその選択を保存する(計画ごとにエッジを指定)。
+        edgeSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, pos: Int, idl: Long) {
+                if (suppressEdgeSel) return
+                val nm = if (pos in 1..edges.size) edges[pos - 1].name else ""
+                setPlanEdgeName(currentPlanId, nm)
+            }
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+        }
         searchButton.setOnClickListener { HgeNative.nativeSearchDevices() }
         connectButton.setOnClickListener {
             val host = ipInput.text.toString().trim()
@@ -344,7 +352,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 横向き(ランドスケープ)。
         landscapeCheck.setOnCheckedChangeListener { _, checked ->
             if (suppressLandscape) return@setOnCheckedChangeListener
-            Thread { HgeNative.nativeSetPlanLandscape(if (checked) 1 else 0) }.start()
+            planExec.execute { HgeNative.nativeSetPlanLandscape(if (checked) 1 else 0) }
         }
         // センサー/レンズ定数の変更(機材リストに無い値の参考用)。
         findViewById<Button>(R.id.plan_gearConst).setOnClickListener { editGearConst() }
@@ -595,6 +603,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         gearItem(box, "カメラリスト") { openCameraList() }
         gearItem(box, "レンズリスト") { openLensList() }
         gearBand(box, "エッジ端末")
+        gearItem(box, "エッジ端末の登録") { manageEdges() }
         gearItem(box, "エッジ端末設定") { openEdgeSettings() }
     }
 
@@ -819,14 +828,31 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val nm = p.optString("name")
             val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL; row.gravity = Gravity.CENTER_VERTICAL
             val star = TextView(this); star.text = if (nm == prefName) "★" else "　"; star.textSize = 14f; star.setPadding(dp(2), 0, dp(4), 0)
-            val et = EditText(this); et.setText(nm); et.isSingleLine = true; et.textSize = 16f
-            et.setBackgroundColor(0x00000000)
-            et.setTypeface(null, if (nm == selPresetName) Typeface.BOLD else Typeface.NORMAL)
-            et.setTextColor(if (nm == selPresetName) Color.BLACK else Color.parseColor("#888888"))
-            et.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            et.setOnClickListener { selectPreset(nm) }
-            et.setOnFocusChangeListener { _, has -> if (!has) commitRename(nm, et.text.toString()) }
-            row.addView(star); row.addView(et); row.addView(ctxMenuButton(listOf("削除" to { removePreset(nm) })))
+            row.addView(star)
+            if (nm == selPresetName) {
+                // 選択中のみ名称インライン編集可(分割バー画面共通の動作)。
+                val et = EditText(this); et.setText(nm); et.isSingleLine = true; et.textSize = 19f
+                et.setBackgroundColor(0x00000000); et.setTypeface(null, Typeface.BOLD); et.setTextColor(Color.BLACK)
+                et.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                et.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+                et.setOnFocusChangeListener { _, has -> if (!has) commitRename(nm, et.text.toString()) }
+                et.setOnEditorActionListener { v, a, _ ->
+                    if (a == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
+                        commitRename(nm, v.text.toString()); v.clearFocus()
+                        (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(v.windowToken, 0)
+                        true
+                    } else false
+                }
+                row.addView(et)
+            } else {
+                // 未選択はタップで選択のみ(キーボードを出さない)。
+                val t = TextView(this); t.text = nm; t.textSize = 16f; t.setTextColor(Color.parseColor("#888888"))
+                t.setPadding(0, dp(6), 0, dp(6))
+                t.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                t.setOnClickListener { selectPreset(nm) }
+                row.addView(t)
+            }
+            row.addView(ctxMenuButton(listOf("削除" to { removePreset(nm) })))
             box.addView(row); box.addView(thinDivider())
         }
         // 新規追加(文字を直接入力して確定で作成)
@@ -1087,22 +1113,44 @@ class MainActivity : AppCompatActivity(), HgeListener {
         return v
     }
 
-    // 一覧の1行(タップで選択。右にコンテキストメニュー「⋮」)。
+    // 一覧の1行(タップで選択。選択中は太字。右にコンテキストメニュー「⋮」)。
+    // onRename を渡すと名称をインライン編集できる(タップで選択、確定/フォーカス外で改名)。全分割バー画面で共通。
     private fun listRow(title: String, sub: String, selected: Boolean, onSelect: () -> Unit,
-                        menuItems: List<Pair<String, () -> Unit>>): View {
+                        menuItems: List<Pair<String, () -> Unit>>, onRename: ((String) -> Unit)? = null): View {
         val row = LinearLayout(this)
         row.orientation = LinearLayout.HORIZONTAL
         row.gravity = Gravity.CENTER_VERTICAL
         row.setPadding(dp(6), dp(8), dp(6), dp(8))
         val txt = LinearLayout(this); txt.orientation = LinearLayout.VERTICAL
         txt.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        val t = TextView(this); t.text = title
-        t.textSize = if (selected) 19f else 16f
-        t.setTypeface(null, if (selected) Typeface.BOLD else Typeface.NORMAL)
-        t.setTextColor(if (selected) Color.BLACK else Color.parseColor("#888888"))
-        txt.addView(t)
-        if (sub.isNotEmpty()) { val s = TextView(this); s.text = sub; s.textSize = 12f; s.setTextColor(Color.GRAY); txt.addView(s) }
-        txt.setOnClickListener { onSelect() }
+        if (selected && onRename != null) {
+            // 選択中のみ名称インライン編集可: フォーカス外/確定で改名(未選択行はタップで選択のみ)。
+            val e = EditText(this); e.setText(title); e.isSingleLine = true
+            e.textSize = if (selected) 19f else 16f
+            e.setTypeface(null, if (selected) Typeface.BOLD else Typeface.NORMAL)
+            e.setTextColor(if (selected) Color.BLACK else Color.parseColor("#888888"))
+            e.setBackgroundColor(0x00000000); e.setPadding(0, 0, 0, 0)
+            e.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            e.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+            e.setOnClickListener { onSelect() }
+            e.setOnFocusChangeListener { _, has -> if (!has) onRename(e.text.toString()) }
+            e.setOnEditorActionListener { v, a, _ ->
+                if (a == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
+                    onRename(v.text.toString()); v.clearFocus()
+                    (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(v.windowToken, 0)
+                    true
+                } else false
+            }
+            txt.addView(e)
+        } else {
+            val t = TextView(this); t.text = title
+            t.textSize = if (selected) 19f else 16f
+            t.setTypeface(null, if (selected) Typeface.BOLD else Typeface.NORMAL)
+            t.setTextColor(if (selected) Color.BLACK else Color.parseColor("#888888"))
+            txt.addView(t)
+            txt.setOnClickListener { onSelect() }
+        }
+        if (sub.isNotEmpty()) { val s = TextView(this); s.text = sub; s.textSize = 12f; s.setTextColor(Color.GRAY); s.setOnClickListener { onSelect() }; txt.addView(s) }
         row.addView(txt)
         if (menuItems.isNotEmpty()) { row.addView(ctxMenuButton(menuItems)) }
         return row
@@ -1140,14 +1188,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
             if (cam.optString("serial").isNotEmpty()) parts.add("S/N:${cam.optString("serial")}")
             val sub = if (parts.isEmpty()) cam.optString("maker") else parts.joinToString("  ")
             box.addView(listRow(name, sub, name == selCamera,
-                onSelect = { selCamera = name; buildCameraList(); buildCameraDetail() },
+                onSelect = { selectCamera(name) },
                 menuItems = listOf(
                     "削除" to {
                         Thread { HgeNative.nativeRemoveOwnedCamera(name)
                             runOnUiThread { if (selCamera == name) selCamera = null; buildCameraList(); buildCameraDetail() } }.start()
                     },
                     "接続カメラ検索" to { searchAndAddCameras() }
-                )))
+                ),
+                onRename = { newName -> commitCameraRename(name, newName) }))
             box.addView(thinDivider())
         }
         box.addView(linkText("＋ 新規カメラ追加") { openCameraAdd() })
@@ -1180,7 +1229,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         addCancelButton(box, atTop = true) { buildCameraDetail() }   // 分割バー直下に右寄せ
         box.addView(editRow("メーカー", "maker", cam.optString("maker")))
         box.addView(editRow("モデル", "model", cam.optString("model")))
-        box.addView(editRow("名称", "name", cam.optString("name")))
+        // 名称はリストの行でインライン編集する(分割バー画面共通の動作)。詳細からは除外。
         box.addView(editRow("愛称", "friendly", cam.optString("friendly")))
         box.addView(editRow("シリアルNo.", "serial", cam.optString("serial")))
         box.addView(editRow2("センサーサイズ", "sensorSize", cam.optDouble("sensorSize", 0.0).toString(),
@@ -1285,9 +1334,24 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun leaveCameraList() { persistCameraDetail(false); flipper.displayedChild = 5 }
 
-    // カメラ詳細を保存する。rebuild=true は一覧/詳細を作り直す(並べ替え等)。false は離脱時(再描画なし)。
-    private fun persistCameraDetail(rebuild: Boolean) {
-        val orig = selCamera ?: return
+    // リスト選択(タップ)。同じ行の再タップは編集(フォーカス)のみ。別の行なら前の詳細を保存して切替。
+    private fun selectCamera(name: String) {
+        if (name == selCamera) return
+        persistCameraDetail(false)            // 前の選択の編集内容を保存(分割バー画面共通の動作)
+        selCamera = name; buildCameraList(); buildCameraDetail()
+    }
+    // リストでの名称インライン編集の確定。orig→newName へ改名(キー変更)。
+    private fun commitCameraRename(orig: String, newName: String) {
+        val nm = newName.trim()
+        if (nm.isEmpty() || nm == orig) return
+        selCamera = nm
+        persistCameraDetail(rebuild = true, origName = orig)
+    }
+
+    // カメラ詳細を保存する。名称はリストで編集するため selCamera を用いる。
+    // rebuild=true は一覧/詳細を作り直す。origName 指定時はその名前を保存対象(改名時の元キー)とする。
+    private fun persistCameraDetail(rebuild: Boolean, origName: String? = null) {
+        val orig = origName ?: selCamera ?: return
         if (camFields.isEmpty()) return
         val o = JSONObject()
         for ((k, et) in camFields) {
@@ -1297,11 +1361,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 else -> o.put(k, et.text.toString())
             }
         }
+        o.put("name", selCamera ?: orig)      // 名称はリストのインライン編集分(selCamera)
         o.put("autoInsert", camAutoInsert?.isChecked ?: false)
         val ln = JSONArray(); camLensNames.forEach { ln.put(it) }; o.put("lensNames", ln)
-        val newName = o.optString("name", orig)
         val js = o.toString()
-        selCamera = if (newName.isNotEmpty()) newName else orig
         if (rebuild) {
             Thread {
                 HgeNative.nativeSetOwnedCameraDetail(orig, js)
@@ -1332,8 +1395,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val sel = ArrayList(checkedCamAdd); checkedCamAdd.clear()
         if (sel.isEmpty()) { if (toMenu) openGearMenu() else openCameraList(); return }
         Thread {
-            sel.forEach { HgeNative.nativeAddOwnedCamera(it) }
-            runOnUiThread { Toast.makeText(this, "${sel.size}台を追加しました", Toast.LENGTH_SHORT).show(); if (toMenu) openGearMenu() else openCameraList() }
+            // §4a: 同機種で未識別(愛称もシリアルも無い)のカメラが既にあると、もう一台は区別できないため追加不可。
+            var ok = 0; val failed = ArrayList<String>()
+            sel.forEach { if (HgeNative.nativeAddOwnedCamera(it) == 0) ok++ else failed.add(it) }
+            runOnUiThread {
+                val msg = when {
+                    failed.isEmpty() -> "${ok}台を追加しました"
+                    ok == 0 -> "追加できません: 同機種で未識別のカメラが既にあります。先に愛称かシリアルを設定してください"
+                    else -> "${ok}台追加。${failed.size}台は追加不可(同機種の未識別カメラが既にあるため)"
+                }
+                Toast.makeText(this, msg, Toast.LENGTH_LONG).show(); if (toMenu) openGearMenu() else openCameraList()
+            }
         }.start()
     }
 
@@ -1349,11 +1421,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val name = l.optString("name")
             val sub = "${l.optString("maker")}  ${l.optDouble("focalLength", 0.0).toInt()}mm  F${l.optDouble("fn", 0.0)}"
             box.addView(listRow(name, sub, name == selLens,
-                onSelect = { selLens = name; buildLensList(); buildLensDetail() },
+                onSelect = { selectLens(name) },
                 menuItems = listOf("削除" to {
                     Thread { HgeNative.nativeRemoveOwnedLens(name)
                         runOnUiThread { if (selLens == name) selLens = null; buildLensList(); buildLensDetail() } }.start()
-                })))
+                }),
+                onRename = { newName -> commitLensRename(name, newName) }))
             box.addView(thinDivider())
         }
         box.addView(linkText("＋ 新規レンズ追加") { openLensAdd() })
@@ -1371,7 +1444,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (l == null) { val tv = TextView(this); tv.text = "(データなし)"; box.addView(tv); return }
         addCancelButton(box, atTop = true) { buildLensDetail() }   // 分割バー直下に右寄せ
         box.addView(editRow("メーカー", "maker", l.optString("maker")))
-        box.addView(editRow("モデル", "name", l.optString("name")))
+        // 名称(モデル)はリストの行でインライン編集する(分割バー画面共通の動作)。詳細からは除外。
         val cb = CheckBox(this); cb.text = "電子接点あり"; cb.isChecked = l.optBoolean("hasContact", true); lensContact = cb; box.addView(cb)
         box.addView(editRow2("F値", "fn", l.optDouble("fn", 0.0).toString(), "fnMax", l.optDouble("fnMax", 0.0).toString(), "〜", "", true))
         box.addView(editRow("焦点距離", "focalLength", l.optDouble("focalLength", 0.0).toString(), true))
@@ -1381,8 +1454,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun leaveLensList() { persistLensDetail(false); flipper.displayedChild = 5 }
 
-    private fun persistLensDetail(rebuild: Boolean) {
-        val orig = selLens ?: return
+    private fun selectLens(name: String) {
+        if (name == selLens) return
+        persistLensDetail(false)              // 前の選択の編集内容を保存(分割バー画面共通の動作)
+        selLens = name; buildLensList(); buildLensDetail()
+    }
+    private fun commitLensRename(orig: String, newName: String) {
+        val nm = newName.trim()
+        if (nm.isEmpty() || nm == orig) return
+        selLens = nm
+        persistLensDetail(rebuild = true, origName = orig)
+    }
+
+    private fun persistLensDetail(rebuild: Boolean, origName: String? = null) {
+        val orig = origName ?: selLens ?: return
         if (lensFields.isEmpty()) return
         val o = JSONObject()
         for ((k, et) in lensFields) {
@@ -1391,10 +1476,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 else -> o.put(k, et.text.toString())
             }
         }
+        o.put("name", selLens ?: orig)        // 名称(モデル)はリストのインライン編集分(selLens)
         o.put("hasContact", lensContact?.isChecked ?: true)
-        val newName = o.optString("name", orig)
         val js = o.toString()
-        selLens = if (newName.isNotEmpty()) newName else orig
         if (rebuild) {
             Thread { HgeNative.nativeSetOwnedLensDetail(orig, js); runOnUiThread { buildLensList(); buildLensDetail() } }.start()
         } else {
@@ -1510,11 +1594,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .setTitle("カメラを選択")
             .setItems(names.toTypedArray()) { _, which ->
                 val name = names[which]
-                Thread {
+                planExec.execute {
                     HgeNative.nativeSetPlanCamera(name)
                     val sched = HgeNative.nativeScheduleJson()
                     runOnUiThread { latestSchedule = sched; updatePlanDisplay(sched) }
-                }.start()
+                }
             }.show()
     }
 
@@ -1526,11 +1610,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .setTitle("レンズを選択")
             .setItems(names.toTypedArray()) { _, which ->
                 val name = names[which]
-                Thread {
+                planExec.execute {
                     HgeNative.nativeSetPlanLens(name)
                     val sched = HgeNative.nativeScheduleJson()
                     runOnUiThread { latestSchedule = sched; updatePlanDisplay(sched); loadExpoValues() }
-                }.start()
+                }
             }.show()
     }
 
@@ -2325,24 +2409,29 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val s = fmtIso.format(startCal.time)
         val e = fmtIso.format(endCal.time)
         val off = TimeZone.getDefault().getOffset(startCal.timeInMillis) / 60000
-        Thread { HgeNative.nativeSetPlanTimes(s, e, off) }.start()
+        planExec.execute {
+            HgeNative.nativeSetPlanTimes(s, e, off)
+            // 時刻変更で撮影可否(終了>現在)が変わるので、開始アイコンを即更新する(指示2)。
+            runOnUiThread { refreshPlanList() }
+        }
     }
 
     // 撮影方向/仰角をEntityへ渡してスケジュールを再生成させる(結果はEV_SCHEDULEで反映)。
     private fun pushDirectionToEntity(az: Float, el: Float) {
         dirText.text = "撮影方向 %.1f°   仰角 %.1f°".format(az, el)
-        Thread { HgeNative.nativeSetPlanDirection(az.toDouble(), el.toDouble()) }.start()
+        planExec.execute { HgeNative.nativeSetPlanDirection(az.toDouble(), el.toDouble()) }
     }
 
     // ============================================================
     //  複数撮影計画リスト(分割バー上。§7.3.1/§7.3.3)
     // ============================================================
     private fun refreshPlanList() {
-        Thread {
+        // 一覧の読み出しも計画操作と同じ単一スレッドで実行し、改名・編集の直後に最新状態を読む。
+        planExec.execute {
             val js = HgeNative.nativeListPlans()
             val cur = HgeNative.nativeCurrentPlanId()
-            runOnUiThread { currentPlanId = cur; buildPlanList(js); updateReadOnly() }
-        }.start()
+            runOnUiThread { currentPlanId = cur; buildPlanList(js); updateReadOnly(); refreshEdgeSpinner() }
+        }
     }
 
     private fun buildPlanList(js: String) {
@@ -2359,6 +2448,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val arr = JSONArray(js)
             for (i in 0 until arr.length()) { planListContainer.addView(buildPlanRow(arr.getJSONObject(i))) }
         } catch (_: Exception) {}
+        // 再構築直後に選択中行のEditTextが自動フォーカスしてキーボードが出るのを防ぐ(フォーカスをスクロールへ)。
+        planListScroll.isFocusableInTouchMode = true
+        planListScroll.requestFocus()
         // リスト件数が少なければ内容ぴったりまで縮める(item6: リスト最下段で止める)。
         setInitialSplit(R.id.plan_listScroll, R.id.plan_listContainer)
     }
@@ -2389,13 +2481,36 @@ class MainActivity : AppCompatActivity(), HgeListener {
             else -> icon.setImageDrawable(null)
         }
         row.addView(icon)
-        val tv = TextView(this)
-        tv.text = name
+        // 計画名: 1タップ目=選択(下に詳細表示、キーボード無し)。選択中の行の名前タップ=編集(キーボード→確定で改名)。
+        val tv = EditText(this)
+        tv.setText(name)
         tv.textSize = 15f
-        tv.maxLines = 1
+        tv.isSingleLine = true
+        tv.setPadding(dp(4), dp(2), dp(4), dp(2))
+        tv.background = null   // ラベル風(下線なし)
+        tv.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        tv.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
         if (id == currentPlanId) tv.setTypeface(null, Typeface.BOLD)
         tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        tv.setOnClickListener { selectPlanRow(id) }
+        if (!capturing && id == currentPlanId) {
+            // 選択中の計画 → 名前タップで編集可能(キーボード)。確定で改名。
+            tv.isFocusableInTouchMode = true; tv.isFocusable = true
+            tv.setOnEditorActionListener { v, actionId, _ ->
+                if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
+                    val nm = v.text.toString().trim()
+                    planListScroll.isFocusableInTouchMode = true
+                    planListScroll.requestFocus()   // 隣行へ飛ばずキーボードを閉じる
+                    (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
+                        .hideSoftInputFromWindow(v.windowToken, 0)
+                    if (nm.isNotEmpty()) planExec.execute { HgeNative.nativeRenamePlan(id, nm) }
+                    true
+                } else false
+            }
+        } else {
+            // 未選択(または撮影中)の行 → タップで選択のみ(キーボードは出さない)。
+            tv.isFocusable = false; tv.isFocusableInTouchMode = false
+            tv.setOnClickListener { selectPlanRow(id) }
+        }
         row.addView(tv)
         // ⋮ コンテキストメニュー(削除/コピーを追加)
         val menu = ImageView(this)
@@ -2408,30 +2523,52 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun selectPlanRow(id: String) {
         if (id == currentPlanId) return
-        Thread {
+        planExec.execute {
             HgeNative.nativeSelectPlan(id)   // EV_SCHEDULE で詳細表示が更新される
             runOnUiThread { currentPlanId = id; refreshPlanList() }
-        }.start()
+        }
     }
 
     private fun doNewPlan() {
-        Thread {
+        planExec.execute {
             HgeNative.nativeNewPlan("")
             val cur = HgeNative.nativeCurrentPlanId()
             runOnUiThread { currentPlanId = cur; refreshPlanList() }
-        }.start()
+        }
     }
 
     private fun startPlan(id: String) {
-        val e = selectedEdge()
+        // この計画に指定されたエッジ端末の"名称"(無ければスマホで撮影)。
+        val name = planEdgeName(id)
+        if (name.isEmpty()) {
+            // スマホで撮影。
+            planExec.execute {
+                HgeNative.nativeSelectPlan(id)
+                runOnUiThread {
+                    currentPlanId = id; capturingPlans.add(id)
+                    HgeNative.nativeCaptureStartPlan(id)
+                    startBlink(); refreshPlanList(); updateReadOnly()
+                }
+            }
+            return
+        }
+        // エッジで撮影。IPは動的なので、開始時に端末名称で検索して現在のIPを解決する。見つからなければ開始しない。
         Thread {
-            HgeNative.nativeSelectPlan(id)
+            val e = discoverEdgeByName(name)
             runOnUiThread {
-                currentPlanId = id
-                capturingPlans.add(id)
-                // 撮影中も撮影計画画面のまま(item7)。並行撮影対応で planId 指定。
-                if (e == null) HgeNative.nativeCaptureStartPlan(id) else startOnEdge(e, id)
-                startBlink(); refreshPlanList(); updateReadOnly()
+                if (e == null) {
+                    Toast.makeText(this, "エッジ端末(${name})が見つからないため撮影を開始できません", Toast.LENGTH_LONG).show()
+                    return@runOnUiThread
+                }
+                updateEdgeIp(name, e.ip, e.port)   // 解決したIPを保持(停止/状態確認に使う)
+                planExec.execute {
+                    HgeNative.nativeSelectPlan(id)
+                    runOnUiThread {
+                        currentPlanId = id; capturingPlans.add(id)
+                        startOnEdge(e, id)
+                        startBlink(); refreshPlanList(); updateReadOnly()
+                    }
+                }
             }
         }.start()
     }
@@ -2441,11 +2578,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle("撮影中止")
             .setMessage("撮影を中止しますか？")
-            .setPositiveButton("中止する") { _, _ ->
-                val e = selectedEdge()
-                if (e == null) HgeNative.nativeCaptureStopPlan(id) else stopOnEdge(e)
+            .setPositiveButton("中止する") { dlg, _ ->
+                dlg.dismiss()   // 中止選択で即ダイアログを閉じる(停止処理の完了は待たない。指示4)
+                val e = planEdge(id)   // この計画のエッジ(無ければスマホ)
                 capturingPlans.remove(id); if (capturingPlans.isEmpty()) stopBlink()
                 refreshPlanList(); updateReadOnly()
+                // 停止指示はネットワークI/Oを伴うためバックグラウンドで実行(UIを固めない)。
+                Thread { if (e == null) HgeNative.nativeCaptureStopPlan(id) else stopOnEdge(e, id) }.start()
             }
             .setNegativeButton("続ける", null)
             .show()
@@ -2457,11 +2596,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
         pm.menu.add("削除")
         pm.setOnMenuItemClickListener { mi ->
             when (mi.title) {
-                "コピーを追加" -> Thread {
+                "コピーを追加" -> planExec.execute {
                     HgeNative.nativeCopyPlan(id)
                     val c = HgeNative.nativeCurrentPlanId()
-                    runOnUiThread { currentPlanId = c; refreshPlanList() }
-                }.start()
+                    runOnUiThread {
+                        // エッジ端末の指定(Android prefs管理)はコピー元から引き継ぐ。他項目はentityが複製済み。
+                        if (c.isNotEmpty()) setPlanEdgeName(c, planEdgeName(id))
+                        currentPlanId = c; refreshPlanList()
+                    }
+                }
                 "削除" -> confirmDeletePlan(id, name)
             }
             true
@@ -2475,11 +2618,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .setTitle("削除")
             .setMessage("「$name」を削除しますか？")
             .setPositiveButton("削除") { _, _ ->
-                Thread {
+                planExec.execute {
                     HgeNative.nativeDeletePlan(id)
                     val c = HgeNative.nativeCurrentPlanId()
                     runOnUiThread { currentPlanId = c; refreshPlanList() }
-                }.start()
+                }
             }
             .setNegativeButton("キャンセル", null)
             .show()
@@ -2550,7 +2693,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 HgeNative.EV_DEVICE -> {}
                 HgeNative.EV_ERROR -> {
                     val o = JSONObject(json)
-                    capState.text = "ERROR ${o.optString("msg")}"
+                    val msg = o.optString("msg")
+                    capState.text = "ERROR $msg"
+                    // カメラ未検出・カメラ使用中など、撮影開始の失敗をユーザーへ通知する。
+                    if (msg.isNotEmpty()) Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -2560,7 +2706,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun updatePlanDisplay(json: String) {
         try {
             val o = JSONObject(json)
-            planName.text = o.optString("name")
             capName.text = o.optString("name")
             // 選択中計画の開始/終了をピッカー用カレンダーへ同期(計画切替時に時刻表示を追従)。
             try {
@@ -2801,14 +2946,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         planReadOnly = capturingPlans.contains(currentPlanId)
         val ed = !planReadOnly
         intArrayOf(R.id.plan_startDate, R.id.plan_startTime, R.id.plan_endDate, R.id.plan_endTime,
-            R.id.plan_resetButton, R.id.plan_saveButton, R.id.plan_startButton, R.id.plan_gearConst,
+            R.id.plan_resetButton, R.id.plan_saveButton, R.id.plan_gearConst,
             R.id.plan_edgeSearchButton, R.id.searchButton, R.id.connectButton)
             .forEach { findViewById<View>(it).isEnabled = ed }
         intervalText.isEnabled = ed; landscapeCheck.isEnabled = ed
         cameraText.isEnabled = ed; lensText.isEnabled = ed; edgeSpinner.isEnabled = ed
         compass.isEnabled = ed; elevationView.isEnabled = ed; scheduleView?.isEnabled = ed
         findViewById<LinearLayout>(R.id.plan_ccmButtons).let { for (i in 0 until it.childCount) it.getChildAt(i).isEnabled = ed }
-        findViewById<View>(R.id.plan_startButton).alpha = if (ed) 1f else 0.4f
         findViewById<View>(R.id.plan_saveButton).alpha = if (ed) 1f else 0.4f
     }
 
@@ -2832,12 +2976,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .setView(et)
             .setPositiveButton("OK") { _, _ ->
                 val sec = et.text.toString().toDoubleOrNull() ?: return@setPositiveButton
-                Thread {
+                planExec.execute {
                     val r = HgeNative.nativeSetPlanInterval(sec)
                     runOnUiThread {
                         if (r != 0) Toast.makeText(this, "先にシャッター速度を変更してください(最小周期未満)", Toast.LENGTH_LONG).show()
                     }
-                }.start()
+                }
             }
             .setNegativeButton("キャンセル", null)
             .show()
@@ -2867,7 +3011,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 eP.text.toString().toIntOrNull()?.let { j.put("pixelW", it) }
                 eF.text.toString().toDoubleOrNull()?.let { j.put("focalLength", it) }
                 eN.text.toString().toDoubleOrNull()?.let { j.put("fn", it) }
-                Thread { HgeNative.nativeSetPlanGearConst(j.toString()) }.start()
+                planExec.execute { HgeNative.nativeSetPlanGearConst(j.toString()) }
             }
             .setNegativeButton("キャンセル", null)
             .show()
@@ -2879,24 +3023,110 @@ class MainActivity : AppCompatActivity(), HgeListener {
         return if (i in 1..edges.size) edges[i - 1] else null
     }
 
-    private fun refreshEdgeSpinner() {
-        val labels = mutableListOf("無し (スマホで撮影)")
-        edges.forEach { labels.add("${it.name} (${it.ip})") }
-        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, labels)
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        edgeSpinner.adapter = adapter
+    // --- エッジ端末の登録(prefsに永続化。設定で追加・検索で自動登録。オフラインでも選択可) ---
+    private fun hgcPrefs() = getSharedPreferences("hgc", MODE_PRIVATE)
+    private fun loadRegisteredEdges() {
+        edges.clear()
+        try {
+            val a = JSONArray(hgcPrefs().getString("regEdges", "[]") ?: "[]")
+            for (i in 0 until a.length()) {
+                val o = a.getJSONObject(i)
+                edges.add(Edge(o.optString("name", "エッジ端末"), o.optString("ip"), o.optInt("port", 50506)))
+            }
+        } catch (_: Exception) {}
+    }
+    private fun saveRegisteredEdges() {
+        val a = JSONArray()
+        edges.forEach { a.put(JSONObject().apply { put("name", it.name); put("ip", it.ip); put("port", it.port) }) }
+        hgcPrefs().edit().putString("regEdges", a.toString()).apply()
+    }
+    // 計画ごとのエッジ選択(prefsに端末"名称"を保存。空=無し=スマホで撮影)。
+    // IPはDHCPで変わり事前に不定のため、識別は端末名称で行い、IPは開始時に検索で解決する。
+    private fun planEdgeName(planId: String) = if (planId.isEmpty()) "" else (hgcPrefs().getString("pe_$planId", "") ?: "")
+    private fun setPlanEdgeName(planId: String, name: String) { if (planId.isNotEmpty()) hgcPrefs().edit().putString("pe_$planId", name).apply() }
+    private fun planEdge(planId: String): Edge? {
+        val name = planEdgeName(planId)
+        return if (name.isEmpty()) null else (edges.firstOrNull { it.name == name } ?: Edge(name, "", 50506))
+    }
+    // 端末名称に一致するエッジをネットワーク検索して現在のIPを解決する(見つからなければ null)。
+    private fun discoverEdgeByName(name: String): Edge? {
+        val js = HgeNative.nativeEdgeSearch(2500)
+        try {
+            val arr = JSONArray(js)
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                if (o.optString("name") == name) return Edge(name, o.optString("ip"), o.optInt("port", 50506))
+            }
+        } catch (_: Exception) {}
+        return null
+    }
+    // 登録一覧の last-seen IP を更新(stop/poll 用に開始時の解決結果を保持)。
+    private fun updateEdgeIp(name: String, ip: String, port: Int) {
+        val i = edges.indexOfFirst { it.name == name }
+        if (i >= 0) edges[i] = Edge(name, ip, port) else edges.add(Edge(name, ip, port))
+        saveRegisteredEdges()
     }
 
+    private fun refreshEdgeSpinner() {
+        val labels = mutableListOf("無し (スマホで撮影)")
+        edges.forEach { labels.add(it.name) }   // IPは動的なので名称のみ表示
+        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, labels)
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        suppressEdgeSel = true
+        edgeSpinner.adapter = adapter
+        val name = planEdgeName(currentPlanId)
+        val idx = if (name.isEmpty()) 0 else edges.indexOfFirst { it.name == name }.let { if (it >= 0) it + 1 else 0 }
+        try { edgeSpinner.setSelection(idx) } catch (_: Exception) {}
+        suppressEdgeSel = false
+    }
+
+    // 検索で見つかったエッジを登録一覧へ統合する(名称で重複判定、IPは最新へ更新)。手動登録分は残す。
     private fun onEdgesFound(jsonArray: String) {
-        edges.clear()
         try {
             val arr = JSONArray(jsonArray)
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
-                edges.add(Edge(o.optString("name", "エッジ端末"), o.optString("ip"), o.optInt("port", 50506)))
+                val nm = o.optString("name"); if (nm.isEmpty()) continue
+                val ip = o.optString("ip"); val port = o.optInt("port", 50506)
+                val idx = edges.indexOfFirst { it.name == nm }
+                if (idx >= 0) edges[idx] = Edge(nm, ip, port) else edges.add(Edge(nm, ip, port))
             }
         } catch (_: Exception) {}
+        saveRegisteredEdges()
         refreshEdgeSpinner()
+    }
+
+    // エッジ端末の登録/管理(設定)。名称+IPで手動登録、削除。オフラインでも登録でき計画で選べる。
+    private fun manageEdges() {
+        val ctx = this; val d = resources.displayMetrics.density; val pad = (16 * d).toInt()
+        val box = LinearLayout(ctx); box.orientation = LinearLayout.VERTICAL; box.setPadding(pad, pad, pad, 0)
+        fun rebuild() {
+            box.removeAllViews()
+            box.addView(TextView(ctx).apply { text = "登録済みエッジ端末"; setTypeface(null, Typeface.BOLD) })
+            if (edges.isEmpty()) box.addView(TextView(ctx).apply { text = "(なし)"; setPadding(0, (4 * d).toInt(), 0, 0) })
+            edges.toList().forEach { e ->
+                val row = LinearLayout(ctx); row.orientation = LinearLayout.HORIZONTAL; row.gravity = Gravity.CENTER_VERTICAL
+                val sub = if (e.ip.isEmpty()) "" else " (前回 ${e.ip})"
+                row.addView(TextView(ctx).apply { text = e.name + sub; layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f) })
+                row.addView(Button(ctx).apply { text = "削除"; setOnClickListener { edges.remove(e); saveRegisteredEdges(); refreshEdgeSpinner(); rebuild() } })
+                box.addView(row)
+            }
+            box.addView(TextView(ctx).apply { text = "追加(端末名称で登録。IPは撮影開始時に自動検索)"; setTypeface(null, Typeface.BOLD); setPadding(0, (14 * d).toInt(), 0, 0) })
+            val nameE = EditText(ctx).apply { hint = "端末名称(初期設定で付けた名前)" }; box.addView(nameE)
+            box.addView(Button(ctx).apply {
+                text = "登録"
+                setOnClickListener {
+                    val nm = nameE.text.toString().trim()
+                    if (nm.isEmpty()) { Toast.makeText(ctx, "端末名称を入力してください", Toast.LENGTH_SHORT).show(); return@setOnClickListener }
+                    if (edges.none { it.name == nm }) edges.add(Edge(nm, "", 50506))
+                    saveRegisteredEdges(); refreshEdgeSpinner(); rebuild()
+                }
+            })
+        }
+        rebuild()
+        val dlg = AlertDialog.Builder(ctx).setTitle("エッジ端末の登録").setView(ScrollView(ctx).apply { addView(box) }).setPositiveButton("閉じる", null).create()
+        dlg.setCanceledOnTouchOutside(false)   // 入力フォームが誤タップで閉じないように
+        dlg.show()
     }
 
     // エッジ端末の状態を約10秒ごとに問い合わせ、スマホ表示へ反映する(仕様8.2)。
@@ -2938,10 +3168,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 計画名をモノクロ2値ビットマップ(width u16LE, height u16LE, 1bpp MSB先頭, 1=白)に変換する。
     // エッジ端末はフォントに依存せず名称を表示できる(§8.2.1 多言語対応)。
     private fun makeNameBitmapBytes(name: String): ByteArray {
+        // エッジの計画リスト行に収まるサイズ(高さ約26px)。名前はスマホのフォントで描いて2値化し送る(多言語対応)。
         val paint = android.graphics.Paint().apply {
-            textSize = 40f; color = Color.WHITE; isAntiAlias = false; typeface = Typeface.DEFAULT_BOLD
+            textSize = 20f; color = Color.WHITE; isAntiAlias = false; typeface = Typeface.DEFAULT_BOLD
         }
-        val w = Math.ceil(paint.measureText(name).toDouble()).toInt().coerceIn(1, 300)
+        val w = Math.ceil(paint.measureText(name).toDouble()).toInt().coerceIn(1, 260)
         val fm = paint.fontMetrics
         val h = Math.ceil((fm.bottom - fm.top).toDouble()).toInt().coerceIn(1, 100)
         val bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
@@ -2973,7 +3204,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val name = try { JSONObject(latestSchedule).optString("name") } catch (_: Exception) { "" }
         val nameBmp = makeNameBitmapBytes(if (name.isEmpty()) "撮影計画" else name)
         Thread {
-            val r = HgeNative.nativeEdgeStart(e.ip, e.port, s, off, nameBmp)
+            val r = HgeNative.nativeEdgeStart(e.ip, e.port, s, off, nameBmp, planId)
             runOnUiThread {
                 if (r == 0) {
                     edgeCapturing = true; edgeCapturingPlanId = planId   // 撮影中も計画画面のまま
@@ -2987,9 +3218,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }.start()
     }
 
-    private fun stopOnEdge(e: Edge) {
+    private fun stopOnEdge(e: Edge, planId: String = edgeCapturingPlanId) {
         Thread {
-            HgeNative.nativeEdgeStop(e.ip, e.port)
+            HgeNative.nativeEdgeStop(e.ip, e.port, planId)
             runOnUiThread {
                 edgeCapturing = false; edgeCapturingPlanId = ""
                 handler.removeCallbacks(edgePoll)

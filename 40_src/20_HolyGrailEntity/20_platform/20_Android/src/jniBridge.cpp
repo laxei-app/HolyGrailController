@@ -416,6 +416,17 @@ Java_app_laxei_holygrail_HgeNative_nativeSetPlanCamera(JNIEnv* env, jobject /*th
 { return callNameCmd(env, name, hge_setPlanCamera); }
 
 JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeRenamePlan(JNIEnv* env, jobject /*thiz*/, jstring id, jstring name)
+{
+	const char* i = id   ? env->GetStringUTFChars(id, nullptr)   : nullptr;
+	const char* n = name ? env->GetStringUTFChars(name, nullptr) : nullptr;
+	jint r = hge_renamePlan(i ? i : "", n ? n : "");
+	if (i) { env->ReleaseStringUTFChars(id, i); }
+	if (n) { env->ReleaseStringUTFChars(name, n); }
+	return r;
+}
+
+JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeSetPlanLens(JNIEnv* env, jobject /*thiz*/, jstring name)
 { return callNameCmd(env, name, hge_setPlanLens); }
 

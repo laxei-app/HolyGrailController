@@ -151,14 +151,17 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeSearch(JNIEnv* env, jobject, jint t
 // エッジ端末へ time→capturePlan→action を送って撮影開始させる。return: 0=成功。
 JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring host_, jint port,
-                                                   jstring datetime_, jint offMin, jbyteArray nameBmp)
+                                                   jstring datetime_, jint offMin, jbyteArray nameBmp, jstring planId_)
 {
 	const char* host = env->GetStringUTFChars(host_, nullptr);
 	const char* dt   = env->GetStringUTFChars(datetime_, nullptr);
+	const char* pid  = planId_ ? env->GetStringUTFChars(planId_, nullptr) : nullptr;
 	std::string hostS = host ? host : "";
 	std::string dtS   = dt ? dt : "";
+	std::string pidS  = pid ? pid : "";
 	env->ReleaseStringUTFChars(host_, host);
 	env->ReleaseStringUTFChars(datetime_, dt);
+	if (pid) { env->ReleaseStringUTFChars(planId_, pid); }
 
 	int fd = tcpConnect(hostS, port, 5000);
 	if (fd < 0) { return -1; }
@@ -177,7 +180,9 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring
 		std::vector<char> pbuf(len > 0 ? static_cast<size_t>(len) : 1);
 		if (hge_getPlanJson(pbuf.data(), &len) == 0)
 		{
-			if (tcpRequest(fd, etp::C_CAPTURE_PLAN, etp::M_PUT, std::string(pbuf.data()), rd) != etp::M_ACK)
+			// data = "id\t{plan json}"。エッジは id ごとに計画を蓄積する。
+			std::string body = pidS + "\t" + std::string(pbuf.data());
+			if (tcpRequest(fd, etp::C_CAPTURE_PLAN, etp::M_PUT, body, rd) != etp::M_ACK)
 			{ result = -3; }
 		}
 		else { result = -3; }
@@ -190,16 +195,17 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring
 		if (nlen > 0)
 		{
 			jbyte* nb = env->GetByteArrayElements(nameBmp, nullptr);
-			std::string bmpData(reinterpret_cast<const char*>(nb), static_cast<size_t>(nlen));
+			// data = "id\t<bitmap bytes>"。エッジは計画 id ごとに名前ビットマップを保持する。
+			std::string bmpData = pidS + "\t" + std::string(reinterpret_cast<const char*>(nb), static_cast<size_t>(nlen));
 			env->ReleaseByteArrayElements(nameBmp, nb, JNI_ABORT);
 			tcpRequest(fd, etp::C_NAME_BMP, etp::M_PUT, bmpData, rd);
 		}
 	}
 
-	// 3) 撮影開始
+	// 3) 撮影開始(計画 id を渡してその計画を開始させる)
 	if (result == 0)
 	{
-		if (tcpRequest(fd, etp::C_ACTION, etp::M_POST, "", rd) != etp::M_ACK) { result = -4; }
+		if (tcpRequest(fd, etp::C_ACTION, etp::M_POST, pidS, rd) != etp::M_ACK) { result = -4; }
 	}
 
 	close(fd);
@@ -207,16 +213,19 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeEdgeStop(JNIEnv* env, jobject, jstring host_, jint port)
+Java_app_laxei_holygrail_HgeNative_nativeEdgeStop(JNIEnv* env, jobject, jstring host_, jint port, jstring planId_)
 {
 	const char* host = env->GetStringUTFChars(host_, nullptr);
+	const char* pid  = planId_ ? env->GetStringUTFChars(planId_, nullptr) : nullptr;
 	std::string hostS = host ? host : "";
+	std::string pidS  = pid ? pid : "";
 	env->ReleaseStringUTFChars(host_, host);
+	if (pid) { env->ReleaseStringUTFChars(planId_, pid); }
 
 	int fd = tcpConnect(hostS, port, 5000);
 	if (fd < 0) { return -1; }
 	std::string rd;
-	int m = tcpRequest(fd, etp::C_STOP, etp::M_POST, "", rd);
+	int m = tcpRequest(fd, etp::C_STOP, etp::M_POST, pidS, rd);
 	close(fd);
 	return (m == etp::M_ACK) ? 0 : -2;
 }

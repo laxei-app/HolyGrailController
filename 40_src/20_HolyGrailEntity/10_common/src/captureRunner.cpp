@@ -1,6 +1,7 @@
 ﻿#include "common.h"
 #include "captureRunner.h"
 #include "osSystemCall.h"
+#include "debugOut.h"
 #include <algorithm>
 #include <cmath>
 #include <ctime>

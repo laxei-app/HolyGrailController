@@ -468,31 +468,28 @@ errCode apiCanonCCAPI::setupShootingModeManual(void)
 // setupShootingModeManual で変更した撮影モードを元に戻す。
 errCode apiCanonCCAPI::restoreShootingMode(void)
 {
-    if (!shootModeChanged_) { return ERR_HGC_OK; }
-    shootModeChanged_ = false;
     errCode rc = ERR_HGC_OK;
 
-    if (savedIsDial_)
+    // 1) 変更した撮影モード値を元へ戻す(保存値が有効で M でないとき)。
+    if (shootModeChanged_)
     {
-        // 元のモードへ戻す(保存値が空 or "m" ならスキップ)。
-        if (!savedShootMode_.empty() && savedShootMode_ != "m" && hasFunc(funcNum::SHOOTMODE_DIAL, verb::PUT))
+        funcNum fn = savedIsDial_ ? funcNum::SHOOTMODE_DIAL : funcNum::SHOOTMODE;
+        if (!savedShootMode_.empty() && savedShootMode_ != "m" && hasFunc(fn, verb::PUT))
         {
             json b; b["value"] = savedShootMode_; std::string resp;
-            if (!netThread::httpPut(funcList[funcNum::SHOOTMODE_DIAL].url, b.dump(), resp)) { rc = ERR_HGC_HTTP_PUT; }
+            if (!netThread::httpPut(funcList[fn].url, b.dump(), resp)) { rc = ERR_HGC_HTTP_PUT; }
         }
-        // ダイアル無視モード OFF(ダイアル位置に従う通常状態へ)。
-        if (hasFunc(funcNum::IGNORE_DIAL, verb::POS))
-        {
-            json b; b["action"] = "off"; std::string resp;
-            netThread::httpPost(funcList[funcNum::IGNORE_DIAL].url, b.dump(), resp);
-        }
+        shootModeChanged_ = false;
     }
-    else
+
+    // 2) ダイアル無視モードは撮影開始で ON にしているので、終了時は必ず OFF へ戻す。
+    //    フラグ状態に依らず確実に解除する(ダイアルが効かないまま残るのを防ぐ)。失敗時は一度だけ再試行。
+    if (hasFunc(funcNum::IGNORE_DIAL, verb::POS))
     {
-        if (!savedShootMode_.empty() && savedShootMode_ != "m" && hasFunc(funcNum::SHOOTMODE, verb::PUT))
+        json b; b["action"] = "off"; std::string resp;
+        if (!netThread::httpPost(funcList[funcNum::IGNORE_DIAL].url, b.dump(), resp))
         {
-            json b; b["value"] = savedShootMode_; std::string resp;
-            if (!netThread::httpPut(funcList[funcNum::SHOOTMODE].url, b.dump(), resp)) { rc = ERR_HGC_HTTP_PUT; }
+            std::string resp2; netThread::httpPost(funcList[funcNum::IGNORE_DIAL].url, b.dump(), resp2);
         }
     }
     return rc;

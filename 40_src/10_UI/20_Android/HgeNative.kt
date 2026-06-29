@@ -45,6 +45,7 @@ object HgeNative {
     external fun nativeSetPlanTimes(start: String, end: String, offMin: Int): Int
     external fun nativeSetPlanDirection(azimuth: Double, elevation: Double): Int  // 撮影方向/仰角を設定し再生成
     external fun nativeSetPlanInterval(seconds: Double): Int   // 撮影周期。最小(最長ss+2)未満は失敗
+    external fun nativeRenamePlan(id: String, name: String): Int  // 計画名をid指定で変更(リスト直接リネーム)
     external fun nativeSetPlanLandscape(landscape: Int): Int   // 横向き(ランドスケープ)。再生成
     external fun nativeSetPlanGearConst(json: String): Int     // センサー/レンズ定数の上書き(sensorW/H/pixelW/focalLength/fn)
     // スケジュール手動編集(7.3.2)
@@ -99,8 +100,8 @@ object HgeNative {
 
     // --- エッジ端末(ETP §6) ---
     external fun nativeEdgeSearch(timeoutMs: Int): String           // edgeInfo の JSON 配列
-    external fun nativeEdgeStart(host: String, port: Int, datetime: String, offMin: Int, nameBmp: ByteArray): Int
-    external fun nativeEdgeStop(host: String, port: Int): Int
+    external fun nativeEdgeStart(host: String, port: Int, datetime: String, offMin: Int, nameBmp: ByteArray, planId: String): Int
+    external fun nativeEdgeStop(host: String, port: Int, planId: String): Int
     external fun nativeEdgeProgress(host: String, port: Int): String // progress の JSON
 
     fun stateName(s: Int): String = when (s) {

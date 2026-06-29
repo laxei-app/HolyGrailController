@@ -393,6 +393,32 @@ namespace
 		for (const auto& l : g_masterLenses) { if (l.name == name) { return &l; } }
 		return nullptr;
 	}
+
+	// 所持/計画カメラ cam の型番が device dev と同じ機種か(メーカー名差を吸収)。
+	bool camModelMatchesDev(const hgc::camera& cam, const device& dev)
+	{
+		std::string key = stripMaker(dev.model, dev.manufacturer);
+		if (!cam.name.empty()  && (cam.name  == key || cam.name  == dev.model)) { return true; }
+		if (!cam.model.empty() && (cam.model == key || cam.model == dev.model)) { return true; }
+		return false;
+	}
+
+	// 所持カメラリスト内で一意な表示名を返す(同名があれば " (2)"," (3)"... を付す)。name はリストのキー。
+	std::string uniqueOwnedName(const std::string& base)
+	{
+		std::string b = base.empty() ? std::string("カメラ") : base;
+		bool taken = false;
+		for (const auto& oc : g_ownedCameras) { if (oc.cam.name == b) { taken = true; break; } }
+		if (!taken) { return b; }
+		for (int n = 2; n < 100; ++n)
+		{
+			std::string cand = b + " (" + std::to_string(n) + ")";
+			bool used = false;
+			for (const auto& oc : g_ownedCameras) { if (oc.cam.name == cand) { used = true; break; } }
+			if (!used) { return cand; }
+		}
+		return b;
+	}
 }
 
 std::string dataManager::masterCamerasJson(void)
@@ -425,11 +451,20 @@ std::string dataManager::ownedLensesJson(void)
 bool dataManager::addOwnedCameraFromMaster(const std::string& name)
 {
 	ensureOwned();
-	for (const auto& oc : g_ownedCameras) { if (oc.cam.name == name) { return true; } }	// 既存
 	const hgc::camera* m = findMasterCamera(name);
 	if (!m) { return false; }
+	// §4a: 同じ機種で「未識別(シリアルもフレンドリ名も空)」の所持カメラが既にあれば、もう一台の未識別は
+	//      区別できないため追加しない。識別済み(シリアル or フレンドリ名あり)なら2台目の登録を許可する。
+	for (const auto& oc : g_ownedCameras)
+	{
+		bool sameModel = (!oc.cam.model.empty() && !m->model.empty() && oc.cam.model == m->model)
+		              || (!oc.cam.name.empty()  && (oc.cam.name == m->name || oc.cam.name == name));
+		if (sameModel && oc.cam.serial.empty() && oc.cam.friendly.empty()) { return false; }
+	}
 	hgc::ownedCamera oc;
 	oc.cam = *m;
+	if (oc.cam.model.empty()) { oc.cam.model = m->name; }	// 機種照合の基準
+	oc.cam.name = uniqueOwnedName(oc.cam.name);	// 2台目以降は名称を一意化(リストのキー)
 	g_ownedCameras.push_back(std::move(oc));
 	return saveOwnedCameras();
 }
@@ -841,25 +876,35 @@ bool dataManager::recordConnectedCamera(const device& dev)
 	ensureOwned();
 	// device.model 例 "Canon EOS R10"。所持/マスタは型番のみ("EOS R10")なのでメーカー名を除いて照合。
 	std::string key = stripMaker(dev.model, dev.manufacturer);
-	auto modelMatch = [&](const std::string& camModel, const std::string& camName) -> bool {
-		if (!camName.empty()  && (camName  == key || camName  == dev.model)) { return true; }
-		if (!camModel.empty() && (camModel == key || camModel == dev.model)) { return true; }
-		return false;
-	};
 
-	// 1) モデル一致の所持カメラへ serial/friendly を保存
-	for (auto& oc : g_ownedCameras)
+	// 1) シリアル一致の所持カメラ → 同一個体。フレンドリ名のみ更新する(serialは識別子なので変えない)。
+	if (!dev.serialno.empty())
 	{
-		if (modelMatch(oc.cam.model, oc.cam.name))
+		for (auto& oc : g_ownedCameras)
 		{
-			bool changed = false;
-			if (!dev.serialno.empty()   && oc.cam.serial   != dev.serialno)   { oc.cam.serial   = dev.serialno;   changed = true; }
-			if (!dev.friendName.empty() && oc.cam.friendly != dev.friendName) { oc.cam.friendly = dev.friendName; changed = true; }
-			return changed ? saveOwnedCameras() : true;
+			if (!oc.cam.serial.empty() && oc.cam.serial == dev.serialno)
+			{
+				bool changed = false;
+				if (!dev.friendName.empty() && oc.cam.friendly != dev.friendName) { oc.cam.friendly = dev.friendName; changed = true; }
+				return changed ? saveOwnedCameras() : true;
+			}
 		}
 	}
 
-	// 2) 一致が無ければ master(model)＋device から所持カメラを自動作成(1台運用で無設定OK)
+	// 2) シリアル一致なし → 同機種で「未識別(serial空)」の所持カメラがあれば、それを確定させる(プレースホルダを埋める)。
+	//    §4a: 未識別の同機種は最大1台なので、これが該当する唯一のものになる。
+	for (auto& oc : g_ownedCameras)
+	{
+		if (camModelMatchesDev(oc.cam, dev) && oc.cam.serial.empty())
+		{
+			oc.cam.serial = dev.serialno;
+			if (!dev.friendName.empty()) { oc.cam.friendly = dev.friendName; }
+			return saveOwnedCameras();
+		}
+	}
+
+	// 3) 同機種は全て別シリアルで確定済み(またはモデル不一致) → 新規の別個体として追加。
+	//    §4a: 既存が識別済みなら2台目の登録は可。device は実機なのでシリアルを持ち、未識別の重複は作らない。
 	hgc::ownedCamera oc;
 	const hgc::camera* m = matchMasterCamera(dev);
 	if (m) { oc.cam = *m; }
@@ -869,11 +914,38 @@ bool dataManager::recordConnectedCamera(const device& dev)
 		oc.cam.name  = oc.cam.model;
 		oc.cam.maker = dev.manufacturer;
 	}
-	if (oc.cam.name.empty()) { oc.cam.name = dev.friendName.empty() ? dev.serialno : dev.friendName; }
+	if (oc.cam.model.empty()) { oc.cam.model = key.empty() ? dev.model : key; }	// 機種照合の基準(名称は一意化で変わるため model を確実に持たせる)
+	if (oc.cam.name.empty()) { oc.cam.name = dev.friendName.empty() ? (key.empty() ? dev.model : key) : dev.friendName; }
+	oc.cam.name     = uniqueOwnedName(oc.cam.name);	// 同機種2台目以降は名称を一意化(リストのキー)
 	oc.cam.serial   = dev.serialno;
 	oc.cam.friendly = dev.friendName;
 	g_ownedCameras.push_back(std::move(oc));
 	return saveOwnedCameras();
+}
+
+// §4b: 計画カメラの friendly から所持リストを引き、実シリアルを解決する(接続済みなら serial が入っている)。
+bool dataManager::serialForFriendly(const std::string& friendly, std::string& outSerial)
+{
+	if (friendly.empty()) { return false; }
+	ensureOwned();
+	for (const auto& oc : g_ownedCameras)
+	{
+		if (oc.cam.friendly == friendly && !oc.cam.serial.empty()) { outSerial = oc.cam.serial; return true; }
+	}
+	return false;
+}
+
+// §4b: 所持カメラに登録済みのシリアル一覧(空は除く)。「それ以外のカメラ」判定に使う。
+void dataManager::ownedCameraSerials(std::vector<std::string>& out)
+{
+	ensureOwned();
+	for (const auto& oc : g_ownedCameras) { if (!oc.cam.serial.empty()) { out.push_back(oc.cam.serial); } }
+}
+
+// §4b: device のモデルが計画カメラ(cam)と同機種か。
+bool dataManager::cameraModelMatches(const device& dev, const hgc::camera& cam)
+{
+	return camModelMatchesDev(cam, dev);
 }
 
 // ============================================================================
