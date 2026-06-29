@@ -34,6 +34,7 @@ protected:
 		IGNORE_DIAL,				// 撮影モードダイアル無視モード(control/ignoreshootingmodedialmode)
 		SHOOTMODE_DIAL,				// 撮影モード(ダイアル搭載機: settings/shootingmodedial)
 		SHOOTMODE,					// 撮影モード(ダイアル非搭載機: settings/shootingmode)
+		AUTOPOWEROFF,				// オートパワーオフ(functions/autopoweroff)。撮影中は disable に抑止
 
 		// 全体の要素数
 		NUM,
@@ -105,6 +106,10 @@ protected:
 	std::string savedShootMode_;	// 元の撮影モード値("av"等)
 	bool        savedIsDial_  = false;	// ダイアル搭載機(shootingmodedial)で変更したか
 	bool        shootModeChanged_ = false;	// 変更したか(restore要否)
+
+	// オートパワーオフ抑止の復元用(setupShootingModeManual で保存)。
+	std::string savedAutoPowerOff_;		// 元の autopoweroff 値("30"等)
+	bool        autoPowerOffChanged_ = false;	// disable に変更したか(restore要否)
 
 protected:
 
@@ -198,6 +203,7 @@ protected:
 		{false, funcNum::IGNORE_DIAL,		"control/ignoreshootingmodedialmode"},	// 撮影モードダイアル無視
 		{false, funcNum::SHOOTMODE_DIAL,	"settings/shootingmodedial"},	// 撮影モード(ダイアル機)
 		{false, funcNum::SHOOTMODE,			"settings/shootingmode"},		// 撮影モード(ダイアル無し機)
+		{false, funcNum::AUTOPOWEROFF,		"functions/autopoweroff"},		// オートパワーオフ(撮影中 disable)
 	};
 
 };

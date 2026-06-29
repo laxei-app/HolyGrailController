@@ -418,6 +418,28 @@ errCode apiCanonCCAPI::setupShootingModeManual(void)
     shootModeChanged_ = false;
     savedShootMode_.clear();
 
+    // --- オートパワーオフ抑止(撮影中は disable) ---
+    // CCAPIはステートレスHTTPで持続セッションを握らない。撮影開始〜撮影窓までの待機(captureRunner
+    // の now<startSec ループ)や「撮影周期 > autopoweroff秒」のコマ間は無通信になり、カメラが
+    // オートパワーオフ(スリープ)し得る。これを防ぐため開始時に disable へ。元値は restoreShootingMode で戻す。
+    // ここ(setup段=待機ループより前)で行うことで待機中・コマ間の両ギャップをカバーする。
+    autoPowerOffChanged_ = false;
+    savedAutoPowerOff_.clear();
+    if (hasFunc(funcNum::AUTOPOWEROFF, verb::PUT))
+    {
+        std::string ans;
+        if (netThread::httpGet(funcList[funcNum::AUTOPOWEROFF].url, ans))
+        {
+            try { savedAutoPowerOff_ = json::parse(ans).value("value", std::string()); } catch (...) {}
+        }
+        if (savedAutoPowerOff_ != "disable")	// 既に disable なら何もしない(restore不要)
+        {
+            json b; b["value"] = "disable"; std::string resp;
+            if (netThread::httpPut(funcList[funcNum::AUTOPOWEROFF].url, b.dump(), resp)) { autoPowerOffChanged_ = true; }
+            else { DBGLN(col::RED, "autopoweroff disable NG %s", resp.c_str()); }
+        }
+    }
+
     // --- ダイアル搭載機 ---
     if (hasFunc(funcNum::SHOOTMODE_DIAL, verb::PUT))
     {
@@ -491,6 +513,17 @@ errCode apiCanonCCAPI::restoreShootingMode(void)
         {
             std::string resp2; netThread::httpPost(funcList[funcNum::IGNORE_DIAL].url, b.dump(), resp2);
         }
+    }
+
+    // 3) オートパワーオフを元の値へ戻す(撮影開始で disable にしていた場合のみ)。
+    if (autoPowerOffChanged_)
+    {
+        if (!savedAutoPowerOff_.empty() && savedAutoPowerOff_ != "disable" && hasFunc(funcNum::AUTOPOWEROFF, verb::PUT))
+        {
+            json b; b["value"] = savedAutoPowerOff_; std::string resp;
+            if (!netThread::httpPut(funcList[funcNum::AUTOPOWEROFF].url, b.dump(), resp)) { rc = ERR_HGC_HTTP_PUT; }
+        }
+        autoPowerOffChanged_ = false;
     }
     return rc;
 }
