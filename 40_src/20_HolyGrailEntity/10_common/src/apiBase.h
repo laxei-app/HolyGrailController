@@ -21,6 +21,9 @@ public:
 	// 撮影開始時にカメラを当アプリ都合(マニュアル露出)に設定し、終了時に元へ戻す(仕様8/CCAPI)。
 	virtual errCode setupShootingModeManual(void)			{ return ERR_HGC_NOT_SUPPORTED; };
 	virtual errCode restoreShootingMode(void)				{ return ERR_HGC_NOT_SUPPORTED; };
+	// 接続維持用の無害なGET。撮影窓まで待機中などに定期送出し、無通信でカメラの
+	// Wi-Fi/CCAPIセッションがタイムアウト切断するのを防ぐ。return ERR_HGC_OK で到達。
+	virtual errCode keepAlive(void)							{ return ERR_HGC_NOT_SUPPORTED; };
 
 
 };

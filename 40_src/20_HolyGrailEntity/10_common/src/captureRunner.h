@@ -30,11 +30,15 @@ public:
 	using progressCb = std::function<void(const progressInfo&)>;
 	using capturedCb = std::function<void(const capturedInfo&)>;
 	using errorCb    = std::function<void(errCode, const std::string&)>;
+	// 再接続要求。撮影中にカメラ通信が連続失敗したときに呼ばれる。SSDP等で計画のカメラを
+	// 再探索し、成功したら *dev_ が指すデバイス(セッション専用device)を最新へ更新して true を返す。
+	using reconnectCb = std::function<bool()>;
 
 	captureRunner() = default;
 	~captureRunner();
 
 	void setCallbacks(stateCb s, progressCb p, capturedCb c, errorCb e);
+	void setReconnect(reconnectCb r) { onReconnect_ = std::move(r); }
 
 	// 撮影準備。plan は events/ccmList を生成済みであること。
 	errCode ready(const hgc::cs& plan, device* dev,
@@ -45,10 +49,18 @@ public:
 
 	// hgeState 値(モジュール構造仕様書 47 準拠)
 	enum state { ST_IDLE = 0, ST_SEARCHING = 1, ST_READY = 2,
-	             ST_CAPTURING = 3, ST_STOPPING = 4, ST_ERROR = 5 };
+	             ST_CAPTURING = 3, ST_STOPPING = 4, ST_ERROR = 5,
+	             ST_DISCONNECTED = 6 };	// 撮影中に接続断(再接続試行中/接続不可)
+
+	// --- 接続維持・再接続のパラメータ ---
+	static constexpr int  kKeepAliveSec        = 60;	// 撮影窓まで待機中、無害なGETを送る周期[秒]
+	static constexpr int  kMaxConsecutiveFail  = 3;		// 撮影失敗が連続したら再接続を試みる回数
+	static constexpr int  kMaxReconnectTries   = 3;		// SSDP再探索の試行回数。これを超えたら諦める
+	static constexpr long kReconnectWaitMs     = 2000;	// 再接続試行間の待ち[ms]
 
 private:
 	errCode loop(void);								// 撮影ループ本体(別スレッド)
+	bool    establishSession(void);					// startShooting+M設定+設定値テーブル構築(開始/再接続で使用)
 	const hgc::ccmWindow* activeWindow(long long nowSec) const;
 	hgc::exposure nightGoalAfter(long long nowSec) const;	// 次の夜間固定露出
 	// 最初の補正(仕様 4.4)を反復収束で行い、撮影開始直後の初期露出を決める。
@@ -66,10 +78,11 @@ private:
 	// カメラの設定可能値テーブル(開始時に取得して構築。仕様 4.2)
 	expo::expoTables tables_;
 
-	stateCb    onState_;
-	progressCb onProgress_;
-	capturedCb onCaptured_;
-	errorCb    onError_;
+	stateCb     onState_;
+	progressCb  onProgress_;
+	capturedCb  onCaptured_;
+	errorCb     onError_;
+	reconnectCb onReconnect_;
 };
 
 #endif // _CAPTURE_RUNNER_H_

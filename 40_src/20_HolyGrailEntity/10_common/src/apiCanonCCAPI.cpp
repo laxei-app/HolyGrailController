@@ -528,6 +528,15 @@ errCode apiCanonCCAPI::restoreShootingMode(void)
     return rc;
 }
 
+// 接続維持用の無害なGET。/ccapi カタログを1回取得するだけ。撮影窓まで待機中などに定期送出して
+// 無通信でカメラのWi-Fi/CCAPIセッションが切れるのを防ぐ。到達できれば ERR_HGC_OK。
+errCode apiCanonCCAPI::keepAlive(void)
+{
+    std::string resp;
+    if (netThread::httpGet(device.urlAccess, resp) && resp.length() > 0) { return ERR_HGC_OK; }
+    return ERR_HGC_HTTP_GET;
+}
+
 // 撮影した画像を取得する。
 // jpg    : 撮影した画像データ
 // return : ERR_HGC_OK:成功

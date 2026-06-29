@@ -85,8 +85,23 @@ static int  g_maxScroll = 0;	// スクロール上限(描画時に算出)
 static bool g_listDirty = true;	// 計画リスト(hge_listPlansJson)の再取得が必要
 
 static volatile int g_state = HGE_ST_IDLE;
+static bool  g_blinkOn = true;	// 撮影中(緑カメラ)アイコンの点滅状態。接続断(赤)は点灯のまま。
 static char  g_prog[64] = "";
 static char  g_shot[64] = "";
+
+// ICON_CAPTURING(緑カメラ)を赤一色に変換した版(接続断=赤点灯用)。初回参照時に生成する。
+static uint16_t g_iconCapRed[ICON_CAPTURING_W * ICON_CAPTURING_H];
+static bool     g_iconCapRedReady = false;
+static const uint16_t* capturingRedIcon(void)
+{
+	if (!g_iconCapRedReady)
+	{
+		const int n = ICON_CAPTURING_W * ICON_CAPTURING_H;
+		for (int i = 0; i < n; ++i) { g_iconCapRed[i] = ICON_CAPTURING[i] ? 0xF800 : 0x0000; }	// 非黒画素を赤へ
+		g_iconCapRedReady = true;
+	}
+	return g_iconCapRed;
+}
 static char  g_msg[80]  = "";
 static bool  g_dirty = true;
 static bool  g_edgeUp = false;	// ETPサーバ起動済みか(WiFi接続後に一度)
@@ -138,7 +153,7 @@ static std::vector<planHit> g_planHits;
 // 撮影中(開始シーケンス〜停止処理中まで)か。フッタのボタン表示と操作の切替に使う。
 static bool isCapturing(void)
 {
-	return g_state == HGE_ST_CAPTURING || g_state == HGE_ST_SEARCHING || g_state == HGE_ST_STOPPING;
+	return g_state == HGE_ST_CAPTURING || g_state == HGE_ST_SEARCHING || g_state == HGE_ST_STOPPING || g_state == HGE_ST_DISCONNECTED;
 }
 
 static const char* stName(int s)
@@ -151,6 +166,7 @@ static const char* stName(int s)
 	case HGE_ST_CAPTURING: return "CAPTURING";
 	case HGE_ST_STOPPING:  return "STOPPING";
 	case HGE_ST_ERROR:     return "ERROR";
+	case HGE_ST_DISCONNECTED: return "DISCONN";
 	default:               return "?";
 	}
 }
@@ -333,14 +349,19 @@ static void renderPlan(void)
 		std::string en   = p.value("end",   std::string());
 		bool capturable  = p.value("capturable", false);
 		int  state       = p.value("state", 0);
+		bool disconnected= (state == HGE_ST_DISCONNECTED);
 		bool capturing   = (state == HGE_ST_CAPTURING || state == HGE_ST_SEARCHING || state == HGE_ST_STOPPING);
 		int ry0 = y, ry1 = y + rowH;
 		if (ry1 > top && ry0 < bot)
 		{
-			// 開始/撮影中アイコンはスマホUIと同じ画像(ICON_START=クラッパーREC, ICON_CAPTURING=緑カメラ)。
-			if (capturing)
+			// アイコンはスマホUIと同じ。接続断=赤点灯 / 撮影中=緑点滅 / 撮影可=開始(クラッパーREC)。
+			if (disconnected)
 			{
-				g_cv.pushImage(6, ry0 + (rowH - ICON_CAPTURING_H) / 2, ICON_CAPTURING_W, ICON_CAPTURING_H, ICON_CAPTURING);
+				g_cv.pushImage(6, ry0 + (rowH - ICON_CAPTURING_H) / 2, ICON_CAPTURING_W, ICON_CAPTURING_H, capturingRedIcon());
+			}
+			else if (capturing)
+			{
+				if (g_blinkOn) { g_cv.pushImage(6, ry0 + (rowH - ICON_CAPTURING_H) / 2, ICON_CAPTURING_W, ICON_CAPTURING_H, ICON_CAPTURING); }
 			}
 			else if (capturable)
 			{
@@ -665,6 +686,16 @@ void loop(void)
 	// タッチ操作(スクロール/タップ)
 	handleTouch();
 
+	// 撮影中(緑カメラ)アイコンの点滅。接続断(赤)は点灯のまま点滅させない。
+	{
+		static uint32_t lastBlink = 0;
+		uint32_t nowMs = millis();
+		if (g_state == HGE_ST_CAPTURING && (nowMs - lastBlink) >= 500)
+		{
+			lastBlink = nowMs; g_blinkOn = !g_blinkOn; g_dirty = true;
+		}
+	}
+
 	// シリアルコマンド(検証用): 's'=開始 'x'=停止 'i'=情報 'l'=ログ 'F'=保存先 'D'=内蔵ログ削除
 	if (Serial.available() > 0)
 	{
@@ -702,6 +733,27 @@ void loop(void)
 		else if (c == 'l')
 		{
 			std::string path = dataManager::currentLogPath();
+			std::string body;
+			if (osfile::readAll(path, body))
+			{
+				Serial.printf("[LOG] %s (%u bytes)\n", path.c_str(), (unsigned)body.size());
+				Serial.write(reinterpret_cast<const uint8_t*>(body.data()), body.size());
+				Serial.printf("[LOG] end\n");
+			}
+			else { Serial.printf("[LOG] read failed: %s\n", path.c_str()); }
+		}
+		else if (c == 'G')	// 検証用: /log 内のログファイル名一覧
+		{
+			auto names = osfile::logFileNames();
+			Serial.printf("[LOGS] %u file(s)\n", (unsigned)names.size());
+			for (auto& n : names) { Serial.printf("  %s\n", n.c_str()); }
+			Serial.printf("[LOGS] end\n");
+		}
+		else if (c == 'R')	// 検証用: R に続けて改行までをファイル名として /log 配下を読み出す
+		{
+			String name = Serial.readStringUntil('\n');
+			name.trim();
+			std::string path = std::string("/log/") + name.c_str();
 			std::string body;
 			if (osfile::readAll(path, body))
 			{

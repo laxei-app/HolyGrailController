@@ -30,7 +30,8 @@ enum hgeState
 	HGE_ST_READY     = 2,
 	HGE_ST_CAPTURING = 3,
 	HGE_ST_STOPPING  = 4,
-	HGE_ST_ERROR     = 5
+	HGE_ST_ERROR     = 5,
+	HGE_ST_DISCONNECTED = 6	// 撮影中にカメラ接続が切れた(再接続試行中/接続不可)。UIは赤点灯で表示
 };
 
 // 通知コールバック型。json は呼び出し中のみ有効(Entity 所有)。

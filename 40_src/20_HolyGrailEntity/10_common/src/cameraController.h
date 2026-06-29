@@ -28,6 +28,7 @@ public:
 	// 撮影開始時にカメラをM(ダイアル無視)に設定し、終了時に元へ戻す(仕様8/CCAPI)。
 	static errCode setupShootingModeManual(const class device& device);
 	static errCode restoreShootingMode(const class device& device);
+	static errCode keepAlive(const class device& device);	// 接続維持用の無害なGET
 
 protected:
 };

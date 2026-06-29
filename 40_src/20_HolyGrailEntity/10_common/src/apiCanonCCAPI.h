@@ -127,6 +127,7 @@ public:
 	errCode startShooting(void);						// 撮影開始
 	errCode setupShootingModeManual(void) override;		// 撮影モードをM(ダイアル無視ON)へ。元値を保存
 	errCode restoreShootingMode(void) override;			// 保存した撮影モードへ戻す(ダイアル無視OFF)
+	errCode keepAlive(void) override;					// 接続維持用の無害なGET(/ccapi カタログ取得)
 
 	// 情報を知る
 	errCode getSettings(cmdt::shotRange& settings);		// 設定値を取得する

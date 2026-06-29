@@ -28,6 +28,7 @@ object HgeNative {
     const val ST_CAPTURING = 3
     const val ST_STOPPING = 4
     const val ST_ERROR = 5
+    const val ST_DISCONNECTED = 6   // 撮影中にカメラ接続が切れた(再接続試行中/接続不可)。赤点灯
 
     external fun nativeSetLogDir(dir: String)
     external fun nativeInit(): Int
@@ -111,6 +112,7 @@ object HgeNative {
         ST_CAPTURING -> "CAPTURING"
         ST_STOPPING -> "STOPPING"
         ST_ERROR -> "ERROR"
+        ST_DISCONNECTED -> "DISCONNECTED"
         else -> "?($s)"
     }
 }

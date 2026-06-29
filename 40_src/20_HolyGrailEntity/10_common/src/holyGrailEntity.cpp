@@ -619,7 +619,7 @@ namespace
 	void refreshAggregateState(void)
 	{
 		int agg = HGE_ST_IDLE;
-		for (auto& s : g_sessions) { int st = s->state.load(); if (st == HGE_ST_CAPTURING || st == HGE_ST_SEARCHING || st == HGE_ST_STOPPING) { agg = st; } }
+		for (auto& s : g_sessions) { int st = s->state.load(); if (st == HGE_ST_CAPTURING || st == HGE_ST_SEARCHING || st == HGE_ST_STOPPING || st == HGE_ST_DISCONNECTED) { agg = st; } }
 		g_state = agg;
 	}
 	void notifyStateP(const std::string& planId, int s)
@@ -764,6 +764,26 @@ namespace
 				dataManager::logShot(c.frame, c.exp, c.luminance, c.ccm.c_str(), c.metered);
 			},
 			[S](errCode e, const std::string& m) { notifyError(e, m.c_str()); });
+
+		// 撮影中にカメラ通信が連続失敗したときの再接続(SSDP再探索)。1回の試行ぶんを行う。
+		S->runner->setReconnect([S]() -> bool {
+			std::vector<class device> found;
+			cameraController::detectTarget(found);
+			class device* hit = nullptr;
+			// 初回接続で判明しているシリアルで同一個体を再特定するのが最優先(IPが変わっていても追従)。
+			if (!S->dev.serialno.empty())
+			{
+				for (auto& d : found) { if (d.apiBase && d.serialno == S->dev.serialno) { hit = &d; break; } }
+			}
+			if (hit == nullptr)	// シリアル不明/不一致なら機種一致でフォールバック。
+			{
+				for (auto& d : found) { if (d.apiBase && dataManager::cameraModelMatches(d, S->plan.camera)) { hit = &d; break; } }
+			}
+			if (hit == nullptr) { return false; }
+			S->dev = *hit;	// runner の dev_ が指す先(=S->dev)を最新のIP/apiへ更新。
+			notify(HGE_EV_DEVICE, devicesJson());
+			return true;
+		});
 
 		hgc::exposureSmoothing smooth = dataManager::currentSmoothing();
 		errCode e = S->runner->ready(S->plan, &S->dev, smooth, g_offMin);

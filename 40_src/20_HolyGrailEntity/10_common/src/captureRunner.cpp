@@ -200,18 +200,16 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 	return best;
 }
 
-errCode captureRunner::loop(void)
+// ライブビュー開始 + M設定(ダイアル無視/オートパワーオフ抑止) + 設定可能値テーブル構築。
+// 撮影開始時と、撮影中の再接続後の両方で使う。return: ライブビュー開始に成功したか。
+bool captureRunner::establishSession(void)
 {
-	if (onState_) { onState_(ST_CAPTURING); }
-
-	// 撮影モードに入る
+	// 撮影モードに入る(ライブビュー開始)
 	errCode err = cameraController::startShooting(*dev_);
 	if (err != ERR_HGC_OK)
 	{
 		if (onError_) { onError_(err, "startShooting"); }
-		if (onState_) { onState_(ST_ERROR); }
-		running_ = false;
-		return err;
+		return false;
 	}
 
 	// カメラを当アプリ都合の設定にする(撮影モードダイアル無視ON+マニュアル露出)。仕様8/CCAPI。
@@ -238,6 +236,28 @@ errCode captureRunner::loop(void)
 		double fmin = (plan_.lens.fn > 0.0) ? plan_.lens.fn : 1.0;
 		tables_ = expo::standardTables(fmin, 32.0);
 	}
+	return true;
+}
+
+errCode captureRunner::loop(void)
+{
+	if (onState_) { onState_(ST_CAPTURING); }
+
+	// ライブビュー開始+M設定+設定可能値テーブル構築(再接続後も同じ処理を使う)。
+	// 失敗(=この接続では撮影継続不可)ならエラーで中止。
+	if (!establishSession())
+	{
+		if (onState_) { onState_(ST_ERROR); }
+		running_ = false;
+		return ERR_HGC_HTTP_POST;
+	}
+	errCode err = ERR_HGC_OK;	// ループ内の各カメラ操作の結果を受ける(actShutter 等)
+
+	// 撮影失敗の連続回数(rdyShutter/actShutter が失敗するとカウント、成功でリセット)。
+	int  shootFailStreak = 0;
+	bool gaveUp = false;		// 再接続を諦めた(終了時に赤=ST_DISCONNECTED のまま残す)
+	// 撮影窓まで待機中の接続維持GETの最終送出時刻。
+	long long lastKeepAlive = static_cast<long long>(std::time(nullptr));
 
 	const long long startSec = hgc::toUnixUtc(plan_.start, off_);
 	const long long endSec   = hgc::toUnixUtc(plan_.end, off_);
@@ -305,7 +325,17 @@ errCode captureRunner::loop(void)
 	{
 		const long long now = static_cast<long long>(std::time(nullptr));
 		if (now >= endSec) { break; }				// 計画終了
-		if (now < startSec) { interruptibleSleep(500); continue; }	// 開始前は待つ
+		if (now < startSec)
+		{	// 開始前は待つ。無通信が続くとカメラがWi-Fi/CCAPIセッションを切るため、
+			// 約60秒ごとに無害なGET(keepAlive)を送って接続を維持する。
+			if (now - lastKeepAlive >= kKeepAliveSec)
+			{
+				cameraController::keepAlive(*dev_);
+				lastKeepAlive = now;
+			}
+			interruptibleSleep(500);
+			continue;
+		}
 
 		const hgc::ccmWindow* w = activeWindow(now);
 		if (w == nullptr || !w->ccm) { interruptibleSleep(500); continue; }	// 隙間
@@ -609,6 +639,9 @@ errCode captureRunner::loop(void)
 		{
 			if (onError_) { onError_(err, "actShutter"); }
 		}
+		// 連続失敗の検出: 露出設定か撮影のどちらかが失敗したらこのサイクルは失敗。成功で0へ。
+		if (setErr != ERR_HGC_OK || err != ERR_HGC_OK) { ++shootFailStreak; }
+		else { shootFailStreak = 0; }
 		lastExp = target;
 		++frame;
 
@@ -623,16 +656,57 @@ errCode captureRunner::loop(void)
 			            static_cast<int>(endSec - now), static_cast<int>(now - startSec) });
 		}
 
-		// 撮影周期を維持(仕様 4.1: 撮影間隔は最優先で守る)
+		// 撮影が連続失敗 → カメラ接続が切れたとみなし再接続を試みる(SSDP再探索)。
+		if (shootFailStreak >= kMaxConsecutiveFail)
+		{
+			if (onState_) { onState_(ST_DISCONNECTED); }	// UIを赤(点灯)へ
+			bool recovered = false;
+			for (int attempt = 1; attempt <= kMaxReconnectTries && running_; ++attempt)
+			{
+				if (onError_) { onError_(ERR_HGC_NOT_FOUND, ("カメラ再接続を試行 " + std::to_string(attempt) + "/" + std::to_string(kMaxReconnectTries)).c_str()); }
+				// SSDP再探索で計画のカメラを探し *dev_ を更新(成功時)→ ライブビュー/M設定を張り直す。
+				if (onReconnect_ && onReconnect_() && establishSession())
+				{
+					recovered = true;
+					break;
+				}
+				interruptibleSleep(kReconnectWaitMs);
+			}
+			if (recovered)
+			{
+				shootFailStreak = 0;
+				avgBuf.clear();								// 測光移動平均をリセット
+				if (onState_) { onState_(ST_CAPTURING); }	// 緑へ戻す
+			}
+			else
+			{	// SSDP再探索を上限まで試しても繋がらない → 諦めてユーザーへ通知。赤点灯のまま終了。
+				if (onError_) { onError_(ERR_HGC_NOT_FOUND, "カメラに接続できません。撮影を中断しました"); }
+				if (onState_) { onState_(ST_DISCONNECTED); }
+				gaveUp = true;
+				break;
+			}
+		}
+
+		// 撮影周期を維持(仕様 4.1: 撮影間隔は最優先で守る)。
+		// この周期待ちは停止要求(中止)が来ても中断せず最後まで待つ。理由: 直前に切った最後の1枚は
+		// カメラ側で露光・保存が続いている。ここで即終了処理(restoreShootingMode)へ進むと、busyな
+		// カメラへ設定変更POSTが飛んで最後の1枚に影響/復元失敗する。次の撮影周期境界まで待ってから
+		// ループ先頭の running_ 判定で抜け、終了処理に入ることで最後の1枚を守る。
 		uint32_t spent = tool::getElapse(el);
 		long waitMs = static_cast<long>(interval * 1000.0) - static_cast<long>(spent);
-		interruptibleSleep(waitMs);
+		for (long left = waitMs; left > 0; )	// running_ を見ない=中断しない待ち
+		{
+			uint32_t c = (left > 200) ? 200u : static_cast<uint32_t>(left);
+			tool::sleep(c);
+			left -= static_cast<long>(c);
+		}
 	}
 
 	// 撮影終了: カメラの撮影モードを元に戻す(ダイアル無視OFF含む)。仕様8/CCAPI。
 	cameraController::restoreShootingMode(*dev_);
 
 	running_ = false;
-	if (onState_) { onState_(ST_IDLE); }
-	return ERR_HGC_OK;
+	// 通常終了は IDLE。再接続を諦めた場合は赤(ST_DISCONNECTED)のまま残し、ユーザーが中止するまで表示。
+	if (onState_) { onState_(gaveUp ? ST_DISCONNECTED : ST_IDLE); }
+	return gaveUp ? ERR_HGC_NOT_FOUND : ERR_HGC_OK;
 }

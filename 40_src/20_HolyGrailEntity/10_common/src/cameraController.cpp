@@ -156,6 +156,13 @@ errCode cameraController::restoreShootingMode(const class device& device)
 	return device.apiBase->restoreShootingMode();
 }
 
+// 接続維持用の無害なGET(待機中の定期送出・再接続後の到達確認に使う)。
+errCode cameraController::keepAlive(const class device& device)
+{
+	if (device.apiBase == nullptr) { return ERR_HGC_READY; }
+	return device.apiBase->keepAlive();
+}
+
 // 撮影開始
 // device :対象デバイス
 // return : ERR_HGC_OK: 成功
