@@ -622,6 +622,85 @@ namespace
 		for (auto& s : g_sessions) { int st = s->state.load(); if (st == HGE_ST_CAPTURING || st == HGE_ST_SEARCHING || st == HGE_ST_STOPPING || st == HGE_ST_DISCONNECTED) { agg = st; } }
 		g_state = agg;
 	}
+	// 撮影実行状況(/asset/capturing.json)に「撮影の意図」を追加/削除する(item2: 電源復帰/再起動の再開用)。
+	//  on  = 撮影開始(意図あり)。off = 完了 or 明示停止。
+	// 失敗(ERROR/接続断)や予期せぬ電源断では呼ばず意図を残す → 再起動時に再試行する。
+	// 何も撮影していないときは空配列 [] がファイルに残る(=その旨を明示)。ファイル自体は消さない。
+	void setCapturing(const std::string& planId, bool on)
+	{
+		if (planId.empty()) { return; }
+		std::vector<std::string> ids;
+		dataManager::loadCapturingIds(ids);
+		auto it = std::find(ids.begin(), ids.end(), planId);
+		bool changed = false;
+		if (on && it == ids.end())       { ids.push_back(planId); changed = true; }
+		else if (!on && it != ids.end()) { ids.erase(it);         changed = true; }
+		if (changed) { dataManager::saveCapturingIds(ids); }	// 空でも [] を書く(削除しない)
+	}
+
+	// --- item3: ccm露出をカメラ(isoList/ssList)・レンズ(fn/fnMax)の上下限へクランプ ---
+	std::string fmtFn(double f)
+	{
+		char b[16];
+		if (std::fabs(f - std::round(f)) < 0.05) { std::snprintf(b, sizeof(b), "%.0f", f); }
+		else                                     { std::snprintf(b, sizeof(b), "%.1f", f); }
+		return std::string(b);
+	}
+	// 露出(iso/ss/fn)1件をカメラ/レンズの範囲へクランプ。範囲を超えた値のみ限界値へ。
+	// 範囲内・リスト未設定・空文字はそのまま(初期値ccm単体=カメラ未規定では呼ばない)。
+	void clampExposureToGear(hgc::exposure& e, const hgc::camera& cam, const hgc::lens& lens)
+	{
+		auto clampList = [](std::string& cur, const std::vector<std::string>& list, expo::expoKind k)
+		{
+			if (cur.empty() || list.empty()) { return; }
+			double v = expo::parseValue(cur, k);
+			if (v <= 0) { return; }
+			const std::string* lo = nullptr; const std::string* hi = nullptr;
+			double loR = 1e300, hiR = -1e300;
+			for (const auto& s : list) { double r = expo::parseValue(s, k); if (r <= 0) { continue; } if (r < loR) { loR = r; lo = &s; } if (r > hiR) { hiR = r; hi = &s; } }
+			if      (lo && v < loR) { cur = *lo; }
+			else if (hi && v > hiR) { cur = *hi; }
+		};
+		clampList(e.iso, cam.isoList, expo::expoKind::iso);
+		clampList(e.ss,  cam.ssList,  expo::expoKind::ss);
+		// fn はレンズの開放(fn)〜最小絞り(fnMax)。fnMax 0=未設定なら下限のみ。
+		if (!e.fn.empty() && lens.fn > 0.0)
+		{
+			double v = expo::parseValue(e.fn, expo::expoKind::fn);
+			if      (v > 0 && v < lens.fn)               { e.fn = fmtFn(lens.fn); }
+			else if (lens.fnMax > 0.0 && v > lens.fnMax) { e.fn = fmtFn(lens.fnMax); }
+		}
+	}
+	void clampCcmSetToGear(astro::ccmSet& set, const hgc::camera& cam, const hgc::lens& lens)
+	{
+		auto one = [&](hgc::ccmBase* c) { if (!c) { return; } clampExposureToGear(c->limitBright, cam, lens); clampExposureToGear(c->limitDark, cam, lens); clampExposureToGear(c->initial, cam, lens); };
+		one(set.night.get()); one(set.sunrise.get()); one(set.sunset.get()); one(set.day.get());
+	}
+	// 編集中計画のccm一式を、その計画のカメラ/レンズの上下限へクランプする(item3)。
+	void clampPlanCcmToGear(void) { clampCcmSetToGear(g_planCcm, g_plan.camera, g_plan.lens); }
+
+	// --- item5: 名称の重複回避(リスト+分割バー画面共通の方針) ---
+	// names に重複しない名前を返す。base が空き=base、使用中=base+"1","2"...。
+	std::string uniqueName(const std::string& base, const std::vector<std::string>& names)
+	{
+		auto exists = [&](const std::string& n) { for (const auto& e : names) { if (e == n) { return true; } } return false; };
+		if (!exists(base)) { return base; }
+		for (int i = 1; i < 100000; ++i) { std::string c = base + std::to_string(i); if (!exists(c)) { return c; } }
+		return base;
+	}
+	// 保存済み全計画の名称(excludeId は除外=改名時の自分自身を除く)。編集中計画は未保存の現名を使う。
+	std::vector<std::string> collectPlanNames(const std::string& excludeId)
+	{
+		std::vector<std::string> names;
+		for (const std::string& id : dataManager::listPlanIds())
+		{
+			if (id == excludeId) { continue; }
+			if (id == g_editId && g_planReady) { names.push_back(g_plan.name); continue; }
+			std::string saved, pj, cj; hgc::cs cs;
+			if (dataManager::loadPlanFile(id, saved) && dataManager::splitSavedPlan(saved, pj, cj) && csjson::fromJson(pj, cs)) { names.push_back(cs.name); }
+		}
+		return names;
+	}
 	void notifyStateP(const std::string& planId, int s)
 	{
 		std::string j = "{\"planId\":\"" + jesc(planId) + "\",\"state\":" + std::to_string(s) + "}";
@@ -746,6 +825,11 @@ namespace
 					S->logCapturing = false; dataManager::logEvent("STOP", "");
 				}
 				S->state = s; notifyStateP(S->planId, s); refreshAggregateState();
+				// 実行状況: 撮影窓を終えてのIDLE(=完了)のみ意図を消す。失敗(ERROR/接続断)や
+				// 窓内での停止/シャットダウンでは残し、再起動時に再開できるようにする。
+				if (s == HGE_ST_IDLE &&
+				    static_cast<long long>(std::time(nullptr)) >= hgc::toUnixUtc(S->plan.end, g_offMin))
+				{ setCapturing(S->planId, false); }
 			},
 			[S](const captureRunner::progressInfo& p) {
 				g_pgFrame = p.frame; g_pgTotal = p.total; g_pgRemain = p.remainSec; g_pgElapsed = p.elapsedSec;
@@ -802,6 +886,30 @@ namespace
 		g_sessions.erase(g_sessions.begin() + i);
 		notifyStateP(pid, HGE_ST_IDLE);
 		refreshAggregateState();
+		// 注: 実行状況ファイルはここでは触らない。明示停止は hge_captureStopPlan で off にし、
+		//     シャットダウン(全停止)では意図を残して再起動時に再開できるようにする。
+	}
+
+	// 実行が終了した(ランナー停止)セッションを掃除する。IDLE/ERROR は除去して
+	// 再開始できるようにし、エッジが ERROR 表示のまま固まるのを防ぐ。DISCONNECTED
+	// (接続断=赤表示)はユーザーが中止するまで残す。ランナー停止済みのみ対象なので安全。
+	void reapDeadSessions(void)
+	{
+		bool removed = false;
+		for (size_t i = 0; i < g_sessions.size(); )
+		{
+			int  st      = g_sessions[i]->state.load();
+			bool running = g_sessions[i]->runner && g_sessions[i]->runner->isRunning();
+			if (!running && (st == HGE_ST_IDLE || st == HGE_ST_ERROR))
+			{
+				if (g_sessions[i]->startThread) { ossc::threadEnd(g_sessions[i]->startThread); g_sessions[i]->startThread = nullptr; }
+				if (g_sessions[i]->runner)      { g_sessions[i]->runner->stop(); }
+				g_sessions.erase(g_sessions.begin() + i);
+				removed = true;
+			}
+			else { ++i; }
+		}
+		if (removed) { refreshAggregateState(); }
 	}
 }
 
@@ -1057,7 +1165,10 @@ int32_t hge_newPlan(const char* presetName)
 {
 	(void)presetName;	// Phase0: 出荷時設定のみ(プリセット連携は後続フェーズ)
 	if (!g_planReady) { loadFixedPlanImpl(); }	// g_offMin 確保
+	std::string nm = uniqueName("新規撮影計画", collectPlanNames(""));	// item5: 既存と重複しない名前
 	makeFactoryCurrent("新規撮影計画");
+	g_plan.name = nm;
+	buildScheduleJson();
 	g_editId = makePlanId();
 	g_planReady = true;
 	dataManager::savePlanFile(g_editId, wrapCurrentPlan());
@@ -1071,7 +1182,7 @@ int32_t hge_copyPlan(const char* id)
 	if (!g_planReady) { loadFixedPlanImpl(); }
 	errCode e = loadPlanById(std::string(id));	// 元計画を現在へ読み込む
 	if (e != ERR_HGC_OK) { return e; }
-	g_plan.name += " コピー";
+	g_plan.name = uniqueName(g_plan.name + " コピー", collectPlanNames(""));	// item5: 重複回避
 	g_editId = makePlanId();			// 別 id で複製保存
 	buildScheduleJson();				// 名称変更を反映
 	dataManager::savePlanFile(g_editId, wrapCurrentPlan());
@@ -1142,6 +1253,7 @@ int32_t hge_setPlanCcmJson(const char* json, int32_t len)
 	{ return ERR_HGC_JSON_PARSE; }
 	g_planCcm  = set;
 	g_planMoon = moon ? moon : dataManager::factoryMoon();
+	clampPlanCcmToGear();	// item3: 計画のカメラ/レンズ上下限へccm露出をクランプ(初期値選択も含む)
 	errCode e = astro::buildSchedule(g_plan, g_planCcm, g_offMin);
 	if (e != ERR_HGC_OK) { return e; }
 	// 仕様 7.4.2: ssが撮影周期-2を超えたら撮影周期を自動的に最長ss+2へ伸ばす。
@@ -1170,6 +1282,11 @@ int32_t hge_renamePlan(const char* id, const char* name)
 	if (id == nullptr || id[0] == '\0' || name == nullptr) { return ERR_HGC_INVALID_ARG; }
 	if (!g_planReady) { errCode e = loadFixedPlanImpl(); if (e != ERR_HGC_OK) { return e; } }
 	std::string sid = id;
+	// item5: 他の計画と同名にはできない(自分自身は除外)。重複なら拒否しUIがポップアップ表示。
+	{
+		std::vector<std::string> others = collectPlanNames(sid);
+		for (const auto& nm : others) { if (nm == std::string(name)) { return ERR_HGC_NAME_DUP; } }
+	}
 	if (sid == g_editId)
 	{
 		g_plan.name = name;
@@ -1324,9 +1441,14 @@ int32_t hge_getExpoValuesJson(char* buf, int32_t* inoutLen)
 	if (!g_planReady) { loadFixedPlanImpl(); }
 	double fmin = (g_plan.lens.fn > 0.0) ? g_plan.lens.fn : 1.0;
 	double fmax = (g_plan.lens.fnMax > 0.0) ? g_plan.lens.fnMax : 32.0;	// レンズのF最大があれば使う
-	auto iso = expo::standardValues(expo::expoKind::iso);
-	auto ss  = expo::standardValues(expo::expoKind::ss);
-	auto fn  = expo::standardFn(fmin, fmax);
+	// item3: iso/ss はスライダ選択範囲も計画のカメラの設定可能範囲(isoList/ssList)に限定する。
+	// カメラ未設定時は標準1/3段にフォールバック。ss の "Bulb" はスライダ対象外として除く。
+	std::vector<std::string> iso = !g_plan.camera.isoList.empty()
+	                               ? g_plan.camera.isoList : expo::standardValues(expo::expoKind::iso);
+	std::vector<std::string> ss;
+	if (!g_plan.camera.ssList.empty()) { for (const auto& s : g_plan.camera.ssList) { if (s != "Bulb") { ss.push_back(s); } } }
+	else                               { ss = expo::standardValues(expo::expoKind::ss); }
+	auto fn  = expo::standardFn(fmin, fmax);	// fn はレンズの開放〜最小絞り(従来どおり)
 	auto arr = [](const std::vector<std::string>& v) {
 		std::string s = "[";
 		for (size_t i = 0; i < v.size(); ++i) { if (i) { s += ","; } s += "\"" + v[i] + "\""; }
@@ -1462,6 +1584,7 @@ int32_t hge_setPlanCamera(const char* name)
 	hgc::camera c;
 	if (!dataManager::findOwnedCamera(std::string(name), c)) { return ERR_HGC_NO_ELEMENT; }
 	g_plan.camera = c;
+	clampPlanCcmToGear();	// item3: 新しいカメラの上下限へccm露出をクランプ
 	// センサーサイズ/画角が変わると太陽の画角侵入時刻が変わるためスケジュールを再生成する。
 	errCode e = astro::buildSchedule(g_plan, g_planCcm, g_offMin);
 	if (e != ERR_HGC_OK) { return e; }
@@ -1477,6 +1600,7 @@ int32_t hge_setPlanLens(const char* name)
 	hgc::lens l;
 	if (!dataManager::findOwnedLens(std::string(name), l)) { return ERR_HGC_NO_ELEMENT; }
 	g_plan.lens = l;
+	clampPlanCcmToGear();	// item3: 新しいレンズの開放/最小絞りへfnをクランプ
 	// 焦点距離が変わると画角が変わるためスケジュールを再生成する。
 	errCode e = astro::buildSchedule(g_plan, g_planCcm, g_offMin);
 	if (e != ERR_HGC_OK) { return e; }
@@ -1611,11 +1735,13 @@ int32_t hge_captureStartPlan(const char* planId_)
 	if (!g_planReady) { errCode e = loadFixedPlanImpl(); if (e != ERR_HGC_OK) { return e; } }
 	std::string planId = (planId_ && planId_[0]) ? std::string(planId_) : g_editId;
 	if (planId.empty()) { return ERR_HGC_INVALID_ARG; }
-	if (sessionFor(planId)) { return ERR_HGC_INVALID_STATE; }	// 既に撮影中
+	reapDeadSessions();		// 終了/エラーで残った同名セッションを掃除し、再開始できるようにする
+	if (sessionFor(planId)) { return ERR_HGC_INVALID_STATE; }	// まだ実行中なら二重開始しない
 	if (g_sessions.size() >= MAX_CONCURRENT) { notifyError(ERR_HGC_INVALID_STATE, "max concurrent reached"); return ERR_HGC_INVALID_STATE; }
 
 	auto sess = std::make_unique<captureSession>();
 	sess->planId = planId;
+	sess->state  = HGE_ST_SEARCHING;	// 起動シーケンス実行前から非IDLEにし、reapDeadSessions に消されないようにする
 	if (planId == g_editId)
 	{
 		sess->plan = g_plan; sess->planCcm = g_planCcm; sess->planMoon = g_planMoon;	// 編集中スナップショット
@@ -1634,6 +1760,7 @@ int32_t hge_captureStartPlan(const char* planId_)
 	g_sessions.push_back(std::move(sess));
 	ossc::THREAD_FUNC fn = [raw](void*) -> errCode { return startSessionSequence(raw); };
 	raw->startThread = ossc::threadNet(fn, nullptr);
+	setCapturing(planId, true);	// item2: 撮影意図を記録(電源復帰/再起動で再開する)
 	return ERR_HGC_OK;
 }
 
@@ -1641,6 +1768,7 @@ int32_t hge_captureStartPlan(const char* planId_)
 int32_t hge_captureStopPlan(const char* planId_)
 {
 	std::string planId = (planId_ && planId_[0]) ? std::string(planId_) : g_editId;
+	setCapturing(planId, false);	// item2: ユーザーによる明示停止 → 実行意図を消す(再起動で再開しない)
 	for (size_t i = 0; i < g_sessions.size(); ++i)
 	{
 		if (g_sessions[i]->planId == planId) { stopSessionAt(i); return ERR_HGC_OK; }
@@ -1660,6 +1788,31 @@ int32_t hge_getStatePlan(const char* planId_)
 // --- legacy(無引数。編集対象計画に作用) ---
 int32_t hge_captureStart(void) { return hge_captureStartPlan(nullptr); }
 int32_t hge_captureStop(void)  { return hge_captureStopPlan(nullptr); }
-int32_t hge_getState(void)     { return g_state.load(); }
+int32_t hge_getState(void)     { reapDeadSessions(); return g_state.load(); }
+
+// 電源復帰/アプリ再起動時に、保存した撮影実行状況(/asset/capturing.json)を読み、
+// 撮影中だった計画を再開する(item2)。撮影窓を過ぎていればランナーが即終了する。
+// return: 再開を試みた計画数。
+int32_t hge_resumeCapture(void)
+{
+	if (!g_inited) { return ERR_HGC_READY; }
+	if (!g_planReady) { loadFixedPlanImpl(); }
+	std::vector<std::string> ids;
+	dataManager::loadCapturingIds(ids);
+	int n = 0;
+	for (const auto& id : ids)
+	{
+		if (id.empty() || sessionFor(id)) { continue; }		// 空/既に動作中はスキップ
+		std::string saved;
+		if (!dataManager::loadPlanFile(id, saved)) { setCapturing(id, false); continue; }	// 計画ファイルが無い→意図クリア
+		// 撮影窓が既に終了している計画は再開不要 → 意図をクリアして次回起動で蒸し返さない。
+		std::string pj, cj; hgc::cs cs;
+		if (dataManager::splitSavedPlan(saved, pj, cj) && csjson::fromJson(pj, cs) &&
+		    static_cast<long long>(std::time(nullptr)) >= hgc::toUnixUtc(cs.end, g_offMin))
+		{ setCapturing(id, false); continue; }
+		if (hge_captureStartPlan(id.c_str()) == ERR_HGC_OK) { ++n; }
+	}
+	return n;
+}
 
 } // extern "C"

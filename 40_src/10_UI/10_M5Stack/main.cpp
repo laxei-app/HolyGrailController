@@ -107,10 +107,28 @@ static bool  g_dirty = true;
 static bool  g_edgeUp = false;	// ETPサーバ起動済みか(WiFi接続後に一度)
 
 // スマホから受信した計画 id のみリスト表示する(エッジ自身の FixedPlan 等は出さない)。
+// 再起動後も受信済み計画を表示できるよう /asset/recvPlans.json に永続化する(item1)。
 static std::set<std::string> g_recvPlans;
+static std::string recvPlansPath(void) { return osfile::dir("asset") + "/recvPlans.json"; }
+static void saveRecvPlans(void)
+{
+	json j = json::array();
+	for (const auto& id : g_recvPlans) { j.push_back(id); }
+	std::string s = j.dump();
+	osfile::writeAll(recvPlansPath(), s.data(), s.size());
+}
+static void loadRecvPlans(void)
+{
+	std::string s;
+	if (!osfile::readAll(recvPlansPath(), s) || s.empty()) { return; }
+	json j = json::parse(s, nullptr, false);
+	if (!j.is_array()) { return; }
+	for (const auto& e : j) { if (e.is_string()) { g_recvPlans.insert(e.get<std::string>()); } }
+	g_listDirty = true; g_dirty = true;
+}
 void edgeAddReceivedPlan(const std::string& id)
 {
-	if (!id.empty()) { g_recvPlans.insert(id); g_listDirty = true; g_dirty = true; }
+	if (!id.empty()) { g_recvPlans.insert(id); saveRecvPlans(); g_listDirty = true; g_dirty = true; }
 }
 
 // 計画名ビットマップ(スマホから ETP C_NAME_BMP で計画idごとに受信。1bpp MSB先頭, 1=白)。
@@ -134,6 +152,19 @@ void edgeSetNameBitmap(const std::string& id, const uint8_t* data, int len)
 	slot.px = nb; slot.w = w; slot.h = h;
 	g_dirty = true;
 }
+
+// 受信計画をエッジから削除する(item4)。受信リスト・プランファイル・名前ビットマップを消す。
+void edgeRemoveReceivedPlan(const std::string& id)
+{
+	if (id.empty()) { return; }
+	if (g_recvPlans.erase(id) > 0) { saveRecvPlans(); }
+	hge_deletePlan(id.c_str());
+	auto it = g_nameBmps.find(id);
+	if (it != g_nameBmps.end()) { if (it->second.px) { free(it->second.px); } g_nameBmps.erase(it); }
+	g_listDirty = true; g_dirty = true;
+}
+// 削除確認ダイアログ対象の計画id(空=非表示)。item4。
+static std::string g_confirmDelId;
 
 static constexpr int HEAD_H   = 28;
 static constexpr int FOOT_H   = 32;
@@ -390,6 +421,16 @@ static void renderPlan(void)
 			}
 			g_cv.setTextColor(TFT_LIGHTGREY);
 			g_cv.setCursor(52, ry0 + 30); g_cv.print((mmddhhmm(st) + " -> " + mmddhhmm(en)).c_str());
+			// 右端: ゴミ箱アイコン(タップで削除確認。item4)。
+			{
+				int tx0 = 290, tyc = ry0 + rowH / 2;
+				uint16_t tcol = M5.Display.color565(0xCC, 0x44, 0x44);
+				g_cv.fillRect(tx0 - 2, tyc - 8, 24, 3, tcol);		// ふた
+				g_cv.fillRect(tx0 + 6, tyc - 11, 6, 3, tcol);		// 取っ手
+				g_cv.fillRect(tx0, tyc - 4, 20, 14, tcol);			// 本体
+				g_cv.drawFastVLine(tx0 + 6,  tyc - 1, 8, TFT_BLACK);	// 溝
+				g_cv.drawFastVLine(tx0 + 13, tyc - 1, 8, TFT_BLACK);
+			}
 			g_cv.drawFastHLine(0, ry1 - 1, 320, M5.Display.color565(0x33, 0x33, 0x33));
 		}
 		g_planHits.push_back({ ry0, ry1, id, capturing, capturable });
@@ -400,6 +441,20 @@ static void renderPlan(void)
 		g_cv.setTextColor(TFT_LIGHTGREY);
 		g_cv.setCursor(16, top + 24); g_cv.print("計画なし");
 		g_cv.setCursor(16, top + 48); g_cv.print("スマホから転送してください");
+	}
+
+	// 削除確認ダイアログ(item4)。はい=削除 / いいえ=取消。ボタン座標は onTap と一致させる。
+	if (!g_confirmDelId.empty())
+	{
+		int bx = 30, by = 84;
+		g_cv.fillRoundRect(bx, by, 260, 92, 6, M5.Display.color565(0x22, 0x22, 0x22));
+		g_cv.drawRoundRect(bx, by, 260, 92, 6, TFT_WHITE);
+		g_cv.setTextColor(TFT_WHITE);
+		g_cv.setCursor(bx + 16, by + 14); g_cv.print("削除しますか？");
+		g_cv.fillRoundRect(bx + 20,  by + 52, 90, 30, 4, M5.Display.color565(0xCC, 0x44, 0x44));
+		g_cv.setCursor(bx + 50,  by + 60); g_cv.print("はい");
+		g_cv.fillRoundRect(bx + 150, by + 52, 90, 30, 4, M5.Display.color565(0x55, 0x55, 0x55));
+		g_cv.setCursor(bx + 172, by + 60); g_cv.print("いいえ");
 	}
 
 	g_cv.pushSprite(0, 0);
@@ -545,6 +600,15 @@ static void redraw(void)
 static void onTap(int x, int y)
 {
 	if (g_provMode) { g_provMode = false; g_dirty = true; return; }
+	if (!g_confirmDelId.empty())	// 削除確認ダイアログ表示中(item4): はい/いいえ のみ受ける
+	{
+		if (y >= 136 && y < 166)
+		{
+			if (x >= 50 && x < 140)       { edgeRemoveReceivedPlan(g_confirmDelId); g_confirmDelId.clear(); }
+			else if (x >= 180 && x < 270) { g_confirmDelId.clear(); g_dirty = true; }
+		}
+		return;
+	}
 	for (const auto& h : g_planHits)
 	{
 		if (y >= h.y0 && y < h.y1)
@@ -554,6 +618,10 @@ static void onTap(int x, int y)
 				if (h.capturing)       { hge_captureStopPlan(h.id.c_str()); }
 				else if (h.capturable) { hge_captureStartPlan(h.id.c_str()); }
 				g_listDirty = true; g_dirty = true;
+			}
+			else if (x >= 280)	// 右端のゴミ箱: 削除確認ダイアログを出す(item4)
+			{
+				g_confirmDelId = h.id; g_dirty = true;
 			}
 			break;
 		}
@@ -649,6 +717,8 @@ void setup(void)
 	// 起動時のログ整理(当日以外が5件以上なら古い順に削除、最新4件まで残す)。永続化したTZで「当日」を判定。
 	hge_pruneOldLogs(osclock::utcOffsetMin());
 	hge_loadFixedPlan();		// 出荷時設定(dataManager)から固定撮影計画を生成
+	loadRecvPlans();			// 受信済み計画id を復元(item1。再起動後も表示する)
+	// 注意: 撮影再開(hge_resumeCapture)は SSDP でカメラを探すため WiFi 接続後に行う(loop内)。
 	g_state = hge_getState();
 	redraw();
 }
@@ -671,6 +741,8 @@ void loop(void)
 			{
 				etpEdge::setup(g_devName);	// プロビジョニングで設定した端末名で検索応答する(スマホは名称で探す)
 				g_edgeUp = true;
+				hge_resumeCapture();		// item2: WiFi接続後に撮影再開(SSDPでカメラを探せる)
+				g_state = hge_getState();
 			}
 			g_dirty = true;
 		}

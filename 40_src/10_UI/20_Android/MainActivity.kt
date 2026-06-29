@@ -193,6 +193,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
         restorePlan()    // 保存済み計画があれば復元、無ければ出荷時計画を表示(再生成しない)
         refreshPlanList()   // 複数計画リスト(分割バー上)を構築
         restoreEdgeState()  // 再起動時: エッジが撮影中なら状態を復元(item9)
+        resumePhoneCapture()  // 再起動時: スマホ直結で撮影中だった計画を再開(item2)
+    }
+
+    // アプリ再起動時、スマホ直結で撮影中だった計画(/asset/capturing.json)を再開する(item2)。
+    // 開始した計画の状態は EV_STATE 通知でUIへ反映される。
+    private fun resumePhoneCapture() {
+        Thread {
+            val n = HgeNative.nativeResumeCapture()
+            if (n > 0) runOnUiThread { refreshPlanList(); updateReadOnly() }
+        }.start()
     }
 
     // アプリ再起動時、ネットワーク上のエッジ端末が撮影中なら状態を復元する(§7.3.3/§8)。
@@ -213,21 +223,24 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 try {
                     val o = JSONObject(pj)
                     val st = o.optInt("state")
-                    if (st == HgeNative.ST_CAPTURING || st == HgeNative.ST_SEARCHING) {
+                    if (st == HgeNative.ST_CAPTURING || st == HgeNative.ST_SEARCHING || st == HgeNative.ST_DISCONNECTED) {
                         val nm = o.optString("name")
                         var pid = ""
                         try {
                             val pa = JSONArray(HgeNative.nativeListPlans())
                             for (k in 0 until pa.length()) { val po = pa.getJSONObject(k); if (po.optString("name") == nm) { pid = po.optString("id"); break } }
                         } catch (_: Exception) {}
+                        val disc = (st == HgeNative.ST_DISCONNECTED)
                         runOnUiThread {
                             // 復元: このエッジ(名称)を登録一覧へ統合し、復元中の計画のエッジ名称として設定する。
                             updateEdgeIp(ed.name, ed.ip, ed.port)
                             if (pid.isNotEmpty()) setPlanEdgeName(pid, ed.name)
                             refreshEdgeSpinner()
                             edgeCapturing = true; edgeCapturingPlanId = pid
-                            if (pid.isNotEmpty()) { capturingPlans.add(pid); startBlink(); refreshPlanList(); updateReadOnly() }
-                            captureStatus.text = "● エッジ撮影中(復元)"; captureStatus.visibility = View.VISIBLE
+                            if (pid.isNotEmpty()) { capturingPlans.add(pid); if (disc) disconnectedPlans.add(pid); startBlink(); refreshPlanList(); updateReadOnly() }
+                            if (disc) { captureStatus.text = "● カメラ接続が切れました(エッジ)"; captureStatus.setTextColor(0xFFD32F2F.toInt()) }
+                            else { captureStatus.text = "● エッジ撮影中(復元)"; captureStatus.setTextColor(0xFF2E7D32.toInt()) }
+                            captureStatus.visibility = View.VISIBLE
                             handler.postDelayed(edgePoll, 2000)
                         }
                         return@Thread
@@ -881,6 +894,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun commitRename(orig: String, newName: String) {
         val nm = newName.trim()
         if (nm.isEmpty() || nm == orig) return
+        if (presetCcms.any { it.optString("name") == nm }) { showNameInUse(nm); rebuildPresetList(); return }  // item5: 重複拒否
         val p = presetCcms.firstOrNull { it.optString("name") == orig } ?: return
         p.put("name", nm)
         HgeNative.nativeSetCcmPreset(presetType, orig, p.toString())
@@ -1115,6 +1129,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // 一覧の1行(タップで選択。選択中は太字。右にコンテキストメニュー「⋮」)。
+    // item5: 名称が既に使われているときのポップアップ(全リスト+分割バー画面で共通)。
+    private fun showNameInUse(name: String) {
+        AlertDialog.Builder(this).setMessage("「$name」は使用されています")
+            .setPositiveButton("OK", null).show()
+    }
+    // item5: 重複チェック用の現在の名称一覧。
+    private fun ownedCameraNames(): List<String> { val a = camArray(HgeNative.nativeGetOwnedCameras()); return (0 until a.length()).mapNotNull { a.optJSONObject(it)?.optString("name") } }
+    private fun ownedLensNames(): List<String> { val a = camArray(HgeNative.nativeGetOwnedLenses()); return (0 until a.length()).mapNotNull { a.optJSONObject(it)?.optString("name") } }
+
     // onRename を渡すと名称をインライン編集できる(タップで選択、確定/フォーカス外で改名)。全分割バー画面で共通。
     private fun listRow(title: String, sub: String, selected: Boolean, onSelect: () -> Unit,
                         menuItems: List<Pair<String, () -> Unit>>, onRename: ((String) -> Unit)? = null): View {
@@ -1345,6 +1368,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun commitCameraRename(orig: String, newName: String) {
         val nm = newName.trim()
         if (nm.isEmpty() || nm == orig) return
+        if (ownedCameraNames().any { it == nm }) { showNameInUse(nm); buildCameraList(); return }  // item5: 重複拒否
         selCamera = nm
         persistCameraDetail(rebuild = true, origName = orig)
     }
@@ -1463,6 +1487,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun commitLensRename(orig: String, newName: String) {
         val nm = newName.trim()
         if (nm.isEmpty() || nm == orig) return
+        if (ownedLensNames().any { it == nm }) { showNameInUse(nm); buildLensList(); return }  // item5: 重複拒否
         selLens = nm
         persistLensDetail(rebuild = true, origName = orig)
     }
@@ -1598,7 +1623,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 planExec.execute {
                     HgeNative.nativeSetPlanCamera(name)
                     val sched = HgeNative.nativeScheduleJson()
-                    runOnUiThread { latestSchedule = sched; updatePlanDisplay(sched) }
+                    runOnUiThread { latestSchedule = sched; updatePlanDisplay(sched); reloadExpoEditors() }  // item3: iso/ss範囲をカメラに合わせ直す
                 }
             }.show()
     }
@@ -1614,7 +1639,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 planExec.execute {
                     HgeNative.nativeSetPlanLens(name)
                     val sched = HgeNative.nativeScheduleJson()
-                    runOnUiThread { latestSchedule = sched; updatePlanDisplay(sched); loadExpoValues() }
+                    runOnUiThread { latestSchedule = sched; updatePlanDisplay(sched); reloadExpoEditors() }  // item3: fn範囲をレンズに合わせ直す
                 }
             }.show()
     }
@@ -1979,6 +2004,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         ssDisp = ssValues.reversed()
         fnDisp = fnValues
     }
+
+    // item3: カメラ/レンズ/計画が変わったら露出値リストを取り直し、スライダ(エディタ)を範囲ごと作り直す。
+    // ExposureEditor は構築時にリストを取り込むため、範囲反映には再構築が必要。
+    private fun reloadExpoEditors() { loadExpoValues(); buildExposureEditors() }
 
     private fun buildExposureEditors() {
         fixEditor = ExposureEditor(findViewById(R.id.edit_fix_container))
@@ -2510,7 +2539,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     planListScroll.requestFocus()   // 隣行へ飛ばずキーボードを閉じる
                     (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
                         .hideSoftInputFromWindow(v.windowToken, 0)
-                    if (nm.isNotEmpty()) planExec.execute { HgeNative.nativeRenamePlan(id, nm) }
+                    if (nm.isNotEmpty()) planExec.execute {
+                        val r = HgeNative.nativeRenamePlan(id, nm)   // item5: 重複なら ERR_NAME_DUP
+                        runOnUiThread { if (r == HgeNative.ERR_NAME_DUP) showNameInUse(nm); refreshPlanList() }
+                    }
                     true
                 } else false
             }
@@ -2533,7 +2565,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (id == currentPlanId) return
         planExec.execute {
             HgeNative.nativeSelectPlan(id)   // EV_SCHEDULE で詳細表示が更新される
-            runOnUiThread { currentPlanId = id; refreshPlanList() }
+            runOnUiThread { currentPlanId = id; refreshPlanList(); reloadExpoEditors() }  // item3: 計画のカメラ/レンズに合わせ露出スライダ範囲を更新
         }
     }
 

@@ -44,6 +44,7 @@ enum errCode : uint32_t
 	ERR_HGC_INVALID_ARG,		// 引数不正
 	ERR_HGC_INVALID_STATE,		// 状態不正(その操作が許されない状態)
 	ERR_HGC_JSON_PARSE,			// JSON 解析失敗
+	ERR_HGC_NAME_DUP,			// 名称が既に使用されている(item5: リスト内で重複)
 
 	//
 };

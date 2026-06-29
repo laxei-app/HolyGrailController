@@ -120,6 +120,11 @@ public:
 	// 保存済み撮影計画の id 一覧(昇順)。plan_<id>.json から id 部分を取り出す。
 	static std::vector<std::string> listPlanIds(void);
 
+	// --- 撮影実行状況の永続化(/asset/capturing.json。電源復帰/再起動時の再開用。item2) ---
+	// 現在撮影中の計画id一覧を保存/読込する。撮影開始/停止時に更新し、起動時に読んで再開する。
+	static bool saveCapturingIds(const std::vector<std::string>& ids);
+	static bool loadCapturingIds(std::vector<std::string>& out);
+
 	// --- 旧単一ファイル(plan.json)の移行用(後方互換) ---
 	// 撮影計画(cs)の自己完結JSONを /plan/plan.json へ保存する。
 	static bool savePlanJson(const std::string& json);

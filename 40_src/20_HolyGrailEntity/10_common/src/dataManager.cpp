@@ -196,6 +196,35 @@ std::vector<std::string> dataManager::listPlanIds(void)
 	return ids;
 }
 
+bool dataManager::saveCapturingIds(const std::vector<std::string>& ids)
+{
+	std::string d = osfile::dir("asset");
+	if (d.empty()) { return false; }
+	std::string s = "[";
+	for (size_t i = 0; i < ids.size(); ++i) { if (i) { s += ","; } s += "\"" + ids[i] + "\""; }
+	s += "]";
+	return osfile::writeAll(d + "/capturing.json", s.data(), s.size());
+}
+
+bool dataManager::loadCapturingIds(std::vector<std::string>& out)
+{
+	out.clear();
+	std::string d = osfile::dir("asset");
+	if (d.empty()) { return false; }
+	std::string s;
+	if (!osfile::readAll(d + "/capturing.json", s)) { return false; }
+	// 簡易パース: "id" を順に取り出す(idは yyyyMMdd-HHmmss 等で特殊文字を含まない)。
+	size_t i = 0;
+	while (i < s.size())
+	{
+		size_t q1 = s.find('"', i); if (q1 == std::string::npos) { break; }
+		size_t q2 = s.find('"', q1 + 1); if (q2 == std::string::npos) { break; }
+		out.push_back(s.substr(q1 + 1, q2 - q1 - 1));
+		i = q2 + 1;
+	}
+	return true;
+}
+
 bool dataManager::savePlanJson(const std::string& json)
 {
 	std::string p = planPath();

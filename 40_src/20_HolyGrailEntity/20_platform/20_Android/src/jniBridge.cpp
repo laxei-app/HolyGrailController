@@ -90,6 +90,12 @@ Java_app_laxei_holygrail_HgeNative_nativeGetState(JNIEnv* /*env*/, jobject /*thi
 	return hge_getState();
 }
 
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeResumeCapture(JNIEnv* /*env*/, jobject /*thiz*/)
+{
+	return hge_resumeCapture();
+}
+
 // --- 並行撮影(計画id指定) ---
 JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeCaptureStartPlan(JNIEnv* env, jobject /*thiz*/, jstring id)
