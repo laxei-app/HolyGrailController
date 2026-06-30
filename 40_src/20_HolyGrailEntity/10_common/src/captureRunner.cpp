@@ -258,6 +258,8 @@ errCode captureRunner::loop(void)
 	bool gaveUp = false;		// 再接続を諦めた(終了時に赤=ST_DISCONNECTED のまま残す)
 	// 撮影窓まで待機中の接続維持GETの最終送出時刻。
 	long long lastKeepAlive = static_cast<long long>(std::time(nullptr));
+	int  waitFailStreak = 0;	// 待機中の keepAlive 連続失敗数(健全性チェック=先回り再接続の判定用)
+	bool waitDisconnected = false;	// 待機中に接続断と判定済みか(復帰でセッション張り直しが要る)
 
 	const long long startSec = hgc::toUnixUtc(plan_.start, off_);
 	const long long endSec   = hgc::toUnixUtc(plan_.end, off_);
@@ -328,10 +330,38 @@ errCode captureRunner::loop(void)
 		if (now < startSec)
 		{	// 開始前は待つ。無通信が続くとカメラがWi-Fi/CCAPIセッションを切るため、
 			// 約60秒ごとに無害なGET(keepAlive)を送って接続を維持する。
+			// ※実機検証(2026-06-30): keepAliveを止めると autopoweroff=disable でも約53分の待機で
+			//   カメラがネットワークから脱落し、窓開始で1枚も撮れず・SSDP/IP直結とも再接続不可になった。
+			//   寝たカメラは起こせないため keepAlive は必須(撤去不可)。
 			if (now - lastKeepAlive >= kKeepAliveSec)
 			{
-				cameraController::keepAlive(*dev_);
 				lastKeepAlive = now;
+				// 健全性チェック: keepAlive の到達可否を見る。連続失敗したら「窓が来る前に」その場で
+				// 先回り再接続(SSDP再探索→直近IP直結)し、窓開始の取りこぼしを防ぐ。keepAlive が
+				// 効いている限りカメラはネットワーク上に留まるので、これは一時的なブリップへの早期回復。
+				const bool alive = (cameraController::keepAlive(*dev_) == ERR_HGC_OK);
+				if (!waitDisconnected)
+				{
+					if (alive) { waitFailStreak = 0; }
+					else if (++waitFailStreak >= kWaitMaxFail)
+					{	// 連続失敗で接続断と判定(検知ログは1回だけ)。以降は下の復帰ブロックで毎周期再試行。
+						waitDisconnected = true;
+						if (onError_) { onError_(ERR_HGC_NOT_FOUND, "待機中に接続断を検知 → 先回り再接続"); }
+						if (onState_) { onState_(ST_DISCONNECTED); }	// 待機中も赤を反映
+					}
+				}
+				if (waitDisconnected)
+				{
+					// 断検知後は窓開始まで毎周期、SSDP再探索→直近IP直結で復帰を試す。
+					// 電源復帰等でセッション(LV/M/autopoweroff)は失われているため、同一IPで keepAlive が
+					// 通る場合でもこの経路を通し、onReconnect_ で再特定後に establishSession で必ず張り直す。
+					if (onReconnect_ && onReconnect_() && establishSession())
+					{
+						waitDisconnected = false; waitFailStreak = 0;
+						if (onState_) { onState_(ST_CAPTURING); }	// 復帰(緑へ)
+					}
+					// 復帰できなければ次の keepAlive 周期で再試行(窓開始まで何度でも)。
+				}
 			}
 			interruptibleSleep(500);
 			continue;

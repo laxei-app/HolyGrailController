@@ -727,6 +727,15 @@ namespace
 	errCode startSessionSequence(captureSession* S)
 	{
 		S->state = HGE_ST_SEARCHING; notifyStateP(S->planId, HGE_ST_SEARCHING); refreshAggregateState();
+		// 撮影開始操作をした時点(=実際の撮影開始時刻より前。例: 1時間後開始の計画でもタップ時)で
+		// カメラ検索が走ることを記録する。後続の「カメラ接続 …」(成功経路) または ERR「…見つかりません」と
+		// 対になる。タップ時刻はこのログのタイムスタンプ、撮影窓は detail で分かる。
+		{
+			std::string d = "撮影開始操作 計画=" + S->plan.name +
+			                " 窓=" + dtToStr(S->plan.start) + "~" + dtToStr(S->plan.end) +
+			                " カメラ検索(SSDP)開始";
+			dataManager::logEvent("NET", d.c_str());
+		}
 		// 撮影開始(=このシーケンスの実行)の都度、計画のカメラを SSDP で検索する。
 		//  ・カメラのIPはオートパワーオフ→再起動(DHCP)で変わるため、前回のIPは使い回さず毎回探す。
 		//  ・撮影開始"時刻"ではなく「撮影開始操作をした時点」で検索する(本関数はワーカーで即実行され、
@@ -764,6 +773,7 @@ namespace
 		// SSDP広告を止めるカメラ(スマホ接続後など)対策: 計画カメラの直近IPが分かっていれば、
 		// SSDPで見つからなくてもそのIPへCCAPI直接接続を試し、応答すれば候補(found)に加える。
 		// 本人確認(serial/model)は下の特定処理に委ねる。serial未解決の計画は最後に繋がったhostを使う。
+		std::string manualUrl;	// 直近IP直結で追加した候補のurlAccess(どの経路で繋がったかのログ判定用)
 		{
 			std::string host = dataManager::loadCameraHost(wantSerial);
 			if (!host.empty())
@@ -776,6 +786,7 @@ namespace
 					std::vector<class device> man;
 					if (cameraController::connectManual(man, host) > 0 && man[0].apiBase)
 					{
+						manualUrl = man[0].urlAccess;
 						found.push_back(man[0]);	// apiBase はポインタ共有(device は解放しない設計)
 					}
 				}
@@ -825,8 +836,17 @@ namespace
 		}
 
 		S->dev = *hit;	// セッション専用 device へコピー(アドレス安定。実行中の他セッションに影響しない)
-		// 次回SSDPが応答しない時のため、今回つながったカメラのIPを保存する(SSDP広告停止対策)。
-		{ std::string h = hostFromDevice(S->dev); if (!h.empty()) { dataManager::saveCameraHost(S->dev.serialno, h); } }
+		// どの経路でカメラに繋がったか(SSDP発見 / 直近IP直結)と IP をログに残す。次回SSDPが
+		// 応答しない時のため、今回つながったカメラのIPも保存する(SSDP広告停止対策)。
+		{
+			std::string h = hostFromDevice(S->dev);
+			const bool viaCache = (!manualUrl.empty() && S->dev.urlAccess == manualUrl);
+			std::string d = std::string("カメラ接続 ") + (viaCache ? "直近IP直結(SSDP不発)" : "SSDP発見")
+			              + " ip=" + (h.empty() ? "?" : h)
+			              + (S->dev.serialno.empty() ? "" : (" serial=" + S->dev.serialno));
+			dataManager::logEvent("NET", d.c_str());
+			if (!h.empty()) { dataManager::saveCameraHost(S->dev.serialno, h); }
+		}
 		// 表示用デバイス一覧(g_devices)も最新へ反映(同serialは更新、無ければ追加)。runner は g_devices を参照しない。
 		{
 			int gi = -1;
@@ -902,6 +922,7 @@ namespace
 			{
 				for (auto& d : found) { if (d.apiBase && dataManager::cameraModelMatches(d, S->plan.camera)) { hit = &d; break; } }
 			}
+			const bool viaSsdp = (hit != nullptr);	// SSDP再探索で見つかったか(下の直近IP直結と区別)
 			// SSDPで見つからない時は直近IPへCCAPI直接接続(SSDP広告停止対策)。man は hit 確定まで生かす。
 			std::vector<class device> man;
 			if (hit == nullptr)
@@ -915,9 +936,19 @@ namespace
 					if (ok) { hit = &man[0]; }
 				}
 			}
-			if (hit == nullptr) { return false; }
+			if (hit == nullptr)
+			{	// SSDP再探索・直近IP直結ともに不可。runner は試行回数まで再試行し、尽きたら中断する。
+				dataManager::logEvent("NET", "再接続失敗(SSDP/直近IPとも不可)", true);
+				return false;
+			}
 			S->dev = *hit;	// runner の dev_ が指す先(=S->dev)を最新のIP/apiへ更新。
-			{ std::string h = hostFromDevice(S->dev); if (!h.empty()) { dataManager::saveCameraHost(S->dev.serialno, h); } }
+			{
+				std::string h = hostFromDevice(S->dev);
+				std::string d = std::string("再接続成功 ") + (viaSsdp ? "SSDP発見" : "直近IP直結(SSDP不発)")
+				              + " ip=" + (h.empty() ? "?" : h);
+				dataManager::logEvent("NET", d.c_str());
+				if (!h.empty()) { dataManager::saveCameraHost(S->dev.serialno, h); }
+			}
 			notify(HGE_EV_DEVICE, devicesJson());
 			return true;
 		});

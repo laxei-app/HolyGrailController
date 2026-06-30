@@ -54,6 +54,7 @@ public:
 
 	// --- 接続維持・再接続のパラメータ ---
 	static constexpr int  kKeepAliveSec        = 60;	// 撮影窓まで待機中、無害なGETを送る周期[秒]
+	static constexpr int  kWaitMaxFail         = 2;		// 待機中keepAliveがこの回数連続失敗で先回り再接続(健全性チェック)
 	static constexpr int  kMaxConsecutiveFail  = 3;		// 撮影失敗が連続したら再接続を試みる回数
 	static constexpr int  kMaxReconnectTries   = 3;		// SSDP再探索の試行回数。これを超えたら諦める
 	static constexpr long kReconnectWaitMs     = 2000;	// 再接続試行間の待ち[ms]
