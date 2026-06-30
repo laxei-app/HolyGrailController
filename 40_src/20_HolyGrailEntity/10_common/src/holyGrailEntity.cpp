@@ -707,6 +707,22 @@ namespace
 		notify(HGE_EV_STATE, j);
 	}
 
+	// device の urlAccess/location から host(IP)を取り出す。
+	// "http://192.168.1.7:8080/ccapi" -> "192.168.1.7"。失敗時は空。
+	std::string hostFromDevice(const class device& d)
+	{
+		auto extract = [](const std::string& url) -> std::string {
+			auto p = url.find("://");
+			if (p == std::string::npos) { return std::string(); }
+			size_t s = p + 3, e = s;
+			while (e < url.size() && url[e] != ':' && url[e] != '/') { ++e; }
+			return url.substr(s, e - s);
+		};
+		std::string h = extract(d.urlAccess);
+		if (h.empty()) { h = extract(d.location); }
+		return h;
+	}
+
 	// 1セッションの撮影開始シーケンス(カメラ割当→配線→ループ起動)。ワーカースレッドで実行。
 	errCode startSessionSequence(captureSession* S)
 	{
@@ -744,6 +760,27 @@ namespace
 			std::string s; if (dataManager::serialForFriendly(pc.friendly, s)) { wantSerial = s; }
 		}
 		const bool hasModel = !pc.model.empty() || !pc.name.empty();
+
+		// SSDP広告を止めるカメラ(スマホ接続後など)対策: 計画カメラの直近IPが分かっていれば、
+		// SSDPで見つからなくてもそのIPへCCAPI直接接続を試し、応答すれば候補(found)に加える。
+		// 本人確認(serial/model)は下の特定処理に委ねる。serial未解決の計画は最後に繋がったhostを使う。
+		{
+			std::string host = dataManager::loadCameraHost(wantSerial);
+			if (!host.empty())
+			{
+				std::string url = "http://" + host + ":8080/ccapi";
+				bool already = false;
+				for (auto& d : found) { if (d.apiBase && d.urlAccess == url) { already = true; break; } }
+				if (!already)
+				{
+					std::vector<class device> man;
+					if (cameraController::connectManual(man, host) > 0 && man[0].apiBase)
+					{
+						found.push_back(man[0]);	// apiBase はポインタ共有(device は解放しない設計)
+					}
+				}
+			}
+		}
 
 		class device* hit = nullptr;
 		if (!wantSerial.empty())
@@ -788,6 +825,8 @@ namespace
 		}
 
 		S->dev = *hit;	// セッション専用 device へコピー(アドレス安定。実行中の他セッションに影響しない)
+		// 次回SSDPが応答しない時のため、今回つながったカメラのIPを保存する(SSDP広告停止対策)。
+		{ std::string h = hostFromDevice(S->dev); if (!h.empty()) { dataManager::saveCameraHost(S->dev.serialno, h); } }
 		// 表示用デバイス一覧(g_devices)も最新へ反映(同serialは更新、無ければ追加)。runner は g_devices を参照しない。
 		{
 			int gi = -1;
@@ -863,8 +902,22 @@ namespace
 			{
 				for (auto& d : found) { if (d.apiBase && dataManager::cameraModelMatches(d, S->plan.camera)) { hit = &d; break; } }
 			}
+			// SSDPで見つからない時は直近IPへCCAPI直接接続(SSDP広告停止対策)。man は hit 確定まで生かす。
+			std::vector<class device> man;
+			if (hit == nullptr)
+			{
+				std::string host = dataManager::loadCameraHost(S->dev.serialno);
+				if (!host.empty() && cameraController::connectManual(man, host) > 0 && man[0].apiBase)
+				{
+					bool ok = S->dev.serialno.empty() || man[0].serialno.empty()
+					        || man[0].serialno == S->dev.serialno
+					        || dataManager::cameraModelMatches(man[0], S->plan.camera);
+					if (ok) { hit = &man[0]; }
+				}
+			}
 			if (hit == nullptr) { return false; }
 			S->dev = *hit;	// runner の dev_ が指す先(=S->dev)を最新のIP/apiへ更新。
+			{ std::string h = hostFromDevice(S->dev); if (!h.empty()) { dataManager::saveCameraHost(S->dev.serialno, h); } }
 			notify(HGE_EV_DEVICE, devicesJson());
 			return true;
 		});
@@ -1042,7 +1095,7 @@ int32_t hge_setPlanTimes(const char* startIso, const char* endIso, int32_t offMi
 	buildScheduleJson();
 	g_planReady = true;
 	notify(HGE_EV_SCHEDULE, g_schedJson);
-	return ERR_HGC_OK;
+	return saveCurrentPlan();	// 編集を即永続化(エッジ転送/再起動/再選択で失わない)
 }
 
 int32_t hge_setPlanDirection(double azimuth, double elevation)
@@ -1065,7 +1118,7 @@ int32_t hge_setPlanDirection(double azimuth, double elevation)
 	if (e != ERR_HGC_OK) { return e; }
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
-	return ERR_HGC_OK;
+	return saveCurrentPlan();	// 編集を即永続化
 }
 
 int32_t hge_getScheduleJson(char* buf, int32_t* inoutLen)
@@ -1312,7 +1365,7 @@ int32_t hge_setPlanLandscape(int32_t landscape)
 	if (e != ERR_HGC_OK) { return e; }
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
-	return ERR_HGC_OK;
+	return saveCurrentPlan();	// 編集を即永続化
 }
 
 int32_t hge_setPlanGearConstJson(const char* json)
@@ -1330,7 +1383,7 @@ int32_t hge_setPlanGearConstJson(const char* json)
 	if (e != ERR_HGC_OK) { return e; }
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
-	return ERR_HGC_OK;
+	return saveCurrentPlan();	// 編集を即永続化
 }
 
 int32_t hge_setBandMode(int32_t sunriseMode, int32_t sunsetMode)
@@ -1590,7 +1643,7 @@ int32_t hge_setPlanCamera(const char* name)
 	if (e != ERR_HGC_OK) { return e; }
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
-	return ERR_HGC_OK;
+	return saveCurrentPlan();	// 編集を即永続化
 }
 
 int32_t hge_setPlanLens(const char* name)
@@ -1606,7 +1659,7 @@ int32_t hge_setPlanLens(const char* name)
 	if (e != ERR_HGC_OK) { return e; }
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
-	return ERR_HGC_OK;
+	return saveCurrentPlan();	// 編集を即永続化
 }
 
 int32_t hge_setOwnedCameraDetail(const char* origName, const char* json)

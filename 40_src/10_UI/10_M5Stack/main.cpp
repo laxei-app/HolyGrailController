@@ -835,6 +835,13 @@ void loop(void)
 			}
 			else { Serial.printf("[LOG] read failed: %s\n", path.c_str()); }
 		}
+		else if (c == 'H')	// 検証用: 直近カメラIPキャッシュを手動設定(H<ip>\n)。SSDP広告停止対策の初回シード。
+		{
+			String ip = Serial.readStringUntil('\n');
+			ip.trim();
+			bool ok = dataManager::saveCameraHost(std::string(), std::string(ip.c_str()));
+			Serial.printf("[HOST] save \"*\"=%s -> %d\n", ip.c_str(), (int)ok);
+		}
 	}
 
 	if (g_dirty)
