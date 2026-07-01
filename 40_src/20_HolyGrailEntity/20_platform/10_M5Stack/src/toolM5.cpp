@@ -1,5 +1,15 @@
 #include "commonM5.h"
 #include "tool.h"
+#include <sys/time.h>
+
+// 壁時計(UTCエポック)のミリ秒。gettimeofday=RTC同期済みのシステム時刻(UTC秒)。
+// 単調増加の millis() と異なり、実時刻(スマホから同期したRTC)に対応する。
+uint64_t tool::epochMs(void)
+{
+    timeval tv{};
+    gettimeofday(&tv, nullptr);
+    return static_cast<uint64_t>(tv.tv_sec) * 1000ULL + static_cast<uint64_t>(tv.tv_usec) / 1000ULL;
+}
 
 // 経過時間の計測を開始する
 // return handle。これをgetElapse に渡して経過時間を取得する

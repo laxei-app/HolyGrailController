@@ -163,9 +163,10 @@ public:
 	// 1枚撮影(SHOT)を記録する。frame/iso/ss/fn/lum と適用中ccm名。
 	// meteredLinear: 測光したリニア輝度(自動補正時のみ。<0=測光なしで detail に出力しない)。
 	// rdyMeteringMs/rdyShutterMs: ライブビュー取得/露出設定の実測ms(>=0で detail 末尾に rdy=/set= を付与。計測用)。
+	// shutterEpochMs: actShutter直前の壁時計(UTCエポックms)。>0 で detail 末尾に sh=HH:MM:SS.mmm を付与(発光時刻の精密検証用)。
 	static void logShot(int frame, const hgc::exposure& e, double lumStops, const char* ccmName,
 	                    double meteredLinear = -1.0, int rdyMeteringMs = -1, int rdyShutterMs = -1, int tm0Ms = -1,
-	                    int offMs = -1, bool rdyOk = true, bool setOk = true);
+	                    int offMs = -1, bool rdyOk = true, bool setOk = true, uint64_t shutterEpochMs = 0);
 
 	// 現在の(本日の)ログファイルのフルパスを返す(検証・ログ転送用)。
 	static std::string currentLogPath(void);

@@ -22,6 +22,9 @@ public:
 	static void* startElapse(void);
 	static uint32_t getElapse(void * handle);
 	static void sleep(uint32_t ms);
+	// 壁時計(UTCエポック)のミリ秒。シャッター投下時刻など「絶対時刻をms精度で」記録する用途。
+	// startElapse(単調増加・経過計測用)と異なり、実時刻(RTC/システム時刻)に対応する。
+	static uint64_t epochMs(void);
     static void memoryInfo(void);
 
 };

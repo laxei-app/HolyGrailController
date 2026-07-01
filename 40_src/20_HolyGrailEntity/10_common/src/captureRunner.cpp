@@ -403,6 +403,8 @@ errCode captureRunner::loop(void)
 	//  以降は撮影窓開始を0とする monotonic アンカー(mono)からの絶対境界で tm0/tm1 を実行:
 	//   tm0=境界: 変更分の露出適用 + 測光(次コマ用) / tm1=境界+offset: シャッター(=周期ピッタリで発光)。
 	//  露出計算ブロックは行内のまま流用し、ウォームアップ(初回)と通常コマで同じブロックを1回ずつ通す。
+	//  mono/boundaryIdx は「周期の刻み(ペーシング)」専用。ccm選択・露出スケジュール・進捗に渡す文脈時刻は
+	//  常に実時刻(std::time)を使う → 開始が過去でも計画を過去から再生せず、再接続の再アンカーでも ccm が巻き戻らない。
 	hgc::exposure pending{};			// 各境界(tm0)で適用し tm1 で撮る露出。前フェーズの初期収束で確定
 	bool          warmedUp   = false;	// 初期収束が済み pending が確定したか
 	void*         mono       = nullptr;	// 撮影窓開始を0とする monotonic アンカー
@@ -447,7 +449,8 @@ errCode captureRunner::loop(void)
 				continue;
 			}
 			// kPreConvergeSec 秒前に到達 → 初期収束ウォームアップ。nowCtx=startSec でブロックを1回通す(シャッター無し)。
-			now = startSec;
+			// 開始時刻が過去(遅れ起動)なら実時刻を文脈に使い、計画を過去から再生しない(1枚目から現在の窓/露出で収束)。
+			now = (now > startSec) ? now : startSec;
 		}
 		else
 		{
@@ -455,7 +458,9 @@ errCode captureRunner::loop(void)
 			sleepUntilElapse(mono, static_cast<long>(boundaryIdx * interval * 1000.0));
 			if (!running_) { break; }
 			if (static_cast<long long>(std::time(nullptr)) >= endSec) { break; }
-			now = startSec + static_cast<long long>(boundaryIdx * interval);	// ブロック用の窓コンテキスト
+			// 窓コンテキスト(ccm選択/露出スケジュール/進捗)は実時刻を使う。周期の刻み(mono+boundaryIdx)はペーシング専用。
+			// こうすると開始が過去でも計画時刻を過去から再生せず、再接続で boundaryIdx=0 に戻しても ccm が計画先頭へ巻き戻らない。
+			now = static_cast<long long>(std::time(nullptr));
 		}
 
 		const hgc::ccmWindow* w = activeWindow(now);
@@ -774,6 +779,7 @@ errCode captureRunner::loop(void)
 
 		// tm1: 境界+offset まで待ってシャッター(=周期ピッタリで発光)。tm0がoffsetを超えたカメラでは即発光。
 		sleepUntilElapse(mono, static_cast<long>(boundaryIdx * interval * 1000.0 + offsetSec * 1000.0));	// offset=(周期-最大ss)×係数
+		const uint64_t shutterMs = tool::epochMs();	// シャッター投下直前の壁時計(ms精度)。実際の発光時刻の検証用
 		err = cameraController::actShutter(*dev_);
 		if (err != ERR_HGC_OK) { err = cameraController::actShutter(*dev_); }	// tm1(シャッター)失敗は1回だけリトライ
 		if (err != ERR_HGC_OK) { if (onError_) { onError_(err, "actShutter"); } ++shootFailStreak; }
@@ -785,7 +791,7 @@ errCode captureRunner::loop(void)
 			double lum = expo::brightnessStops(pending, tables_);	// 撮ったのは pending(適用済み)
 			// tm0で退避した成否/所要をここ(tm1)でまとめてログへ渡す(tm0内ではログしない)。
 			onCaptured_(capturedInfo{ frame, pending, lum, ccm->name, meteredLinear, meterMs_, applyMs, tm0Ms,
-			                          offMs, meterOk_, (applyErr == ERR_HGC_OK) });
+			                          offMs, meterOk_, (applyErr == ERR_HGC_OK), shutterMs });
 		}
 		if (onProgress_)
 		{

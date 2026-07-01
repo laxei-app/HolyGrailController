@@ -30,6 +30,14 @@ uint32_t tool::getElapse(void* handle)
 	return monoMs() - static_cast<uint32_t>(reinterpret_cast<uintptr_t>(handle));
 }
 
+// 壁時計(UTCエポック)のミリ秒。CLOCK_REALTIME=システム時刻(端末TZ非依存のUTC)。
+uint64_t tool::epochMs(void)
+{
+	timespec ts{};
+	clock_gettime(CLOCK_REALTIME, &ts);
+	return static_cast<uint64_t>(ts.tv_sec) * 1000ULL + static_cast<uint64_t>(ts.tv_nsec) / 1000000ULL;
+}
+
 // 指定ミリ秒待つ。
 void tool::sleep(uint32_t ms)
 {

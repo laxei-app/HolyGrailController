@@ -30,7 +30,8 @@ public:
 	// rdyOk/setOk=tm0で行った rdyMetering / 露出設定 の成否(tm0内ではログせず tm1 でまとめて出す)。
 	struct capturedInfo { int frame; hgc::exposure exp; double luminance; std::string ccm; double metered = -1.0;
 	                      int rdyMeteringMs = -1; int rdyShutterMs = -1; int tm0Ms = -1; int offMs = -1;
-	                      bool rdyOk = true; bool setOk = true; };
+	                      bool rdyOk = true; bool setOk = true;
+	                      uint64_t shutterMs = 0; };	// actShutter直前の壁時計(UTCエポックms)。0=未記録
 
 	using stateCb    = std::function<void(int)>;					// hgeState 値
 	using progressCb = std::function<void(const progressInfo&)>;
@@ -74,7 +75,7 @@ public:
 	// --- 周期正確化(タイマ方式) ---
 	// tm0(露出適用+測光)→ tm1(シャッター)の差 offset = (周期 - 最大ss) × kShutterOffsetFactor。
 	// 最大ss=夜間ss。固定にせず周期と最大ssの余裕から算出し、なるべく短くする。係数は今後の検証で調整する。
-	static constexpr double kShutterOffsetFactor = 0.3;	// offset 算出係数(調整対象)
+	static constexpr double kShutterOffsetFactor = 0.7;	// offset 算出係数(調整対象)
 	static constexpr int    kPreConvergeSec      = 30;	// 撮影窓の何秒前から初期収束(測光のみ・シャッター無し)を始めるか
 
 private:

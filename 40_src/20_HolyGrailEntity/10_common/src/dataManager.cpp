@@ -1082,7 +1082,7 @@ std::string dataManager::currentLogPath(void)
 
 void dataManager::logShot(int frame, const hgc::exposure& e, double lumStops, const char* ccmName,
                           double meteredLinear, int rdyMeteringMs, int rdyShutterMs, int tm0Ms,
-                          int offMs, bool rdyOk, bool setOk)
+                          int offMs, bool rdyOk, bool setOk, uint64_t shutterEpochMs)
 {
 	char lumStr[12];
 	std::snprintf(lumStr, sizeof(lumStr), "%+.3f", lumStops);
@@ -1106,7 +1106,20 @@ void dataManager::logShot(int frame, const hgc::exposure& e, double lumStops, co
 		if (tm0Ms >= 0)                                                 { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " tm0=%dms", tm0Ms); }
 		if (offMs >= 0 && dn < static_cast<int>(sizeof(detail)))        { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " off=%dms", offMs); }
 		if (rdyMeteringMs >= 0 && dn < static_cast<int>(sizeof(detail))) { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " rdy=%dms(%s)", rdyMeteringMs, rdyOk ? "OK" : "NG"); }
-		if (rdyShutterMs  >= 0 && dn < static_cast<int>(sizeof(detail))) { std::snprintf(detail + dn, sizeof(detail) - dn, " set=%dms(%s)", rdyShutterMs, setOk ? "OK" : "NG"); }
+		if (rdyShutterMs  >= 0 && dn < static_cast<int>(sizeof(detail))) { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " set=%dms(%s)", rdyShutterMs, setOk ? "OK" : "NG"); }
+		// シャッター投下の実時刻(ms精度)。ログのタイムスタンプ用オフセットでローカル化して sh=HH:MM:SS.mmm。
+		if (shutterEpochMs > 0 && dn < static_cast<int>(sizeof(detail)))
+		{
+			std::time_t st = static_cast<std::time_t>(shutterEpochMs / 1000ULL) + static_cast<std::time_t>(g_logOff) * 60;
+			unsigned    sms = static_cast<unsigned>(shutterEpochMs % 1000ULL);
+			std::tm     sg{};
+#if defined(_WIN32)
+			gmtime_s(&sg, &st);
+#else
+			gmtime_r(&st, &sg);
+#endif
+			std::snprintf(detail + dn, sizeof(detail) - dn, " sh=%02d:%02d:%02d.%03u", sg.tm_hour, sg.tm_min, sg.tm_sec, sms);
+		}
 	}
 	// SHOT のみ frame〜lum を使う。body を列整形(frame|iso|ss|fn|lum|detail)。露出はカメラ設定値の文字列。
 	char body[208];
