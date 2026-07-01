@@ -29,6 +29,10 @@ public:
 	// カメラへのアクセス
 	static errCode startShooting(const class device& device);
 	static errCode rdyShutter(const class device& device, const cmdt::shotSet& shotSet);
+	// 露出を1項目ずつ設定(タイマ方式で変更のあった項目だけ適用するため)。上位が種別非依存に呼ぶ。
+	static errCode setFNumber(const class device& device, const std::string& fNumber);
+	static errCode setSS(const class device& device, const std::string& ss);
+	static errCode setIso(const class device& device, const std::string& iso);
 	static errCode actShutter(const class device& device);
 	static errCode getSettings(const class device& device, cmdt::shotRange& settings);
 	static errCode rdyMetering(const class device& device);

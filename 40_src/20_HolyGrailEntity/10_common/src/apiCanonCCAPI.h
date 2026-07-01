@@ -134,6 +134,12 @@ public:
 	errCode rdyMetering(void);							// 測光準備
 	errCode alzMetering(cmdt::HISTOGRAM& histoOut);		    // 測光解析
 
+	// 露出を1項目ずつ設定する(送信用テーブルで real に最も近いカメラ広告値を選んで送る)。
+	// 周期正確化リアーキ(タイマ方式)では rdyShutter を使わず、変更のあった項目だけを個別に呼ぶ。
+	errCode setFNumber(const std::string& fNumber) override;		// f 値を設定する
+	errCode setSS(const std::string& ss) override;					// シャッター速度を設定する
+	errCode setIso(const std::string& iso) override;				// ISO を設定する
+
 protected:
 	// カメラの情報を取得する
 	errCode getDeviceDescriptor(class device& device);
@@ -147,10 +153,7 @@ protected:
 //	errCode getHistoGram(cmdt::HISTOGRAM & hist);			// live view のヒストグラムを取得する
 	errCode getShotPicture(std::vector<std::byte>& jpg);
 
-	// 設定する(送信用テーブルで real に最も近いカメラ広告値を選んで送る)
-	errCode setFNumber(const std::string& fNumber);		// f 値を設定する
-	errCode setSS(const std::string& ss);				// シャッター速度を設定する
-	errCode setIso(const std::string& iso);				// ISO を設定する
+	// (setFNumber/setSS/setIso は public へ移動)
 
 	// 送信用テーブルから real に最も近い「カメラが広告した文字列」を返す。空=該当なし。
 	std::string sendFor(const std::vector<sendMap>& map, double real) const;

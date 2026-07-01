@@ -63,6 +63,25 @@ errCode cameraController::rdyShutter(const class device& device, const cmdt::sho
 	return device.apiBase->rdyShutter(shotSet);
 }
 
+// 露出を1項目ずつ設定(タイマ方式で変更のあった項目だけ適用するため)。null は無害にスキップ。
+errCode cameraController::setFNumber(const class device& device, const std::string& fNumber)
+{
+	if (device.apiBase == nullptr) { return ERR_HGC_READY; }
+	return device.apiBase->setFNumber(fNumber);
+}
+
+errCode cameraController::setSS(const class device& device, const std::string& ss)
+{
+	if (device.apiBase == nullptr) { return ERR_HGC_READY; }
+	return device.apiBase->setSS(ss);
+}
+
+errCode cameraController::setIso(const class device& device, const std::string& iso)
+{
+	if (device.apiBase == nullptr) { return ERR_HGC_READY; }
+	return device.apiBase->setIso(iso);
+}
+
 // シャッターを切る
 // device : 対象デバイス
 // return : ERR_HGC_OK:成功、それ以外はエラー
