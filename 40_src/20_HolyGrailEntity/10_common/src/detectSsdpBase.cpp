@@ -108,14 +108,22 @@ void detectSsdpBase::watchStop()
 	if (watchSock_ != nullptr)   { net::ssdpListenClose(watchSock_); watchSock_ = nullptr; }
 }
 
-// 待ち受けスレッド本体: NOTIFY を1秒タイムアウトで周期読みし、対象サービス語を含めば onAppear。
+// 待ち受けスレッド本体: NOTIFY を周期読みし、対象サービス語を含めば onAppear。
+// ※プラットフォームで ssdpListenRead のブロッキング挙動が異なる: Android(recvfrom+SO_RCVTIMEO)は
+//   最大1秒ブロックするが、M5Stack(WiFiUDP::parsePacket)はノンブロッキングで即戻る。後者では
+//   パケット無しで tight loop になり ESP32 のタスクウォッチドッグ(IDLE枯渇)で abort する。
+//   これを防ぐため、パケットが無いときは必ず少し眠って CPU を明け渡す(停止応答も約50ms以内)。
 errCode detectSsdpBase::watchLoop()
 {
 	std::string pkt;
 	while (watchRunning_)
 	{
 		pkt.clear();
-		if (!net::ssdpListenRead(watchSock_, pkt) || pkt.empty()) { continue; }	// 1秒で戻る(停止に追随)
+		if (!net::ssdpListenRead(watchSock_, pkt) || pkt.empty())
+		{
+			tool::sleep(50);	// パケット無し → CPUを明け渡す(M5Stackのウォッチドッグ回避)
+			continue;
+		}
 		for (const auto& iface : interfaces())
 		{	// このバックエンドのカメラが自発広告した(出現した)とみなして通知。
 			if (tool::findKvp(pkt, iface.keywords))
