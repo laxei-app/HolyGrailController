@@ -48,6 +48,7 @@ size_t cameraController::connectManual(std::vector<class device>& devices, const
 // return  : ERR_HGC_OK:成功
 errCode cameraController::rdyShutter(const class device& device, const cmdt::shotSet& shotSet)
 {
+	if (device.apiBase == nullptr) { return ERR_HGC_READY; }
 	return device.apiBase->rdyShutter(shotSet);
 }
 
@@ -75,8 +76,8 @@ errCode cameraController::getSettings(const class device& device, cmdt::shotRang
 // return : ERR_HGC_OK: 成功
 errCode cameraController::rdyMetering(const class device& device)
 {
+	if (device.apiBase == nullptr) { return ERR_HGC_READY; }
 	return device.apiBase->rdyMetering();
-	return ERR_HGC_OK;
 }
 
 // 測光結果を取得する
@@ -85,16 +86,19 @@ errCode cameraController::rdyMetering(const class device& device)
 // return : ERR_HGC_OK: 成功
 errCode cameraController::alzMetering(const class device& device, cmdt::HISTOGRAM& hist)
 {
+	if (device.apiBase == nullptr) { return ERR_HGC_READY; }
 	return device.apiBase->alzMetering(hist);
 }
 
 errCode cameraController::setupShootingModeManual(const class device& device)
 {
+	if (device.apiBase == nullptr) { return ERR_HGC_READY; }
 	return device.apiBase->setupShootingModeManual();
 }
 
 errCode cameraController::restoreShootingMode(const class device& device)
 {
+	if (device.apiBase == nullptr) { return ERR_HGC_READY; }	// 未取得のまま終了(3a)なら無害にスキップ
 	return device.apiBase->restoreShootingMode();
 }
 
@@ -110,5 +114,6 @@ errCode cameraController::keepAlive(const class device& device)
 // return : ERR_HGC_OK: 成功
 errCode cameraController::startShooting(const class device& device)
 {
+	if (device.apiBase == nullptr) { return ERR_HGC_READY; }
 	return device.apiBase->startShooting();
 }

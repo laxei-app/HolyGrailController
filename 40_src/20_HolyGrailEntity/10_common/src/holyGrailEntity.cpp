@@ -795,16 +795,10 @@ namespace
 
 		class device* hit = nullptr;
 		if (!wantSerial.empty())
-		{	// 特定個体(シリアル)を探す。
+		{	// 特定個体(シリアル)を探す。見つからなくても中断せず武装する(3a: 未検出許容)。
 			for (auto& d : found) { if (d.apiBase && d.serialno == wantSerial) { hit = &d; break; } }
-			if (hit == nullptr)
-			{	// 見つからなければ開始しない(メッセージを出す)。
-				notifyError(ERR_HGC_NOT_FOUND, ("計画のカメラが見つかりません(serial=" + wantSerial + ")").c_str());
-				S->state = HGE_ST_ERROR; notifyStateP(S->planId, HGE_ST_ERROR); refreshAggregateState();
-				return ERR_HGC_NOT_FOUND;
-			}
-			if (serialBusy(wantSerial))
-			{	// 既に撮影中のカメラを使う計画は開始しない。
+			if (hit != nullptr && serialBusy(wantSerial))
+			{	// 既に撮影中のカメラを使う計画は開始しない(これは正当な拒否。未検出とは別)。
 				notifyError(ERR_HGC_INVALID_STATE, "このカメラは既に撮影中です");
 				S->state = HGE_ST_ERROR; notifyStateP(S->planId, HGE_ST_ERROR); refreshAggregateState();
 				return ERR_HGC_INVALID_STATE;
@@ -812,49 +806,47 @@ namespace
 		}
 		else if (hasModel)
 		{	// シリアル未解決だが機種は指定 → 「それ以外の個体(=識別済みでない同機種)」を選ぶ。
+			// 見つからなくても中断せず武装する(3a: 未検出許容)。
 			std::vector<std::string> knownSerials; dataManager::ownedCameraSerials(knownSerials);
 			auto isKnown = [&](const std::string& s) -> bool { for (auto& k : knownSerials) { if (k == s) { return true; } } return false; };
 			for (auto& d : found) { if (d.apiBase && dataManager::cameraModelMatches(d, pc) && !isKnown(d.serialno) && !serialBusy(d.serialno)) { hit = &d; break; } }
 			if (hit == nullptr)	// 該当が無ければ同機種の空き1台で代替。
 			{ for (auto& d : found) { if (d.apiBase && dataManager::cameraModelMatches(d, pc) && !serialBusy(d.serialno)) { hit = &d; break; } } }
-			if (hit == nullptr)
-			{
-				notifyError(ERR_HGC_NOT_FOUND, ("計画のカメラが見つかりません(" + (pc.name.empty() ? pc.model : pc.name) + ")").c_str());
-				S->state = HGE_ST_ERROR; notifyStateP(S->planId, HGE_ST_ERROR); refreshAggregateState();
-				return ERR_HGC_NOT_FOUND;
-			}
 		}
 		else
-		{	// 計画にカメラ未指定: 他セッションが使っていない最初の1台。
+		{	// 計画にカメラ未指定: 他セッションが使っていない最初の1台。見つからなくても武装(3a)。
 			for (auto& d : found) { if (d.apiBase && !serialBusy(d.serialno)) { hit = &d; break; } }
-			if (hit == nullptr)
-			{
-				notifyError(ERR_HGC_NOT_FOUND, "カメラが見つかりません");
-				S->state = HGE_ST_ERROR; notifyStateP(S->planId, HGE_ST_ERROR); refreshAggregateState();
-				return ERR_HGC_NOT_FOUND;
-			}
 		}
 
-		S->dev = *hit;	// セッション専用 device へコピー(アドレス安定。実行中の他セッションに影響しない)
-		// どの経路でカメラに繋がったか(SSDP発見 / 直近IP直結)と IP をログに残す。次回SSDPが
-		// 応答しない時のため、今回つながったカメラのIPも保存する(SSDP広告停止対策)。
+		if (hit != nullptr)
 		{
-			std::string h = hostFromDevice(S->dev);
-			const bool viaCache = (!manualUrl.empty() && S->dev.urlAccess == manualUrl);
-			std::string d = std::string("カメラ接続 ") + (viaCache ? "直近IP直結(SSDP不発)" : "SSDP発見")
-			              + " ip=" + (h.empty() ? "?" : h)
-			              + (S->dev.serialno.empty() ? "" : (" serial=" + S->dev.serialno));
-			dataManager::logEvent("NET", d.c_str());
-			if (!h.empty()) { dataManager::saveCameraHost(S->dev.serialno, h); }
+			S->dev = *hit;	// セッション専用 device へコピー(アドレス安定。実行中の他セッションに影響しない)
+			// どの経路でカメラに繋がったか(SSDP発見 / 直近IP直結)と IP をログに残す。次回SSDPが
+			// 応答しない時のため、今回つながったカメラのIPも保存する(SSDP広告停止対策)。
+			{
+				std::string h = hostFromDevice(S->dev);
+				const bool viaCache = (!manualUrl.empty() && S->dev.urlAccess == manualUrl);
+				std::string d = std::string("カメラ接続 ") + (viaCache ? "直近IP直結(SSDP不発)" : "SSDP発見")
+				              + " ip=" + (h.empty() ? "?" : h)
+				              + (S->dev.serialno.empty() ? "" : (" serial=" + S->dev.serialno));
+				dataManager::logEvent("NET", d.c_str());
+				if (!h.empty()) { dataManager::saveCameraHost(S->dev.serialno, h); }
+			}
+			// 表示用デバイス一覧(g_devices)も最新へ反映(同serialは更新、無ければ追加)。runner は g_devices を参照しない。
+			{
+				int gi = -1;
+				for (size_t i = 0; i < g_devices.size(); ++i) { if (g_devices[i].serialno == S->dev.serialno) { gi = (int)i; break; } }
+				if (gi >= 0) { g_devices[gi] = *hit; } else { g_devices.push_back(*hit); }
+			}
+			notify(HGE_EV_DEVICE, devicesJson());
+			dataManager::recordConnectedCamera(S->dev);
 		}
-		// 表示用デバイス一覧(g_devices)も最新へ反映(同serialは更新、無ければ追加)。runner は g_devices を参照しない。
-		{
-			int gi = -1;
-			for (size_t i = 0; i < g_devices.size(); ++i) { if (g_devices[i].serialno == S->dev.serialno) { gi = (int)i; break; } }
-			if (gi >= 0) { g_devices[gi] = *hit; } else { g_devices.push_back(*hit); }
+		else
+		{	// 3a: カメラ未検出のまま撮影要求を受理する。中断せず、runner が取得まで NOCAMERA(✖点灯)で
+			// 探し続ける(60秒ごと再探索/直近IP直結)。撮影窓の終了か中止まで継続。
+			S->dev.clear();
+			dataManager::logEvent("NET", "カメラ未検出のまま撮影要求を受理(探索を継続)");
 		}
-		notify(HGE_EV_DEVICE, devicesJson());
-		dataManager::recordConnectedCamera(S->dev);
 
 		S->runner->setCallbacks(
 			[S](int s) {
@@ -908,15 +900,24 @@ namespace
 			},
 			[S](errCode e, const std::string& m) { notifyError(e, m.c_str()); });
 
-		// 撮影中にカメラ通信が連続失敗したときの再接続(SSDP再探索)。1回の試行ぶんを行う。
+		// カメラの取得/再接続を1回試みる(3a: 初回取得も撮影中再接続もこの1本に集約)。
+		//  ・撮影要求時にカメラ未検出でも中断しないため、runner の取得フェーズがこれを繰り返し呼ぶ。
+		//  ・撮影中の連続失敗時も同じ経路で再接続する。成功で *dev_(=S->dev)を最新IP/apiへ更新。
 		S->runner->setReconnect([S]() -> bool {
+			// 計画のカメラ(serial 明示 or friendly から解決)を毎回求める。初回未取得時は S->dev.serialno が
+			// 空のため、それに依存しない(旧実装の空serial依存バグを解消)。既知IP直結にもこの serial を使う。
+			std::string wantSerial = S->plan.camera.serial;
+			if (wantSerial.empty() && !S->plan.camera.friendly.empty())
+			{ std::string s; if (dataManager::serialForFriendly(S->plan.camera.friendly, s)) { wantSerial = s; } }
+			if (wantSerial.empty() && !S->dev.serialno.empty()) { wantSerial = S->dev.serialno; }
+
 			std::vector<class device> found;
 			cameraController::detectTarget(found);
 			class device* hit = nullptr;
-			// 初回接続で判明しているシリアルで同一個体を再特定するのが最優先(IPが変わっていても追従)。
-			if (!S->dev.serialno.empty())
+			// 判明しているシリアルで同一個体を再特定するのが最優先(IPが変わっていても追従)。
+			if (!wantSerial.empty())
 			{
-				for (auto& d : found) { if (d.apiBase && d.serialno == S->dev.serialno) { hit = &d; break; } }
+				for (auto& d : found) { if (d.apiBase && d.serialno == wantSerial) { hit = &d; break; } }
 			}
 			if (hit == nullptr)	// シリアル不明/不一致なら機種一致でフォールバック。
 			{
@@ -927,18 +928,18 @@ namespace
 			std::vector<class device> man;
 			if (hit == nullptr)
 			{
-				std::string host = dataManager::loadCameraHost(S->dev.serialno);
+				std::string host = dataManager::loadCameraHost(wantSerial);
 				if (!host.empty() && cameraController::connectManual(man, host) > 0 && man[0].apiBase)
 				{
-					bool ok = S->dev.serialno.empty() || man[0].serialno.empty()
-					        || man[0].serialno == S->dev.serialno
+					bool ok = wantSerial.empty() || man[0].serialno.empty()
+					        || man[0].serialno == wantSerial
 					        || dataManager::cameraModelMatches(man[0], S->plan.camera);
 					if (ok) { hit = &man[0]; }
 				}
 			}
 			if (hit == nullptr)
-			{	// SSDP再探索・直近IP直結ともに不可。runner は試行回数まで再試行し、尽きたら中断する。
-				dataManager::logEvent("NET", "再接続失敗(SSDP/直近IPとも不可)", true);
+			{	// SSDP再探索・直近IP直結ともに不可。runner の取得/再接続フェーズが後で再試行する。
+				dataManager::logEvent("NET", "カメラ取得/再接続失敗(SSDP/直近IPとも不可)", true);
 				return false;
 			}
 			S->dev = *hit;	// runner の dev_ が指す先(=S->dev)を最新のIP/apiへ更新。
@@ -953,6 +954,10 @@ namespace
 			return true;
 		});
 
+		if (hit == nullptr)
+		{	// 3a: 未検出のまま武装。即座に NOCAMERA(✖点灯)を反映(runner も取得まで NOCAMERA を出す)。
+			S->state = HGE_ST_NOCAMERA; notifyStateP(S->planId, HGE_ST_NOCAMERA); refreshAggregateState();
+		}
 		hgc::exposureSmoothing smooth = dataManager::currentSmoothing();
 		errCode e = S->runner->ready(S->plan, &S->dev, smooth, g_offMin);
 		if (e != ERR_HGC_OK) { notifyError(e, "ready"); S->state = HGE_ST_ERROR; notifyStateP(S->planId, HGE_ST_ERROR); refreshAggregateState(); return e; }
