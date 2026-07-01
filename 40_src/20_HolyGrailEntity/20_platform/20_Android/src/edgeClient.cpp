@@ -230,6 +230,25 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeStop(JNIEnv* env, jobject, jstring 
 	return (m == etp::M_ACK) ? 0 : -2;
 }
 
+// エッジ端末へ「継続(カメラ未検出時の即再探索)」を送る。planId 空=全取得フェーズ。
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeEdgeResearch(JNIEnv* env, jobject, jstring host_, jint port, jstring planId_)
+{
+	const char* host = env->GetStringUTFChars(host_, nullptr);
+	const char* pid  = planId_ ? env->GetStringUTFChars(planId_, nullptr) : nullptr;
+	std::string hostS = host ? host : "";
+	std::string pidS  = pid ? pid : "";
+	env->ReleaseStringUTFChars(host_, host);
+	if (pid) { env->ReleaseStringUTFChars(planId_, pid); }
+
+	int fd = tcpConnect(hostS, port, 5000);
+	if (fd < 0) { return -1; }
+	std::string rd;
+	int m = tcpRequest(fd, etp::C_RESEARCH, etp::M_POST, pidS, rd);
+	close(fd);
+	return (m == etp::M_ACK) ? 0 : -2;
+}
+
 // エッジ端末の進捗を取得する。progress の JSON を返す(失敗時 "")。
 JNIEXPORT jstring JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeEdgeProgress(JNIEnv* env, jobject, jstring host_, jint port)

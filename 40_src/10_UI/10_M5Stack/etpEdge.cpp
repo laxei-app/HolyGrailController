@@ -152,6 +152,9 @@ namespace
 			if (!pk.data.empty()) { hge_captureStopPlan(pk.data.c_str()); }
 			else                  { hge_captureStop(); }
 			break;
+		case etp::C_RESEARCH:	// 継続: カメラ未検出時の即再探索(取得フェーズの60秒待ちを前倒し)
+			hge_pokeAcquire(pk.data.empty() ? nullptr : pk.data.c_str());
+			break;
 		case etp::C_PROGRESS:
 		{
 			char b[256];

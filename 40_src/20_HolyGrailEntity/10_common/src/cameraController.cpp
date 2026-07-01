@@ -43,6 +43,17 @@ size_t cameraController::connectManual(std::vector<class device>& devices, const
 	return 0;
 }
 
+// SSDP受動待ち受けの開始/停止(3b)。全バックエンドへ委譲(SSDP系のみ実装、他は既定no-op)。
+void cameraController::watchStart(std::function<void()> onAppear)
+{
+	for (auto& be : backends()) { be->watchStart(onAppear); }
+}
+
+void cameraController::watchStop()
+{
+	for (auto& be : backends()) { be->watchStop(); }
+}
+
 // シャッター準備
 // shotSet : シャッター設定値
 // return  : ERR_HGC_OK:成功

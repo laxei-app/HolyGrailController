@@ -47,6 +47,10 @@ public:
 	errCode stop(void);		// 停止要求して join
 	bool    isRunning(void) const { return running_; }
 
+	// 取得フェーズ(カメラ未取得=apiBase==nullptr の間)の60秒待ちを打ち切り、即再探索させる。
+	// SSDP受動待ち受けがカメラの出現(NOTIFY)を検知したときに外部から呼ぶ(3b)。取得フェーズ以外では無害。
+	void    pokeAcquire(void);
+
 	// hgeState 値(モジュール構造仕様書 47 準拠。holyGrailEntity.h の hgeState と番号同期)
 	enum state { ST_IDLE = 0, ST_SEARCHING = 1, ST_READY = 2,
 	             ST_CAPTURING = 3, ST_STOPPING = 4, ST_ERROR = 5,
@@ -76,6 +80,7 @@ private:
 	int off_ = 0;
 
 	std::atomic<bool> running_{ false };
+	std::atomic<bool> wake_{ false };	// 取得フェーズの待ちを前倒しするポーク(pokeAcquire で立てる)
 	void* thread_ = nullptr;
 
 	// カメラの設定可能値テーブル(開始時に取得して構築。仕様 4.2)

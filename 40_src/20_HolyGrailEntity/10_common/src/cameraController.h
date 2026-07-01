@@ -21,6 +21,11 @@ public:
 	//  return : 接続できたデバイス数(0 or 1)
 	static size_t connectManual(std::vector<class device>& device, const std::string& host);
 
+	// SSDP受動待ち受けの開始/停止(3b)。全バックエンドへ委譲する。onAppear はカメラの出現(NOTIFY)
+	// 検知時に呼ばれる。撮影要求中にカメラ未検出のセッションがある間だけ稼働させ、出現を60秒待たず拾う。
+	static void watchStart(std::function<void()> onAppear);
+	static void watchStop();
+
 	// カメラへのアクセス
 	static errCode startShooting(const class device& device);
 	static errCode rdyShutter(const class device& device, const cmdt::shotSet& shotSet);

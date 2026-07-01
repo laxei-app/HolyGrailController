@@ -92,10 +92,18 @@ void captureRunner::interruptibleSleep(long ms)
 {
 	while (running_ && ms > 0)
 	{
+		if (wake_.exchange(false)) { break; }	// ポーク(取得フェーズの60秒待ち前倒し)で即抜ける
 		uint32_t chunk = (ms > 100) ? 100u : static_cast<uint32_t>(ms);
 		tool::sleep(chunk);
 		ms -= chunk;
 	}
+}
+
+// 取得フェーズ(apiBase未取得)中のみ、待ちを打ち切って即再探索させる(3b: SSDP出現検知時に呼ぶ)。
+// 撮影中など取得フェーズ以外では wake_ を立てない(測光待ち等の正規のsleepを乱さない)。
+void captureRunner::pokeAcquire(void)
+{
+	if (dev_ != nullptr && dev_->apiBase == nullptr) { wake_ = true; }
 }
 
 const hgc::ccmWindow* captureRunner::activeWindow(long long nowSec) const

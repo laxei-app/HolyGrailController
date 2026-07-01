@@ -124,6 +124,16 @@ Java_app_laxei_holygrail_HgeNative_nativeGetStatePlan(JNIEnv* env, jobject /*thi
 	return r;
 }
 
+// スマホ直接撮影で NOCAMERA の計画に即再探索を促す(継続ボタン)。planId 空=全取得フェーズ。
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativePokeAcquire(JNIEnv* env, jobject /*thiz*/, jstring id)
+{
+	const char* s = id ? env->GetStringUTFChars(id, nullptr) : nullptr;
+	jint r = hge_pokeAcquire(s ? s : "");
+	if (s) { env->ReleaseStringUTFChars(id, s); }
+	return r;
+}
+
 JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeSearchDevices(JNIEnv* /*env*/, jobject /*thiz*/)
 {

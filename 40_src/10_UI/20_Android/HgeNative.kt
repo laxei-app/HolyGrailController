@@ -45,6 +45,7 @@ object HgeNative {
     external fun nativeCaptureStartPlan(planId: String): Int
     external fun nativeCaptureStopPlan(planId: String): Int
     external fun nativeGetStatePlan(planId: String): Int
+    external fun nativePokeAcquire(planId: String): Int   // 継続: スマホ直接撮影のNOCAMERA計画に即再探索を促す
     external fun nativeScheduleJson(): String
     external fun nativeGetPlanJson(): String
     external fun nativeSetPlanTimes(start: String, end: String, offMin: Int): Int
@@ -107,6 +108,7 @@ object HgeNative {
     external fun nativeEdgeSearch(timeoutMs: Int): String           // edgeInfo の JSON 配列
     external fun nativeEdgeStart(host: String, port: Int, datetime: String, offMin: Int, nameBmp: ByteArray, planId: String): Int
     external fun nativeEdgeStop(host: String, port: Int, planId: String): Int
+    external fun nativeEdgeResearch(host: String, port: Int, planId: String): Int // 継続: エッジへ即再探索を送る
     external fun nativeEdgeProgress(host: String, port: Int): String // progress の JSON
 
     fun stateName(s: Int): String = when (s) {

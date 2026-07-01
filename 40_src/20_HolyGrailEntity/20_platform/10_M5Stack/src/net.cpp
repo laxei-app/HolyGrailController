@@ -55,7 +55,7 @@ bool ssdpRead(void* handle, std::string& answer)
     return false;
 }
 
-void ssdpClose(void* handle) 
+void ssdpClose(void* handle)
 {
     if (handle) {
         WiFiUDP* udp = (WiFiUDP*)handle;
@@ -63,6 +63,18 @@ void ssdpClose(void* handle)
         delete udp;
     }
 }
+
+// SSDP受動待ち受け: M-SEARCH を送らず 1900 で待ち受け 239.255.255.250 の NOTIFY を受ける。
+// beginMulticast が 1900 への bind + グループ参加(LWIP IGMP)を行う。読み/破棄は ssdpRead/ssdpClose を流用。
+void* ssdpListenStart(void)
+{
+    WiFiUDP* udp = new WiFiUDP();
+    if (!udp->beginMulticast(IPAddress(239, 255, 255, 250), 1900)) { delete udp; return nullptr; }
+    return (void*)udp;
+}
+
+bool ssdpListenRead(void* handle, std::string& answer) { return ssdpRead(handle, answer); }
+void ssdpListenClose(void* handle) { ssdpClose(handle); }
 //#define     USE_KEEP_ALIVE
 #if defined(USE_KEEP_ALIVE)
     ///////////////////////////////////////////////////////////////

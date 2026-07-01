@@ -177,6 +177,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         setContentView(R.layout.activity_main)
         bindViews()
 
+        acquireMulticastLock()   // 3b: ネイティブSSDP受動待ち受けがマルチキャストを受信するため(無いと破棄される)
+
         val baseDir = getExternalFilesDir(null) ?: filesDir
         copyMasterAssets(baseDir)   // インストール同梱の機材マスタを /master へ展開(nativeInit より前)
         HgeNative.nativeSetLogDir(baseDir.absolutePath)
@@ -2512,18 +2514,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
         icon.layoutParams = LinearLayout.LayoutParams(dp(32), dp(32)).apply { rightMargin = dp(6) }
         when {
             disconnected -> {
-                icon.setImageResource(R.drawable.ic_camera_cap)
-                icon.setColorFilter(0xFFD32F2F.toInt())     // Phase4でic_camera_ng(✖)へ。今は赤点灯で代替(点滅しない)
-                icon.tag = "ng:$id"
+                icon.setImageResource(R.drawable.ic_camera_ng)  // Phase4: ✖カメラ(ICOカメラNon.png)。色でなく×印で区別(色覚多様性)
+                icon.clearColorFilter()
+                icon.tag = "ng:$id"                             // 点灯(点滅しない)
                 icon.setOnClickListener { confirmStop(id) }
             }
             capturing -> {
                 icon.setImageResource(R.drawable.ic_camera_cap)
+                icon.clearColorFilter()
                 icon.tag = "cam:$id"                        // 緑点滅(planBlink が cam: を点滅)
                 icon.setOnClickListener { confirmStop(id) }
             }
             waiting -> {
                 icon.setImageResource(R.drawable.ic_camera_cap)
+                icon.clearColorFilter()
                 icon.tag = "wait:$id"                       // 点灯(点滅しない)
                 icon.setOnClickListener { confirmStop(id) }
             }
@@ -2629,6 +2633,50 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }.start()
     }
 
+    // Phase3c: カメラ未検出(NOCAMERA)時の「継続/中止」ポップアップ。○○=計画カメラの愛称/名称。
+    // 継続=即再探索(スマホ=pokeAcquire / エッジ=C_RESEARCH)、見つからなければ猶予後に再表示。
+    // 中止=撮影停止。nocamDialogShown で多重表示を抑止する。UIスレッドから呼ぶこと。
+    private fun planCameraLabel(id: String): String {
+        try {
+            if (id == currentPlanId) {
+                val cam = JSONObject(HgeNative.nativeGetPlanJson()).optJSONObject("camera")
+                val label = listOf(cam?.optString("friendly") ?: "", cam?.optString("name") ?: "", cam?.optString("model") ?: "")
+                    .firstOrNull { it.isNotEmpty() }
+                if (!label.isNullOrEmpty()) return label
+            }
+        } catch (_: Exception) {}
+        return "カメラ"
+    }
+
+    private fun showNoCameraDialog(id: String) {
+        if (nocamDialogShown.contains(id)) return   // 既に表示中/継続中は出さない
+        nocamDialogShown.add(id)
+        val cam = planCameraLabel(id)
+        val e = planEdge(id)   // null=スマホ直接
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("カメラが見つかりません")
+            .setMessage("${cam}が見つかりません。オンラインにしてください。")
+            .setCancelable(false)
+            .setPositiveButton("継続") { dlg, _ ->
+                dlg.dismiss()
+                // 即再探索(取得フェーズの60秒待ちを前倒し)。ネットワークI/Oは別スレッド。
+                Thread { if (e == null) HgeNative.nativePokeAcquire(id) else HgeNative.nativeEdgeResearch(e.ip, e.port, id) }.start()
+                // 猶予後もまだ未検出なら再度ポップアップ(継続の間は nocamDialogShown を維持して多重表示を防ぐ)。
+                handler.postDelayed({
+                    if (disconnectedPlans.contains(id)) { nocamDialogShown.remove(id); showNoCameraDialog(id) }
+                }, 12000)
+            }
+            .setNegativeButton("中止") { dlg, _ ->
+                dlg.dismiss()
+                val e2 = planEdge(id)
+                capturingPlans.remove(id); waitingPlans.remove(id); disconnectedPlans.remove(id); nocamDialogShown.remove(id)
+                if (capturingPlans.isEmpty()) stopBlink()
+                refreshPlanList(); updateReadOnly()
+                Thread { if (e2 == null) HgeNative.nativeCaptureStopPlan(id) else stopOnEdge(e2, id) }.start()
+            }
+            .show()
+    }
+
     private fun confirmStop(id: String) {
         // 338.撮影中止 ダイアログ
         androidx.appcompat.app.AlertDialog.Builder(this)
@@ -2706,7 +2754,23 @@ class MainActivity : AppCompatActivity(), HgeListener {
         HgeNative.nativeSetListener(null)
         HgeNative.nativeCaptureStop()
         HgeNative.nativeTerm()
+        releaseMulticastLock()
         super.onDestroy()
+    }
+
+    // 3b: SSDP受動待ち受け用の MulticastLock。Wi-Fi ドライバの受信フィルタを緩め、239.255.255.250:1900
+    // への NOTIFY をネイティブ(ssdpListen*)が受信できるようにする。権限 CHANGE_WIFI_MULTICAST_STATE 必須。
+    private var multicastLock: android.net.wifi.WifiManager.MulticastLock? = null
+    private fun acquireMulticastLock() {
+        try {
+            if (multicastLock != null) return
+            val wifi = applicationContext.getSystemService(android.content.Context.WIFI_SERVICE) as? android.net.wifi.WifiManager ?: return
+            multicastLock = wifi.createMulticastLock("hgc-ssdp").apply { setReferenceCounted(false); acquire() }
+        } catch (e: Exception) { /* 取得失敗時は受動待ち受け無し(60秒能動再探索で復帰) */ }
+    }
+    private fun releaseMulticastLock() {
+        try { multicastLock?.let { if (it.isHeld) it.release() } } catch (e: Exception) {}
+        multicastLock = null
     }
 
     // --- Entity通知 ---
@@ -2722,17 +2786,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         // 状態→3集合(撮影中=点滅 / 待機=点灯 / 未検出=✖)。各計画はいずれか一つ。
                         when (st) {
                             HgeNative.ST_CAPTURING, HgeNative.ST_STOPPING -> {
-                                capturingPlans.add(pid); waitingPlans.remove(pid); disconnectedPlans.remove(pid)
+                                capturingPlans.add(pid); waitingPlans.remove(pid); disconnectedPlans.remove(pid); nocamDialogShown.remove(pid)
                                 startBlink()
                             }
                             HgeNative.ST_WAITING, HgeNative.ST_SEARCHING -> {
-                                waitingPlans.add(pid); capturingPlans.remove(pid); disconnectedPlans.remove(pid)
+                                waitingPlans.add(pid); capturingPlans.remove(pid); disconnectedPlans.remove(pid); nocamDialogShown.remove(pid)
                                 if (capturingPlans.isEmpty()) stopBlink()
                             }
                             HgeNative.ST_NOCAMERA, HgeNative.ST_DISCONNECTED -> {
                                 disconnectedPlans.add(pid); capturingPlans.remove(pid); waitingPlans.remove(pid)
                                 if (capturingPlans.isEmpty()) stopBlink()
-                                // Phase3: ここで継続/中止ポップアップを出す。
+                                showNoCameraDialog(pid)   // Phase3c: 継続/中止ポップアップ(多重抑止あり)
                             }
                             HgeNative.ST_IDLE, HgeNative.ST_ERROR -> {
                                 capturingPlans.remove(pid); waitingPlans.remove(pid); disconnectedPlans.remove(pid)
@@ -3230,12 +3294,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
                                         if (waitingPlans.remove(epid)) changed = true
                                         if (capturingPlans.isEmpty()) stopBlink()
                                         if (currentPlanId == epid) { captureStatus.text = "● カメラが見つかりません(エッジ)"; captureStatus.setTextColor(0xFFD32F2F.toInt()); captureStatus.visibility = View.VISIBLE }
-                                        // Phase3: ここで継続/中止ポップアップを出す。
+                                        showNoCameraDialog(epid)   // Phase3c: 継続/中止ポップアップ(多重抑止あり)
                                     }
                                     HgeNative.ST_WAITING, HgeNative.ST_SEARCHING -> {
                                         if (waitingPlans.add(epid)) changed = true
                                         if (capturingPlans.remove(epid)) changed = true
                                         if (disconnectedPlans.remove(epid)) changed = true
+                                        nocamDialogShown.remove(epid)
                                         if (capturingPlans.isEmpty()) stopBlink()
                                         if (currentPlanId == epid) { captureStatus.text = "● 撮影開始待ち(エッジ)"; captureStatus.setTextColor(0xFF1565C0.toInt()); captureStatus.visibility = View.VISIBLE }
                                     }
@@ -3243,6 +3308,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                                         if (capturingPlans.add(epid)) changed = true
                                         if (waitingPlans.remove(epid)) changed = true
                                         if (disconnectedPlans.remove(epid)) changed = true
+                                        nocamDialogShown.remove(epid)
                                         startBlink()
                                         if (currentPlanId == epid) { captureStatus.text = "● エッジ撮影中  ${o.optInt("frame")}/${o.optInt("total")}枚  残り${o.optInt("remainSec")}秒"; captureStatus.setTextColor(0xFF2E7D32.toInt()); captureStatus.visibility = View.VISIBLE }
                                     }

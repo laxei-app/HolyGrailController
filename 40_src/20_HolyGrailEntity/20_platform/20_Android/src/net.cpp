@@ -327,6 +327,39 @@ namespace net
 		}
 	}
 
+	// SSDP受動待ち受け: 0.0.0.0:1900 に bind + 239.255.255.250 へ参加(IP_ADD_MEMBERSHIP)。
+	// ※MulticastLock は Java 側(MainActivity)で保持する。無いとここで受信できても破棄される。
+	void* ssdpListenStart(void)
+	{
+		int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+		if (sock < 0) { return nullptr; }
+		setTimeout(sock, 1);	// recv 1秒タイムアウト(専用スレッドから周期読み。停止に追随)
+
+		int reuse = 1;
+		setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+#ifdef SO_REUSEPORT
+		setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse));	// 能動探索の1900と共存
+#endif
+		sockaddr_in addr{};
+		addr.sin_family = AF_INET;
+		addr.sin_port   = htons(1900);
+		addr.sin_addr.s_addr = htonl(INADDR_ANY);
+		if (bind(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
+		{
+			close(sock);
+			return nullptr;
+		}
+		ip_mreq mreq{};
+		inet_pton(AF_INET, "239.255.255.250", &mreq.imr_multiaddr);
+		mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+		setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq));
+
+		return new int(sock);
+	}
+
+	bool ssdpListenRead(void* handle, std::string& answer) { return ssdpRead(handle, answer); }
+	void ssdpListenClose(void* handle) { ssdpClose(handle); }
+
 	void httpBreak(void)
 	{
 		g_break = true;

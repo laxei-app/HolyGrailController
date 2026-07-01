@@ -233,6 +233,9 @@ int32_t hge_getState(void);			// 集約状態(hgeState)を即時返す
 int32_t hge_captureStartPlan(const char* planId);
 int32_t hge_captureStopPlan(const char* planId);
 int32_t hge_getStatePlan(const char* planId);	// 指定計画の状態。planId 空=集約状態
+// カメラ未検出(NOCAMERA)で待機中の計画に即再探索を促す(継続ボタン/SSDP出現)。planId 空=全て。
+// 取得フェーズの60秒待ちを前倒しするだけで、見つからなければ引き続き NOCAMERA を維持する。
+int32_t hge_pokeAcquire(const char* planId);
 // 電源復帰/アプリ再起動時の撮影再開(item2)。/asset/capturing.json を読み、撮影中だった
 // 計画を再開する。return: 再開を試みた計画数。エッジは起動時、スマホはアプリ起動時に呼ぶ。
 int32_t hge_resumeCapture(void);

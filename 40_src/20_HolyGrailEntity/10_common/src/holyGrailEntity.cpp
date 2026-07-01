@@ -62,6 +62,45 @@ namespace
 	};
 	std::vector<std::unique_ptr<captureSession>> g_sessions;
 
+	// --- SSDP受動待ち受け → 取得フェーズのポーク配線(3b) ---
+	// 待ち受けスレッド(cameraController の共有リスナ)から呼ばれる onAppear は、取得フェーズ中の
+	// 各 runner を pokeAcquire して60秒待ちを前倒しする。g_sessions を待ち受けスレッドから直接
+	// 触らず、専用の軽量ロック付きレジストリ経由にして競合/デッドロックを避ける。
+	std::mutex                    g_pokeMutex;
+	std::vector<captureRunner*>   g_pokeRunners;	// 撮影中セッションの runner(生存中のみ登録)
+	bool                          g_watching = false;	// 共有SSDPリスナ稼働中か
+
+	void pokeRegister(captureRunner* r)
+	{
+		if (r == nullptr) { return; }
+		std::lock_guard<std::mutex> lk(g_pokeMutex);
+		g_pokeRunners.push_back(r);
+	}
+	void pokeUnregister(captureRunner* r)
+	{
+		std::lock_guard<std::mutex> lk(g_pokeMutex);
+		g_pokeRunners.erase(std::remove(g_pokeRunners.begin(), g_pokeRunners.end(), r), g_pokeRunners.end());
+	}
+	void pokeAllAcquiring(void)	// 待ち受けスレッドから: 取得フェーズの runner を全て前倒し
+	{
+		std::lock_guard<std::mutex> lk(g_pokeMutex);
+		for (auto* r : g_pokeRunners) { if (r) { r->pokeAcquire(); } }
+	}
+	void ensureWatching(void)	// 撮影セッション開始時に共有SSDPリスナを起動(冪等)
+	{
+		if (g_watching) { return; }
+		cameraController::watchStart([]() { pokeAllAcquiring(); });
+		g_watching = true;
+	}
+	void stopWatchingIfIdle(void)	// セッションが無くなったら待ち受けを止める
+	{
+		if (g_watching && g_sessions.empty())
+		{
+			cameraController::watchStop();
+			g_watching = false;
+		}
+	}
+
 	// 進捗スナップショット(progress(get) 応答・エッジ端末用。最後に撮影したセッションの値)
 	int                   g_pgFrame = 0, g_pgTotal = 0, g_pgRemain = 0, g_pgElapsed = 0;
 	hgc::exposure         g_pgExp{};
@@ -968,6 +1007,7 @@ namespace
 	void stopSessionAt(size_t i)
 	{
 		captureSession* s = g_sessions[i].get();
+		pokeUnregister(s->runner ? s->runner.get() : nullptr);	// 3b: ポーク対象から外す(runner破棄前)
 		s->state = HGE_ST_STOPPING; notifyStateP(s->planId, HGE_ST_STOPPING); refreshAggregateState();
 		if (s->startThread) { ossc::threadEnd(s->startThread); s->startThread = nullptr; }
 		if (s->runner) { s->runner->stop(); }	// ワーカースレッドを join(以後コールバック無し)
@@ -975,6 +1015,7 @@ namespace
 		g_sessions.erase(g_sessions.begin() + i);
 		notifyStateP(pid, HGE_ST_IDLE);
 		refreshAggregateState();
+		stopWatchingIfIdle();	// 3b: 最後のセッションが消えたらSSDP待ち受けを停止
 		// 注: 実行状況ファイルはここでは触らない。明示停止は hge_captureStopPlan で off にし、
 		//     シャットダウン(全停止)では意図を残して再起動時に再開できるようにする。
 	}
@@ -991,6 +1032,7 @@ namespace
 			bool running = g_sessions[i]->runner && g_sessions[i]->runner->isRunning();
 			if (!running && (st == HGE_ST_IDLE || st == HGE_ST_ERROR))
 			{
+				pokeUnregister(g_sessions[i]->runner ? g_sessions[i]->runner.get() : nullptr);	// 3b
 				if (g_sessions[i]->startThread) { ossc::threadEnd(g_sessions[i]->startThread); g_sessions[i]->startThread = nullptr; }
 				if (g_sessions[i]->runner)      { g_sessions[i]->runner->stop(); }
 				g_sessions.erase(g_sessions.begin() + i);
@@ -998,7 +1040,7 @@ namespace
 			}
 			else { ++i; }
 		}
-		if (removed) { refreshAggregateState(); }
+		if (removed) { refreshAggregateState(); stopWatchingIfIdle(); }
 	}
 }
 
@@ -1021,7 +1063,8 @@ int32_t hge_init(void)
 
 int32_t hge_term(void)
 {
-	while (!g_sessions.empty()) { stopSessionAt(g_sessions.size() - 1); }	// 全セッション停止
+	while (!g_sessions.empty()) { stopSessionAt(g_sessions.size() - 1); }	// 全セッション停止(最後の1つで待ち受けも停止)
+	cameraController::watchStop(); g_watching = false;	// 3b: 念のためSSDP待ち受けを確実に停止
 	if (g_searchThread) { ossc::threadEnd(g_searchThread); g_searchThread = nullptr; }
 	if (g_inited) { netThread::deInit(); g_inited = false; }
 	setState(HGE_ST_IDLE);
@@ -1847,6 +1890,8 @@ int32_t hge_captureStartPlan(const char* planId_)
 	sess->runner = std::make_unique<captureRunner>();
 	captureSession* raw = sess.get();
 	g_sessions.push_back(std::move(sess));
+	pokeRegister(raw->runner.get());	// 3b: SSDP出現ポークの対象に登録
+	ensureWatching();					// 3b: 共有SSDP受動待ち受けを起動(冪等)
 	ossc::THREAD_FUNC fn = [raw](void*) -> errCode { return startSessionSequence(raw); };
 	raw->startThread = ossc::threadNet(fn, nullptr);
 	setCapturing(planId, true);	// item2: 撮影意図を記録(電源復帰/再起動で再開する)
@@ -1862,6 +1907,16 @@ int32_t hge_captureStopPlan(const char* planId_)
 	{
 		if (g_sessions[i]->planId == planId) { stopSessionAt(i); return ERR_HGC_OK; }
 	}
+	return ERR_HGC_OK;
+}
+
+// カメラ未検出で待機中の計画に即再探索を促す(継続ボタン/SSDP出現)。planId 空=全取得フェーズ。
+int32_t hge_pokeAcquire(const char* planId_)
+{
+	std::string planId = (planId_ && planId_[0]) ? std::string(planId_) : std::string();
+	if (planId.empty()) { pokeAllAcquiring(); return ERR_HGC_OK; }
+	captureSession* s = sessionFor(planId);
+	if (s && s->runner) { s->runner->pokeAcquire(); }
 	return ERR_HGC_OK;
 }
 

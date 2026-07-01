@@ -1,5 +1,8 @@
 ﻿#include "common.h"
 #include "detectSsdpBase.h"
+#include "net.h"
+#include "osSystemCall.h"
+#include "tool.h"
 #include <algorithm>
 
 // SSDP(M-SEARCH)で検出し、同一カメラの統合と apiBase 初期化まで済ませて out に追加する。
@@ -76,4 +79,51 @@ size_t detectSsdpBase::detect(std::vector<class device>& out)
 		added++;
 	}
 	return added;
+}
+
+detectSsdpBase::~detectSsdpBase()
+{
+	watchStop();
+}
+
+// SSDP受動待ち受け開始。0.0.0.0:1900 に bind して 239.255.255.250 の NOTIFY を専用スレッドで待つ。
+// 既に稼働中なら何もしない(共有単一リスナ)。net::ssdpListenStart が nullptr(Windows/失敗)なら
+// 待ち受け無しで戻る(呼び出し側は60秒ごとの能動再探索で復帰する)。
+void detectSsdpBase::watchStart(std::function<void()> onAppear)
+{
+	if (watchRunning_) { return; }
+	onAppear_  = std::move(onAppear);
+	watchSock_ = net::ssdpListenStart();
+	if (watchSock_ == nullptr) { return; }	// 非対応/失敗 → 待ち受け無し
+	watchRunning_ = true;
+	ossc::THREAD_FUNC fn = [this](void*) -> errCode { return this->watchLoop(); };
+	watchThread_ = ossc::threadNet(fn, nullptr);
+}
+
+void detectSsdpBase::watchStop()
+{
+	if (!watchRunning_ && watchThread_ == nullptr) { return; }
+	watchRunning_ = false;
+	if (watchThread_ != nullptr) { ossc::threadEnd(watchThread_); watchThread_ = nullptr; }	// join
+	if (watchSock_ != nullptr)   { net::ssdpListenClose(watchSock_); watchSock_ = nullptr; }
+}
+
+// 待ち受けスレッド本体: NOTIFY を1秒タイムアウトで周期読みし、対象サービス語を含めば onAppear。
+errCode detectSsdpBase::watchLoop()
+{
+	std::string pkt;
+	while (watchRunning_)
+	{
+		pkt.clear();
+		if (!net::ssdpListenRead(watchSock_, pkt) || pkt.empty()) { continue; }	// 1秒で戻る(停止に追随)
+		for (const auto& iface : interfaces())
+		{	// このバックエンドのカメラが自発広告した(出現した)とみなして通知。
+			if (tool::findKvp(pkt, iface.keywords))
+			{
+				if (onAppear_) { onAppear_(); }
+				break;
+			}
+		}
+	}
+	return ERR_HGC_OK;
 }

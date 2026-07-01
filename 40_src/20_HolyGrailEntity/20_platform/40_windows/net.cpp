@@ -115,7 +115,7 @@ bool ssdpRead(void* handle, std::string& answer)
 }
 
 // 4. 探索終了
-void ssdpClose(void* handle)  
+void ssdpClose(void* handle)
 {
     if (handle) {
         SOCKET* sockPtr = (SOCKET*)handle;
@@ -123,6 +123,11 @@ void ssdpClose(void* handle)
         delete sockPtr;
     }
 }
+
+// SSDP受動待ち受け: Windows は非対象(検証用)のためスタブ。60秒ごとの能動再探索のみで動く。
+void* ssdpListenStart(void) { return nullptr; }
+bool  ssdpListenRead(void* handle, std::string& answer) { (void)handle; (void)answer; return false; }
+void  ssdpListenClose(void* handle) { (void)handle; }
 
 // http通信の中断要求フラグ
 std::atomic<bool> httpBreakRequest = false;

@@ -89,19 +89,7 @@ static bool  g_blinkOn = true;	// 撮影中(緑カメラ)アイコンの点滅�
 static char  g_prog[64] = "";
 static char  g_shot[64] = "";
 
-// ICON_CAPTURING(緑カメラ)を赤一色に変換した版(接続断=赤点灯用)。初回参照時に生成する。
-static uint16_t g_iconCapRed[ICON_CAPTURING_W * ICON_CAPTURING_H];
-static bool     g_iconCapRedReady = false;
-static const uint16_t* capturingRedIcon(void)
-{
-	if (!g_iconCapRedReady)
-	{
-		const int n = ICON_CAPTURING_W * ICON_CAPTURING_H;
-		for (int i = 0; i < n; ++i) { g_iconCapRed[i] = ICON_CAPTURING[i] ? 0xF800 : 0x0000; }	// 非黒画素を赤へ
-		g_iconCapRedReady = true;
-	}
-	return g_iconCapRed;
-}
+// (Phase4: カメラ未検出の赤点灯代替は ICON_CAMERA_NG(✖カメラ)へ置換。旧 capturingRedIcon は廃止)
 static char  g_msg[80]  = "";
 static bool  g_dirty = true;
 static bool  g_edgeUp = false;	// ETPサーバ起動済みか(WiFi接続後に一度)
@@ -390,8 +378,8 @@ static void renderPlan(void)
 		if (ry1 > top && ry0 < bot)
 		{
 			if (nocam)
-			{	// カメラ未検出。Phase4 で ICON_CAMERA_NG(✖)へ。現状は赤点灯で代替。
-				g_cv.pushImage(6, ry0 + (rowH - ICON_CAPTURING_H) / 2, ICON_CAPTURING_W, ICON_CAPTURING_H, capturingRedIcon());
+			{	// カメラ未検出(✖カメラ)=点灯。Phase4: ICOカメラNon.png 由来の ICON_CAMERA_NG。
+				g_cv.pushImage(6, ry0 + (rowH - ICON_CAMERA_NG_H) / 2, ICON_CAMERA_NG_W, ICON_CAMERA_NG_H, ICON_CAMERA_NG);
 			}
 			else if (capturing)
 			{	// 撮影中=点滅
