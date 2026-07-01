@@ -117,6 +117,31 @@ errCode captureRunner::rdyMeterTimed(void)
 	return e;
 }
 
+// 露出を「変更のあった項目だけ」適用する(タイマ方式tm0)。通常は ss/iso/fn の1つだけ、
+// ccm切替の瞬間のみ複数、暗限界張り付き等で変化なしなら0本になる。直近適用値と比較して差分のみ送る。
+// establishSession でキャッシュをクリアするので、接続/再接続直後の初回はフル適用になる。
+errCode captureRunner::applyExposureChanged(const hgc::exposure& exp)
+{
+	errCode e = ERR_HGC_OK, r;
+	if (exp.fn != lastFnApplied_)   { r = cameraController::setFNumber(*dev_, exp.fn); if (r == ERR_HGC_OK) { lastFnApplied_ = exp.fn; } else { e = r; } }
+	if (exp.ss != lastSsApplied_)   { r = cameraController::setSS(*dev_, exp.ss);      if (r == ERR_HGC_OK) { lastSsApplied_ = exp.ss; } else { e = r; } }
+	if (exp.iso != lastIsoApplied_) { r = cameraController::setIso(*dev_, exp.iso);    if (r == ERR_HGC_OK) { lastIsoApplied_ = exp.iso; } else { e = r; } }
+	return e;
+}
+
+// monotonic 基準 mono(tool::startElapse のハンドル)からの経過が targetMs に達するまで待つ。
+// 撮影周期の絶対アンカー用。100ms刻みで running_ を見て中断可。既に過ぎていれば即戻る。
+void captureRunner::sleepUntilElapse(void* mono, long targetMs)
+{
+	while (running_)
+	{
+		long rem = targetMs - static_cast<long>(tool::getElapse(mono));
+		if (rem <= 0) { break; }
+		uint32_t chunk = (rem > 100) ? 100u : static_cast<uint32_t>(rem);
+		tool::sleep(chunk);
+	}
+}
+
 const hgc::ccmWindow* captureRunner::activeWindow(long long nowSec) const
 {
 	for (const auto& w : plan_.ccmList)
@@ -226,6 +251,9 @@ bool captureRunner::establishSession(void)
 	// カメラ未取得(apiBase==nullptr)ならセッションは張れない(3a: 未検出許容)。
 	if (dev_ == nullptr || dev_->apiBase == nullptr) { return false; }
 
+	// 変更分のみ適用のキャッシュをクリア(再接続直後はカメラ状態が不定なので次回フル適用させる)。
+	lastFnApplied_.clear(); lastSsApplied_.clear(); lastIsoApplied_.clear();
+
 	// 撮影モードに入る(ライブビュー開始)
 	errCode err = cameraController::startShooting(*dev_);
 	if (err != ERR_HGC_OK)
@@ -312,7 +340,7 @@ errCode captureRunner::loop(void)
 	// 最長ss上限(仕様7.4.2/今回の指示3): ss は「夜間ssを超えない」かつ「撮影周期-2秒以内」。
 	// 夜間がスケジュール窓に無くても周期決定パラメータとして守る。各 ctl.init 後に capLongestSs で適用。
 	const double nightSsSec = expo::parseValue(plan_.nightFixedExposure.ss, expo::expoKind::ss);
-	const double ivCap      = (interval > 2.0) ? (interval - 2.0) : interval;
+	const double ivCap      = (interval > kShutterOffsetSec) ? (interval - kShutterOffsetSec) : interval;	// 最大ss=周期-offset
 	const double maxSsCap   = (nightSsSec > 0.0) ? std::min(nightSsSec, ivCap) : ivCap;
 
 	const hgc::ccmWindow* curWin = nullptr;
@@ -365,55 +393,79 @@ errCode captureRunner::loop(void)
 		return best ? static_cast<const hgc::ccmNight*>(best->ccm.get()) : nullptr;
 	};
 
+	// --- 周期正確化(タイマ方式・案P) ---
+	//  前フェーズ(撮影窓の kPreConvergeSec 秒前)で初期収束(測光のみ・シャッター無し)して1枚目の露出 pending を確定。
+	//  以降は撮影窓開始を0とする monotonic アンカー(mono)からの絶対境界で tm0/tm1 を実行:
+	//   tm0=境界: 変更分の露出適用 + 測光(次コマ用) / tm1=境界+offset: シャッター(=周期ピッタリで発光)。
+	//  露出計算ブロックは行内のまま流用し、ウォームアップ(初回)と通常コマで同じブロックを1回ずつ通す。
+	hgc::exposure pending{};			// 各境界(tm0)で適用し tm1 で撮る露出。前フェーズの初期収束で確定
+	bool          warmedUp   = false;	// 初期収束が済み pending が確定したか
+	void*         mono       = nullptr;	// 撮影窓開始を0とする monotonic アンカー
+	long long     boundaryIdx = 0;		// 何コマ目か(境界時刻 = mono + boundaryIdx*interval)
+
 	while (running_)
 	{
-		const long long now = static_cast<long long>(std::time(nullptr));
+		long long now = static_cast<long long>(std::time(nullptr));
 		if (now >= endSec) { break; }				// 計画終了
-		if (now < startSec)
-		{	// 開始前は待つ。無通信が続くとカメラがWi-Fi/CCAPIセッションを切るため、
-			// 約60秒ごとに無害なGET(keepAlive)を送って接続を維持する。
-			// ※実機検証(2026-06-30): keepAliveを止めると autopoweroff=disable でも約53分の待機で
-			//   カメラがネットワークから脱落し、窓開始で1枚も撮れず・SSDP/IP直結とも再接続不可になった。
-			//   寝たカメラは起こせないため keepAlive は必須(撤去不可)。
-			if (now - lastKeepAlive >= kKeepAliveSec)
+
+		if (!warmedUp)
+		{
+			// 撮影窓の kPreConvergeSec 秒前まで待機。無通信が続くとカメラがセッションを切るため、
+			// 約60秒ごとに無害なGET(keepAlive)を送り、連続失敗なら先回り再接続する(健全性チェック)。
+			//  ※keepAlive は撤去不可(2026-06-30 実機: 止めると約53分で脱落・再接続不可)。
+			if (now < startSec - kPreConvergeSec)
 			{
-				lastKeepAlive = now;
-				// 健全性チェック: keepAlive の到達可否を見る。連続失敗したら「窓が来る前に」その場で
-				// 先回り再接続(SSDP再探索→直近IP直結)し、窓開始の取りこぼしを防ぐ。keepAlive が
-				// 効いている限りカメラはネットワーク上に留まるので、これは一時的なブリップへの早期回復。
-				const bool alive = (cameraController::keepAlive(*dev_) == ERR_HGC_OK);
-				if (!waitDisconnected)
+				if (now - lastKeepAlive >= kKeepAliveSec)
 				{
-					if (alive) { waitFailStreak = 0; }
-					else if (++waitFailStreak >= kWaitMaxFail)
-					{	// 連続失敗で接続断と判定(検知ログは1回だけ)。以降は下の復帰ブロックで毎周期再試行。
-						waitDisconnected = true;
-						if (onError_) { onError_(ERR_HGC_NOT_FOUND, "待機中に接続断を検知 → 先回り再接続"); }
-						if (onState_) { onState_(ST_NOCAMERA); }	// 待機中のカメラ未検出(✖点灯)
-					}
-				}
-				if (waitDisconnected)
-				{
-					// 断検知後は窓開始まで毎周期、SSDP再探索→直近IP直結で復帰を試す。
-					// 電源復帰等でセッション(LV/M/autopoweroff)は失われているため、同一IPで keepAlive が
-					// 通る場合でもこの経路を通し、onReconnect_ で再特定後に establishSession で必ず張り直す。
-					if (onReconnect_ && onReconnect_() && establishSession())
+					lastKeepAlive = now;
+					const bool alive = (cameraController::keepAlive(*dev_) == ERR_HGC_OK);
+					if (!waitDisconnected)
 					{
-						waitDisconnected = false; waitFailStreak = 0;
-						if (onState_) { onState_(ST_WAITING); }	// まだ撮影窓前なので待機(点灯)へ戻す
+						if (alive) { waitFailStreak = 0; }
+						else if (++waitFailStreak >= kWaitMaxFail)
+						{	// 連続失敗で接続断と判定(検知ログは1回だけ)。
+							waitDisconnected = true;
+							if (onError_) { onError_(ERR_HGC_NOT_FOUND, "待機中に接続断を検知 → 先回り再接続"); }
+							if (onState_) { onState_(ST_NOCAMERA); }	// 待機中のカメラ未検出(✖点灯)
+						}
 					}
-					// 復帰できなければ次の keepAlive 周期で再試行(窓開始まで何度でも)。
+					if (waitDisconnected)
+					{	// 電源復帰等でセッションは失われているため、必ず onReconnect_→establishSession で張り直す。
+						if (onReconnect_ && onReconnect_() && establishSession())
+						{
+							waitDisconnected = false; waitFailStreak = 0;
+							if (onState_) { onState_(ST_WAITING); }	// まだ撮影窓前なので待機(点灯)へ戻す
+						}
+					}
 				}
+				interruptibleSleep(500);
+				continue;
 			}
-			interruptibleSleep(500);
-			continue;
+			// kPreConvergeSec 秒前に到達 → 初期収束ウォームアップ。nowCtx=startSec でブロックを1回通す(シャッター無し)。
+			now = startSec;
+		}
+		else
+		{
+			// tm0: 次の境界(絶対アンカー)まで待つ。累積ドリフトが出ない。
+			sleepUntilElapse(mono, static_cast<long>(boundaryIdx * interval * 1000.0));
+			if (!running_) { break; }
+			if (static_cast<long long>(std::time(nullptr)) >= endSec) { break; }
+			now = startSec + static_cast<long long>(boundaryIdx * interval);	// ブロック用の窓コンテキスト
 		}
 
-		// ここに来た=撮影窓に入った。待機(点灯)から撮影中(点滅)へ一度だけ切り替える。
-		if (!inWindow) { inWindow = true; if (onState_) { onState_(ST_CAPTURING); } }
-
 		const hgc::ccmWindow* w = activeWindow(now);
-		if (w == nullptr || !w->ccm) { interruptibleSleep(500); continue; }	// 隙間
+		if (w == nullptr || !w->ccm) { if (warmedUp) { ++boundaryIdx; } interruptibleSleep(500); continue; }	// 隙間
+
+		// tm0: 変更のあった露出項目だけ適用(通常コマのみ。ウォームアップは pending 未確定なので適用しない)。
+		void* tm0    = warmedUp ? tool::startElapse() : nullptr;	// tm0処理時間(適用+測光)の計測開始
+		int   applyMs = -1;
+		if (warmedUp)
+		{
+			lastExp = pending;	// ブロックの ev0 は「測光時の露出」= これから測る pending を使う
+			void* ta = tool::startElapse();
+			applyExposureChanged(pending);
+			applyMs = static_cast<int>(tool::getElapse(ta));
+		}
 
 		const hgc::ccmWindow* prevWin = curWin;
 		const bool windowChanged = (w != curWin);
@@ -425,7 +477,6 @@ errCode captureRunner::loop(void)
 		hgc::exposure target{};
 		double meteredLinear = -1.0;	// 測光したリニア輝度(自動補正時のみ。<0=測光なし)
 		meterMs_ = -1;	// このコマの rdyMetering 実測msをリセット(測光しないコマは -1 のまま)
-		int    setMs = -1;	// rdyShutter(露出設定適用)の実測ms。計測は退避のみ、ログはシャッター後(2秒窓の予算検討用)
 
 		if (ccm->type == hgc::ccmType::night)
 		{
@@ -695,39 +746,41 @@ errCode captureRunner::loop(void)
 			target = ccm->limitBright;	// その他はフォールバック
 		}
 
-		// 露出設定が無効ならスキップして待機
-		if (!validExposure(target))
+		// --- ウォームアップ(初期収束)完了処理: シャッターは撃たず 1枚目の露出 pending を確定 ---
+		if (!warmedUp)
 		{
-			interruptibleSleep(static_cast<long>(interval * 1000.0));
+			if (validExposure(target))       { pending = target; }
+			else if (validExposure(lastExp)) { pending = lastExp; }
+			else                             { pending = ccm->limitBright; }
+			warmedUp = true;
+			// 収束が撮影窓より早く終わった余り時間は keepAlive で待つ。窓開始で CAPTURING + アンカー設定。
+			while (running_ && static_cast<long long>(std::time(nullptr)) < startSec)
+			{
+				cameraController::keepAlive(*dev_);
+				interruptibleSleep(1000);
+			}
+			if (!running_) { break; }
+			if (onState_) { onState_(ST_CAPTURING); }
+			mono = tool::startElapse();	// 撮影窓開始を0とする monotonic アンカー
+			boundaryIdx = 0;
 			continue;
 		}
 
-		// 露出を設定して撮影(仕様 4章)。周期計測のため経過を測る。
-		void* el = tool::startElapse();
-		cmdt::shotSet shot(target.ss, target.fn, target.iso);	// カメラ設定値の文字列
-		void* st = tool::startElapse();							// 露出設定(rdyShutter)の実測(2秒窓の予算検討用)
-		errCode setErr = cameraController::rdyShutter(*dev_, shot);
-		setMs = static_cast<int>(tool::getElapse(st));			// 退避のみ。ログは下の onCaptured(シャッター後)で
-		if (setErr != ERR_HGC_OK && onError_)
-		{
-			// 露出設定(iso/ss/fn)がカメラに反映できなかった。握りつぶさず通知する。
-			onError_(setErr, "rdyShutter(露出設定失敗)");
-		}
+		// --- 通常コマ: tm0処理時間(適用+測光+計算)を確定してログ用に退避し、tm1で撮る ---
+		const int tm0Ms = (tm0 != nullptr) ? static_cast<int>(tool::getElapse(tm0)) : -1;
+		if (!validExposure(target)) { target = validExposure(pending) ? pending : ccm->limitBright; }	// 無効はフォールバック
+
+		// tm1: 境界+offset まで待ってシャッター(=周期ピッタリで発光)。tm0がoffsetを超えたカメラでは即発光。
+		sleepUntilElapse(mono, static_cast<long>(boundaryIdx * interval * 1000.0 + kShutterOffsetSec * 1000.0));
 		err = cameraController::actShutter(*dev_);
-		if (err != ERR_HGC_OK)
-		{
-			if (onError_) { onError_(err, "actShutter"); }
-		}
-		// 連続失敗の検出: 露出設定か撮影のどちらかが失敗したらこのサイクルは失敗。成功で0へ。
-		if (setErr != ERR_HGC_OK || err != ERR_HGC_OK) { ++shootFailStreak; }
+		if (err != ERR_HGC_OK) { if (onError_) { onError_(err, "actShutter"); } ++shootFailStreak; }
 		else { shootFailStreak = 0; }
-		lastExp = target;
 		++frame;
 
 		if (onCaptured_)
 		{
-			double lum = expo::brightnessStops(target, tables_);
-			onCaptured_(capturedInfo{ frame, target, lum, ccm->name, meteredLinear, meterMs_, setMs });
+			double lum = expo::brightnessStops(pending, tables_);	// 撮ったのは pending(適用済み)
+			onCaptured_(capturedInfo{ frame, pending, lum, ccm->name, meteredLinear, meterMs_, applyMs, tm0Ms });
 		}
 		if (onProgress_)
 		{
@@ -735,9 +788,7 @@ errCode captureRunner::loop(void)
 			            static_cast<int>(endSec - now), static_cast<int>(now - startSec) });
 		}
 
-		// 撮影が連続失敗 → カメラ接続が切れたとみなし再接続を試みる(SSDP再探索/直近IP直結)。
-		// 3a: 「3回で諦める」は廃止。中止(running_=false)するまで無限に再接続を試み続ける。
-		//     無人エッジでも撮影窓の終了までは NOCAMERA のまま探し続ける(指示: 中止するまで繰り返す)。
+		// 撮影が連続失敗 → カメラ接続が切れたとみなし再接続(3a: 中止まで無限)。復帰後は現在時刻から周期を取り直す。
 		if (shootFailStreak >= kMaxConsecutiveFail)
 		{
 			if (onState_) { onState_(ST_NOCAMERA); }	// 撮影中のカメラ未検出(✖点灯)
@@ -745,32 +796,33 @@ errCode captureRunner::loop(void)
 			bool recovered = false;
 			while (running_)
 			{
-				// SSDP再探索で計画のカメラを探し *dev_ を更新(成功時)→ ライブビュー/M設定を張り直す。
-				if (onReconnect_ && onReconnect_() && establishSession())
-				{
-					recovered = true;
-					break;
-				}
+				if (onReconnect_ && onReconnect_() && establishSession()) { recovered = true; break; }
 				interruptibleSleep(kReconnectWaitMs);	// 再試行間隔(中止でsleep中断)
 			}
 			if (!recovered) { break; }	// 中止された(running_=false)→ 終了処理へ
 			shootFailStreak = 0;
 			avgBuf.clear();								// 測光移動平均をリセット
 			if (onState_) { onState_(ST_CAPTURING); }	// 緑へ戻す
+			mono = tool::startElapse(); boundaryIdx = 0;	// 再接続後は現在時刻から周期をアンカーし直す
+			pending = target;
+			continue;	// 次コマから再開(establishSession でキャッシュclear済=フル適用)
 		}
 
-		// 撮影周期を維持(仕様 4.1: 撮影間隔は最優先で守る)。
-		// この周期待ちは停止要求(中止)が来ても中断せず最後まで待つ。理由: 直前に切った最後の1枚は
-		// カメラ側で露光・保存が続いている。ここで即終了処理(restoreShootingMode)へ進むと、busyな
-		// カメラへ設定変更POSTが飛んで最後の1枚に影響/復元失敗する。次の撮影周期境界まで待ってから
-		// ループ先頭の running_ 判定で抜け、終了処理に入ることで最後の1枚を守る。
-		uint32_t spent = tool::getElapse(el);
-		long waitMs = static_cast<long>(interval * 1000.0) - static_cast<long>(spent);
-		for (long left = waitMs; left > 0; )	// running_ を見ない=中断しない待ち
+		pending = target;	// 次コマの露出(パイプライン: 測光→計算した露出は 1コマ後に適用/撮影)
+		++boundaryIdx;
+	}
+
+	// 最後の1枚を守る: 直前に切ったコマはカメラ側でまだ露光・保存中のことがある。ここで即
+	// restoreShootingMode(設定変更POST)を送ると busy なカメラで最後の1枚が壊れる/復元失敗する。
+	// 次の撮影周期境界(=露光+保存が済む時刻)まで「中断しない待ち」を入れてから終了処理へ入る。
+	if (mono != nullptr && frame > 0)
+	{
+		const long targetMs = static_cast<long>(boundaryIdx * interval * 1000.0);
+		for (long left = targetMs - static_cast<long>(tool::getElapse(mono)); left > 0;
+		     left = targetMs - static_cast<long>(tool::getElapse(mono)))
 		{
 			uint32_t c = (left > 200) ? 200u : static_cast<uint32_t>(left);
 			tool::sleep(c);
-			left -= static_cast<long>(c);
 		}
 	}
 

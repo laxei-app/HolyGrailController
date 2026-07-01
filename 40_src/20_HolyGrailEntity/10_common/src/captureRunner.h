@@ -26,8 +26,9 @@ public:
 	// luminance=露出の明るさ[段](Sv-Av-Tv)。metered=測光したリニア輝度(自動補正時のみ。<0=測光なし)。
 	// rdyMeteringMs=ライブビュー取得(rdyMetering)実測ms、rdyShutterMs=露出設定適用(rdyShutter)実測ms。
 	// いずれも計測点では変数に退避するだけで、ログ出力はこのコマ確定後(シャッター後)に行う(-1=計測なし)。
+	// tm0Ms=タイマ方式のtm0処理時間(境界での 露出適用+測光 の合計ms)。offset に収まるかの判定用(ユーザー要望)。
 	struct capturedInfo { int frame; hgc::exposure exp; double luminance; std::string ccm; double metered = -1.0;
-	                      int rdyMeteringMs = -1; int rdyShutterMs = -1; };
+	                      int rdyMeteringMs = -1; int rdyShutterMs = -1; int tm0Ms = -1; };
 
 	using stateCb    = std::function<void(int)>;					// hgeState 値
 	using progressCb = std::function<void(const progressInfo&)>;
@@ -68,10 +69,16 @@ public:
 	static constexpr int  kMaxReconnectTries   = 3;		// SSDP再探索の試行回数。これを超えたら諦める
 	static constexpr long kReconnectWaitMs     = 2000;	// 再接続試行間の待ち[ms]
 
+	// --- 周期正確化(タイマ方式) ---
+	static constexpr double kShutterOffsetSec  = 2.0;	// tm0(露出適用+測光)→ tm1(シャッター)の差[秒]。=周期と最大ssの差(固定)
+	static constexpr int    kPreConvergeSec    = 30;	// 撮影窓の何秒前から初期収束(測光のみ・シャッター無し)を始めるか
+
 private:
 	errCode loop(void);								// 撮影ループ本体(別スレッド)
 	bool    establishSession(void);					// startShooting+M設定+設定値テーブル構築(開始/再接続で使用)
 	errCode rdyMeterTimed(void);					// rdyMetering を実測付きで呼ぶ(所要msは meterMs_ に退避)
+	errCode applyExposureChanged(const hgc::exposure& exp);	// 変更のあった ss/iso/fn だけを適用(タイマ方式tm0)
+	void    sleepUntilElapse(void* mono, long targetMs);	// monotonic基準(mono)で targetMs 経過まで待つ(中断可)
 	const hgc::ccmWindow* activeWindow(long long nowSec) const;
 	hgc::exposure nightGoalAfter(long long nowSec) const;	// 次の夜間固定露出
 	// 最初の補正(仕様 4.4)を反復収束で行い、撮影開始直後の初期露出を決める。
@@ -91,6 +98,8 @@ private:
 	expo::expoTables tables_;
 
 	int meterMs_ = -1;	// 直近 rdyMetering(ライブビュー取得)の実測ms。コマ毎にリセットしログへ出す(計測用)
+	// 変更分のみ適用(タイマ方式tm0)の直近適用値。establishSession でクリアし次回フル適用させる。
+	std::string lastFnApplied_, lastSsApplied_, lastIsoApplied_;
 
 	stateCb     onState_;
 	progressCb  onProgress_;

@@ -164,7 +164,7 @@ public:
 	// meteredLinear: 測光したリニア輝度(自動補正時のみ。<0=測光なしで detail に出力しない)。
 	// rdyMeteringMs/rdyShutterMs: ライブビュー取得/露出設定の実測ms(>=0で detail 末尾に rdy=/set= を付与。計測用)。
 	static void logShot(int frame, const hgc::exposure& e, double lumStops, const char* ccmName,
-	                    double meteredLinear = -1.0, int rdyMeteringMs = -1, int rdyShutterMs = -1);
+	                    double meteredLinear = -1.0, int rdyMeteringMs = -1, int rdyShutterMs = -1, int tm0Ms = -1);
 
 	// 現在の(本日の)ログファイルのフルパスを返す(検証・ログ転送用)。
 	static std::string currentLogPath(void);

@@ -1081,7 +1081,7 @@ std::string dataManager::currentLogPath(void)
 }
 
 void dataManager::logShot(int frame, const hgc::exposure& e, double lumStops, const char* ccmName,
-                          double meteredLinear, int rdyMeteringMs, int rdyShutterMs)
+                          double meteredLinear, int rdyMeteringMs, int rdyShutterMs, int tm0Ms)
 {
 	char lumStr[12];
 	std::snprintf(lumStr, sizeof(lumStr), "%+.3f", lumStops);
@@ -1101,7 +1101,8 @@ void dataManager::logShot(int frame, const hgc::exposure& e, double lumStops, co
 	// 実測時間(2秒窓の予算検討用)。>=0 のときだけ付与する。rdy=ライブビュー取得, set=露出設定適用。
 	if (dn > 0 && dn < static_cast<int>(sizeof(detail)))
 	{
-		if (rdyMeteringMs >= 0) { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " rdy=%dms", rdyMeteringMs); }
+		if (tm0Ms        >= 0) { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " tm0=%dms", tm0Ms); }
+		if (rdyMeteringMs >= 0 && dn < static_cast<int>(sizeof(detail))) { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " rdy=%dms", rdyMeteringMs); }
 		if (rdyShutterMs  >= 0 && dn < static_cast<int>(sizeof(detail))) { std::snprintf(detail + dn, sizeof(detail) - dn, " set=%dms", rdyShutterMs); }
 	}
 	// SHOT のみ frame〜lum を使う。body を列整形(frame|iso|ss|fn|lum|detail)。露出はカメラ設定値の文字列。
