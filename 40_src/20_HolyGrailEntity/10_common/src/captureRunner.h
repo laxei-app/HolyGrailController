@@ -47,10 +47,12 @@ public:
 	errCode stop(void);		// 停止要求して join
 	bool    isRunning(void) const { return running_; }
 
-	// hgeState 値(モジュール構造仕様書 47 準拠)
+	// hgeState 値(モジュール構造仕様書 47 準拠。holyGrailEntity.h の hgeState と番号同期)
 	enum state { ST_IDLE = 0, ST_SEARCHING = 1, ST_READY = 2,
 	             ST_CAPTURING = 3, ST_STOPPING = 4, ST_ERROR = 5,
-	             ST_DISCONNECTED = 6 };	// 撮影中に接続断(再接続試行中/接続不可)
+	             ST_DISCONNECTED = 6,	// 撮影中に接続断(NOCAMERAの旧同義)
+	             ST_WAITING = 7,		// 撮影窓前・カメラOKで待機中(点灯)
+	             ST_NOCAMERA = 8 };		// カメラ未検出(✖点灯)。武装/撮影中いずれでも
 
 	// --- 接続維持・再接続のパラメータ ---
 	static constexpr int  kKeepAliveSec        = 60;	// 撮影窓まで待機中、無害なGETを送る周期[秒]

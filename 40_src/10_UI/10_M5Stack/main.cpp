@@ -380,19 +380,26 @@ static void renderPlan(void)
 		std::string en   = p.value("end",   std::string());
 		bool capturable  = p.value("capturable", false);
 		int  state       = p.value("state", 0);
-		bool disconnected= (state == HGE_ST_DISCONNECTED);
-		bool capturing   = (state == HGE_ST_CAPTURING || state == HGE_ST_SEARCHING || state == HGE_ST_STOPPING);
+		// 状態→表示(指示1/2): 未検出(NOCAMERA/旧DISCONNECTED)=✖点灯 / 撮影中=点滅 /
+		// 待機(撮影窓前)・探索中=点灯 / 撮影可=開始(クラッパーREC)。
+		bool nocam     = (state == HGE_ST_NOCAMERA || state == HGE_ST_DISCONNECTED);
+		bool capturing = (state == HGE_ST_CAPTURING || state == HGE_ST_STOPPING);	// 実撮影中=点滅
+		bool waiting   = (state == HGE_ST_WAITING || state == HGE_ST_SEARCHING);		// 待機/探索=点灯
+		bool active    = (nocam || capturing || waiting);	// 何らか実行中(タップで中止可)
 		int ry0 = y, ry1 = y + rowH;
 		if (ry1 > top && ry0 < bot)
 		{
-			// アイコンはスマホUIと同じ。接続断=赤点灯 / 撮影中=緑点滅 / 撮影可=開始(クラッパーREC)。
-			if (disconnected)
-			{
+			if (nocam)
+			{	// カメラ未検出。Phase4 で ICON_CAMERA_NG(✖)へ。現状は赤点灯で代替。
 				g_cv.pushImage(6, ry0 + (rowH - ICON_CAPTURING_H) / 2, ICON_CAPTURING_W, ICON_CAPTURING_H, capturingRedIcon());
 			}
 			else if (capturing)
-			{
+			{	// 撮影中=点滅
 				if (g_blinkOn) { g_cv.pushImage(6, ry0 + (rowH - ICON_CAPTURING_H) / 2, ICON_CAPTURING_W, ICON_CAPTURING_H, ICON_CAPTURING); }
+			}
+			else if (waiting)
+			{	// 待機(撮影窓前)=点灯
+				g_cv.pushImage(6, ry0 + (rowH - ICON_CAPTURING_H) / 2, ICON_CAPTURING_W, ICON_CAPTURING_H, ICON_CAPTURING);
 			}
 			else if (capturable)
 			{
@@ -433,7 +440,7 @@ static void renderPlan(void)
 			}
 			g_cv.drawFastHLine(0, ry1 - 1, 320, M5.Display.color565(0x33, 0x33, 0x33));
 		}
-		g_planHits.push_back({ ry0, ry1, id, capturing, capturable });
+		g_planHits.push_back({ ry0, ry1, id, active, capturable });
 		y += rowH;
 	}
 	if (arr.empty())

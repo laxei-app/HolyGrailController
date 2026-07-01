@@ -31,7 +31,9 @@ enum hgeState
 	HGE_ST_CAPTURING = 3,
 	HGE_ST_STOPPING  = 4,
 	HGE_ST_ERROR     = 5,
-	HGE_ST_DISCONNECTED = 6	// 撮影中にカメラ接続が切れた(再接続試行中/接続不可)。UIは赤点灯で表示
+	HGE_ST_DISCONNECTED = 6,	// 撮影中にカメラ接続が切れた(再接続試行中/接続不可)。NOCAMERAの旧同義。UIは✖点灯
+	HGE_ST_WAITING   = 7,	// 撮影要求済・撮影窓前・カメラOKで待機中。UIはカメラアイコン点灯(点滅しない)
+	HGE_ST_NOCAMERA  = 8	// 武装/撮影中いずれでもカメラ未検出。UIは✖カメラアイコン点灯。1分ごと再検索+SSDP待受で探索継続
 };
 
 // 通知コールバック型。json は呼び出し中のみ有効(Entity 所有)。

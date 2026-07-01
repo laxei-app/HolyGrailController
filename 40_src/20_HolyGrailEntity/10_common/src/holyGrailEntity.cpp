@@ -619,7 +619,7 @@ namespace
 	void refreshAggregateState(void)
 	{
 		int agg = HGE_ST_IDLE;
-		for (auto& s : g_sessions) { int st = s->state.load(); if (st == HGE_ST_CAPTURING || st == HGE_ST_SEARCHING || st == HGE_ST_STOPPING || st == HGE_ST_DISCONNECTED) { agg = st; } }
+		for (auto& s : g_sessions) { int st = s->state.load(); if (st == HGE_ST_CAPTURING || st == HGE_ST_SEARCHING || st == HGE_ST_STOPPING || st == HGE_ST_DISCONNECTED || st == HGE_ST_WAITING || st == HGE_ST_NOCAMERA) { agg = st; } }
 		g_state = agg;
 	}
 	// 撮影実行状況(/asset/capturing.json)に「撮影の意図」を追加/削除する(item2: 電源復帰/再起動の再開用)。
@@ -753,7 +753,7 @@ namespace
 			{
 				if (s.get() == S) { continue; }
 				int st = s->state.load();
-				bool active = (st == HGE_ST_CAPTURING || st == HGE_ST_SEARCHING || st == HGE_ST_READY || st == HGE_ST_STOPPING);
+				bool active = (st == HGE_ST_CAPTURING || st == HGE_ST_SEARCHING || st == HGE_ST_READY || st == HGE_ST_STOPPING || st == HGE_ST_WAITING || st == HGE_ST_NOCAMERA);
 				if (active && s->dev.apiBase && s->dev.serialno == serial) { return true; }
 			}
 			return false;
@@ -778,9 +778,9 @@ namespace
 			std::string host = dataManager::loadCameraHost(wantSerial);
 			if (!host.empty())
 			{
-				std::string url = "http://" + host + ":8080/ccapi";
+				// 既に SSDP で同じ host が見つかっていれば手動接続はしない(種別非依存で host 比較)。
 				bool already = false;
-				for (auto& d : found) { if (d.apiBase && d.urlAccess == url) { already = true; break; } }
+				for (auto& d : found) { if (d.apiBase && hostFromDevice(d) == host) { already = true; break; } }
 				if (!already)
 				{
 					std::vector<class device> man;

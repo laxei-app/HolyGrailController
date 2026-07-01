@@ -4,13 +4,12 @@
 
 
 // ネットワークに接続されているカメラを検索する
-// device:検索したカメラの情報
-// target:検索するサービスの名称
+// deviceList:検索したカメラの情報
+// ifaces    :検索するサービスの定義(キーワード→apiClass)。呼び出し側(受信バックエンド)が保持。
 // 　　　サービスの名称は接続するインターフェースごとに決まっている。
-// 　　　今後拡張していき増えるかも
 // 　　　canon : ICPO-CameraControlAPIService
 // 　　　sony  : DigitalImaging
-int deviceDiscovery::search(std::vector<device>& deviceList)
+int deviceDiscovery::search(std::vector<device>& deviceList, const std::vector<definitionIntereface>& ifaces)
 {
     std::string query =
         "M-SEARCH * HTTP/1.1\r\n"
@@ -39,7 +38,7 @@ int deviceDiscovery::search(std::vector<device>& deviceList)
             DBGLN(col::GRN, "netThread::ssdpRead(%4ums,%u))",tool::getElapse(itvl), deviceInfo.length());
             itvl = tool::startElapse();
             class device deviceTmp;
-            for (const auto& interface : definitionIntereface)
+            for (const auto& interface : ifaces)
             {   // 対象の service を探す
                 if(tool::findKvp(deviceInfo, interface.keywords))
                 {   // 対象のserviceが見つかった

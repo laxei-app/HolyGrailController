@@ -241,7 +241,10 @@ bool captureRunner::establishSession(void)
 
 errCode captureRunner::loop(void)
 {
-	if (onState_) { onState_(ST_CAPTURING); }
+	// 初期状態: 撮影窓より前ならカメラ点灯(待機=ST_WAITING)、窓内なら撮影中(点滅=ST_CAPTURING)。
+	// 窓入場時に一度だけ CAPTURING へ切り替える(inWindow フラグ)。待機と撮影中をUIで区別するため(指示2)。
+	bool inWindow = (static_cast<long long>(std::time(nullptr)) >= hgc::toUnixUtc(plan_.start, off_));
+	if (onState_) { onState_(inWindow ? ST_CAPTURING : ST_WAITING); }
 
 	// ライブビュー開始+M設定+設定可能値テーブル構築(再接続後も同じ処理を使う)。
 	// 失敗(=この接続では撮影継続不可)ならエラーで中止。
@@ -347,7 +350,7 @@ errCode captureRunner::loop(void)
 					{	// 連続失敗で接続断と判定(検知ログは1回だけ)。以降は下の復帰ブロックで毎周期再試行。
 						waitDisconnected = true;
 						if (onError_) { onError_(ERR_HGC_NOT_FOUND, "待機中に接続断を検知 → 先回り再接続"); }
-						if (onState_) { onState_(ST_DISCONNECTED); }	// 待機中も赤を反映
+						if (onState_) { onState_(ST_NOCAMERA); }	// 待機中のカメラ未検出(✖点灯)
 					}
 				}
 				if (waitDisconnected)
@@ -358,7 +361,7 @@ errCode captureRunner::loop(void)
 					if (onReconnect_ && onReconnect_() && establishSession())
 					{
 						waitDisconnected = false; waitFailStreak = 0;
-						if (onState_) { onState_(ST_CAPTURING); }	// 復帰(緑へ)
+						if (onState_) { onState_(ST_WAITING); }	// まだ撮影窓前なので待機(点灯)へ戻す
 					}
 					// 復帰できなければ次の keepAlive 周期で再試行(窓開始まで何度でも)。
 				}
@@ -366,6 +369,9 @@ errCode captureRunner::loop(void)
 			interruptibleSleep(500);
 			continue;
 		}
+
+		// ここに来た=撮影窓に入った。待機(点灯)から撮影中(点滅)へ一度だけ切り替える。
+		if (!inWindow) { inWindow = true; if (onState_) { onState_(ST_CAPTURING); } }
 
 		const hgc::ccmWindow* w = activeWindow(now);
 		if (w == nullptr || !w->ccm) { interruptibleSleep(500); continue; }	// 隙間
@@ -689,7 +695,7 @@ errCode captureRunner::loop(void)
 		// 撮影が連続失敗 → カメラ接続が切れたとみなし再接続を試みる(SSDP再探索)。
 		if (shootFailStreak >= kMaxConsecutiveFail)
 		{
-			if (onState_) { onState_(ST_DISCONNECTED); }	// UIを赤(点灯)へ
+			if (onState_) { onState_(ST_NOCAMERA); }	// 撮影中のカメラ未検出(✖点灯)
 			bool recovered = false;
 			for (int attempt = 1; attempt <= kMaxReconnectTries && running_; ++attempt)
 			{
@@ -709,9 +715,9 @@ errCode captureRunner::loop(void)
 				if (onState_) { onState_(ST_CAPTURING); }	// 緑へ戻す
 			}
 			else
-			{	// SSDP再探索を上限まで試しても繋がらない → 諦めてユーザーへ通知。赤点灯のまま終了。
+			{	// SSDP再探索を上限まで試しても繋がらない → 諦めてユーザーへ通知。✖点灯のまま終了。
 				if (onError_) { onError_(ERR_HGC_NOT_FOUND, "カメラに接続できません。撮影を中断しました"); }
-				if (onState_) { onState_(ST_DISCONNECTED); }
+				if (onState_) { onState_(ST_NOCAMERA); }
 				gaveUp = true;
 				break;
 			}
@@ -736,7 +742,7 @@ errCode captureRunner::loop(void)
 	cameraController::restoreShootingMode(*dev_);
 
 	running_ = false;
-	// 通常終了は IDLE。再接続を諦めた場合は赤(ST_DISCONNECTED)のまま残し、ユーザーが中止するまで表示。
-	if (onState_) { onState_(gaveUp ? ST_DISCONNECTED : ST_IDLE); }
+	// 通常終了は IDLE。再接続を諦めた場合は✖(ST_NOCAMERA)のまま残し、ユーザーが中止するまで表示。
+	if (onState_) { onState_(gaveUp ? ST_NOCAMERA : ST_IDLE); }
 	return gaveUp ? ERR_HGC_NOT_FOUND : ERR_HGC_OK;
 }

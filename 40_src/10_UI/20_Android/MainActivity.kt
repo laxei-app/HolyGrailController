@@ -78,8 +78,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 計画の選択・改名・各種編集(g_plan/g_editIdを触る操作)は単一スレッドで直列化し競合を防ぐ
     // (例: 改名と別計画選択が並走すると選択がファイルから古い名前を読み戻して改名が無効化される)。
     private val planExec = java.util.concurrent.Executors.newSingleThreadExecutor()
-    private val capturingPlans = mutableSetOf<String>()  // 撮影中の計画 id 群(並行撮影)
-    private val disconnectedPlans = mutableSetOf<String>() // 撮影中にカメラ接続が切れた計画 id 群(赤点灯)
+    private val capturingPlans = mutableSetOf<String>()  // 実撮影中(撮影窓内)の計画 id 群=カメラ点滅
+    private val disconnectedPlans = mutableSetOf<String>() // カメラ未検出(NOCAMERA/旧DISCONNECTED)の計画 id 群=✖点灯
+    private val waitingPlans = mutableSetOf<String>()    // 撮影要求済・撮影窓前で待機中(カメラOK)の計画 id 群=カメラ点灯
+    private val nocamDialogShown = mutableSetOf<String>() // カメラ未検出ポップアップを表示済みの計画 id(多重表示抑止。Phase3)
     private var scheduleView: ScheduleView? = null   // §7.3.2 スケジュール表示/編集ビュー
     private lateinit var captureStatus: TextView     // 撮影中ステータス(plan画面内)
     private var planReadOnly = false                 // 撮影中の計画を表示中=編集不可(item7)
@@ -223,23 +225,30 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 try {
                     val o = JSONObject(pj)
                     val st = o.optInt("state")
-                    if (st == HgeNative.ST_CAPTURING || st == HgeNative.ST_SEARCHING || st == HgeNative.ST_DISCONNECTED) {
+                    if (st == HgeNative.ST_CAPTURING || st == HgeNative.ST_SEARCHING || st == HgeNative.ST_DISCONNECTED || st == HgeNative.ST_WAITING || st == HgeNative.ST_NOCAMERA) {
                         val nm = o.optString("name")
                         var pid = ""
                         try {
                             val pa = JSONArray(HgeNative.nativeListPlans())
                             for (k in 0 until pa.length()) { val po = pa.getJSONObject(k); if (po.optString("name") == nm) { pid = po.optString("id"); break } }
                         } catch (_: Exception) {}
-                        val disc = (st == HgeNative.ST_DISCONNECTED)
+                        val disc = (st == HgeNative.ST_DISCONNECTED || st == HgeNative.ST_NOCAMERA)
+                        val wait = (st == HgeNative.ST_WAITING || st == HgeNative.ST_SEARCHING)
                         runOnUiThread {
                             // 復元: このエッジ(名称)を登録一覧へ統合し、復元中の計画のエッジ名称として設定する。
                             updateEdgeIp(ed.name, ed.ip, ed.port)
                             if (pid.isNotEmpty()) setPlanEdgeName(pid, ed.name)
                             refreshEdgeSpinner()
                             edgeCapturing = true; edgeCapturingPlanId = pid
-                            if (pid.isNotEmpty()) { capturingPlans.add(pid); if (disc) disconnectedPlans.add(pid); startBlink(); refreshPlanList(); updateReadOnly() }
-                            if (disc) { captureStatus.text = "● カメラ接続が切れました(エッジ)"; captureStatus.setTextColor(0xFFD32F2F.toInt()) }
-                            else { captureStatus.text = "● エッジ撮影中(復元)"; captureStatus.setTextColor(0xFF2E7D32.toInt()) }
+                            if (pid.isNotEmpty()) {
+                                when { disc -> disconnectedPlans.add(pid); wait -> waitingPlans.add(pid); else -> { capturingPlans.add(pid); startBlink() } }
+                                refreshPlanList(); updateReadOnly()
+                            }
+                            when {
+                                disc -> { captureStatus.text = "● カメラが見つかりません(エッジ)"; captureStatus.setTextColor(0xFFD32F2F.toInt()) }
+                                wait -> { captureStatus.text = "● 撮影開始待ち(エッジ)"; captureStatus.setTextColor(0xFF1565C0.toInt()) }
+                                else -> { captureStatus.text = "● エッジ撮影中(復元)"; captureStatus.setTextColor(0xFF2E7D32.toInt()) }
+                            }
                             captureStatus.visibility = View.VISIBLE
                             handler.postDelayed(edgePoll, 2000)
                         }
@@ -2489,26 +2498,33 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val id = p.optString("id")
         val name = p.optString("name")
         val capturable = p.optBoolean("capturable")
-        val capturing = capturingPlans.contains(id)
-        val disconnected = disconnectedPlans.contains(id)
+        val capturing = capturingPlans.contains(id)            // 実撮影中=点滅
+        val disconnected = disconnectedPlans.contains(id)      // カメラ未検出(NOCAMERA)=✖点灯
+        val waiting = waitingPlans.contains(id)                // 撮影窓前で待機=点灯
+        val active = capturing || disconnected || waiting      // 撮影要求済(タップで中止)
         val row = LinearLayout(this)
         row.orientation = LinearLayout.HORIZONTAL
         row.gravity = Gravity.CENTER_VERTICAL
         row.setPadding(dp(4), dp(6), dp(4), dp(6))
         if (id == currentPlanId) row.setBackgroundColor(0xFFE3F2FD.toInt())
-        // 左アイコン: 接続断=カメラ赤点灯 / 撮影中=カメラ緑点滅 / 撮影可=開始(ICO開始D) / 不可=空。
+        // 左アイコン(指示1/2): 未検出=✖点灯 / 撮影中=点滅 / 待機(窓前)=点灯 / 撮影可=開始(ICO開始D) / 不可=空。
         val icon = ImageView(this)
         icon.layoutParams = LinearLayout.LayoutParams(dp(32), dp(32)).apply { rightMargin = dp(6) }
         when {
             disconnected -> {
                 icon.setImageResource(R.drawable.ic_camera_cap)
-                icon.setColorFilter(0xFFD32F2F.toInt())     // 赤(点灯・点滅しない)
-                icon.tag = "dc:$id"
+                icon.setColorFilter(0xFFD32F2F.toInt())     // Phase4でic_camera_ng(✖)へ。今は赤点灯で代替(点滅しない)
+                icon.tag = "ng:$id"
                 icon.setOnClickListener { confirmStop(id) }
             }
             capturing -> {
                 icon.setImageResource(R.drawable.ic_camera_cap)
                 icon.tag = "cam:$id"                        // 緑点滅(planBlink が cam: を点滅)
+                icon.setOnClickListener { confirmStop(id) }
+            }
+            waiting -> {
+                icon.setImageResource(R.drawable.ic_camera_cap)
+                icon.tag = "wait:$id"                       // 点灯(点滅しない)
                 icon.setOnClickListener { confirmStop(id) }
             }
             capturable -> {
@@ -2529,8 +2545,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         tv.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
         if (id == currentPlanId) tv.setTypeface(null, Typeface.BOLD)
         tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        if (!capturing && id == currentPlanId) {
-            // 選択中の計画 → 名前タップで編集可能(キーボード)。確定で改名。
+        if (!active && id == currentPlanId) {
+            // 選択中かつ非実行中の計画 → 名前タップで編集可能(キーボード)。確定で改名。
             tv.isFocusableInTouchMode = true; tv.isFocusable = true
             tv.setOnEditorActionListener { v, actionId, _ ->
                 if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
@@ -2585,9 +2601,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
             planExec.execute {
                 HgeNative.nativeSelectPlan(id)
                 runOnUiThread {
-                    currentPlanId = id; capturingPlans.add(id)
+                    currentPlanId = id; waitingPlans.add(id)   // まずは待機(点灯)。実状態はEV_STATEで即補正される
                     HgeNative.nativeCaptureStartPlan(id)
-                    startBlink(); refreshPlanList(); updateReadOnly()
+                    refreshPlanList(); updateReadOnly()
                 }
             }
             return
@@ -2604,9 +2620,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 planExec.execute {
                     HgeNative.nativeSelectPlan(id)
                     runOnUiThread {
-                        currentPlanId = id; capturingPlans.add(id)
+                        currentPlanId = id; waitingPlans.add(id)   // まずは待機(点灯)。実状態はedgePollで補正される
                         startOnEdge(e, id)
-                        startBlink(); refreshPlanList(); updateReadOnly()
+                        refreshPlanList(); updateReadOnly()
                     }
                 }
             }
@@ -2621,7 +2637,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .setPositiveButton("中止する") { dlg, _ ->
                 dlg.dismiss()   // 中止選択で即ダイアログを閉じる(停止処理の完了は待たない。指示4)
                 val e = planEdge(id)   // この計画のエッジ(無ければスマホ)
-                capturingPlans.remove(id); if (capturingPlans.isEmpty()) stopBlink()
+                capturingPlans.remove(id); waitingPlans.remove(id); disconnectedPlans.remove(id); nocamDialogShown.remove(id)
+                if (capturingPlans.isEmpty()) stopBlink()
                 refreshPlanList(); updateReadOnly()
                 // 停止指示はネットワークI/Oを伴うためバックグラウンドで実行(UIを固めない)。
                 Thread { if (e == null) HgeNative.nativeCaptureStopPlan(id) else stopOnEdge(e, id) }.start()
@@ -2653,7 +2670,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private fun confirmDeletePlan(id: String, name: String) {
-        if (capturingPlans.contains(id)) { Toast.makeText(this, "撮影中は削除できません", Toast.LENGTH_SHORT).show(); return }
+        if (capturingPlans.contains(id) || waitingPlans.contains(id) || disconnectedPlans.contains(id)) { Toast.makeText(this, "撮影要求中は削除できません", Toast.LENGTH_SHORT).show(); return }
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle("削除")
             .setMessage("「$name」を削除しますか？")
@@ -2702,22 +2719,36 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     val pid = o.optString("planId")
                     capState.text = "state: ${HgeNative.stateName(st)}"
                     if (pid.isNotEmpty()) {
-                        if (st == HgeNative.ST_CAPTURING || st == HgeNative.ST_SEARCHING) {
-                            if (capturingPlans.add(pid)) startBlink()
-                            disconnectedPlans.remove(pid)               // 再接続成功 → 赤を解除
-                        } else if (st == HgeNative.ST_DISCONNECTED) {
-                            capturingPlans.add(pid); disconnectedPlans.add(pid); startBlink()  // 接続断 → 赤点灯
-                        } else if (st == HgeNative.ST_IDLE || st == HgeNative.ST_ERROR) {
-                            capturingPlans.remove(pid); disconnectedPlans.remove(pid)
-                            if (capturingPlans.isEmpty()) stopBlink()
+                        // 状態→3集合(撮影中=点滅 / 待機=点灯 / 未検出=✖)。各計画はいずれか一つ。
+                        when (st) {
+                            HgeNative.ST_CAPTURING, HgeNative.ST_STOPPING -> {
+                                capturingPlans.add(pid); waitingPlans.remove(pid); disconnectedPlans.remove(pid)
+                                startBlink()
+                            }
+                            HgeNative.ST_WAITING, HgeNative.ST_SEARCHING -> {
+                                waitingPlans.add(pid); capturingPlans.remove(pid); disconnectedPlans.remove(pid)
+                                if (capturingPlans.isEmpty()) stopBlink()
+                            }
+                            HgeNative.ST_NOCAMERA, HgeNative.ST_DISCONNECTED -> {
+                                disconnectedPlans.add(pid); capturingPlans.remove(pid); waitingPlans.remove(pid)
+                                if (capturingPlans.isEmpty()) stopBlink()
+                                // Phase3: ここで継続/中止ポップアップを出す。
+                            }
+                            HgeNative.ST_IDLE, HgeNative.ST_ERROR -> {
+                                capturingPlans.remove(pid); waitingPlans.remove(pid); disconnectedPlans.remove(pid)
+                                nocamDialogShown.remove(pid)
+                                if (capturingPlans.isEmpty()) stopBlink()
+                            }
                         }
                         refreshPlanList(); updateReadOnly()
                     }
-                    // 表示中の計画の状態をステータス表示(接続断は赤)。
+                    // 表示中の計画の状態をステータス表示(未検出=赤 / 撮影中=緑 / 待機=青)。
                     if (disconnectedPlans.contains(currentPlanId)) {
-                        captureStatus.text = "● カメラ接続が切れました"; captureStatus.setTextColor(0xFFD32F2F.toInt()); captureStatus.visibility = View.VISIBLE
+                        captureStatus.text = "● カメラが見つかりません"; captureStatus.setTextColor(0xFFD32F2F.toInt()); captureStatus.visibility = View.VISIBLE
                     } else if (capturingPlans.contains(currentPlanId)) {
                         captureStatus.text = "● 撮影中 (${HgeNative.stateName(st)})"; captureStatus.setTextColor(0xFF2E7D32.toInt()); captureStatus.visibility = View.VISIBLE
+                    } else if (waitingPlans.contains(currentPlanId)) {
+                        captureStatus.text = "● 撮影開始待ち"; captureStatus.setTextColor(0xFF1565C0.toInt()); captureStatus.visibility = View.VISIBLE
                     } else { captureStatus.visibility = View.GONE }
                 }
                 HgeNative.EV_PROGRESS -> {
@@ -2987,9 +3018,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         sv.setData(blocks)
     }
 
-    // 撮影中の計画を表示しているときは一切編集できない(item7)。各操作部の有効/無効を切替。
+    // 撮影要求済(撮影中/待機/未検出)の計画を表示しているときは一切編集できない(item7)。各操作部の有効/無効を切替。
     private fun updateReadOnly() {
-        planReadOnly = capturingPlans.contains(currentPlanId)
+        planReadOnly = capturingPlans.contains(currentPlanId) || waitingPlans.contains(currentPlanId) || disconnectedPlans.contains(currentPlanId)
         val ed = !planReadOnly
         intArrayOf(R.id.plan_startDate, R.id.plan_startTime, R.id.plan_endDate, R.id.plan_endTime,
             R.id.plan_resetButton, R.id.plan_saveButton, R.id.plan_gearConst,
@@ -3188,23 +3219,41 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         try {
                             val o = JSONObject(js)
                             val st = o.optInt("state")
-                            if (st == HgeNative.ST_DISCONNECTED && edgeCapturingPlanId.isNotEmpty()) {
-                                // エッジ側でカメラ接続が切れた(再接続試行中/接続不可)→ 赤点灯。
-                                capturingPlans.add(edgeCapturingPlanId)
-                                if (disconnectedPlans.add(edgeCapturingPlanId)) { refreshPlanList(); updateReadOnly() }
-                                if (currentPlanId == edgeCapturingPlanId) {
-                                    captureStatus.text = "● カメラ接続が切れました(エッジ)"; captureStatus.setTextColor(0xFFD32F2F.toInt()); captureStatus.visibility = View.VISIBLE
+                            val epid = edgeCapturingPlanId
+                            if (epid.isNotEmpty()) {
+                                // エッジ撮影の状態を3集合へ反映(撮影中=点滅 / 待機=点灯 / 未検出=✖)。
+                                var changed = false
+                                when (st) {
+                                    HgeNative.ST_NOCAMERA, HgeNative.ST_DISCONNECTED -> {
+                                        if (disconnectedPlans.add(epid)) changed = true
+                                        if (capturingPlans.remove(epid)) changed = true
+                                        if (waitingPlans.remove(epid)) changed = true
+                                        if (capturingPlans.isEmpty()) stopBlink()
+                                        if (currentPlanId == epid) { captureStatus.text = "● カメラが見つかりません(エッジ)"; captureStatus.setTextColor(0xFFD32F2F.toInt()); captureStatus.visibility = View.VISIBLE }
+                                        // Phase3: ここで継続/中止ポップアップを出す。
+                                    }
+                                    HgeNative.ST_WAITING, HgeNative.ST_SEARCHING -> {
+                                        if (waitingPlans.add(epid)) changed = true
+                                        if (capturingPlans.remove(epid)) changed = true
+                                        if (disconnectedPlans.remove(epid)) changed = true
+                                        if (capturingPlans.isEmpty()) stopBlink()
+                                        if (currentPlanId == epid) { captureStatus.text = "● 撮影開始待ち(エッジ)"; captureStatus.setTextColor(0xFF1565C0.toInt()); captureStatus.visibility = View.VISIBLE }
+                                    }
+                                    HgeNative.ST_CAPTURING, HgeNative.ST_STOPPING -> {
+                                        if (capturingPlans.add(epid)) changed = true
+                                        if (waitingPlans.remove(epid)) changed = true
+                                        if (disconnectedPlans.remove(epid)) changed = true
+                                        startBlink()
+                                        if (currentPlanId == epid) { captureStatus.text = "● エッジ撮影中  ${o.optInt("frame")}/${o.optInt("total")}枚  残り${o.optInt("remainSec")}秒"; captureStatus.setTextColor(0xFF2E7D32.toInt()); captureStatus.visibility = View.VISIBLE }
+                                    }
                                 }
-                            } else if (currentPlanId == edgeCapturingPlanId && edgeCapturingPlanId.isNotEmpty()) {
-                                if (disconnectedPlans.remove(edgeCapturingPlanId)) { refreshPlanList(); updateReadOnly() }  // 再接続 → 緑へ戻す
-                                captureStatus.text = "● エッジ撮影中  ${o.optInt("frame")}/${o.optInt("total")}枚  残り${o.optInt("remainSec")}秒"
-                                captureStatus.setTextColor(0xFF2E7D32.toInt()); captureStatus.visibility = View.VISIBLE
+                                if (changed) { refreshPlanList(); updateReadOnly() }
                             }
                             // エッジが停止/終了/エラー → スマホ側の撮影中表示を解除。
                             if (st == HgeNative.ST_IDLE || st == HgeNative.ST_ERROR) {
                                 edgeCapturing = false
                                 if (edgeCapturingPlanId.isNotEmpty()) {
-                                    capturingPlans.remove(edgeCapturingPlanId); disconnectedPlans.remove(edgeCapturingPlanId); edgeCapturingPlanId = ""
+                                    capturingPlans.remove(edgeCapturingPlanId); disconnectedPlans.remove(edgeCapturingPlanId); waitingPlans.remove(edgeCapturingPlanId); nocamDialogShown.remove(edgeCapturingPlanId); edgeCapturingPlanId = ""
                                     if (capturingPlans.isEmpty()) stopBlink()
                                     refreshPlanList(); updateReadOnly(); captureStatus.visibility = View.GONE
                                 }
@@ -3265,7 +3314,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     captureStatus.text = "● エッジ端末へ転送・撮影開始"; captureStatus.visibility = View.VISIBLE
                     handler.postDelayed(edgePoll, 2000)
                 } else {
-                    capturingPlans.remove(planId); refreshPlanList(); updateReadOnly()
+                    capturingPlans.remove(planId); waitingPlans.remove(planId); disconnectedPlans.remove(planId)
+                    refreshPlanList(); updateReadOnly()
                     Toast.makeText(this, "エッジ端末 開始失敗 (code=$r)", Toast.LENGTH_LONG).show()
                 }
             }

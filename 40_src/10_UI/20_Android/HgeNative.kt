@@ -28,7 +28,9 @@ object HgeNative {
     const val ST_CAPTURING = 3
     const val ST_STOPPING = 4
     const val ST_ERROR = 5
-    const val ST_DISCONNECTED = 6   // 撮影中にカメラ接続が切れた(再接続試行中/接続不可)。赤点灯
+    const val ST_DISCONNECTED = 6   // 撮影中にカメラ接続が切れた(NOCAMERAの旧同義)。✖点灯
+    const val ST_WAITING = 7        // 撮影要求済・撮影窓前・カメラOKで待機中。カメラアイコン点灯(点滅しない)
+    const val ST_NOCAMERA = 8       // 武装/撮影中いずれでもカメラ未検出。✖カメラアイコン点灯
     const val ERR_NAME_DUP = 31     // 名称が既に使用されている(errCode の ERR_HGC_NAME_DUP。item5)
 
     external fun nativeSetLogDir(dir: String)
@@ -115,6 +117,8 @@ object HgeNative {
         ST_STOPPING -> "STOPPING"
         ST_ERROR -> "ERROR"
         ST_DISCONNECTED -> "DISCONNECTED"
+        ST_WAITING -> "WAITING"
+        ST_NOCAMERA -> "NOCAMERA"
         else -> "?($s)"
     }
 }
