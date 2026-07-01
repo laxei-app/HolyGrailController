@@ -1081,21 +1081,28 @@ std::string dataManager::currentLogPath(void)
 }
 
 void dataManager::logShot(int frame, const hgc::exposure& e, double lumStops, const char* ccmName,
-                          double meteredLinear)
+                          double meteredLinear, int rdyMeteringMs, int rdyShutterMs)
 {
 	char lumStr[12];
 	std::snprintf(lumStr, sizeof(lumStr), "%+.3f", lumStops);
 	// detail = ccm名 + 測光輝度(自動補正時のみ)。Y=リニア輝度, ev=中庸グレー(0.18)基準の段差。
 	const char* nm = ccmName ? ccmName : "";
-	char detail[64];
+	char detail[96];
+	int  dn = 0;
 	if (meteredLinear > 0.0)
 	{
 		double ev = std::log2(meteredLinear / 0.18);
-		std::snprintf(detail, sizeof(detail), "%s Y=%.4f ev%+.2f", nm, meteredLinear, ev);
+		dn = std::snprintf(detail, sizeof(detail), "%s Y=%.4f ev%+.2f", nm, meteredLinear, ev);
 	}
 	else
 	{
-		std::snprintf(detail, sizeof(detail), "%s", nm);
+		dn = std::snprintf(detail, sizeof(detail), "%s", nm);
+	}
+	// 実測時間(2秒窓の予算検討用)。>=0 のときだけ付与する。rdy=ライブビュー取得, set=露出設定適用。
+	if (dn > 0 && dn < static_cast<int>(sizeof(detail)))
+	{
+		if (rdyMeteringMs >= 0) { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " rdy=%dms", rdyMeteringMs); }
+		if (rdyShutterMs  >= 0 && dn < static_cast<int>(sizeof(detail))) { std::snprintf(detail + dn, sizeof(detail) - dn, " set=%dms", rdyShutterMs); }
 	}
 	// SHOT のみ frame〜lum を使う。body を列整形(frame|iso|ss|fn|lum|detail)。露出はカメラ設定値の文字列。
 	char body[176];

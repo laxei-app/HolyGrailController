@@ -106,6 +106,17 @@ void captureRunner::pokeAcquire(void)
 	if (dev_ != nullptr && dev_->apiBase == nullptr) { wake_ = true; }
 }
 
+// rdyMetering(ライブビュー1枚の取得=HTTP GET)を実測付きで呼ぶ。所要msは meterMs_ に退避するだけで
+// ここではログI/Oを行わない(将来の tm0 相当の時間クリティカル点でSD書き込みを走らせないため)。
+// 実ログは撮影(シャッター)後の onCaptured 経由で出力する(tm1相当)。2秒窓の予算検討用の計測。
+errCode captureRunner::rdyMeterTimed(void)
+{
+	void* mt = tool::startElapse();
+	errCode e = cameraController::rdyMetering(*dev_);
+	meterMs_ = static_cast<int>(tool::getElapse(mt));
+	return e;
+}
+
 const hgc::ccmWindow* captureRunner::activeWindow(long long nowSec) const
 {
 	for (const auto& w : plan_.ccmList)
@@ -165,7 +176,7 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 
 		double x = -1.0, linear = -1.0;
 		cmdt::HISTOGRAM hist;
-		if (cameraController::rdyMetering(*dev_) == ERR_HGC_OK &&
+		if (this->rdyMeterTimed() == ERR_HGC_OK &&
 		    cameraController::alzMetering(*dev_, hist) == ERR_HGC_OK)
 		{
 			x = expo::histMedian(hist.y, cmdt::hist_bin);
@@ -413,6 +424,8 @@ errCode captureRunner::loop(void)
 
 		hgc::exposure target{};
 		double meteredLinear = -1.0;	// 測光したリニア輝度(自動補正時のみ。<0=測光なし)
+		meterMs_ = -1;	// このコマの rdyMetering 実測msをリセット(測光しないコマは -1 のまま)
+		int    setMs = -1;	// rdyShutter(露出設定適用)の実測ms。計測は退避のみ、ログはシャッター後(2秒窓の予算検討用)
 
 		if (ccm->type == hgc::ccmType::night)
 		{
@@ -472,7 +485,7 @@ errCode captureRunner::loop(void)
 				const double homeB    = haveHome ? nightB : 0.0;
 				double linear = -1.0;
 				cmdt::HISTOGRAM hist;
-				if (cameraController::rdyMetering(*dev_) == ERR_HGC_OK &&
+				if (this->rdyMeterTimed() == ERR_HGC_OK &&
 				    cameraController::alzMetering(*dev_, hist) == ERR_HGC_OK)
 				{
 					double x = expo::histMedian(hist.y, cmdt::hist_bin);
@@ -549,7 +562,7 @@ errCode captureRunner::loop(void)
 			const double homeB    = haveHome ? expo::brightnessStops(goal, tables_) : 0.0;
 			double linear = -1.0;
 			cmdt::HISTOGRAM hist;
-			if (cameraController::rdyMetering(*dev_) == ERR_HGC_OK &&
+			if (this->rdyMeterTimed() == ERR_HGC_OK &&
 			    cameraController::alzMetering(*dev_, hist) == ERR_HGC_OK)
 			{
 				double x = expo::histMedian(hist.y, cmdt::hist_bin);
@@ -634,7 +647,7 @@ errCode captureRunner::loop(void)
 				// 測光(ライブビューのヒストグラム)→ リニア輝度(仕様 4.3)
 				double linear = -1.0;
 				cmdt::HISTOGRAM hist;
-				if (cameraController::rdyMetering(*dev_) == ERR_HGC_OK &&
+				if (this->rdyMeterTimed() == ERR_HGC_OK &&
 				    cameraController::alzMetering(*dev_, hist) == ERR_HGC_OK)
 				{
 					double x = expo::histMedian(hist.y, cmdt::hist_bin);
@@ -692,7 +705,9 @@ errCode captureRunner::loop(void)
 		// 露出を設定して撮影(仕様 4章)。周期計測のため経過を測る。
 		void* el = tool::startElapse();
 		cmdt::shotSet shot(target.ss, target.fn, target.iso);	// カメラ設定値の文字列
+		void* st = tool::startElapse();							// 露出設定(rdyShutter)の実測(2秒窓の予算検討用)
 		errCode setErr = cameraController::rdyShutter(*dev_, shot);
+		setMs = static_cast<int>(tool::getElapse(st));			// 退避のみ。ログは下の onCaptured(シャッター後)で
 		if (setErr != ERR_HGC_OK && onError_)
 		{
 			// 露出設定(iso/ss/fn)がカメラに反映できなかった。握りつぶさず通知する。
@@ -712,7 +727,7 @@ errCode captureRunner::loop(void)
 		if (onCaptured_)
 		{
 			double lum = expo::brightnessStops(target, tables_);
-			onCaptured_(capturedInfo{ frame, target, lum, ccm->name, meteredLinear });
+			onCaptured_(capturedInfo{ frame, target, lum, ccm->name, meteredLinear, meterMs_, setMs });
 		}
 		if (onProgress_)
 		{
