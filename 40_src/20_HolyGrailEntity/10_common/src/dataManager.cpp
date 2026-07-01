@@ -1081,13 +1081,14 @@ std::string dataManager::currentLogPath(void)
 }
 
 void dataManager::logShot(int frame, const hgc::exposure& e, double lumStops, const char* ccmName,
-                          double meteredLinear, int rdyMeteringMs, int rdyShutterMs, int tm0Ms)
+                          double meteredLinear, int rdyMeteringMs, int rdyShutterMs, int tm0Ms,
+                          int offMs, bool rdyOk, bool setOk)
 {
 	char lumStr[12];
 	std::snprintf(lumStr, sizeof(lumStr), "%+.3f", lumStops);
 	// detail = ccm名 + 測光輝度(自動補正時のみ)。Y=リニア輝度, ev=中庸グレー(0.18)基準の段差。
 	const char* nm = ccmName ? ccmName : "";
-	char detail[96];
+	char detail[128];
 	int  dn = 0;
 	if (meteredLinear > 0.0)
 	{
@@ -1098,15 +1099,17 @@ void dataManager::logShot(int frame, const hgc::exposure& e, double lumStops, co
 	{
 		dn = std::snprintf(detail, sizeof(detail), "%s", nm);
 	}
-	// 実測時間(2秒窓の予算検討用)。>=0 のときだけ付与する。rdy=ライブビュー取得, set=露出設定適用。
+	// タイマ方式の計測(offset調整・カメラ性能判断用)。>=0 のときだけ付与。
+	//  tm0=tm0処理時間, off=そのコマのoffset, rdy=測光時間(OK/NG), set=露出設定時間(OK/NG)。
 	if (dn > 0 && dn < static_cast<int>(sizeof(detail)))
 	{
-		if (tm0Ms        >= 0) { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " tm0=%dms", tm0Ms); }
-		if (rdyMeteringMs >= 0 && dn < static_cast<int>(sizeof(detail))) { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " rdy=%dms", rdyMeteringMs); }
-		if (rdyShutterMs  >= 0 && dn < static_cast<int>(sizeof(detail))) { std::snprintf(detail + dn, sizeof(detail) - dn, " set=%dms", rdyShutterMs); }
+		if (tm0Ms >= 0)                                                 { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " tm0=%dms", tm0Ms); }
+		if (offMs >= 0 && dn < static_cast<int>(sizeof(detail)))        { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " off=%dms", offMs); }
+		if (rdyMeteringMs >= 0 && dn < static_cast<int>(sizeof(detail))) { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " rdy=%dms(%s)", rdyMeteringMs, rdyOk ? "OK" : "NG"); }
+		if (rdyShutterMs  >= 0 && dn < static_cast<int>(sizeof(detail))) { std::snprintf(detail + dn, sizeof(detail) - dn, " set=%dms(%s)", rdyShutterMs, setOk ? "OK" : "NG"); }
 	}
 	// SHOT のみ frame〜lum を使う。body を列整形(frame|iso|ss|fn|lum|detail)。露出はカメラ設定値の文字列。
-	char body[176];
+	char body[208];
 	std::snprintf(body, sizeof(body), "%5d|%5s|%-11s|%-6s|%8s|%s",
 	              frame, e.iso.c_str(), e.ss.c_str(), e.fn.c_str(), lumStr, detail);
 	writeRecord("INF", "SHOT", body);

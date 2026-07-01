@@ -114,6 +114,7 @@ errCode captureRunner::rdyMeterTimed(void)
 	void* mt = tool::startElapse();
 	errCode e = cameraController::rdyMetering(*dev_);
 	meterMs_ = static_cast<int>(tool::getElapse(mt));
+	meterOk_ = (e == ERR_HGC_OK);	// 成否を退避(tm1でログ)
 	return e;
 }
 
@@ -339,9 +340,13 @@ errCode captureRunner::loop(void)
 
 	// 最長ss上限(仕様7.4.2/今回の指示3): ss は「夜間ssを超えない」かつ「撮影周期-2秒以内」。
 	// 夜間がスケジュール窓に無くても周期決定パラメータとして守る。各 ctl.init 後に capLongestSs で適用。
+	// 最大ss=夜間ss(未設定/過大は安全値へ)。tm1オフセット=(周期-最大ss)×係数(固定にせず余裕から算出・調整対象)。
 	const double nightSsSec = expo::parseValue(plan_.nightFixedExposure.ss, expo::expoKind::ss);
-	const double ivCap      = (interval > kShutterOffsetSec) ? (interval - kShutterOffsetSec) : interval;	// 最大ss=周期-offset
-	const double maxSsCap   = (nightSsSec > 0.0) ? std::min(nightSsSec, ivCap) : ivCap;
+	double       maxSs      = (nightSsSec > 0.0) ? nightSsSec : (interval * 0.5);
+	if (maxSs >= interval) { maxSs = interval * 0.9; }
+	const double offsetSec  = std::max(0.1, (interval - maxSs) * kShutterOffsetFactor);	// tm0→tm1 の差[秒]
+	const double maxSsCap   = maxSs;	// 露出の ss 上限=最大ss(offset+maxSs<周期 が保証される)
+	const int    offMs      = static_cast<int>(offsetSec * 1000.0);	// ログ用
 
 	const hgc::ccmWindow* curWin = nullptr;
 	expo::exposureCtl autoCtl;		// 自動露出用
@@ -457,13 +462,15 @@ errCode captureRunner::loop(void)
 		if (w == nullptr || !w->ccm) { if (warmedUp) { ++boundaryIdx; } interruptibleSleep(500); continue; }	// 隙間
 
 		// tm0: 変更のあった露出項目だけ適用(通常コマのみ。ウォームアップは pending 未確定なので適用しない)。
-		void* tm0    = warmedUp ? tool::startElapse() : nullptr;	// tm0処理時間(適用+測光)の計測開始
-		int   applyMs = -1;
+		// tm0内ではログ出力せず成否/所要を変数に退避する(tm0を極力短く)。失敗してもここではリトライしない。
+		void*   tm0     = warmedUp ? tool::startElapse() : nullptr;	// tm0処理時間(適用+測光)の計測開始
+		int     applyMs = -1;
+		errCode applyErr = ERR_HGC_OK;
 		if (warmedUp)
 		{
 			lastExp = pending;	// ブロックの ev0 は「測光時の露出」= これから測る pending を使う
 			void* ta = tool::startElapse();
-			applyExposureChanged(pending);
+			applyErr = applyExposureChanged(pending);	// 変更分のみ。失敗はリトライせず記録のみ
 			applyMs = static_cast<int>(tool::getElapse(ta));
 		}
 
@@ -477,6 +484,7 @@ errCode captureRunner::loop(void)
 		hgc::exposure target{};
 		double meteredLinear = -1.0;	// 測光したリニア輝度(自動補正時のみ。<0=測光なし)
 		meterMs_ = -1;	// このコマの rdyMetering 実測msをリセット(測光しないコマは -1 のまま)
+		meterOk_ = true;	// 測光成否をリセット(測光しないコマは「成功扱い」でログ非表示)
 
 		if (ccm->type == hgc::ccmType::night)
 		{
@@ -561,10 +569,8 @@ errCode captureRunner::loop(void)
 				}
 				else
 				{
-					if (meterFailStreak == 0) { avgBuf.clear(); if (onError_) { onError_(ERR_HGC_RDY_METARING, "metering lost -> liveview restart"); } }
+					if (meterFailStreak == 0) { avgBuf.clear(); if (onError_) { onError_(ERR_HGC_RDY_METARING, "metering lost (tm0: no retry, keep exposure)"); } }
 					++meterFailStreak;
-					cameraController::startShooting(*dev_);
-					interruptibleSleep(kMeterSettleMs);
 				}
 				target = preCtl.current();
 				if (!validExposure(target)) { target = validExposure(lastExp) ? lastExp : nightExp; }
@@ -639,10 +645,8 @@ errCode captureRunner::loop(void)
 			}
 			else
 			{
-				if (meterFailStreak == 0) { avgBuf.clear(); if (onError_) { onError_(ERR_HGC_RDY_METARING, "metering lost -> liveview restart"); } }
+				if (meterFailStreak == 0) { avgBuf.clear(); if (onError_) { onError_(ERR_HGC_RDY_METARING, "metering lost (tm0: no retry, keep exposure)"); } }
 				++meterFailStreak;
-				cameraController::startShooting(*dev_);
-				interruptibleSleep(kMeterSettleMs);
 			}
 			target = postCtl.current();
 			if (!validExposure(target)) { target = validExposure(lastExp) ? lastExp : nightExp; }
@@ -732,11 +736,9 @@ errCode captureRunner::loop(void)
 					if (meterFailStreak == 0)
 					{
 						avgBuf.clear();
-						if (onError_) { onError_(ERR_HGC_RDY_METARING, "metering lost -> liveview restart"); }
+						if (onError_) { onError_(ERR_HGC_RDY_METARING, "metering lost (tm0: no retry, keep exposure)"); }
 					}
 					++meterFailStreak;
-					cameraController::startShooting(*dev_);	// live view を張り直す
-					interruptibleSleep(kMeterSettleMs);
 				}
 				target = autoCtl.current();
 			}
@@ -771,8 +773,9 @@ errCode captureRunner::loop(void)
 		if (!validExposure(target)) { target = validExposure(pending) ? pending : ccm->limitBright; }	// 無効はフォールバック
 
 		// tm1: 境界+offset まで待ってシャッター(=周期ピッタリで発光)。tm0がoffsetを超えたカメラでは即発光。
-		sleepUntilElapse(mono, static_cast<long>(boundaryIdx * interval * 1000.0 + kShutterOffsetSec * 1000.0));
+		sleepUntilElapse(mono, static_cast<long>(boundaryIdx * interval * 1000.0 + offsetSec * 1000.0));	// offset=(周期-最大ss)×係数
 		err = cameraController::actShutter(*dev_);
+		if (err != ERR_HGC_OK) { err = cameraController::actShutter(*dev_); }	// tm1(シャッター)失敗は1回だけリトライ
 		if (err != ERR_HGC_OK) { if (onError_) { onError_(err, "actShutter"); } ++shootFailStreak; }
 		else { shootFailStreak = 0; }
 		++frame;
@@ -780,7 +783,9 @@ errCode captureRunner::loop(void)
 		if (onCaptured_)
 		{
 			double lum = expo::brightnessStops(pending, tables_);	// 撮ったのは pending(適用済み)
-			onCaptured_(capturedInfo{ frame, pending, lum, ccm->name, meteredLinear, meterMs_, applyMs, tm0Ms });
+			// tm0で退避した成否/所要をここ(tm1)でまとめてログへ渡す(tm0内ではログしない)。
+			onCaptured_(capturedInfo{ frame, pending, lum, ccm->name, meteredLinear, meterMs_, applyMs, tm0Ms,
+			                          offMs, meterOk_, (applyErr == ERR_HGC_OK) });
 		}
 		if (onProgress_)
 		{

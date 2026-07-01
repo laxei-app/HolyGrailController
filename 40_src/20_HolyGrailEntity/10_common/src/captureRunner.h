@@ -26,9 +26,11 @@ public:
 	// luminance=露出の明るさ[段](Sv-Av-Tv)。metered=測光したリニア輝度(自動補正時のみ。<0=測光なし)。
 	// rdyMeteringMs=ライブビュー取得(rdyMetering)実測ms、rdyShutterMs=露出設定適用(rdyShutter)実測ms。
 	// いずれも計測点では変数に退避するだけで、ログ出力はこのコマ確定後(シャッター後)に行う(-1=計測なし)。
-	// tm0Ms=タイマ方式のtm0処理時間(境界での 露出適用+測光 の合計ms)。offset に収まるかの判定用(ユーザー要望)。
+	// tm0Ms=tm0処理時間(境界での 露出適用+測光 の合計ms)。offMs=そのコマの offset[ms]。
+	// rdyOk/setOk=tm0で行った rdyMetering / 露出設定 の成否(tm0内ではログせず tm1 でまとめて出す)。
 	struct capturedInfo { int frame; hgc::exposure exp; double luminance; std::string ccm; double metered = -1.0;
-	                      int rdyMeteringMs = -1; int rdyShutterMs = -1; int tm0Ms = -1; };
+	                      int rdyMeteringMs = -1; int rdyShutterMs = -1; int tm0Ms = -1; int offMs = -1;
+	                      bool rdyOk = true; bool setOk = true; };
 
 	using stateCb    = std::function<void(int)>;					// hgeState 値
 	using progressCb = std::function<void(const progressInfo&)>;
@@ -70,8 +72,10 @@ public:
 	static constexpr long kReconnectWaitMs     = 2000;	// 再接続試行間の待ち[ms]
 
 	// --- 周期正確化(タイマ方式) ---
-	static constexpr double kShutterOffsetSec  = 2.0;	// tm0(露出適用+測光)→ tm1(シャッター)の差[秒]。=周期と最大ssの差(固定)
-	static constexpr int    kPreConvergeSec    = 30;	// 撮影窓の何秒前から初期収束(測光のみ・シャッター無し)を始めるか
+	// tm0(露出適用+測光)→ tm1(シャッター)の差 offset = (周期 - 最大ss) × kShutterOffsetFactor。
+	// 最大ss=夜間ss。固定にせず周期と最大ssの余裕から算出し、なるべく短くする。係数は今後の検証で調整する。
+	static constexpr double kShutterOffsetFactor = 0.3;	// offset 算出係数(調整対象)
+	static constexpr int    kPreConvergeSec      = 30;	// 撮影窓の何秒前から初期収束(測光のみ・シャッター無し)を始めるか
 
 private:
 	errCode loop(void);								// 撮影ループ本体(別スレッド)
@@ -97,7 +101,8 @@ private:
 	// カメラの設定可能値テーブル(開始時に取得して構築。仕様 4.2)
 	expo::expoTables tables_;
 
-	int meterMs_ = -1;	// 直近 rdyMetering(ライブビュー取得)の実測ms。コマ毎にリセットしログへ出す(計測用)
+	int  meterMs_ = -1;	// 直近 rdyMetering(ライブビュー取得)の実測ms。コマ毎にリセットしログへ出す(計測用)
+	bool meterOk_ = true;	// 直近 rdyMetering の成否(rdyMeterTimed が設定)。tm1でログ
 	// 変更分のみ適用(タイマ方式tm0)の直近適用値。establishSession でクリアし次回フル適用させる。
 	std::string lastFnApplied_, lastSsApplied_, lastIsoApplied_;
 

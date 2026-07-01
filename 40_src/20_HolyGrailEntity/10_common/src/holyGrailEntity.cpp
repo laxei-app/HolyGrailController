@@ -935,7 +935,7 @@ namespace
 				              S->planId.c_str(), c.frame, c.exp.iso.c_str(), c.exp.ss.c_str(), c.exp.fn.c_str(), c.luminance);
 				notify(HGE_EV_CAPTURED, b);
 				if (c.ccm != S->lastCcm) { std::string d = (S->lastCcm.empty() ? "" : S->lastCcm + " -> ") + c.ccm; dataManager::logEvent("CCMSW", d.c_str()); S->lastCcm = c.ccm; }
-				dataManager::logShot(c.frame, c.exp, c.luminance, c.ccm.c_str(), c.metered, c.rdyMeteringMs, c.rdyShutterMs, c.tm0Ms);
+				dataManager::logShot(c.frame, c.exp, c.luminance, c.ccm.c_str(), c.metered, c.rdyMeteringMs, c.rdyShutterMs, c.tm0Ms, c.offMs, c.rdyOk, c.setOk);
 			},
 			[S](errCode e, const std::string& m) { notifyError(e, m.c_str()); });
 
