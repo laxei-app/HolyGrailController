@@ -145,7 +145,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private val edges = mutableListOf<Edge>()   // 登録済みエッジ端末(設定で追加、prefsに永続化、オフラインでも選択可)
     private var suppressEdgeSel = false          // スピナーをプログラムで設定する間は選択保存を抑止
     private val handler = Handler(Looper.getMainLooper())
-    private var edgeCapturing = false
 
     // エッジ設定(QR+PoP §8.2.2)。スキャンしたPoP/端末名を保持。
     private var scannedPop = ""
@@ -241,7 +240,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
                             updateEdgeIp(ed.name, ed.ip, ed.port)
                             if (pid.isNotEmpty()) setPlanEdgeName(pid, ed.name)
                             refreshEdgeSpinner()
-                            edgeCapturing = true; edgeCapturingPlanId = pid
                             if (pid.isNotEmpty()) {
                                 when { disc -> disconnectedPlans.add(pid); wait -> waitingPlans.add(pid); else -> { capturingPlans.add(pid); startBlink() } }
                                 refreshPlanList(); updateReadOnly()
@@ -252,9 +250,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
                                 else -> { captureStatus.text = "● エッジ撮影中(復元)"; captureStatus.setTextColor(0xFF2E7D32.toInt()) }
                             }
                             captureStatus.visibility = View.VISIBLE
-                            handler.postDelayed(edgePoll, 2000)
+                            ensureEdgePoll()
                         }
-                        return@Thread
+                        // 複数エッジが並行撮影中の場合もあるため return せず、見つかった全エッジを復元する。
                     }
                 } catch (_: Exception) {}
             }
@@ -347,7 +345,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 HgeNative.nativeCaptureStop()
                 flipper.displayedChild = 0
             } else {
-                stopOnEdge(e)
+                stopOnEdge(e, currentPlanId)
             }
         }
         edgeSearchButton.setOnClickListener {
@@ -3284,67 +3282,75 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // エッジ端末の状態を約10秒ごとに問い合わせ、スマホ表示へ反映する(仕様8.2)。
     // エッジ側で停止された場合もここで検知してスマホUIを更新する(既知ギャップの解消)。
+    // 撮影中/待機/未検出の「エッジ計画」を列挙する。計画ごとに別エッジを指定でき並行撮影も可能なので、
+    // 表示中の1台ではなく“アクティブな全エッジ計画”を対象にする。phone直は planEdge==null で除外される。
+    private fun activeEdgePlans(): List<String> =
+        (capturingPlans + waitingPlans + disconnectedPlans).filter { planEdge(it) != null }
+
+    // 1つのエッジ計画の進捗JSONを状態集合へ反映する。表示中の計画(currentPlanId)ならステータス行も更新。
+    // ST_IDLE/ST_ERROR ならその計画を各集合から除く(=撮影終了)。
+    private fun reconcileEdgePlan(pid: String, pj: String) {
+        if (pj.isEmpty()) return
+        try {
+            val o = JSONObject(pj)
+            val st = o.optInt("state")
+            var changed = false
+            when (st) {
+                HgeNative.ST_NOCAMERA, HgeNative.ST_DISCONNECTED -> {
+                    if (disconnectedPlans.add(pid)) changed = true
+                    if (capturingPlans.remove(pid)) changed = true
+                    if (waitingPlans.remove(pid)) changed = true
+                    if (currentPlanId == pid) { captureStatus.text = "● カメラが見つかりません(エッジ)"; captureStatus.setTextColor(0xFFD32F2F.toInt()); captureStatus.visibility = View.VISIBLE }
+                    showNoCameraDialog(pid)   // Phase3c: 継続/中止ポップアップ(多重抑止あり)
+                }
+                HgeNative.ST_WAITING, HgeNative.ST_SEARCHING -> {
+                    if (waitingPlans.add(pid)) changed = true
+                    if (capturingPlans.remove(pid)) changed = true
+                    if (disconnectedPlans.remove(pid)) changed = true
+                    nocamDialogShown.remove(pid)
+                    if (currentPlanId == pid) { captureStatus.text = "● 撮影開始待ち(エッジ)"; captureStatus.setTextColor(0xFF1565C0.toInt()); captureStatus.visibility = View.VISIBLE }
+                }
+                HgeNative.ST_CAPTURING, HgeNative.ST_STOPPING -> {
+                    if (capturingPlans.add(pid)) changed = true
+                    if (waitingPlans.remove(pid)) changed = true
+                    if (disconnectedPlans.remove(pid)) changed = true
+                    nocamDialogShown.remove(pid)
+                    if (currentPlanId == pid) { captureStatus.text = "● エッジ撮影中  ${o.optInt("frame")}/${o.optInt("total")}枚  残り${o.optInt("remainSec")}秒"; captureStatus.setTextColor(0xFF2E7D32.toInt()); captureStatus.visibility = View.VISIBLE }
+                }
+                HgeNative.ST_IDLE, HgeNative.ST_ERROR -> {   // この計画は終了 → 各集合から除去
+                    if (capturingPlans.remove(pid)) changed = true
+                    if (waitingPlans.remove(pid)) changed = true
+                    if (disconnectedPlans.remove(pid)) changed = true
+                    nocamDialogShown.remove(pid)
+                    if (currentPlanId == pid) captureStatus.visibility = View.GONE
+                }
+                // その他(READY 等)は無視
+            }
+            if (capturingPlans.isEmpty()) stopBlink() else startBlink()
+            if (changed) { refreshPlanList(); updateReadOnly() }
+        } catch (_: Exception) {}
+    }
+
+    // エッジ側で停止された場合もここで検知してスマホUIを更新する(既知ギャップの解消)。
+    // 表示中の計画に依らず、アクティブな各エッジ計画をそれぞれ自分のエッジでポールする(並行対応)。
     private val edgePoll = object : Runnable {
         override fun run() {
-            val e = selectedEdge()
-            if (e == null) { return }
-            Thread {
-                val js = HgeNative.nativeEdgeProgress(e.ip, e.port)
-                runOnUiThread {
-                    if (js.isNotEmpty()) {
-                        try {
-                            val o = JSONObject(js)
-                            val st = o.optInt("state")
-                            val epid = edgeCapturingPlanId
-                            if (epid.isNotEmpty()) {
-                                // エッジ撮影の状態を3集合へ反映(撮影中=点滅 / 待機=点灯 / 未検出=✖)。
-                                var changed = false
-                                when (st) {
-                                    HgeNative.ST_NOCAMERA, HgeNative.ST_DISCONNECTED -> {
-                                        if (disconnectedPlans.add(epid)) changed = true
-                                        if (capturingPlans.remove(epid)) changed = true
-                                        if (waitingPlans.remove(epid)) changed = true
-                                        if (capturingPlans.isEmpty()) stopBlink()
-                                        if (currentPlanId == epid) { captureStatus.text = "● カメラが見つかりません(エッジ)"; captureStatus.setTextColor(0xFFD32F2F.toInt()); captureStatus.visibility = View.VISIBLE }
-                                        showNoCameraDialog(epid)   // Phase3c: 継続/中止ポップアップ(多重抑止あり)
-                                    }
-                                    HgeNative.ST_WAITING, HgeNative.ST_SEARCHING -> {
-                                        if (waitingPlans.add(epid)) changed = true
-                                        if (capturingPlans.remove(epid)) changed = true
-                                        if (disconnectedPlans.remove(epid)) changed = true
-                                        nocamDialogShown.remove(epid)
-                                        if (capturingPlans.isEmpty()) stopBlink()
-                                        if (currentPlanId == epid) { captureStatus.text = "● 撮影開始待ち(エッジ)"; captureStatus.setTextColor(0xFF1565C0.toInt()); captureStatus.visibility = View.VISIBLE }
-                                    }
-                                    HgeNative.ST_CAPTURING, HgeNative.ST_STOPPING -> {
-                                        if (capturingPlans.add(epid)) changed = true
-                                        if (waitingPlans.remove(epid)) changed = true
-                                        if (disconnectedPlans.remove(epid)) changed = true
-                                        nocamDialogShown.remove(epid)
-                                        startBlink()
-                                        if (currentPlanId == epid) { captureStatus.text = "● エッジ撮影中  ${o.optInt("frame")}/${o.optInt("total")}枚  残り${o.optInt("remainSec")}秒"; captureStatus.setTextColor(0xFF2E7D32.toInt()); captureStatus.visibility = View.VISIBLE }
-                                    }
-                                }
-                                if (changed) { refreshPlanList(); updateReadOnly() }
-                            }
-                            // エッジが停止/終了/エラー → スマホ側の撮影中表示を解除。
-                            if (st == HgeNative.ST_IDLE || st == HgeNative.ST_ERROR) {
-                                edgeCapturing = false
-                                if (edgeCapturingPlanId.isNotEmpty()) {
-                                    capturingPlans.remove(edgeCapturingPlanId); disconnectedPlans.remove(edgeCapturingPlanId); waitingPlans.remove(edgeCapturingPlanId); nocamDialogShown.remove(edgeCapturingPlanId); edgeCapturingPlanId = ""
-                                    if (capturingPlans.isEmpty()) stopBlink()
-                                    refreshPlanList(); updateReadOnly(); captureStatus.visibility = View.GONE
-                                }
-                            }
-                        } catch (_: Exception) {}
-                    }
-                }
-            }.start()
-            if (edgeCapturing) handler.postDelayed(this, 10000)   // 約10秒間隔
+            val active = activeEdgePlans()
+            if (active.isEmpty()) { return }   // アクティブなエッジ計画が無ければ停止(次の start/restore で再開)
+            for (pid in active) {
+                val e = planEdge(pid) ?: continue
+                if (e.ip.isEmpty()) continue   // IP未解決(名称のみ)はスキップ
+                Thread {
+                    val pj = HgeNative.nativeEdgeProgress(e.ip, e.port)
+                    runOnUiThread { reconcileEdgePlan(pid, pj) }
+                }.start()
+            }
+            handler.postDelayed(this, 10000)   // 約10秒間隔(アクティブが続く限り再スケジュール)
         }
     }
 
-    private var edgeCapturingPlanId = ""   // エッジで撮影中の計画 id
+    // edgePoll を単一インスタンスで(再)起動する。多重 postDelayed による二重ループを防ぐ。
+    private fun ensureEdgePoll() { handler.removeCallbacks(edgePoll); handler.postDelayed(edgePoll, 2000) }
 
     // 計画名をモノクロ2値ビットマップ(width u16LE, height u16LE, 1bpp MSB先頭, 1=白)に変換する。
     // エッジ端末はフォントに依存せず名称を表示できる(§8.2.1 多言語対応)。
@@ -3388,9 +3394,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val r = HgeNative.nativeEdgeStart(e.ip, e.port, s, off, nameBmp, planId)
             runOnUiThread {
                 if (r == 0) {
-                    edgeCapturing = true; edgeCapturingPlanId = planId   // 撮影中も計画画面のまま
-                    captureStatus.text = "● エッジ端末へ転送・撮影開始"; captureStatus.visibility = View.VISIBLE
-                    handler.postDelayed(edgePoll, 2000)
+                    // waitingPlans には startPlan で追加済み。以降は edgePoll(全エッジ計画対象)が各計画の状態を反映する。
+                    if (currentPlanId == planId) { captureStatus.text = "● エッジ端末へ転送・撮影開始"; captureStatus.visibility = View.VISIBLE }
+                    ensureEdgePoll()
                 } else {
                     capturingPlans.remove(planId); waitingPlans.remove(planId); disconnectedPlans.remove(planId)
                     refreshPlanList(); updateReadOnly()
@@ -3400,13 +3406,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }.start()
     }
 
-    private fun stopOnEdge(e: Edge, planId: String = edgeCapturingPlanId) {
+    private fun stopOnEdge(e: Edge, planId: String) {
         Thread {
             HgeNative.nativeEdgeStop(e.ip, e.port, planId)
             runOnUiThread {
-                edgeCapturing = false; edgeCapturingPlanId = ""
-                handler.removeCallbacks(edgePoll)
-                captureStatus.visibility = View.GONE
+                // この計画だけを各集合から除去する(他のエッジ計画は継続)。
+                capturingPlans.remove(planId); waitingPlans.remove(planId); disconnectedPlans.remove(planId); nocamDialogShown.remove(planId)
+                if (capturingPlans.isEmpty()) stopBlink()
+                if (currentPlanId == planId) captureStatus.visibility = View.GONE
+                refreshPlanList(); updateReadOnly()
+                if (activeEdgePlans().isEmpty()) handler.removeCallbacks(edgePoll)   // 他に撮影中のエッジ計画が無ければポール停止
             }
         }.start()
     }

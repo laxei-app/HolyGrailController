@@ -32,6 +32,11 @@ namespace
 	WiFiClient            g_client;
 	std::vector<uint8_t>  g_rx;		// TCP 受信バッファ(フレーミング用)
 	std::string           g_name = "エッジ端末";
+	uint32_t              g_lastRx = 0;			// g_client の最終受信時刻(ms)。stale接続の回収に使う
+	// これ以上無通信の接続は回収してスロットを空ける。スマホの状態ポーリングは約10秒間隔なので、
+	// それを十分上回る値にして永続接続がポール間で切れないようにする(案B)。half-open滞留は
+	// 新接続の優先受理(下記 hasClient 分岐)が即座に解消するため、この値は長めでも安全。
+	constexpr uint32_t    TCP_IDLE_MS = 30000;
 
 	// --- RTC(UTC保持運用) ---
 	void setRtcFromUtc(long long utc)
@@ -117,6 +122,7 @@ namespace
 	// 1 つの TCP 要求を処理して応答を返す。
 	void handleTcp(const etp::packet& pk)
 	{
+		DBGLN(col::YEL, "etpEdge: rx cmd=%u m=%u len=%u", (unsigned)pk.cmd, (unsigned)pk.method, (unsigned)pk.data.size());
 		uint16_t rm = etp::M_ACK;
 		std::string rd;
 		switch (pk.cmd)
@@ -131,7 +137,9 @@ namespace
 			size_t tab = pk.data.find('\t');
 			if (tab != std::string::npos) { id = pk.data.substr(0, tab); body = pk.data.substr(tab + 1); }
 			else { body = pk.data; }
-			if (hge_importPlan(id.c_str(), body.c_str(), static_cast<int32_t>(body.size())) != ERR_HGC_OK)
+			int32_t ir = hge_importPlan(id.c_str(), body.c_str(), static_cast<int32_t>(body.size()));
+			DBGLN(col::YEL, "etpEdge: CAPTURE_PLAN id='%s' bodyLen=%u import=%ld", id.c_str(), (unsigned)body.size(), (long)ir);
+			if (ir != ERR_HGC_OK)
 			{ rm = etp::M_NAK; }
 			else { edgeAddReceivedPlan(id); }	// 受信した計画だけリスト表示する
 			break;
@@ -148,9 +156,12 @@ namespace
 		case etp::C_CONTROL_METHOD:
 			break;	// 将来用。現状は受領のみ(ccmListは計画に内包)
 		case etp::C_ACTION:	// data に計画 id があればその計画を開始(無ければ従来の単一開始)
-			if (!pk.data.empty()) { hge_captureStartPlan(pk.data.c_str()); }
-			else                  { hge_captureStart(); }
+		{
+			int32_t ar = (!pk.data.empty()) ? hge_captureStartPlan(pk.data.c_str()) : hge_captureStart();
+			DBGLN(col::YEL, "etpEdge: ACTION planId='%s' start=%ld state=%d", pk.data.c_str(), (long)ar, (int)hge_getState());
+			if (ar != ERR_HGC_OK) { rm = etp::M_NAK; }	// 診断+改善: 開始失敗をスマホへ返す(従来は常にACKだった)
 			break;
+		}
 		case etp::C_STOP:
 			if (!pk.data.empty()) { hge_captureStopPlan(pk.data.c_str()); }
 			else                  { hge_captureStop(); }
@@ -196,19 +207,42 @@ namespace
 		}
 	}
 
-	// TCP 制御のポーリング
+	// TCP 制御のポーリング。
+	// 単一クライアント方式のため、half-open接続が居座ると新規接続がバックログで待たされ
+	// 「C_TIMEは通るのに後続が処理されない」スタックに陥る。防御として次の2点を入れる:
+	//  (1) 新規接続が来ていて現接続がアイドル(未読バイト無し/フレーム途中でない)なら差し替える。
+	//  (2) 一定時間(TCP_IDLE_MS)無通信の接続は stop() して回収し、スロットを空ける。
 	void pollTcp(void)
 	{
+		// (1) 新規接続を優先受理: 現接続がアイドル(処理中でない)なら古い方を切って差し替える。
+		if (g_server.hasClient())
+		{
+			bool curActive = g_client && g_client.connected() && (g_client.available() > 0 || !g_rx.empty());
+			if (!curActive)
+			{
+				WiFiClient nc = g_server.available();
+				if (nc)
+				{
+					if (g_client) { g_client.stop(); }
+					g_client = nc; g_rx.clear(); g_lastRx = millis();
+					DBGLN(col::CYN, "etpEdge: client connected (accepted newer)");
+				}
+			}
+		}
+
 		if (!g_client || !g_client.connected())
 		{
 			g_client = g_server.available();
-			if (g_client) { g_rx.clear(); }
+			if (g_client) { g_rx.clear(); g_lastRx = millis(); DBGLN(col::CYN, "etpEdge: client connected"); }
 			else          { return; }
 		}
+		size_t got = 0;
 		while (g_client.available() > 0)
 		{
 			g_rx.push_back(static_cast<uint8_t>(g_client.read()));
+			++got;
 		}
+		if (got > 0) { g_lastRx = millis(); DBGLN(col::CYN, "etpEdge: rx +%u (rxLen=%u)", (unsigned)got, (unsigned)g_rx.size()); }
 		size_t pos = 0;
 		while (pos < g_rx.size())
 		{
@@ -216,9 +250,18 @@ namespace
 			int c = etp::decode(g_rx.data() + pos, g_rx.size() - pos, pk);
 			if (c > 0)      { handleTcp(pk); pos += static_cast<size_t>(c); }
 			else if (c == 0){ break; }		// データ不足
-			else            { pos += 1; }	// 不正: 1バイト進めて再同期
+			else            { DBGLN(col::RED, "etpEdge: decode resync (bad byte, rxLen=%u)", (unsigned)(g_rx.size() - pos)); pos += 1; }	// 不正: 1バイト進めて再同期
 		}
 		if (pos > 0) { g_rx.erase(g_rx.begin(), g_rx.begin() + static_cast<long>(pos)); }
+
+		// (2) アイドルが続く接続(half-open含む)を回収してスロットを空ける。
+		//     フレーム途中(g_rx非空)は保護。スマホは永続接続で ~2秒周期に通信するので通常は回収されない。
+		if (g_client && g_client.connected() && g_rx.empty() && (millis() - g_lastRx) > TCP_IDLE_MS)
+		{
+			DBGLN(col::CYN, "etpEdge: recycle idle client (%ums)", (unsigned)(millis() - g_lastRx));
+			g_client.stop();
+			g_rx.clear();
+		}
 	}
 }
 

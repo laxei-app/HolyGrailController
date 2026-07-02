@@ -12,13 +12,19 @@
 #include <unistd.h>
 #include <cerrno>
 #include <cstring>
+#include <mutex>
 #include <set>
 #include <string>
 #include <vector>
 
+#include <android/log.h>
+
 #include "etp.h"
 #include "holyGrailEntity.h"
 #include "commonAndroid.h"
+
+// 診断ログ(スマホ→エッジ開始の各段の可視化)。adb logcat -s HGEdgeCli で確認。
+#define ELOG(...) __android_log_print(ANDROID_LOG_INFO, "HGEdgeCli", __VA_ARGS__)
 
 namespace
 {
@@ -71,7 +77,9 @@ namespace
 	int tcpRequest(int fd, uint16_t cmd, uint16_t method, const std::string& data, std::string& outData)
 	{
 		std::vector<uint8_t> out = etp::encode(cmd, method, data);
-		if (send(fd, out.data(), out.size(), 0) < 0) { return 0; }
+		// MSG_NOSIGNAL: 相手が閉じた接続(使い回しで stale の場合)への send で SIGPIPE により
+		// プロセスが落ちるのを防ぐ。失敗は戻り値<0 で検知して呼び側が張り直す。
+		if (send(fd, out.data(), out.size(), MSG_NOSIGNAL) < 0) { return 0; }
 
 		std::vector<uint8_t> rx;
 		uint8_t buf[1024];
@@ -102,6 +110,65 @@ namespace
 			return -1;
 		}
 		return fd;
+	}
+
+	// --- エッジ制御用の永続TCP接続(案B) ---
+	// 毎回 open/close せず 1 本を張りっぱなしにして使い回す。connect/close の churn を無くし、
+	// エッジ側の単一クライアントTCPサーバとも自然に噛み合わせてスタックを防ぐ。
+	// start/stop/progress が別スレッドから呼ばれるため g_connMtx で操作全体を直列化する。
+	std::mutex   g_connMtx;
+	int          g_connFd   = -1;
+	std::string  g_connHost;
+	int          g_connPort = 0;
+
+	void closeConn(void)	// 要 g_connMtx
+	{
+		if (g_connFd >= 0) { close(g_connFd); g_connFd = -1; }
+	}
+
+	// 接続を用意する(必要なら張り直す)。宛先が変わったら再接続。return: fd or -1。
+	// fresh には「今この呼び出しで新規に張ったか(=使い回しでない)」を返す。要 g_connMtx。
+	int ensureConn(const std::string& host, int port, bool* fresh)
+	{
+		if (fresh) { *fresh = false; }
+		if (g_connFd >= 0 && (host != g_connHost || port != g_connPort)) { closeConn(); }
+		if (g_connFd < 0)
+		{
+			g_connFd   = tcpConnect(host, port, 5000);
+			g_connHost = host; g_connPort = port;
+			if (fresh) { *fresh = true; }
+			ELOG("edgeConn %s ip=%s:%d fd=%d", (g_connFd >= 0 ? "open" : "open FAIL"), host.c_str(), port, g_connFd);
+		}
+		return g_connFd;
+	}
+
+	// 使い回し接続に残った未読バイト(想定外の残骸)を捨てる。要 g_connMtx。
+	void drainSocket(int fd)
+	{
+		uint8_t b[512];
+		while (recv(fd, b, sizeof(b), MSG_DONTWAIT) > 0) { /* discard */ }
+	}
+
+	// 永続接続で「操作の最初の1コマンド」を送る。使い回し接続が死んでいたら 1 度だけ張り直して再送。
+	// return: method(ACK/NAK) or 0(失敗)。要 g_connMtx。
+	int firstReq(const std::string& host, int port, uint16_t cmd, uint16_t method,
+	             const std::string& data, std::string& out)
+	{
+		bool fresh = false;
+		int fd = ensureConn(host, port, &fresh);
+		if (fd >= 0)
+		{
+			if (!fresh) { drainSocket(fd); }			// 使い回しは残骸を掃除してから
+			int m = tcpRequest(fd, cmd, method, data, out);
+			if (m) { return m; }
+			if (fresh) { closeConn(); return 0; }		// 新規接続でも失敗ならエッジ側の問題
+			closeConn();								// 使い回しが stale → 張り直して 1 回だけ再送
+			fd = ensureConn(host, port, &fresh);
+		}
+		if (fd < 0) { return 0; }
+		int m = tcpRequest(fd, cmd, method, data, out);
+		if (!m) { closeConn(); }
+		return m;
 	}
 }
 
@@ -163,14 +230,16 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring
 	env->ReleaseStringUTFChars(datetime_, dt);
 	if (pid) { env->ReleaseStringUTFChars(planId_, pid); }
 
-	int fd = tcpConnect(hostS, port, 5000);
-	if (fd < 0) { return -1; }
+	std::lock_guard<std::mutex> lk(g_connMtx);	// 永続接続を操作全体で占有(コマンド間に他操作を割り込ませない)
 
 	jint result = 0;
 	std::string rd;
-	// 1) 時刻同期
+	// 1) 時刻同期(操作の先頭。使い回し接続が死んでいれば firstReq が張り直して再送)
 	std::string timeJson = "{\"datetime\":\"" + dtS + "\",\"utcOffsetMin\":" + std::to_string(offMin) + "}";
-	if (tcpRequest(fd, etp::C_TIME, etp::M_PUT, timeJson, rd) != etp::M_ACK) { result = -2; }
+	int mTime = firstReq(hostS, port, etp::C_TIME, etp::M_PUT, timeJson, rd);
+	ELOG("edgeStart C_TIME method=%d fd=%d", mTime, g_connFd);
+	if (mTime != etp::M_ACK) { closeConn(); return -2; }
+	int fd = g_connFd;	// 以降は確立済みの同一接続で送る
 
 	// 2) 撮影計画(現在の計画JSONを entity から取得)
 	if (result == 0)
@@ -178,11 +247,15 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring
 		int32_t len = 0;
 		hge_getPlanJson(nullptr, &len);
 		std::vector<char> pbuf(len > 0 ? static_cast<size_t>(len) : 1);
-		if (hge_getPlanJson(pbuf.data(), &len) == 0)
+		int32_t gj = hge_getPlanJson(pbuf.data(), &len);
+		ELOG("edgeStart planJson getRc=%d len=%d", (int)gj, (int)len);
+		if (gj == 0)
 		{
 			// data = "id\t{plan json}"。エッジは id ごとに計画を蓄積する。
 			std::string body = pidS + "\t" + std::string(pbuf.data());
-			if (tcpRequest(fd, etp::C_CAPTURE_PLAN, etp::M_PUT, body, rd) != etp::M_ACK)
+			int mPlan = tcpRequest(fd, etp::C_CAPTURE_PLAN, etp::M_PUT, body, rd);
+			ELOG("edgeStart C_CAPTURE_PLAN bodyLen=%d method=%d", (int)body.size(), mPlan);
+			if (mPlan != etp::M_ACK)
 			{ result = -3; }
 		}
 		else { result = -3; }
@@ -205,10 +278,13 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring
 	// 3) 撮影開始(計画 id を渡してその計画を開始させる)
 	if (result == 0)
 	{
-		if (tcpRequest(fd, etp::C_ACTION, etp::M_POST, pidS, rd) != etp::M_ACK) { result = -4; }
+		int mAct = tcpRequest(fd, etp::C_ACTION, etp::M_POST, pidS, rd);
+		ELOG("edgeStart C_ACTION planId=%s method=%d", pidS.c_str(), mAct);
+		if (mAct != etp::M_ACK) { result = -4; }
 	}
 
-	close(fd);
+	if (result != 0) { closeConn(); }	// 失敗時は接続を破棄し、次回はクリーンに張り直す(残骸混入を防ぐ)
+	ELOG("edgeStart result=%d", (int)result);
 	return result;
 }
 
@@ -222,11 +298,9 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeStop(JNIEnv* env, jobject, jstring 
 	env->ReleaseStringUTFChars(host_, host);
 	if (pid) { env->ReleaseStringUTFChars(planId_, pid); }
 
-	int fd = tcpConnect(hostS, port, 5000);
-	if (fd < 0) { return -1; }
+	std::lock_guard<std::mutex> lk(g_connMtx);
 	std::string rd;
-	int m = tcpRequest(fd, etp::C_STOP, etp::M_POST, pidS, rd);
-	close(fd);
+	int m = firstReq(hostS, port, etp::C_STOP, etp::M_POST, pidS, rd);
 	return (m == etp::M_ACK) ? 0 : -2;
 }
 
@@ -241,11 +315,9 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeResearch(JNIEnv* env, jobject, jstr
 	env->ReleaseStringUTFChars(host_, host);
 	if (pid) { env->ReleaseStringUTFChars(planId_, pid); }
 
-	int fd = tcpConnect(hostS, port, 5000);
-	if (fd < 0) { return -1; }
+	std::lock_guard<std::mutex> lk(g_connMtx);
 	std::string rd;
-	int m = tcpRequest(fd, etp::C_RESEARCH, etp::M_POST, pidS, rd);
-	close(fd);
+	int m = firstReq(hostS, port, etp::C_RESEARCH, etp::M_POST, pidS, rd);
 	return (m == etp::M_ACK) ? 0 : -2;
 }
 
@@ -257,11 +329,9 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeProgress(JNIEnv* env, jobject, jstr
 	std::string hostS = host ? host : "";
 	env->ReleaseStringUTFChars(host_, host);
 
-	int fd = tcpConnect(hostS, port, 5000);
-	if (fd < 0) { return env->NewStringUTF(""); }
+	std::lock_guard<std::mutex> lk(g_connMtx);
 	std::string rd;
-	int m = tcpRequest(fd, etp::C_PROGRESS, etp::M_GET, "", rd);
-	close(fd);
+	int m = firstReq(hostS, port, etp::C_PROGRESS, etp::M_GET, "", rd);
 	return env->NewStringUTF((m == etp::M_ACK) ? rd.c_str() : "");
 }
 
