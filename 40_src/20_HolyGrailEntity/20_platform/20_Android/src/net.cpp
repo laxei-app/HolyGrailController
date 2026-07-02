@@ -260,6 +260,12 @@ namespace net
 		return ips;
 	}
 
+	// APモードのクライアントIP列挙はエッジ端末専用機能。Android は非対応(空を返す)。
+	std::vector<std::string> apClientIps()
+	{
+		return std::vector<std::string>();
+	}
+
 	// SSDP 探索開始(指定NICからM-SEARCHを送信)
 	void* ssdpStart(const std::string& query, const std::string& localIp)
 	{

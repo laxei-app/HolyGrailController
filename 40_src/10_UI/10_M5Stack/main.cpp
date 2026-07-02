@@ -47,6 +47,15 @@ static std::string g_devName = "エッジ端末";
 static bool        g_provMode = false;	// プロビジョニング表示(QR)中か
 static std::string g_pop;				// 現在のPoP(乱数)
 
+// ── ネットワークモード(仕様: 屋外でルーター無しでも運用するためエッジ自身をAP化できる) ──
+//  "sta" = 既存ネットワークに参加(従来動作) / "ap" = エッジがアクセスポイント。
+//  モードは NVS 保持。切替は保存後に ESP.restart() し、setup() で選んだモードを素直に立ち上げる
+//  (WiFi netif の張り替え・UDP再bindの複雑さを避けるため)。
+static std::string g_netMode = "sta";	// 既定はSTA(開発機が既存LANから外れないように。将来 未設定→AP)
+static std::string g_apSsid;			// APモードのSSID(初回自動生成しNVS保存)
+static std::string g_apPass;			// APモードのパスワード(初回自動生成しNVS保存)
+static bool        g_apQrMode = false;	// AP参加用QR(SSID/パス)をLCD表示中か
+
 // NVS(Preferences 名前空間 "hgc")から接続情報を読み込む。
 static void loadEdgeCreds(void)
 {
@@ -57,8 +66,33 @@ static void loadEdgeCreds(void)
 		if (s.length()) { g_ssid = s.c_str(); }
 		if (w.length()) { g_pass = w.c_str(); }
 		if (n.length()) { g_devName = n.c_str(); }
+		String nm = p.getString("netmode", ""); if (nm.length()) { g_netMode = nm.c_str(); }
+		String as = p.getString("apssid", "");  if (as.length()) { g_apSsid  = as.c_str(); }
+		String ap = p.getString("appass", "");  if (ap.length()) { g_apPass  = ap.c_str(); }
 		p.end();
 	}
+}
+// ネットワークモード("sta"/"ap")をNVSへ保存する。切替後は ESP.restart() で反映する。
+static void saveNetMode(const char* mode)
+{
+	g_netMode = mode ? mode : "sta";
+	Preferences p;
+	if (p.begin("hgc", false)) { p.putString("netmode", g_netMode.c_str()); p.end(); }
+}
+// APモードのSSID/パスワードを用意する(無ければ端末固有に自動生成しNVS保存)。
+// SSID=HGC-Edge-<MAC下2桁>、パス=8桁の乱数(英数)。焼き込み共有秘密を避け端末ごとに異なる。
+static void ensureApCreds(void)
+{
+	if (!g_apSsid.empty() && !g_apPass.empty()) { return; }
+	uint8_t mac[6] = {0};
+	WiFi.macAddress(mac);
+	char ss[24]; std::snprintf(ss, sizeof(ss), "HGC-Edge-%02X%02X", mac[4], mac[5]);
+	char pw[9];
+	for (int i = 0; i < 8; ++i) { uint32_t r = esp_random() % 36; pw[i] = (r < 10) ? char('0' + r) : char('A' + (r - 10)); }
+	pw[8] = 0;
+	g_apSsid = ss; g_apPass = pw;
+	Preferences p;
+	if (p.begin("hgc", false)) { p.putString("apssid", g_apSsid.c_str()); p.putString("appass", g_apPass.c_str()); p.end(); }
 }
 // 接続情報を NVS へ保存して反映する(プロビジョニング受信時に呼ぶ)。
 void saveEdgeCreds(const std::string& ssid, const std::string& pass, const std::string& name)
@@ -349,7 +383,8 @@ static void renderPlan(void)
 	g_cv.fillRect(0, 0, 320, HEAD_H, M5.Display.color565(0x15, 0x65, 0xC0));
 	g_cv.setTextColor(TFT_WHITE);
 	g_cv.setCursor(8, 6);   g_cv.print("撮影計画");
-	if (WiFi.status() == WL_CONNECTED) { g_cv.setCursor(276, 6); g_cv.print(g_edgeUp ? "ETP" : "WiFi"); }
+	if (wifiConnect::isApActive())     { g_cv.setCursor(288, 6); g_cv.print("AP"); }
+	else if (WiFi.status() == WL_CONNECTED) { g_cv.setCursor(276, 6); g_cv.print(g_edgeUp ? "ETP" : "WiFi"); }
 
 	const int rowH = 50;
 	const int top  = HEAD_H;
@@ -585,15 +620,51 @@ static void renderProv(void)
 	g_cv.pushSprite(0, 0);
 }
 
+// ── APモード: 参加用QR(標準 WIFI: 形式)。スマホはスキャンで即参加、カメラは手設定 ──
+static void renderApQr(void)
+{
+	g_cv.fillScreen(TFT_WHITE);
+	// WIFI:T:WPA;S:<ssid>;P:<pass>;; (SSID/パスは英数のみなのでエスケープ不要)
+	std::string qr = std::string("WIFI:T:WPA;S:") + g_apSsid + ";P:" + g_apPass + ";;";
+	g_cv.qrcode(qr.c_str(), 76, 6, 168, 4);
+	g_cv.setFont(&fonts::efontJA_16);
+	g_cv.setTextColor(TFT_BLACK);
+	g_cv.setTextDatum(textdatum_t::middle_center);
+	g_cv.drawString("APモード: このAPに接続", 160, 184);
+	g_cv.drawString((g_apSsid + " / " + g_apPass).c_str(), 160, 204);
+	g_cv.drawString("(画面タップで計画へ)", 160, 224);
+	g_cv.setTextDatum(textdatum_t::top_left);
+	g_cv.pushSprite(0, 0);
+}
+
+// APモードでWiFi(SoftAP)とETPを立ち上げる。setup()/切替後の起動で呼ぶ。
+static void startApAndEtp(void)
+{
+	ensureApCreds();
+	if (wifiConnect::startAp(g_apSsid.c_str(), g_apPass.c_str(), 4))
+	{
+		Serial.printf("[AP] SoftAP up ssid=%s pass=%s ip=%s\n",
+		              g_apSsid.c_str(), g_apPass.c_str(), wifiConnect::apIp().c_str());
+		etpEdge::setup(g_devName);	// スマホは 192.168.4.1 のエッジへ(探索応答IPはAP対応済)
+		g_edgeUp = true;
+		g_apQrMode = true;			// LCDに参加用QR
+		hge_resumeCapture();		// AP参加済みカメラがあれば撮影再開(Phase2でstation列挙発見)
+		g_state = hge_getState();
+	}
+	else { Serial.println("[AP] softAP start FAILED"); }
+}
+
 static void redraw(void)
 {
-	if (g_provMode) { renderProv(); }	// 仕様8.2: 設定(QR+PoP)表示
+	if (g_apQrMode) { renderApQr(); }	// APモード: 参加用QR
+	else if (g_provMode) { renderProv(); }	// 仕様8.2: 設定(QR+PoP)表示
 	else            { renderPlan(); }	// 仕様8.1: 計画名+開始/停止のみ
 }
 
 // ── タップ処理(計画リストの左アイコンで開始/停止。プロビジョニング表示中は戻る) ──
 static void onTap(int x, int y)
 {
+	if (g_apQrMode)  { g_apQrMode = false; g_dirty = true; return; }	// APモード: QRを閉じて計画画面へ
 	if (g_provMode) { g_provMode = false; g_dirty = true; return; }
 	if (!g_confirmDelId.empty())	// 削除確認ダイアログ表示中(item4): はい/いいえ のみ受ける
 	{
@@ -713,7 +784,8 @@ void setup(void)
 	hge_pruneOldLogs(osclock::utcOffsetMin());
 	hge_loadFixedPlan();		// 出荷時設定(dataManager)から固定撮影計画を生成
 	loadRecvPlans();			// 受信済み計画id を復元(item1。再起動後も表示する)
-	// 注意: 撮影再開(hge_resumeCapture)は SSDP でカメラを探すため WiFi 接続後に行う(loop内)。
+	// 注意: STA時の撮影再開(hge_resumeCapture)は カメラを探すため WiFi 接続後に行う(loop内)。
+	if (g_netMode == "ap") { startApAndEtp(); }	// APモード: この時点でSoftAP+ETP+QRを立ち上げる
 	g_state = hge_getState();
 	redraw();
 }
@@ -722,8 +794,8 @@ void loop(void)
 {
 	M5.update();
 
-	// WiFi 切断時は再接続を試みる(実機運用時に SSID/PASS を設定する)
-	if (wifiConnect::getStatus() == wifiConnect::wifiStatus::cuttingOff)
+	// WiFi 切断時は再接続を試みる(実機運用時に SSID/PASS を設定する)。APモードではSTA再接続しない。
+	if (g_netMode != "ap" && wifiConnect::getStatus() == wifiConnect::wifiStatus::cuttingOff)
 	{
 		Serial.printf("[WIFI] connecting to %s ...\n", g_ssid.c_str());
 		bool ok = wifiConnect::connect(g_ssid.c_str(), g_pass.c_str());
@@ -770,6 +842,9 @@ void loop(void)
 		if (c == 's') { hge_captureStart(); }
 		else if (c == 'x') { hge_captureStop(); }
 		else if (c == 'p') { enterProv(); }	// 検証用: プロビジョニングQR表示(本番はBLEから)
+		// 検証用: ネットワークモード切替。保存して再起動し、選んだモードで素直に立ち上げ直す。
+		else if (c == 'A') { Serial.println("[AP] switch to AP mode, restarting..."); saveNetMode("ap");  delay(200); ESP.restart(); }
+		else if (c == 'S') { Serial.println("[STA] switch to STA mode, restarting..."); saveNetMode("sta"); delay(200); ESP.restart(); }
 		// 検証用: timeコマンド受信を模擬してUTCオフセットを設定・永続化し固定計画を再生成。
 		else if (c == 'j') { hge_setUtcOffset(540); hge_loadFixedPlan(); g_state = hge_getState(); g_dirty = true; }	// JST(+9h)
 		else if (c == 'u') { hge_setUtcOffset(0);   hge_loadFixedPlan(); g_state = hge_getState(); g_dirty = true; }	// UTC

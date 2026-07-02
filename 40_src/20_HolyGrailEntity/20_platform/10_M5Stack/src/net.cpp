@@ -2,6 +2,9 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <HTTPClient.h>
+#include <esp_wifi.h>
+#include <esp_netif.h>
+#include <cstring>
 #include "net.h"
 #include "debugOut.h"
 
@@ -19,6 +22,30 @@ std::vector<std::string> getLocalIpList()
     std::vector<std::string> ips;
     if (WiFi.status() == WL_CONNECTED) {
         ips.push_back(WiFi.localIP().toString().c_str());
+    }
+    return ips;
+}
+
+// APモード時、自SoftAPに接続中のクライアントのIP一覧を返す(SSDP不使用のカメラ発見用)。
+// エッジがDHCPサーバなので、接続局のMAC→IPを esp_netif から引ける。APでない時は空。
+std::vector<std::string> apClientIps()
+{
+    std::vector<std::string> ips;
+    if ((WiFi.getMode() & WIFI_MODE_AP) == 0) { return ips; }	// APモード時のみ
+    wifi_sta_list_t staList = {};
+    if (esp_wifi_ap_get_sta_list(&staList) != ESP_OK) { return ips; }
+    esp_netif_sta_list_t netifList = {};
+    if (esp_netif_get_sta_list(&staList, &netifList) != ESP_OK) { return ips; }
+    for (int i = 0; i < netifList.num; ++i)
+    {
+        char buf[16] = {0};
+        esp_ip4addr_ntoa(&netifList.sta[i].ip, buf, sizeof(buf));
+        if (buf[0] && std::strcmp(buf, "0.0.0.0") != 0) { ips.push_back(buf); }
+    }
+    if (!ips.empty())
+    {
+        std::string joined; for (auto& s : ips) { joined += s + " "; }
+        DBGLN(col::CYN, "apClientIps: %d client(s): %s", (int)ips.size(), joined.c_str());
     }
     return ips;
 }

@@ -1,7 +1,18 @@
 ﻿#include "common.h"
 #include "cameraController.h"
 #include "detectCanonCCapi.h"
+#include "netThread.h"
 #include <algorithm>
+
+// URL("http://host:port/..")からホスト部を取り出す(AP列挙のdedup用)。
+static std::string hostOfUrl(const std::string& url)
+{
+	auto p = url.find("://");
+	if (p == std::string::npos) { return std::string(); }
+	size_t s = p + 3, e = s;
+	while (e < url.size() && url[e] != ':' && url[e] != '/') { ++e; }
+	return url.substr(s, e - s);
+}
 
 // 受信バックエンド群(Meyers シングルトン。初回に生成)。
 // 現状は Canon CCAPI のみ。Sony/Nikon/スマホ内蔵は将来ここへ push_back する(構造のみ)。
@@ -23,6 +34,20 @@ size_t cameraController::detectTarget(std::vector<class device> & devices)
 	for (auto& be : backends())
 	{	// 各種別バックエンドで検出(統合・apiBase 初期化はバックエンド内で完結)。
 		be->detect(devices);
+	}
+	// APモード: エッジがSoftAPのDHCP元締めなので、SSDPに頼らず接続局IPを列挙し各IPをprobeする。
+	// STAモード/非対象プラットフォームでは apClientIps() が空=この枝は無影響(挙動不変)。
+	std::vector<std::string> apIps = netThread::apClientIps();
+	for (const auto& host : apIps)
+	{
+		bool known = false;
+		for (const auto& d : devices) { if (hostOfUrl(d.urlAccess) == host) { known = true; break; } }
+		if (known) { continue; }
+		for (auto& be : backends())
+		{	// この種別として host に接続できれば(=/ccapi 応答があれば)カメラとして採用。
+			class device dev;
+			if (be->makeManualDevice(host, dev)) { devices.push_back(dev); break; }
+		}
 	}
 	return devices.size();
 }

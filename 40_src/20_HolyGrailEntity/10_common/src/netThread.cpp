@@ -181,6 +181,12 @@ namespace netThread
         return req.ipList;                          // 成功
     }
 
+    // AP接続局IP一覧: 軽量な local 問い合わせなのでワーカーキューを通さず直接呼ぶ。
+    std::vector<std::string> apClientIps()
+    {
+        return net::apClientIps();
+    }
+
     /////////////////////////////////////////////////////////
     // SSDP関連
     

@@ -13,6 +13,10 @@ namespace netThread
     // 利用可能なローカルIPアドレスのリストを返す
     std::vector<std::string> getLocalIpList();
 
+    // APモード時、自SoftAP接続クライアントのIP一覧(SSDP不使用のカメラ発見用)。
+    // 軽量なローカル問い合わせなので単一ワーカーキューは通さず直接呼ぶ。非AP/非対象は空。
+    std::vector<std::string> apClientIps();
+
     // SSDP関連
     void* ssdpStart(const std::string& query, const std::string& localIp = "");
     bool ssdpRead(void* handle, std::string& answer );

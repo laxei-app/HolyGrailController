@@ -13,6 +13,11 @@ namespace net
     // --- 追加: 利用可能なローカルIPアドレスのリストを返す ---
     std::vector<std::string> getLocalIpList();
 
+    // APモード時、自SoftAPに接続中のクライアントのIP一覧を返す(SSDP不使用のカメラ発見用)。
+    // エッジがDHCPサーバなので接続局のIPを直接列挙できる。各IPの :8080/ccapi を叩いてカメラ判定する。
+    // APモードでない/非対象プラットフォームでは空を返す(=呼び出し側の挙動は変わらない)。
+    std::vector<std::string> apClientIps();
+
     // SSDP関連(能動: M-SEARCH送信→応答受信)
     void* ssdpStart(const std::string& query, const std::string& localIp = "");
     bool ssdpRead(void* handle, std::string& answer);

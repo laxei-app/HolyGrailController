@@ -103,7 +103,10 @@ namespace
 	{
 		json j;
 		j["name"]  = g_name;
-		j["ip"]    = std::string(WiFi.localIP().toString().c_str());
+		// STA接続時はそのIP、APモード時は softAP の自局IP(192.168.4.1)を通知する。
+		// (WiFi.localIP() はAP時 0.0.0.0 になり、スマホが繋げなくなるため)
+		bool sta = (WiFi.status() == WL_CONNECTED);
+		j["ip"]    = std::string((sta ? WiFi.localIP() : WiFi.softAPIP()).toString().c_str());
 		j["port"]  = PORT_CONTROL;
 		j["model"] = "エッジ端末";
 		j["fw"]    = std::string(hge_version());
