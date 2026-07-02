@@ -595,15 +595,28 @@ static void enterProv(void)
 // ── BLEプロビジョニング(edgeProv)との連携(仕様8.2.2) ──
 // BLEの "start" 受信時: PoP生成+QR表示。
 void edgeProvShowQr(void) { enterProv(); }
-// 復号できた認証情報を保存し、新しいSSID/passwordでWiFi再接続する。
-void edgeProvApply(const char* name, const char* ssid, const char* pass)
+// 復号できた設定を保存しネットワークへ反映する。mode="ap"=エッジ自身がAP / それ以外=STA参加。
+// AP/STA切替は保存→ESP.restart()で反映(setup()が選んだモードを素直に立ち上げ直す。統一)。
+// STA資格(自宅ルーターのSSID/パス)は BLE の PoP+AES-GCM 経路でのみ届く=盗聴に強い。
+void edgeProvApply(const char* name, const char* ssid, const char* pass, const char* mode)
 {
+	std::string m = (mode && mode[0]) ? mode : "sta";
+	if (name && name[0]) { g_devName = name; }	// 端末名は共通で更新
+	if (m == "ap")
+	{
+		// APモードへ: SSID/passは受け取らない(エッジ自身のAP資格を使う)。端末名だけ保存し netmode=ap で再起動。
+		Preferences p; if (p.begin("hgc", false)) { p.putString("devname", g_devName.c_str()); p.end(); }
+		saveNetMode("ap");
+		Serial.println("[PROV] mode=ap -> restart into AP");
+		delay(200); ESP.restart();
+		return;
+	}
+	// STAモードへ: 受信したSSID/passで参加。
 	if (ssid == nullptr || ssid[0] == 0) { Serial.println("[PROV] empty ssid, skip"); return; }
-	saveEdgeCreds(ssid, pass ? pass : "", name ? name : "");
-	g_provMode = false; g_dirty = true;
-	bool ok = wifiConnect::connect(g_ssid.c_str(), g_pass.c_str());
-	Serial.printf("[PROV] applied creds. wifi reconnect=%d ssid=%s ip=%s\n",
-	              (int)ok, g_ssid.c_str(), WiFi.localIP().toString().c_str());
+	saveEdgeCreds(ssid, pass ? pass : "", g_devName);
+	saveNetMode("sta");
+	Serial.printf("[PROV] mode=sta ssid=%s -> restart into STA\n", g_ssid.c_str());
+	delay(200); ESP.restart();
 }
 static void renderProv(void)
 {

@@ -649,6 +649,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val nameE = field("端末識別名", scannedName, false)
         val ssidE = field("接続先 SSID", "", false)
         val passE = field("接続先 password", "", true)
+        // ネットワークモード: OFF=既存ネットに参加(STA。SSID/pass使用) / ON=エッジ自身がAP(屋外・ルーター無し)。
+        // APではエッジ固有のAP資格を使うのでSSID/passは不要(エッジのLCDにQR表示)。
+        val apSwitch = android.widget.Switch(ctx).apply {
+            text = "エッジをAPにする (OFF=既存ネットに接続)"
+            setPadding(0, (12 * d).toInt(), 0, 0)
+        }
+        apSwitch.setOnCheckedChangeListener { _, ap ->
+            ssidE.isEnabled = !ap; passE.isEnabled = !ap		// AP時はSSID/pass入力を無効化
+        }
+        box.addView(apSwitch)
         val popView = TextView(ctx).apply {
             setPadding(0, (12 * d).toInt(), 0, 0)
             text = if (scannedPop.isEmpty()) "PoP: 未取得 — QRをスキャンしてください" else "PoP: $scannedPop"
@@ -703,8 +713,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 val name = nameE.text.toString()
                 val ssid = ssidE.text.toString()
                 val pass = passE.text.toString()
-                if (ssid.isEmpty()) { Toast.makeText(ctx, "SSIDを入力してください", Toast.LENGTH_SHORT).show(); return@setOnClickListener }
-                val json = JSONObject().put("name", name).put("ssid", ssid).put("pass", pass).toString()
+                val mode = if (apSwitch.isChecked) "ap" else "sta"
+                // STA時のみSSID必須(AP時はエッジ固有AP資格を使うため不要)。
+                if (mode == "sta" && ssid.isEmpty()) { Toast.makeText(ctx, "SSIDを入力してください", Toast.LENGTH_SHORT).show(); return@setOnClickListener }
+                val json = JSONObject().put("name", name).put("ssid", ssid).put("pass", pass).put("mode", mode).toString()
                 ensureBlePermissions {
                     popView.text = "BLE送信中..."
                     EdgeBle(ctx,

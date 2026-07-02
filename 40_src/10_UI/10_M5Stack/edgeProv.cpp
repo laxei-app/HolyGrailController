@@ -15,7 +15,8 @@
 // main.cpp 側の連携関数。
 extern void edgeProvShowQr(void);                 // PoP生成+QR表示(enterProv)
 extern const std::string& edgePop(void);          // 現在のPoP
-extern void edgeProvApply(const char* name, const char* ssid, const char* pass);  // 保存+WiFi再接続
+// 保存+ネットワーク反映。mode="sta"(ssid/passで参加) / "ap"(エッジ自身がAP)。空は"sta"扱い。
+extern void edgeProvApply(const char* name, const char* ssid, const char* pass, const char* mode);
 
 namespace
 {
@@ -134,10 +135,11 @@ namespace edgeProv
 				std::string name = pick(plain, "name");
 				std::string ssid = pick(plain, "ssid");
 				std::string pass = pick(plain, "pass");
-				Serial.printf("[PROV] creds decrypted: name=%s ssid=%s passLen=%u\n",
-				              name.c_str(), ssid.c_str(), (unsigned)pass.size());
+				std::string mode = pick(plain, "mode");	// "sta"(既定) / "ap"。スマホからのモード切替。
+				Serial.printf("[PROV] creds decrypted: name=%s ssid=%s passLen=%u mode=%s\n",
+				              name.c_str(), ssid.c_str(), (unsigned)pass.size(), mode.c_str());
 				setStatus("ok");
-				edgeProvApply(name.c_str(), ssid.c_str(), pass.c_str());
+				edgeProvApply(name.c_str(), ssid.c_str(), pass.c_str(), mode.c_str());
 			}
 			else
 			{
