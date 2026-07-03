@@ -783,6 +783,11 @@ namespace
 		//    device(S->dev: アドレス安定)を持つので、検索しても実行中の他セッションを壊さない。
 		std::vector<class device> found;
 		cameraController::detectTarget(found);
+		{	// 診断: SSDP検索で何台見つかったか(0台=SSDP不発の可能性)。機種/シリアルも残す。
+			std::string d = "SSDP検索結果 " + std::to_string(found.size()) + "台";
+			for (auto& fd : found) { if (fd.apiBase) { d += " [" + (fd.model.empty() ? fd.friendName : fd.model) + "/" + (fd.serialno.empty() ? "?" : fd.serialno) + "]"; } }
+			dataManager::logEvent("NET", d.c_str());
+		}
 
 		const hgc::camera& pc = S->plan.camera;
 		// 他の動作中セッションが使用中のカメラ(serial)は割り当て不可(同じカメラで二重撮影しない)。
@@ -827,6 +832,12 @@ namespace
 					{
 						manualUrl = man[0].urlAccess;
 						found.push_back(man[0]);	// apiBase はポインタ共有(device は解放しない設計)
+						// 診断: SSDPで拾えなかったが直近IPのCCAPI(HTTP:8080)は生きていた=「SSDP不発/HTTP生」。
+						dataManager::logEvent("NET", ("層診断: 直近IP直結OK host=" + host + " (SSDP不発だがHTTP:8080生)").c_str());
+					}
+					else
+					{	// 診断: 直近IPのHTTP:8080も応答なし=カメラ電源断/IP変化の可能性。
+						dataManager::logEvent("NET", ("層診断: 直近IP直結NG host=" + host + " (HTTP:8080応答なし)").c_str(), true);
 					}
 				}
 			}
@@ -884,7 +895,10 @@ namespace
 		{	// 3a: カメラ未検出のまま撮影要求を受理する。中断せず、runner が取得まで NOCAMERA(✖点灯)で
 			// 探し続ける(60秒ごと再探索/直近IP直結)。撮影窓の終了か中止まで継続。
 			S->dev.clear();
-			dataManager::logEvent("NET", "カメラ未検出のまま撮影要求を受理(探索を継続)");
+			std::string cacheHost = dataManager::loadCameraHost(wantSerial);
+			std::string d = "カメラ未検出のまま撮影要求を受理(探索を継続) SSDP=" + std::to_string(found.size()) + "台";
+			d += cacheHost.empty() ? " 直近IPキャッシュ無し(初回はSSDP必須)" : (" 直近IP=" + cacheHost + "もHTTP:8080不通");
+			dataManager::logEvent("NET", d.c_str(), true);
 		}
 
 		S->runner->setCallbacks(
@@ -978,7 +992,10 @@ namespace
 			}
 			if (hit == nullptr)
 			{	// SSDP再探索・直近IP直結ともに不可。runner の取得/再接続フェーズが後で再試行する。
-				dataManager::logEvent("NET", "カメラ取得/再接続失敗(SSDP/直近IPとも不可)", true);
+				std::string cacheHost = dataManager::loadCameraHost(wantSerial);
+				std::string d = "カメラ取得/再接続失敗 SSDP=" + std::to_string(found.size()) + "台";
+				d += cacheHost.empty() ? " 直近IPキャッシュ無し" : (" 直近IP=" + cacheHost + "もHTTP:8080不通(カメラ電源断/IP変化の疑い)");
+				dataManager::logEvent("NET", d.c_str(), true);
 				return false;
 			}
 			S->dev = *hit;	// runner の dev_ が指す先(=S->dev)を最新のIP/apiへ更新。
