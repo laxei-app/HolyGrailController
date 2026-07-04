@@ -225,16 +225,23 @@ errCode apiCanonCCAPI::startShooting(void)
 {
     if (!(funcList[funcNum::LIVE_SET].verb == verb::POS)) { return ERR_HGC_NOT_SUPPORTED; }
 
-    json request_json;
-    request_json["liveviewsize"] = "small";             // live view サイズ small
-    request_json["cameradisplay"] = "keep";             // カメラの表示
-    std::string body = request_json.dump();             // 文字列に変換
     std::string response;
-
-    auto success = netThread::httpPost(funcList[funcNum::LIVE_SET].url, body, response);
-
-    if (success == false) { return ERR_HGC_HTTP_POST; }
-    return ERR_HGC_OK;
+    // cameradisplay は撮影自体に影響しない(カメラ背面表示の扱い)が、受理値が機種で異なる。
+    // 例: EOS R10 は "keep" を受理、EOS R100 は "Invalid parameter"(HTTP 400)で拒否。
+    // 機種名で分岐せず候補を順に試し、最初に成功(HTTP 2xx)した値を使う(将来機種にも実応答で追従)。
+    // 記憶はしない(毎回試す)。撮影に影響しない部分なので順次試行のコストは許容。
+    const char* displays[] = { "keep", "on", "off" };
+    for (const char* disp : displays)
+    {
+        json request_json;
+        request_json["liveviewsize"] = "small";         // live view サイズ small(両機種で受理)
+        request_json["cameradisplay"] = disp;           // カメラ背面表示(keep→on→off 順次フォールバック)
+        if (netThread::httpPost(funcList[funcNum::LIVE_SET].url, request_json.dump(), response))
+        {
+            return ERR_HGC_OK;
+        }
+    }
+    return ERR_HGC_HTTP_POST;
 }
 
 // シャッターを切る準備
