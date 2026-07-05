@@ -225,42 +225,8 @@ bool dataManager::loadCapturingIds(std::vector<std::string>& out)
 	return true;
 }
 
-// 直近に接続できたカメラのIPを serial ごとに保存する(SSDP広告停止対策)。"*"=最後に繋がった host。
-bool dataManager::saveCameraHost(const std::string& serial, const std::string& host)
-{
-	if (host.empty()) { return false; }
-	std::string d = osfile::dir("asset");
-	if (d.empty()) { return false; }
-	std::string path = d + "/cameraHosts.json";
-	json j = json::object();
-	std::string body;
-	if (osfile::readAll(path, body) && !body.empty())
-	{
-		try { j = json::parse(body); if (!j.is_object()) { j = json::object(); } }
-		catch (const std::exception&) { j = json::object(); }
-	}
-	if (!serial.empty()) { j[serial] = host; }
-	j["*"] = host;	// serial 不明の計画でも使える最後の既知 host
-	std::string s = j.dump();
-	return osfile::writeAll(path, s.data(), s.size());
-}
-
-std::string dataManager::loadCameraHost(const std::string& serial)
-{
-	std::string d = osfile::dir("asset");
-	if (d.empty()) { return std::string(); }
-	std::string body;
-	if (!osfile::readAll(d + "/cameraHosts.json", body) || body.empty()) { return std::string(); }
-	try {
-		json j = json::parse(body);
-		if (j.is_object())
-		{
-			if (!serial.empty() && j.contains(serial) && j[serial].is_string()) { return j[serial].get<std::string>(); }
-			if (j.contains("*") && j["*"].is_string())                          { return j["*"].get<std::string>(); }
-		}
-	} catch (const std::exception&) {}
-	return std::string();
-}
+// (廃止 2026-07-05) saveCameraHost/loadCameraHost(cameraHosts.json 直近カメラIPキャッシュ)は削除。
+// 既知IP直結フォールバックの廃止(誤接続防止)に伴い不要。カメラ発見は M-SEARCH(再送化済み)のみ。
 
 bool dataManager::savePlanJson(const std::string& json)
 {

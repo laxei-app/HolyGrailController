@@ -814,34 +814,10 @@ namespace
 		}
 		const bool hasModel = !pc.model.empty() || !pc.name.empty();
 
-		// SSDP広告を止めるカメラ(スマホ接続後など)対策: 計画カメラの直近IPが分かっていれば、
-		// SSDPで見つからなくてもそのIPへCCAPI直接接続を試し、応答すれば候補(found)に加える。
-		// 本人確認(serial/model)は下の特定処理に委ねる。serial未解決の計画は最後に繋がったhostを使う。
-		std::string manualUrl;	// 直近IP直結で追加した候補のurlAccess(どの経路で繋がったかのログ判定用)
-		{
-			std::string host = dataManager::loadCameraHost(wantSerial);
-			if (!host.empty())
-			{
-				// 既に SSDP で同じ host が見つかっていれば手動接続はしない(種別非依存で host 比較)。
-				bool already = false;
-				for (auto& d : found) { if (d.apiBase && hostFromDevice(d) == host) { already = true; break; } }
-				if (!already)
-				{
-					std::vector<class device> man;
-					if (cameraController::connectManual(man, host) > 0 && man[0].apiBase)
-					{
-						manualUrl = man[0].urlAccess;
-						found.push_back(man[0]);	// apiBase はポインタ共有(device は解放しない設計)
-						// 診断: SSDPで拾えなかったが直近IPのCCAPI(HTTP:8080)は生きていた=「SSDP不発/HTTP生」。
-						dataManager::logEvent("NET", ("層診断: 直近IP直結OK host=" + host + " (SSDP不発だがHTTP:8080生)").c_str());
-					}
-					else
-					{	// 診断: 直近IPのHTTP:8080も応答なし=カメラ電源断/IP変化の可能性。
-						dataManager::logEvent("NET", ("層診断: 直近IP直結NG host=" + host + " (HTTP:8080応答なし)").c_str(), true);
-					}
-				}
-			}
-		}
+		// 【方針変更 2026-07-05】既知IP直結フォールバックは廃止。M-SEARCH(再送化済み)で見つからなければ
+		// NOCAMERA扱いとし撮影しない。理由: serial未解決の計画で「最後に繋いだ別カメラ」へ誤接続する事故
+		// (1エッジ2カメラ時に確実に発生)の原因だったため。発見の信頼性は deviceDiscovery の再送で担保する。
+		// 直近IPキャッシュ(cameraHosts.json)も廃止したため、以降カメラ接続はM-SEARCH発見のみ。
 
 		class device* hit = nullptr;
 		if (!wantSerial.empty())
@@ -871,16 +847,11 @@ namespace
 		if (hit != nullptr)
 		{
 			S->dev = *hit;	// セッション専用 device へコピー(アドレス安定。実行中の他セッションに影響しない)
-			// どの経路でカメラに繋がったか(SSDP発見 / 直近IP直結)と IP をログに残す。次回SSDPが
-			// 応答しない時のため、今回つながったカメラのIPも保存する(SSDP広告停止対策)。
-			{
+			{	// 接続経路(常にM-SEARCH発見)と IP/serial をログに残す。
 				std::string h = hostFromDevice(S->dev);
-				const bool viaCache = (!manualUrl.empty() && S->dev.urlAccess == manualUrl);
-				std::string d = std::string("カメラ接続 ") + (viaCache ? "直近IP直結(SSDP不発)" : "SSDP発見")
-				              + " ip=" + (h.empty() ? "?" : h)
+				std::string d = std::string("カメラ接続 SSDP発見 ip=") + (h.empty() ? "?" : h)
 				              + (S->dev.serialno.empty() ? "" : (" serial=" + S->dev.serialno));
 				dataManager::logEvent("NET", d.c_str());
-				if (!h.empty()) { dataManager::saveCameraHost(S->dev.serialno, h); }
 			}
 			// 表示用デバイス一覧(g_devices)も最新へ反映(同serialは更新、無ければ追加)。runner は g_devices を参照しない。
 			{
@@ -893,11 +864,9 @@ namespace
 		}
 		else
 		{	// 3a: カメラ未検出のまま撮影要求を受理する。中断せず、runner が取得まで NOCAMERA(✖点灯)で
-			// 探し続ける(60秒ごと再探索/直近IP直結)。撮影窓の終了か中止まで継続。
+			// M-SEARCH(再送)で探し続ける。撮影窓の終了か中止まで継続。
 			S->dev.clear();
-			std::string cacheHost = dataManager::loadCameraHost(wantSerial);
-			std::string d = "カメラ未検出のまま撮影要求を受理(探索を継続) SSDP=" + std::to_string(found.size()) + "台";
-			d += cacheHost.empty() ? " 直近IPキャッシュ無し(初回はSSDP必須)" : (" 直近IP=" + cacheHost + "もHTTP:8080不通");
+			std::string d = "カメラ未検出のまま撮影要求を受理(探索を継続) SSDP=" + std::to_string(found.size()) + "台(未発見)";
 			dataManager::logEvent("NET", d.c_str(), true);
 		}
 
@@ -976,35 +945,19 @@ namespace
 			{
 				for (auto& d : found) { if (d.apiBase && dataManager::cameraModelMatches(d, S->plan.camera)) { hit = &d; break; } }
 			}
-			const bool viaSsdp = (hit != nullptr);	// SSDP再探索で見つかったか(下の直近IP直結と区別)
-			// SSDPで見つからない時は直近IPへCCAPI直接接続(SSDP広告停止対策)。man は hit 確定まで生かす。
-			std::vector<class device> man;
+			// 【方針変更 2026-07-05】既知IP直結フォールバックは廃止(別カメラ誤接続の防止)。
+			// SSDP(M-SEARCH再送)で見つからなければ hit は null のまま → 取得/再接続フェーズが後で再試行(その間 NOCAMERA)。
 			if (hit == nullptr)
-			{
-				std::string host = dataManager::loadCameraHost(wantSerial);
-				if (!host.empty() && cameraController::connectManual(man, host) > 0 && man[0].apiBase)
-				{
-					bool ok = wantSerial.empty() || man[0].serialno.empty()
-					        || man[0].serialno == wantSerial
-					        || dataManager::cameraModelMatches(man[0], S->plan.camera);
-					if (ok) { hit = &man[0]; }
-				}
-			}
-			if (hit == nullptr)
-			{	// SSDP再探索・直近IP直結ともに不可。runner の取得/再接続フェーズが後で再試行する。
-				std::string cacheHost = dataManager::loadCameraHost(wantSerial);
-				std::string d = "カメラ取得/再接続失敗 SSDP=" + std::to_string(found.size()) + "台";
-				d += cacheHost.empty() ? " 直近IPキャッシュ無し" : (" 直近IP=" + cacheHost + "もHTTP:8080不通(カメラ電源断/IP変化の疑い)");
+			{	// M-SEARCH再探索で未発見。runner の取得/再接続フェーズが後で再試行する。
+				std::string d = "カメラ取得/再接続失敗 SSDP=" + std::to_string(found.size()) + "台(未発見)";
 				dataManager::logEvent("NET", d.c_str(), true);
 				return false;
 			}
 			S->dev = *hit;	// runner の dev_ が指す先(=S->dev)を最新のIP/apiへ更新。
 			{
 				std::string h = hostFromDevice(S->dev);
-				std::string d = std::string("再接続成功 ") + (viaSsdp ? "SSDP発見" : "直近IP直結(SSDP不発)")
-				              + " ip=" + (h.empty() ? "?" : h);
+				std::string d = std::string("再接続成功 SSDP発見 ip=") + (h.empty() ? "?" : h);
 				dataManager::logEvent("NET", d.c_str());
-				if (!h.empty()) { dataManager::saveCameraHost(S->dev.serialno, h); }
 			}
 			notify(HGE_EV_DEVICE, devicesJson());
 			return true;

@@ -125,13 +125,8 @@ public:
 	static bool saveCapturingIds(const std::vector<std::string>& ids);
 	static bool loadCapturingIds(std::vector<std::string>& out);
 
-	// --- 直近に接続できたカメラIPのキャッシュ(/asset/cameraHosts.json。SSDP広告停止対策) ---
-	// カメラがCCAPI HTTPには応答するがSSDP発見に応じない状態(スマホ接続後など)でも繋げるよう、
-	// 接続成功時に serial→host(IP) を保存し、SSDP不発時はこの host へ CCAPI 直接接続を試みる。
-	// host は IP(例 "192.168.1.7")。"*" キーに最後に繋がった host も保持する。
-	static bool        saveCameraHost(const std::string& serial, const std::string& host);
-	// serial 対応の host を返す。無ければ最後に繋がった host("*")。どちらも無ければ空。
-	static std::string loadCameraHost(const std::string& serial);
+	// (廃止 2026-07-05) saveCameraHost/loadCameraHost(cameraHosts.json)は削除。
+	// 既知IP直結フォールバックの廃止(誤接続防止)に伴い不要。発見は M-SEARCH(再送化済み)のみ。
 
 	// --- 旧単一ファイル(plan.json)の移行用(後方互換) ---
 	// 撮影計画(cs)の自己完結JSONを /plan/plan.json へ保存する。
