@@ -256,7 +256,9 @@ bool captureRunner::establishSession(void)
 	lastFnApplied_.clear(); lastSsApplied_.clear(); lastIsoApplied_.clear();
 
 	// 撮影モードに入る(ライブビュー開始)
+	DBGLN(col::MAG, "[ESTdiag] establish begin serial=%s", dev_->serialno.c_str());	// 診断: 2台同時establish調査
 	errCode err = cameraController::startShooting(*dev_);
+	DBGLN(col::MAG, "[ESTdiag] startShooting serial=%s -> err=%d", dev_->serialno.c_str(), (int)err);
 	if (err != ERR_HGC_OK)
 	{
 		if (onError_) { onError_(err, "startShooting"); }
@@ -287,6 +289,7 @@ bool captureRunner::establishSession(void)
 		double fmin = (plan_.lens.fn > 0.0) ? plan_.lens.fn : 1.0;
 		tables_ = expo::standardTables(fmin, 32.0);
 	}
+	DBGLN(col::MAG, "[ESTdiag] establish OK serial=%s", dev_->serialno.c_str());	// 診断: establish成功
 	return true;
 }
 
@@ -347,6 +350,9 @@ errCode captureRunner::loop(void)
 	const double offsetSec  = std::max(0.1, (interval - maxSs) * kShutterOffsetFactor);	// tm0→tm1 の差[秒]
 	const double maxSsCap   = maxSs;	// 露出の ss 上限=最大ss(offset+maxSs<周期 が保証される)
 	const int    offMs      = static_cast<int>(offsetSec * 1000.0);	// ログ用
+	// Phase4(1エッジ複数カメラ同時): このセッションの tm0/tm1 を周期内で staggerMs だけ後ろへずらす。
+	// 2台なら 0.5 → 半周期ずれ、各カメラのHTTPが単一 netThread へ同時集中して衝突するのを避ける(単独時=0)。
+	const long   staggerMs  = static_cast<long>(staggerFrac_ * interval * 1000.0);
 
 	const hgc::ccmWindow* curWin = nullptr;
 	expo::exposureCtl autoCtl;		// 自動露出用
@@ -454,8 +460,8 @@ errCode captureRunner::loop(void)
 		}
 		else
 		{
-			// tm0: 次の境界(絶対アンカー)まで待つ。累積ドリフトが出ない。
-			sleepUntilElapse(mono, static_cast<long>(boundaryIdx * interval * 1000.0));
+			// tm0: 次の境界(絶対アンカー)まで待つ。累積ドリフトが出ない。staggerMs=同時撮影のずらし(単独時0)。
+			sleepUntilElapse(mono, static_cast<long>(boundaryIdx * interval * 1000.0) + staggerMs);
 			if (!running_) { break; }
 			if (static_cast<long long>(std::time(nullptr)) >= endSec) { break; }
 			// 窓コンテキスト(ccm選択/露出スケジュール/進捗)は実時刻を使う。周期の刻み(mono+boundaryIdx)はペーシング専用。
@@ -778,7 +784,7 @@ errCode captureRunner::loop(void)
 		if (!validExposure(target)) { target = validExposure(pending) ? pending : ccm->limitBright; }	// 無効はフォールバック
 
 		// tm1: 境界+offset まで待ってシャッター(=周期ピッタリで発光)。tm0がoffsetを超えたカメラでは即発光。
-		sleepUntilElapse(mono, static_cast<long>(boundaryIdx * interval * 1000.0 + offsetSec * 1000.0));	// offset=(周期-最大ss)×係数
+		sleepUntilElapse(mono, static_cast<long>(boundaryIdx * interval * 1000.0 + offsetSec * 1000.0) + staggerMs);	// offset=(周期-最大ss)×係数、staggerMs=同時撮影ずらし
 		const uint64_t shutterMs = tool::epochMs();	// シャッター投下直前の壁時計(ms精度)。実際の発光時刻の検証用
 		err = cameraController::actShutter(*dev_);
 		if (err != ERR_HGC_OK) { err = cameraController::actShutter(*dev_); }	// tm1(シャッター)失敗は1回だけリトライ
@@ -828,7 +834,7 @@ errCode captureRunner::loop(void)
 	// 次の撮影周期境界(=露光+保存が済む時刻)まで「中断しない待ち」を入れてから終了処理へ入る。
 	if (mono != nullptr && frame > 0)
 	{
-		const long targetMs = static_cast<long>(boundaryIdx * interval * 1000.0);
+		const long targetMs = static_cast<long>(boundaryIdx * interval * 1000.0) + staggerMs;
 		for (long left = targetMs - static_cast<long>(tool::getElapse(mono)); left > 0;
 		     left = targetMs - static_cast<long>(tool::getElapse(mono)))
 		{

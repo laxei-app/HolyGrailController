@@ -56,6 +56,7 @@ namespace
 		std::unique_ptr<captureRunner> runner;
 		class device                  dev;					// このセッション専用のカメラ(アドレス安定。撮影開始の都度ディスカバリで再取得)
 		std::atomic<int>              state{ HGE_ST_IDLE };
+		int                           slot = 0;				// Phase4: 同時撮影のずらしスロット(周期内位置=slot/MAX_CONCURRENT)
 		bool                          logCapturing = false;	// START/STOP検出
 		std::string                   lastCcm;				// CCMSW検出
 		void*                         startThread = nullptr;
@@ -1844,6 +1845,14 @@ int32_t hge_captureStartPlan(const char* planId_)
 	auto sess = std::make_unique<captureSession>();
 	sess->planId = planId;
 	sess->state  = HGE_ST_SEARCHING;	// 起動シーケンス実行前から非IDLEにし、reapDeadSessions に消されないようにする
+	// Phase4: 同時撮影のずらし用に、現在使われていない最小スロットを割り当てる(1台目終了→再開でも衝突しない)。
+	{
+		bool used[MAX_CONCURRENT] = { false };
+		for (auto& s : g_sessions) { if (s->slot >= 0 && (size_t)s->slot < MAX_CONCURRENT) { used[s->slot] = true; } }
+		int slot = 0;
+		while (slot < (int)MAX_CONCURRENT && used[slot]) { ++slot; }
+		sess->slot = (slot < (int)MAX_CONCURRENT) ? slot : 0;
+	}
 	if (planId == g_editId)
 	{
 		sess->plan = g_plan; sess->planCcm = g_planCcm; sess->planMoon = g_planMoon;	// 編集中スナップショット
@@ -1858,6 +1867,7 @@ int32_t hge_captureStartPlan(const char* planId_)
 		if (sess->plan.ccmList.empty()) { astro::buildSchedule(sess->plan, sess->planCcm, g_offMin); }
 	}
 	sess->runner = std::make_unique<captureRunner>();
+	sess->runner->setStagger((double)sess->slot / (double)MAX_CONCURRENT);	// Phase4: 周期内スロット位置でずらす
 	captureSession* raw = sess.get();
 	g_sessions.push_back(std::move(sess));
 	pokeRegister(raw->runner.get());	// 3b: SSDP出現ポークの対象に登録

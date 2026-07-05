@@ -6,6 +6,7 @@
 #include <deque>
 #include <condition_variable>
 #include <future>
+#include <vector>
 
 namespace netThread
 {
@@ -47,8 +48,13 @@ namespace netThread
         std::mutex mtx;                         // ミューテックス
         std::condition_variable cv_request;     // 条件変数
         std::deque< requestQue_t*> que_;  // 処理内容を表す構造体のリスト
-		bool stopThread = false;                // スレッド停止フラグ
-        void* handleThread = nullptr;          // スレッドハンドル
+		bool stopThread = false;                // スレッド停止フラグ(全ワーカー共通)
+        // Phase4(1エッジ複数カメラ同時): 単一ワーカーだと2台目の測光/ウォームアップが
+        // 先行カメラのHTTPに阻まれて進まないため、同一キューを引く並行ワーカープールにする。
+        // スマホ/エッジ共通コード。net層は各プラットフォームとも呼び出し毎に独立ソケット/HTTPClientを
+        // 生成する実装なので並行呼び出しに対して安全。ワーカー数=2カメラ同時+発見/keepAliveの余裕1。
+        const int          kWorkerCount = 3;
+        std::vector<void*> workers_;            // ワーカースレッドのハンドル一覧
     }
 
 
@@ -276,16 +282,23 @@ namespace netThread
     // スレッドの開始と終了
     void init(void)
     {
-        handleThread = ossc::threadNet(threadFunc, 0);
+        net::init();            // net の初期化(ワーカー起動前に1回)
+        stopThread = false;
+        workers_.clear();
+        for (int i = 0; i < kWorkerCount; ++i)
+        {
+            workers_.push_back(ossc::threadNet(threadFunc, nullptr));
+        }
     }
-    
+
 	// スレッドの終了
     void deInit(void)
     {
-        requestQue_t req;
-        req.type = queType::FINISH;                 // 終了要求
-        execRequest(&req);                          // 実行
-        ossc::threadEnd(handleThread);
+        { std::lock_guard<std::mutex> lock(mtx); stopThread = true; }
+        cv_request.notify_all();                    // 全ワーカーを起こして終了させる
+        for (void* h : workers_) { ossc::threadEnd(h); }
+        workers_.clear();
+        net::deInit();          // net の終了(全ワーカー停止後に1回)
     }
 
     // スレッド本体
@@ -296,17 +309,16 @@ namespace netThread
 		ssdp_read_t* ssdpReadReq = nullptr;
 		ssdp_close_t* ssdpCloseReq = nullptr;
 		local_ip_t* localIpReq = nullptr;
-        stopThread = false; // スレッド停止フラグをリセット
+        // net::init/deInit は init()/deInit() で1回ずつ行う(複数ワーカーで多重初期化しない)。
 
-		net::init(); // net の初期化
-
-        while (!stopThread)
+        while (true)
         {
             requestQue_t* req = nullptr;
 			{   // mutex のスコープを限定するためにブロックを作成
                 std::unique_lock<std::mutex> lock(mtx);
 
-                cv_request.wait(lock, [] { return !que_.empty(); });
+                cv_request.wait(lock, [] { return !que_.empty() || stopThread; });
+                if (stopThread && que_.empty()) { break; }	// 停止要求 & キュー空 → このワーカー終了
                 req = que_.front();
                 que_.pop_front();
             }
@@ -354,12 +366,11 @@ namespace netThread
                 break;
 
             case queType::FINISH:
-                stopThread = true;
+                stopThread = true;		// 旧経路の互換(現在は deInit の stopThread+notify_all で停止)
                 break;
             }
 			req->completion.set_value(true);    // 処理の完了を通知
         }
-        net::deInit(); // net の終了
         return ERR_HGC_OK;
     }
 }

@@ -47,6 +47,12 @@ public:
 	void setCallbacks(stateCb s, progressCb p, capturedCb c, errorCb e);
 	void setReconnect(reconnectCb r) { onReconnect_ = std::move(r); }
 
+	// Phase4(1エッジ複数カメラ同時): このセッションの tm0/tm1 境界を撮影周期内で frac 分だけ後ろへずらす。
+	// frac=[0,1)。0=先頭(ずらし無し)、2台なら 0.5。全カメラのHTTPが単一 netThread ワーカーへ同時集中して
+	// 衝突する(=シャッターが遅延/失敗する)のを、周期内で時間分散して避けるためのスロット位置。
+	// 単独撮影(スマホ/1台)では frac=0 のまま＝挙動不変。
+	void setStagger(double frac) { staggerFrac_ = frac; }
+
 	// 撮影準備。plan は events/ccmList を生成済みであること。
 	errCode ready(const hgc::cs& plan, device* dev,
 	              const hgc::exposureSmoothing& smooth, int utcOffsetMin);
@@ -94,6 +100,7 @@ private:
 	device* dev_ = nullptr;
 	hgc::exposureSmoothing smooth_{};
 	int off_ = 0;
+	double staggerFrac_ = 0.0;	// Phase4: 撮影周期内のスロット位置[0,1)。同時撮影のずらし用(0=単独/先頭)
 
 	std::atomic<bool> running_{ false };
 	std::atomic<bool> wake_{ false };	// 取得フェーズの待ちを前倒しするポーク(pokeAcquire で立てる)

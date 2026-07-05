@@ -15,8 +15,9 @@ public:
     static bool connect(const char * ssid, const char * passphrase);
 
     // --- APモード(エッジ自身がアクセスポイント。屋外・ルーター無しでカメラ/スマホを収容) ---
-    // SoftAP を起動する。channel=1、maxConn=接続上限(スマホ+カメラ2=3以上)。成功でtrue。
-    static bool startAp(const char * ssid, const char * passphrase, int maxConn = 4);
+    // SoftAP を起動する。channel=1、maxConn=同時接続上限(ESP32 SoftAPの最大は10)。成功でtrue。
+    // スマホ+カメラ複数+2台目エッジ+再接続churn を収容するため呼び出し側は最大(10)を渡す。
+    static bool startAp(const char * ssid, const char * passphrase, int maxConn = 10);
     // WiFi を停止(AP/STAとも切断)する。モード切替時に使う。
     static void stop(void);
     // 現在APが起動中か。

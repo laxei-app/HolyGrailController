@@ -43,7 +43,7 @@ static const char* WIFI_PASS = "rnhcftfbk75tf";
 // NVS に保存する接続情報(仕様8.2.1: 端末識別名 / SSID / password)。
 static std::string g_ssid    = WIFI_SSID;
 static std::string g_pass    = WIFI_PASS;
-static std::string g_devName = "エッジ端末";
+static std::string g_devName = "NoName";	// 端末名。未プロビジョニング(NVS未設定)時はこのまま=NoNameを画面先頭に表示
 static bool        g_provMode = false;	// プロビジョニング表示(QR)中か
 static std::string g_pop;				// 現在のPoP(乱数)
 
@@ -382,7 +382,8 @@ static void renderPlan(void)
 	// ヘッダ
 	g_cv.fillRect(0, 0, 320, HEAD_H, M5.Display.color565(0x15, 0x65, 0xC0));
 	g_cv.setTextColor(TFT_WHITE);
-	g_cv.setCursor(8, 6);   g_cv.print("撮影計画");
+	// 画面先頭に端末名称を表示(どのエッジか区別できるように)。未定義なら "NoName"。
+	g_cv.setCursor(8, 6);   g_cv.print(g_devName.empty() ? "NoName" : g_devName.c_str());
 	if (wifiConnect::isApActive())     { g_cv.setCursor(288, 6); g_cv.print("AP"); }
 	else if (WiFi.status() == WL_CONNECTED) { g_cv.setCursor(276, 6); g_cv.print(g_edgeUp ? "ETP" : "WiFi"); }
 
@@ -654,7 +655,9 @@ static void renderApQr(void)
 static void startApAndEtp(void)
 {
 	ensureApCreds();
-	if (wifiConnect::startAp(g_apSsid.c_str(), g_apPass.c_str(), 4))
+	// 同時接続上限=ESP32 SoftAPの最大(10)。スマホ+カメラ複数台+2台目エッジ(Edje01)+再接続churn分の余裕を確保。
+	// 4だと「スマホ+R10+R100+Edje01=4」でちょうど埋まり、再接続時に弾かれてEdje01がAPに入れなくなる不具合が出た。
+	if (wifiConnect::startAp(g_apSsid.c_str(), g_apPass.c_str(), 10))
 	{
 		Serial.printf("[AP] SoftAP up ssid=%s pass=%s ip=%s\n",
 		              g_apSsid.c_str(), g_apPass.c_str(), wifiConnect::apIp().c_str());

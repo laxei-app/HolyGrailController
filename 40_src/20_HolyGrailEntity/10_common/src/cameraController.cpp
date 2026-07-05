@@ -3,6 +3,7 @@
 #include "detectCanonCCapi.h"
 #include "netThread.h"
 #include <algorithm>
+#include <mutex>
 
 // URL("http://host:port/..")からホスト部を取り出す(AP列挙のdedup用)。
 static std::string hostOfUrl(const std::string& url)
@@ -31,6 +32,12 @@ std::vector<std::unique_ptr<detectBase>>& cameraController::backends()
 // return  : 検出したカメラの数
 size_t cameraController::detectTarget(std::vector<class device> & devices)
 {
+	// Phase4(netThread並行化との両立): 複数セッションが同時に発見(SSDP M-SEARCH)を走らせると
+	// ローカルポート1900のマルチキャストbindが競合し片方が「0台」になって取得リトライを繰り返す。
+	// 発見は取得/再接続時の短時間のみなので直列化する(撮影本体の測光/シャッターHTTPは並行のまま)。
+	static std::mutex discoverMutex;
+	std::lock_guard<std::mutex> lock(discoverMutex);
+
 	for (auto& be : backends())
 	{	// 各種別バックエンドで検出(統合・apiBase 初期化はバックエンド内で完結)。
 		be->detect(devices);

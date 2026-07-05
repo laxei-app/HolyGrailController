@@ -68,7 +68,11 @@ size_t detectSsdpBase::detect(std::vector<class device>& out)
 		if (apiBase == nullptr) { continue; }			// 生成失敗(このバックエンド非対応)
 
 		// api の初期化をおこなう
-		if ( apiBase->init(device) != ERR_HGC_OK )
+		errCode ie = apiBase->init(device);				// 【診断】結果をログ(2台同時のinit不発調査)
+		DBGLN(col::MAG, "[DETdiag] init %s loc=%s url=%s model=%s serial=%s",
+			(ie == ERR_HGC_OK ? "OK" : "NG"), device.location.c_str(), device.urlAccess.c_str(),
+			device.model.c_str(), device.serialno.c_str());
+		if ( ie != ERR_HGC_OK )
 		{	// 初期化失敗
 			delete apiBase;
 			device.apiBase = nullptr;
@@ -78,6 +82,7 @@ size_t detectSsdpBase::detect(std::vector<class device>& out)
 		out.push_back(device);			// apiBase はポインタ共有(device は解放しない設計)
 		added++;
 	}
+	DBGLN(col::MAG, "[DETdiag] detect done: found=%u added=%u", (unsigned)devices.size(), (unsigned)added);
 	return added;
 }
 

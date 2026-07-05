@@ -51,13 +51,19 @@ std::vector<std::string> apClientIps()
 }
 
 // SSDP探索開始 (特定のNICを指定してUDP送信)
-void* ssdpStart(const std::string& query, const std::string& localIp) 
+void* ssdpStart(const std::string& query, const std::string& localIp)
 {
     WiFiUDP* udp = new WiFiUDP();
 
-    // UDP開始
-    udp->beginMulticast(IPAddress(239, 255, 255, 250), 1900);
-    
+    // ★重要: M-SEARCHクライアントは ephemeral ローカルポートに bind する(1900へは bind しない)。
+    //   以前は beginMulticast(239.255.255.250, 1900) で 1900 に bind + グループ参加していたが、混雑LANでは
+    //   1900 に全機器の周期NOTIFYマルチキャストが殺到し、ESP32/lwIP の小さいUDP受信バッファが溢れて
+    //   カメラのユニキャストM-SEARCH応答を取りこぼす(→NOCAMERA/間欠発見不能)。スマホ(Android)は
+    //   ephemeralポート(sin_port=0)にbindするので1900の洪水と無縁で常に発見できていた。これに合わせる。
+    //   マルチキャスト宛の「送信」にグループ参加は不要。応答はユニキャストで ephemeral ポートに返る。
+    //   ※受動待ち受け(ssdpListenStart)は 1900 bind + IGMP参加のままで正しい(NOTIFY受信用)。
+    udp->begin(0);   // ephemeral ローカルポートに bind(0 = lwIP が空きポートを自動割当)
+
     // M-SEARCH開始
     udp->beginPacket("239.255.255.250", 1900);
     udp->write((const uint8_t*)query.c_str(), query.length());
