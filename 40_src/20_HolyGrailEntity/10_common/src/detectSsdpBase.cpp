@@ -102,7 +102,7 @@ void detectSsdpBase::watchStart(std::function<void()> onAppear)
 	if (watchSock_ == nullptr) { return; }	// 非対応/失敗 → 待ち受け無し
 	watchRunning_ = true;
 	ossc::THREAD_FUNC fn = [this](void*) -> errCode { return this->watchLoop(); };
-	watchThread_ = ossc::threadNet(fn, nullptr);
+	watchThread_ = ossc::threadNet(fn, nullptr, 4096);	// NOTIFY待ち受けは軽量(内部DRAM節約)
 }
 
 void detectSsdpBase::watchStop()

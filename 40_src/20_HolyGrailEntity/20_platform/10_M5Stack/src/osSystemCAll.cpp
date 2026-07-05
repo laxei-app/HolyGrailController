@@ -38,7 +38,7 @@ namespace ossc
 
     // スレッドを起動する。
     // return : スレッドを破棄するためのハンドル(ThreadControl*)
-    void* threadNet(THREAD_FUNC& func, void* parm)
+    void* threadNet(THREAD_FUNC& func, void* parm, uint32_t stackBytes)
     {
         ThreadControl* ctrl = new ThreadControl();
         ctrl->userFunc = func;     // std::function を値コピー
@@ -46,18 +46,30 @@ namespace ossc
         ctrl->doneSem  = xSemaphoreCreateBinary();
         ctrl->taskHandle = NULL;
 
-        xTaskCreatePinnedToCore(
+        BaseType_t created = xTaskCreatePinnedToCore(
             taskWrapper,
             "ossNet",
-            16384,              // json/HTTPパース・撮影ループ用(4096では不足)。
-                                // 最初の補正(§4.4)の反復収束は loop→initialConverge→alzMetering(json)と
-                                // 1段深くなるため 8192 ではスタック超過(canary)した。余裕を持って 16384。
+            stackBytes,         // 呼び出し側指定(既定16384)。撮影runnerはjson反復収束で16KB必要
+                                // (最初の補正§4.4は loop→initialConverge→alzMetering(json)と1段深くなり
+                                // 8192ではcanary超過)。HTTP/UDP I/Oだけの軽量スレッドは小さくして内部DRAMを空ける。
             ctrl,
             3,                  // 優先度
             &ctrl->taskHandle,
             0
         );
 
+        // ★重要: タスク生成失敗を握りつぶさない。ヒープ枯渇で xTaskCreate が失敗すると、以前は
+        //   非nullハンドルを返すのにタスクは走らず(例: 2カメラ同時で2本目の撮影runnerが起動せず
+        //   establish不発=撮影開始せず)、原因が見えなかった。失敗時は明示ログ＋nullptr返し。
+        if (created != pdPASS)
+        {
+            Serial.printf("[THREADdiag] xTaskCreate FAILED r=%d freeHeap=%u minFree=%u\n",
+                          (int)created, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap());
+            vSemaphoreDelete(ctrl->doneSem);
+            delete ctrl;
+            return nullptr;
+        }
+        Serial.printf("[THREADdiag] task created freeHeap=%u\n", (unsigned)ESP.getFreeHeap());
         return (void*)ctrl; // ハンドルとして ThreadControl* を返す
     }
 

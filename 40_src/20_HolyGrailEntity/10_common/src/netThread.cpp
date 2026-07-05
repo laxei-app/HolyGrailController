@@ -53,7 +53,10 @@ namespace netThread
         // 先行カメラのHTTPに阻まれて進まないため、同一キューを引く並行ワーカープールにする。
         // スマホ/エッジ共通コード。net層は各プラットフォームとも呼び出し毎に独立ソケット/HTTPClientを
         // 生成する実装なので並行呼び出しに対して安全。ワーカー数=2カメラ同時+発見/keepAliveの余裕1。
-        const int          kWorkerCount = 3;
+        // 2カメラ同時+発見/keepAlive。当初3だったが、各ワーカーは16KBスタックのFreeRTOSタスクで
+        // ESP32のヒープを圧迫し、2カメラ時の撮影runnerタスク生成を失敗させていた([THREADdiag])。
+        // 2ワーカーでも2カメラのHTTPは捌ける(Phase4ずらしで衝突低減)ため2に削減しヒープを空ける。
+        const int          kWorkerCount = 2;
         std::vector<void*> workers_;            // ワーカースレッドのハンドル一覧
     }
 
@@ -287,7 +290,9 @@ namespace netThread
         workers_.clear();
         for (int i = 0; i < kWorkerCount; ++i)
         {
-            workers_.push_back(ossc::threadNet(threadFunc, nullptr));
+            // HTTP/SSDP I/Oのみ(json反復収束は撮影runner側)なので小スタックで十分。
+            // 内部DRAMを空け、2カメラ時の撮影runnerタスク×2の生成失敗を防ぐ。
+            workers_.push_back(ossc::threadNet(threadFunc, nullptr, 6144));
         }
     }
 

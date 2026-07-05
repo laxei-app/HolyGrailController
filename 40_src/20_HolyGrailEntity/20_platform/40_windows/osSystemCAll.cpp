@@ -1,5 +1,5 @@
 // osSystemCall.cpp
-// windows ‚Ì OS ˆË‘¶•”•ª‚ğ‚±‚±‚ÉW–ñ‚·‚é
+// windows ï¿½ï¿½ OS ï¿½Ë‘ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ÉWï¿½ñ‚·‚ï¿½
 
 #include "osSystemCall.h"
 #include <thread>
@@ -7,15 +7,15 @@
 
 namespace ossc
 {
-	// ƒXƒŒƒbƒh‚ğ‹N“®‚·‚éB
-	// return : ƒXƒŒƒbƒh‚É’Ê’m‚·‚é‚½‚ß‚Ì—á‚¦‚Îƒ^ƒXƒNID‚Æ‚©‚ğ•Ô‚·
-	void* threadNet(THREAD_FUNC& func, void* parm)
+	// ï¿½Xï¿½ï¿½ï¿½bï¿½hï¿½ï¿½ï¿½Nï¿½ï¿½ï¿½ï¿½ï¿½ï¿½B
+	// return : ï¿½Xï¿½ï¿½ï¿½bï¿½hï¿½É’Ê’mï¿½ï¿½ï¿½é‚½ï¿½ß‚Ì—á‚¦ï¿½Îƒ^ï¿½Xï¿½NIDï¿½Æ‚ï¿½ï¿½ï¿½Ô‚ï¿½
+	void* threadNet(THREAD_FUNC& func, void* parm, uint32_t /*stackBytes*/)
 	{
 		auto thread = new std::thread(func, parm);
 		return thread;
 	}
 
-	// ƒXƒŒƒbƒh‚ÌI—¹‚ğ‘Ò‚Á‚Ä‚©‚çƒXƒŒƒbƒh‚ğ”jŠü‚·‚é
+	// ï¿½Xï¿½ï¿½ï¿½bï¿½hï¿½ÌIï¿½ï¿½ï¿½ï¿½Ò‚ï¿½ï¿½Ä‚ï¿½ï¿½ï¿½Xï¿½ï¿½ï¿½bï¿½hï¿½ï¿½jï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 	void  threadEnd(void* handle)
 	{
 		if (!handle) { return; }
