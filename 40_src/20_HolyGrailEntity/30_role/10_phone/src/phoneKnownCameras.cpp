@@ -19,4 +19,14 @@ int setKnownCameras(const char* /*json*/, int /*len*/)
 	return 0;	// ERR_HGC_OK 相当。スマホは push 受信側ではないため no-op
 }
 
+void noteConnected(const std::string& /*serial*/, const std::string& /*model*/, const std::string& /*ip*/)
+{
+	// スマホ役は既知IPテーブル/不揮発キャッシュを持たない(発見は都度スマホのSSDPで行う)ため no-op。
+}
+
+void loadPersisted()
+{
+	// スマホ役は不揮発の既知カメラを持たない。no-op。
+}
+
 }}	// namespace hge::role

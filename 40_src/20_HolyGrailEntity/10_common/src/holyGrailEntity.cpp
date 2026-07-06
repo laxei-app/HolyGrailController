@@ -883,6 +883,8 @@ namespace
 			}
 			notify(HGE_EV_DEVICE, devicesJson());
 			dataManager::recordConnectedCamera(S->dev);
+			// エッジ役: 接続成功IP(serial→ip)を不揮発へ記録。無人再起動後の「前回IP直結」に使う(スマホ役は no-op)。
+			hge::role::noteConnected(S->dev.serialno, S->dev.model, hostFromDevice(S->dev));
 		}
 		else
 		{	// 3a: カメラ未検出のまま撮影要求を受理する。中断せず、runner が取得まで NOCAMERA(✖点灯)で
@@ -992,8 +994,10 @@ namespace
 			S->dev = *hit;	// runner の dev_ が指す先(=S->dev)を最新のIP/apiへ更新。
 			{
 				std::string h = hostFromDevice(S->dev);
-				std::string d = std::string("再接続成功 SSDP発見 ip=") + (h.empty() ? "?" : h);
+				std::string d = std::string("再接続成功 ip=") + (h.empty() ? "?" : h);
 				dataManager::logEvent("NET", d.c_str());
+				// エッジ役: 再接続で確定した最新IPを不揮発へ記録(次回起動の前回IP直結を最新化)。
+				hge::role::noteConnected(S->dev.serialno, S->dev.model, h);
 			}
 			notify(HGE_EV_DEVICE, devicesJson());
 			return true;
@@ -1062,6 +1066,7 @@ int32_t hge_init(void)
 {
 	if (g_inited) { return ERR_HGC_OK; }
 	netThread::init();
+	hge::role::loadPersisted();	// 無人再起動後の「前回IP直結」用に不揮発の既知カメラを読み込む(エッジ役)
 	g_inited = true;
 	setState(HGE_ST_IDLE);
 	return ERR_HGC_OK;

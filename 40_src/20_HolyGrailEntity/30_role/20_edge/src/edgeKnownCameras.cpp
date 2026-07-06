@@ -2,6 +2,7 @@
 #include "roleDiscovery.h"
 #include "cameraController.h"
 #include "dataManager.h"
+#include "osFile.h"
 #include <json/nlohmann/json.hpp>
 #include <vector>
 #include <mutex>
@@ -59,6 +60,22 @@ namespace {
 			if (knownModelMatch(k.model, cam)) { ++cnt; ip = k.ip; }
 		}
 		return (cnt == 1) ? ip : std::string();
+	}
+
+	// 既知テーブルを /asset/knownCams.json へ保存(呼び出し側で g_knownMutex を保持していること)。
+	// 復元に使えるのは serial+ip が確定した分のみ。online は保存しない(起動時は前回IPを楽観扱いにする)。
+	void saveKnownCamsLocked()
+	{
+		std::string d = osfile::dir("asset");
+		if (d.empty()) { return; }
+		nlohmann::json arr = nlohmann::json::array();
+		for (const auto& k : g_knownCams)
+		{
+			if (k.serial.empty() || k.ip.empty()) { continue; }
+			arr.push_back({ {"serial", k.serial}, {"model", k.model}, {"ip", k.ip} });
+		}
+		std::string s = arr.dump();
+		osfile::writeAll(d + "/knownCams.json", s.data(), s.size());
 	}
 
 }	// anonymous namespace
@@ -119,6 +136,49 @@ int setKnownCameras(const char* json, int len)
 		}
 	} catch (const std::exception&) { return ERR_HGC_INVALID_ARG; }
 	return ERR_HGC_OK;
+}
+
+void noteConnected(const std::string& serial, const std::string& model, const std::string& ip)
+{
+	if (serial.empty() || ip.empty()) { return; }	// 本人確認キー(serial)と直結ヒント(ip)が揃った時のみ記録
+	std::lock_guard<std::mutex> lk(g_knownMutex);
+	bool changed = true, merged = false;
+	for (auto& x : g_knownCams)
+	{
+		if (x.serial == serial)
+		{
+			changed = (x.ip != ip) || (!model.empty() && x.model != model) || !x.online;
+			x.ip = ip; if (!model.empty()) { x.model = model; } x.online = true;
+			merged = true; break;
+		}
+	}
+	if (!merged) { g_knownCams.push_back(knownCam{ serial, model, ip, true }); }
+	if (changed) { saveKnownCamsLocked(); }	// 変化時のみ不揮発へ(頻繁な再接続でのフラッシュを抑制)
+}
+
+void loadPersisted()
+{
+	std::string d = osfile::dir("asset");
+	if (d.empty()) { return; }
+	std::string s;
+	if (!osfile::readAll(d + "/knownCams.json", s) || s.empty()) { return; }
+	try {
+		auto arr = nlohmann::json::parse(s);
+		if (!arr.is_array()) { return; }
+		std::lock_guard<std::mutex> lk(g_knownMutex);
+		for (auto& e : arr)
+		{
+			knownCam k;
+			k.serial = e.value("serial", std::string());
+			k.model  = e.value("model",  std::string());
+			k.ip     = e.value("ip",     std::string());
+			k.online = true;	// 起動時は前回IPを楽観的にオンライン扱い(接続時に (model,serial) で本人確認)
+			if (k.serial.empty() || k.ip.empty()) { continue; }
+			bool merged = false;
+			for (auto& x : g_knownCams) { if (x.serial == k.serial) { x = k; merged = true; break; } }
+			if (!merged) { g_knownCams.push_back(k); }
+		}
+	} catch (const std::exception&) { /* 壊れていれば無視(次回の接続成功で上書き保存される) */ }
 }
 
 }}	// namespace hge::role
