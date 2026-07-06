@@ -3201,6 +3201,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
     // 端末名称に一致するエッジをネットワーク検索して現在のIPを解決する(見つからなければ null)。
     private fun discoverEdgeByName(name: String): Edge? {
+        // ① UDP検索で現在IPを解決(最も確実だが、混雑WiFiでは応答UDPを取りこぼすことがある)。
         val js = HgeNative.nativeEdgeSearch(2500)
         try {
             val arr = JSONArray(js)
@@ -3209,6 +3210,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 if (o.optString("name") == name) return Edge(name, o.optString("ip"), o.optInt("port", 50506))
             }
         } catch (_: Exception) {}
+        // ② B-1: UDP検索が取りこぼした場合のフォールバック。登録一覧の last-seen IP がまだ ETP(TCP)で
+        //    応答するなら、それを採用して開始する(混雑WiFiでの検索不発による「開始できません」を回避)。
+        //    IPがDHCPで変わっていれば probe は無応答 → null(=本当に見つからない)で従来どおりトースト。
+        val cached = edges.firstOrNull { it.name == name && it.ip.isNotEmpty() }
+        if (cached != null) {
+            val pj = try { HgeNative.nativeEdgeProgress(cached.ip, cached.port) } catch (_: Exception) { "" }
+            if (pj.isNotEmpty()) return cached
+        }
         return null
     }
     // 登録一覧の last-seen IP を更新(stop/poll 用に開始時の解決結果を保持)。
