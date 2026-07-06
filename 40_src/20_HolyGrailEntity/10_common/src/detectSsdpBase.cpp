@@ -64,19 +64,18 @@ size_t detectSsdpBase::detect(std::vector<class device>& out)
 	size_t added = 0;
 	for (auto& device : devices)
 	{	// api の初期化をおこなう。このバックエンドが対応する種別のみ生成できる。
-		class apiBase* apiBase = makeApi();
-		if (apiBase == nullptr) { continue; }			// 生成失敗(このバックエンド非対応)
+		std::shared_ptr<class apiBase> api(makeApi());	// makeApi は raw new を返す→shared_ptr が所有
+		if (!api) { continue; }							// 生成失敗(このバックエンド非対応)
 
 		// api の初期化をおこなう
-		errCode ie = apiBase->init(device);
+		errCode ie = api->init(device);
 		if ( ie != ERR_HGC_OK )
-		{	// 初期化失敗
-			delete apiBase;
+		{	// 初期化失敗(api はスコープ離脱で自動解放)
 			device.apiBase = nullptr;
 			continue;
 		}
-		device.apiBase = apiBase;
-		out.push_back(device);			// apiBase はポインタ共有(device は解放しない設計)
+		device.apiBase = api;			// 共有所有(device コピーで参照共有・最後の参照で解放)
+		out.push_back(device);
 		added++;
 	}
 	return added;

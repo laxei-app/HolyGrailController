@@ -31,12 +31,11 @@ bool detectCanonCCapi::makeManualDevice(const std::string& host, class device& o
 	out.urlAccess = "http://" + host + ":8080/ccapi";	// CCAPI のアクセスURL
 	out.model = "Canon CCAPI (manual)";
 
-	auto* api = new apiCanonCCAPI();
+	auto api = std::make_shared<apiCanonCCAPI>();
 	if (api->initManual(out) != ERR_HGC_OK)
 	{
-		delete api;
-		return false;
+		return false;	// api(shared_ptr)はスコープ離脱で自動解放
 	}
-	out.apiBase = api;
+	out.apiBase = api;	// 派生→基底の shared_ptr へ暗黙変換(共有所有)
 	return true;
 }

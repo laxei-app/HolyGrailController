@@ -2,6 +2,7 @@
 #define _DEVICE_H_
 #include "common.h"
 #include "apiBase.h"
+#include <memory>
 
 class device
 {
@@ -30,10 +31,13 @@ public:
 
 	// api について
 	apiClass	apiClass = apiClass::NON;	// これを見て apiBase を設定する
-	class apiBase*	apiBase = nullptr;	// カメラAPI
+	// カメラAPI。共有所有(shared_ptr): device を値コピー(S->dev=*hit 等)すると参照を共有し、
+	// 最後の参照が消えた時に解放される。旧実装は二重解放回避のため ~device で意図的に解放せず
+	// リークさせていた(反転ガード)が、shared_ptr で正しく所有権を管理しリークを根治した。
+	std::shared_ptr<class apiBase>	apiBase;
 
 public:
-	virtual ~device();
+	virtual ~device() = default;
 	void clear(void);
 };
 

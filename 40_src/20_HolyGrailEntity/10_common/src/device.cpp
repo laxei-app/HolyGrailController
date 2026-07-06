@@ -1,13 +1,6 @@
 ﻿#include "device.h"
 
-device::~device()
-{
-	if (this->apiBase == nullptr)
-	{
-		delete this->apiBase;
-		this->apiBase = nullptr;
-	}
-}
+// ~device は = default(device.h)。apiBase は shared_ptr なので自動解放される。
 
 // 内容を消去する
 void device::clear(void)
@@ -24,11 +17,7 @@ void device::clear(void)
 	urlbase.clear();		// url base
 	urlAccess.clear();		// access URL
 
-	// api を削除
-	if (this->apiBase == nullptr)
-	{
-		delete this->apiBase;
-		this->apiBase = nullptr;
-	}
+	// api への参照を解放(最後の参照なら apiBase 実体も解放される)
+	apiBase = nullptr;
 	apiClass = apiClass::NON;
 }
