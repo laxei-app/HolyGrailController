@@ -69,9 +69,6 @@ bool tryIpDirect(const std::string& wantSerial, const hgc::camera& cam, bool has
                  const std::function<bool(const std::string&)>& serialBusy,
                  device& out)
 {
-	DBGLN(col::MAG, "[IPDIRECTdiag] decide wantSerial='%s' pc.model='%s' pc.name='%s' hasModel=%d uniqModelIp='%s'",
-		wantSerial.c_str(), cam.model.c_str(), cam.name.c_str(), (int)hasModel, knownUniqueModelIp(cam).c_str());
-
 	if (!wantSerial.empty())
 	{	// §3.3.1 serial確定 → serial一致IPへ直結し (model, serial) 両方一致で採用(最速)。
 		std::string kip = knownOnlineIp(wantSerial, cam);
@@ -82,7 +79,6 @@ bool tryIpDirect(const std::string& wantSerial, const hgc::camera& cam, bool has
 		    && known[0].serialno == wantSerial && knownModelMatch(known[0].model, cam))
 		{
 			out = known[0];
-			DBGLN(col::MAG, "[IPDIRECTdiag] serial-hit ip=%s serial=%s (SSDP省略)", kip.c_str(), wantSerial.c_str());
 			dataManager::logEvent("NET", (std::string("カメラ接続 IP直結+本人確認 ip=") + kip + " serial=" + wantSerial).c_str());
 			return true;
 		}
@@ -95,7 +91,6 @@ bool tryIpDirect(const std::string& wantSerial, const hgc::camera& cam, bool has
 		    && knownModelMatch(known[0].model, cam) && !serialBusy(known[0].serialno))
 		{
 			out = known[0];
-			DBGLN(col::MAG, "[IPDIRECTdiag] model-unique ip=%s serial=%s (SSDP省略)", kip.c_str(), known[0].serialno.c_str());
 			dataManager::logEvent("NET", (std::string("カメラ接続 IP直結(機種一意) ip=") + kip + " serial=" + known[0].serialno).c_str());
 			return true;
 		}
@@ -121,10 +116,8 @@ int setKnownCameras(const char* json, int len)
 			bool merged = false;	// serial一致は更新、無ければ追加。online=false も保持(在/不在の判断は上位)。
 			for (auto& x : g_knownCams) { if (!k.serial.empty() && x.serial == k.serial) { x = k; merged = true; break; } }
 			if (!merged) { g_knownCams.push_back(k); }
-			DBGLN(col::MAG, "[KNOWNdiag] rx cam serial=%s model=%s ip=%s online=%d", k.serial.c_str(), k.model.c_str(), k.ip.c_str(), (int)k.online);
 		}
 	} catch (const std::exception&) { return ERR_HGC_INVALID_ARG; }
-	DBGLN(col::MAG, "[KNOWNdiag] setKnownCameras done total=%u", (unsigned)g_knownCams.size());
 	return ERR_HGC_OK;
 }
 

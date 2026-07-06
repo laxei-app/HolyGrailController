@@ -256,9 +256,7 @@ bool captureRunner::establishSession(void)
 	lastFnApplied_.clear(); lastSsApplied_.clear(); lastIsoApplied_.clear();
 
 	// 撮影モードに入る(ライブビュー開始)
-	DBGLN(col::MAG, "[ESTdiag] establish begin serial=%s", dev_->serialno.c_str());	// 診断: 2台同時establish調査
 	errCode err = cameraController::startShooting(*dev_);
-	DBGLN(col::MAG, "[ESTdiag] startShooting serial=%s -> err=%d", dev_->serialno.c_str(), (int)err);
 	if (err != ERR_HGC_OK)
 	{
 		if (onError_) { onError_(err, "startShooting"); }
@@ -289,14 +287,12 @@ bool captureRunner::establishSession(void)
 		double fmin = (plan_.lens.fn > 0.0) ? plan_.lens.fn : 1.0;
 		tables_ = expo::standardTables(fmin, 32.0);
 	}
-	DBGLN(col::MAG, "[ESTdiag] establish OK serial=%s", dev_->serialno.c_str());	// 診断: establish成功
 	return true;
 }
 
 errCode captureRunner::loop(void)
 {
 	if (dev_ == nullptr) { running_ = false; return ERR_HGC_READY; }
-	DBGLN(col::CYN, "[LOOPdiag] loop begin serial=%s api=%p running=%d", dev_->serialno.c_str(), (void*)dev_->apiBase, (int)running_);
 
 	// 3a: カメラ取得+セッション確立フェーズ。撮影要求時にカメラが未検出(apiBase==nullptr)でも
 	//     中断せず、取得できるまで NOCAMERA(✖点灯)で探し続ける。約60秒ごとに onReconnect_
@@ -304,7 +300,6 @@ errCode captureRunner::loop(void)
 	//     「3回で諦める」旧挙動は廃止し、撮影窓の終了または中止(running_=false)まで無限に試行する。
 	while (running_)
 	{
-		DBGLN(col::CYN, "[LOOPdiag] iter serial=%s api=%p", dev_->serialno.c_str(), (void*)dev_->apiBase);
 		if (dev_->apiBase == nullptr)
 		{
 			if (onState_) { onState_(ST_NOCAMERA); }

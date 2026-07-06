@@ -1004,7 +1004,6 @@ namespace
 			S->state = HGE_ST_NOCAMERA; notifyStateP(S->planId, HGE_ST_NOCAMERA); refreshAggregateState();
 		}
 		hgc::exposureSmoothing smooth = dataManager::currentSmoothing();
-		DBGLN(col::CYN, "[SEQdiag] pre-ready plan=%s serial=%s api=%p", S->plan.name.c_str(), S->dev.serialno.c_str(), (void*)S->dev.apiBase);
 		errCode e = S->runner->ready(S->plan, &S->dev, smooth, g_offMin);
 		if (e != ERR_HGC_OK) { notifyError(e, "ready"); S->state = HGE_ST_ERROR; notifyStateP(S->planId, HGE_ST_ERROR); refreshAggregateState(); return e; }
 		return S->runner->start();
