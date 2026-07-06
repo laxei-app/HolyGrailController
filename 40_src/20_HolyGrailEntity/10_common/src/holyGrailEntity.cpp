@@ -5,6 +5,7 @@
 #include "osClock.h"
 #include "cameraController.h"
 #include "dataManager.h"
+#include "roleDiscovery.h"	// 役割別の発見(エッジ=IP直結ヒント / スマホ=スタブ)。30_role
 #include "csJson.h"
 #include "netThread.h"
 #include "osSystemCall.h"
@@ -63,55 +64,9 @@ namespace
 	};
 	std::vector<std::unique_ptr<captureSession>> g_sessions;
 
-	// --- 既知カメラテーブル(エッジ役: スマホからの cameraInfo プッシュで更新。43 §6 C_CAMERA_INFO) ---
-	// 発見の最優先ヒント。IPは変わり得るので、接続後に (model, serial) で本人確認して採用する。
-	struct knownCam { std::string serial; std::string model; std::string ip; bool online = false; };
-	std::vector<knownCam> g_knownCams;
-	std::mutex            g_knownMutex;
-
-	// 既知カメラの device.model 全体("Canon EOS R100")が計画カメラ(型番のみ "EOS R100" か全体)と同機種か。
-	//  メーカー接頭辞差を吸収する(dataManager::stripMaker と同趣旨だが known 側は maker を持たないため接頭辞+空白を許容)。
-	//  "EOS R10" が "Canon EOS R100" に誤一致しないよう、接尾一致は語境界(直前が空白)を要求する。
-	bool knownModelMatch(const std::string& kModel, const hgc::camera& cam)
-	{
-		auto eq = [&](const std::string& c) -> bool {
-			if (c.empty()) { return false; }
-			if (kModel == c) { return true; }										// 完全一致(全体 or 既に型番のみ)
-			if (kModel.size() > c.size() + 1 &&
-			    kModel.compare(kModel.size() - c.size(), c.size(), c) == 0 &&
-			    kModel[kModel.size() - c.size() - 1] == ' ') { return true; }	// "メーカー<空白>型番"
-			return false;
-		};
-		return eq(cam.name) || eq(cam.model);
-	}
-
-	// 計画カメラにマッチするオンライン既知IPを返す(serial優先)。無ければ空文字。
-	std::string knownOnlineIp(const std::string& wantSerial, const hgc::camera& cam)
-	{
-		std::lock_guard<std::mutex> lk(g_knownMutex);
-		for (auto& k : g_knownCams)
-		{
-			if (!k.online || k.ip.empty()) { continue; }
-			if (!wantSerial.empty()) { if (k.serial == wantSerial) { return k.ip; } continue; }
-			if (knownModelMatch(k.model, cam)) { return k.ip; }	// serial未解決は機種一致(接続後にserial+modelで再確認)
-		}
-		return std::string();
-	}
-
-	// 機種一致でオンラインな既知カメラが「ちょうど1台」ならそのIPを返す(曖昧さ無し)。
-	// 同機種が複数オンライン(選別が必要)や0台なら空を返し、SSDPに委ねる。serial未指定の計画でも
-	// この一意ケースなら IP直結できる(接続後に (model) で本人確認)。
-	std::string knownUniqueModelIp(const hgc::camera& cam)
-	{
-		std::lock_guard<std::mutex> lk(g_knownMutex);
-		std::string ip; int cnt = 0;
-		for (auto& k : g_knownCams)
-		{
-			if (!k.online || k.ip.empty()) { continue; }
-			if (knownModelMatch(k.model, cam)) { ++cnt; ip = k.ip; }
-		}
-		return (cnt == 1) ? ip : std::string();
-	}
+	// 既知カメラテーブル(エッジ役: スマホからの cameraInfo プッシュ由来のIP直結ヒント)と、それを使う
+	// IP直結+本人確認のオーケストレーションは 30_role/20_edge へ移設した(スマホ役 10_phone はスタブ)。
+	// common は hge::role::tryIpDirect / setKnownCameras の窓口(roleDiscovery.h)経由でのみ触れる。
 
 	// --- SSDP受動待ち受け → 取得フェーズのポーク配線(3b) ---
 	// 待ち受けスレッド(cameraController の共有リスナ)から呼ばれる onAppear は、取得フェーズ中の
@@ -861,42 +816,16 @@ namespace
 
 		std::vector<class device> found;
 
-		DBGLN(col::MAG, "[IPDIRECTdiag] decide wantSerial='%s' pc.model='%s' pc.name='%s' hasModel=%d uniqModelIp='%s'",
-			wantSerial.c_str(), pc.model.c_str(), pc.name.c_str(), (int)hasModel, knownUniqueModelIp(pc).c_str());
-
-		// §3.3.1 IP直結を最優先(serial確定時のみ。最速・大半はこれで済む)。既知IP(スマホプッシュ/前回成功)へ
-		//   connectManual し、(model, serial) 両方一致で採用。成功すればSSDPを省略する。serial未確定(機種のみ/
-		//   未指定)は複数個体の選別が要るためSSDPに委ねる。
+		// §3.3.1 IP直結を最優先(役割別=エッジ役の実装 30_role/20_edge)。既知IP(スマホプッシュ)へ直結し
+		//   (model, serial) 本人確認まで済ませて1台採れたらSSDPを省略する。スマホ役(10_phone)は常に false を返す
+		//   ため、以下は必ずSSDP発見に進む(スマホ自身の発見は信頼できる)。
 		bool ipDirect = false;
-		if (!wantSerial.empty())
 		{
-			std::string kip = knownOnlineIp(wantSerial, pc);
-			std::vector<class device> known;
-			//  本人確認: (model, serial) 両方一致。CCAPIのmanufacturerは"Canon.Inc"でstripMaker不可のため、
-			//  接続後model全体("Canon EOS R100")を計画型番("EOS R100")と knownModelMatch で照合する。
-			if (!kip.empty() && cameraController::connectManual(known, kip) > 0 && known[0].apiBase
-			    && known[0].serialno == wantSerial && knownModelMatch(known[0].model, pc))
+			class device dv;
+			if (hge::role::tryIpDirect(wantSerial, pc, hasModel, serialBusy, dv))
 			{
-				found.push_back(known[0]);
+				found.push_back(dv);
 				ipDirect = true;
-				DBGLN(col::MAG, "[IPDIRECTdiag] serial-hit ip=%s serial=%s (SSDP省略)", kip.c_str(), wantSerial.c_str());
-				std::string d = "カメラ接続 IP直結+本人確認 ip=" + kip + " serial=" + wantSerial;
-				dataManager::logEvent("NET", d.c_str());
-			}
-		}
-		else if (hasModel)
-		{	// serial未指定でも、機種一致のオンライン既知カメラがちょうど1台なら曖昧さ無し→IP直結。
-			//  (同機種が複数オンラインなら「それ以外の個体」選別が要るためSSDPに委ねる = knownUniqueModelIp が空)
-			std::string kip = knownUniqueModelIp(pc);
-			std::vector<class device> known;
-			if (!kip.empty() && cameraController::connectManual(known, kip) > 0 && known[0].apiBase
-			    && knownModelMatch(known[0].model, pc) && !serialBusy(known[0].serialno))
-			{
-				found.push_back(known[0]);
-				ipDirect = true;
-				DBGLN(col::MAG, "[IPDIRECTdiag] model-unique ip=%s serial=%s (SSDP省略)", kip.c_str(), known[0].serialno.c_str());
-				std::string d = "カメラ接続 IP直結(機種一意) ip=" + kip + " serial=" + known[0].serialno;
-				dataManager::logEvent("NET", d.c_str());
 			}
 		}
 
@@ -908,19 +837,6 @@ namespace
 				std::string d = "SSDP検索結果 " + std::to_string(found.size()) + "台";
 				for (auto& fd : found) { if (fd.apiBase) { d += " [" + (fd.model.empty() ? fd.friendName : fd.model) + "/" + (fd.serialno.empty() ? "?" : fd.serialno) + "]"; } }
 				dataManager::logEvent("NET", d.c_str());
-			}
-			// SSDPが取りこぼしても既知IP(前回/機種一致)を保険として足す。本人確認は下の割当が (model,serial) で行う。
-			std::string kip = knownOnlineIp(wantSerial, pc);
-			if (!kip.empty())
-			{
-				bool present = false;
-				for (auto& fd : found) { if (fd.apiBase && hostFromDevice(fd) == kip) { present = true; break; } }
-				if (!present)
-				{
-					std::vector<class device> known;
-					if (cameraController::connectManual(known, kip) > 0 && known[0].apiBase)
-					{ found.push_back(known[0]); }
-				}
 			}
 		}
 
@@ -1042,14 +958,15 @@ namespace
 			class device* hit = nullptr;
 			std::vector<class device> known;	// 既知IP直結の結果(hit の生存管理)
 			std::vector<class device> found;	// M-SEARCH結果
-			// ①既知IP直結を最優先(スマホプッシュ/前回IP)。本人確認(model+serial)が通れば M-SEARCH を省く(速い・確実)。
+			// ①既知IP直結を最優先(スマホプッシュ/前回IP)。役割別(エッジ役 30_role/20_edge)が本人確認
+			//   (model+serial)まで済ませて1台採れたら M-SEARCH を省く(速い・確実)。スマホ役は false→②へ。
 			{
-				std::string kip = knownOnlineIp(wantSerial, S->plan.camera);
-				if (!kip.empty() && cameraController::connectManual(known, kip) > 0)
-				{
-					class device& d = known[0];
-					if (d.apiBase && (wantSerial.empty() || d.serialno == wantSerial) && dataManager::cameraModelMatches(d, S->plan.camera)) { hit = &d; }
-				}
+				const hgc::camera& rc = S->plan.camera;
+				bool hasModel = !rc.model.empty() || !rc.name.empty();
+				known.emplace_back();
+				if (hge::role::tryIpDirect(wantSerial, rc, hasModel, [](const std::string&){ return false; }, known[0]))
+				{ hit = &known[0]; }
+				else { known.clear(); }
 			}
 			// ②外れたら M-SEARCH。判明シリアルで再特定(本人確認 model+serial)、無ければ機種一致。
 			if (hit == nullptr)
@@ -1201,29 +1118,10 @@ int32_t hge_connectManual(const char* host)
 }
 
 // スマホから発見中のオンラインカメラ一覧を受け取り、既知カメラテーブルを更新する(43 §6 C_CAMERA_INFO)。
+// 実体は役割別(エッジ役=既知テーブル更新 / スマホ役=no-op)。common は窓口に委譲する。
 int32_t hge_setKnownCameras(const char* json, int32_t len)
 {
-	if (json == nullptr) { return ERR_HGC_INVALID_ARG; }
-	std::string s = (len > 0) ? std::string(json, static_cast<size_t>(len)) : std::string(json);
-	try {
-		auto arr = nlohmann::json::parse(s);
-		if (!arr.is_array()) { return ERR_HGC_INVALID_ARG; }
-		std::lock_guard<std::mutex> lk(g_knownMutex);
-		for (auto& e : arr) {
-			knownCam k;
-			k.serial = e.value("serial", std::string());
-			k.model  = e.value("model",  std::string());
-			k.ip     = e.value("ip",     std::string());
-			k.online = e.value("online", false);
-			if (k.serial.empty() && k.ip.empty()) { continue; }
-			bool merged = false;	// serial一致は更新、無ければ追加。online=false も保持(在/不在の判断は上位)。
-			for (auto& x : g_knownCams) { if (!k.serial.empty() && x.serial == k.serial) { x = k; merged = true; break; } }
-			if (!merged) { g_knownCams.push_back(k); }
-			DBGLN(col::MAG, "[KNOWNdiag] rx cam serial=%s model=%s ip=%s online=%d", k.serial.c_str(), k.model.c_str(), k.ip.c_str(), (int)k.online);
-		}
-	} catch (const std::exception&) { return ERR_HGC_INVALID_ARG; }
-	DBGLN(col::MAG, "[KNOWNdiag] setKnownCameras done total=%u", (unsigned)g_knownCams.size());
-	return ERR_HGC_OK;
+	return static_cast<int32_t>(hge::role::setKnownCameras(json, static_cast<int>(len)));
 }
 
 int32_t hge_loadFixedPlan(void)

@@ -13,10 +13,13 @@ set(ENTITY ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../../20_HolyGrailEntity)
 file(GLOB COMMON_SRC CONFIGURE_DEPENDS ${ENTITY}/10_common/src/*.cpp)
 # Androidプラットフォーム実装(net/ossc/tool/debugOut/jniBridge)
 file(GLOB ANDROID_SRC CONFIGURE_DEPENDS ${ENTITY}/20_platform/20_Android/src/*.cpp)
+# 役割別コード: スマホ役の実装だけをリンクする(§4.4。スマホ成果物 = common + 30_role/10_phone + platform/Android)。
+file(GLOB PHONE_ROLE_SRC CONFIGURE_DEPENDS ${ENTITY}/30_role/10_phone/src/*.cpp)
 
 add_library(HolyGrailEntity SHARED
     ${COMMON_SRC}
     ${ANDROID_SRC}
+    ${PHONE_ROLE_SRC}
     ${ENTITY}/10_common/lib/astronomy/astronomy.c
 )
 
@@ -24,6 +27,7 @@ target_include_directories(HolyGrailEntity PRIVATE
     ${ENTITY}/10_common/src
     ${ENTITY}/10_common/lib                 # json (json/nlohmann/json.hpp)
     ${ENTITY}/20_platform/20_Android/src
+    ${ENTITY}/30_role                       # 役割別の窓口 roleDiscovery.h
 )
 
 # 端末時刻に依存しない(時刻は自前で渡す)。fast-math は付けない(astronomy.c が #error)。
