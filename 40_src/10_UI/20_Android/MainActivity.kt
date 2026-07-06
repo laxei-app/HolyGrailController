@@ -3069,8 +3069,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
             it.onMoveBoundary = { before, after, occ, altDeg, rising ->
                 Thread { HgeNative.nativeSetBoundaryByAlt(before, after, occ, altDeg, rising) }.start()
             }
+            it.onEditBoundary = { before, after, occ, curAlt, rising, lo, hi ->
+                showBoundaryPicker(before, after, occ, curAlt, rising, lo, hi)
+            }
             it.onSetBand = { rising, insert -> setBand(rising, insert) }
-            it.onNeedTwoFinger = { Toast.makeText(this, "スケジュール変更は2本指で", Toast.LENGTH_SHORT).show() }
+            it.onNeedTwoFinger = { Toast.makeText(this, "境目はタップで編集できます", Toast.LENGTH_SHORT).show() }
             scheduleView = it
             planSchedule.removeAllViews()
             planSchedule.addView(it, LinearLayout.LayoutParams(
@@ -3105,6 +3108,42 @@ class MainActivity : AppCompatActivity(), HgeListener {
             }
         }
         sv.setData(blocks)
+    }
+
+    // 境目(撮影制御方法の切替=太陽高度)をタップした時のピッカー編集。2本指ドラッグの代替(操作性改善)。
+    // 太陽高度を 0.5° 刻みで可動範囲[lo,hi]内から選び、OKで nativeSetBoundaryByAlt(ドラッグと同じ)へ。
+    private fun showBoundaryPicker(before: Int, after: Int, occ: Int, curAlt: Double, rising: Int, lo: Double, hi: Double) {
+        val step = 0.5
+        val n = (Math.round((hi - lo) / step).toInt()).coerceAtLeast(1) + 1
+        val labels = Array(n) { "%+.1f°".format(lo + it * step) }
+        val np = android.widget.NumberPicker(this).apply {
+            minValue = 0; maxValue = n - 1
+            displayedValues = labels
+            wrapSelectorWheel = false
+            value = Math.round((curAlt - lo) / step).toInt().coerceIn(0, n - 1)
+        }
+        fun tn(t: Int) = ccmTypeName[t] ?: when (t) { 6, 7 -> "移行" else -> "境目" }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(12), dp(24), dp(4)); gravity = Gravity.CENTER_HORIZONTAL
+            addView(TextView(this@MainActivity).apply {
+                text = "${tn(before)} → ${tn(after)} に切り替わる太陽高度"; textSize = 14f
+                gravity = Gravity.CENTER; setPadding(0, 0, 0, dp(4))
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "低いほど暗い側で切り替わります"; textSize = 11f; setTextColor(0xFF888888.toInt())
+            })
+            addView(np)
+        }
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("境目の太陽高度")
+            .setView(box)
+            .setPositiveButton("OK") { _, _ ->
+                val altDeg = lo + np.value * step
+                Thread { HgeNative.nativeSetBoundaryByAlt(before, after, occ, altDeg, rising) }.start()
+            }
+            .setNegativeButton("キャンセル", null)
+            .show()
     }
 
     // 撮影要求済(撮影中/待機/未検出)の計画を表示しているときは一切編集できない(item7)。各操作部の有効/無効を切替。

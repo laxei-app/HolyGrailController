@@ -30,6 +30,8 @@ class ScheduleView(context: Context) : View(context) {
 
     var onTapType: ((Int) -> Unit)? = null
     var onMoveBoundary: ((before: Int, after: Int, occ: Int, altDeg: Double, rising: Int) -> Unit)? = null
+    // 境目を「タップ」した時の編集(ピッカー)。2本指ドラッグの代替。curAlt=現在値、lo/hi=可動範囲[°]。
+    var onEditBoundary: ((before: Int, after: Int, occ: Int, curAlt: Double, rising: Int, lo: Double, hi: Double) -> Unit)? = null
     var onSetBand: ((rising: Boolean, insert: Boolean) -> Unit)? = null
     var onNeedTwoFinger: (() -> Unit)? = null
 
@@ -287,7 +289,23 @@ class ScheduleView(context: Context) : View(context) {
                     commitEdit()
                 } else if (e.actionMasked == MotionEvent.ACTION_UP && !twoFinger &&
                            abs(e.x - downX) < dp(10f) && abs(e.y - downY) < dp(10f)) {
-                    val bi = blockAt(e.y); if (bi >= 0) { val si = segAtXY(bi, e.x, e.y); if (si >= 0) onTapType?.invoke(blocks[bi].segs[si].type) }
+                    val bi = blockAt(e.y)
+                    if (bi >= 0) {
+                        // 色付き箱(撮影制御方法)をタップ → その撮影制御方法の編集。
+                        // 箱以外(高度軸・薄明帯・時刻列・余白)をタップ → 最寄りの境目を編集(太陽高度ピッカー)。
+                        //  精密に境目線を狙わなくてよいので操作しやすい(2本指ドラッグの代替)。
+                        val si = segAtXY(bi, e.x, e.y)
+                        if (si >= 0) {
+                            onTapType?.invoke(blocks[bi].segs[si].type)
+                        } else {
+                            val bnd = boundaries().filter { it.bi == bi }.minByOrNull { abs(it.y - e.y) }
+                            if (bnd != null) {
+                                val (lo, hi) = clampRange(bnd.before, bnd.after)
+                                val rising = if (blocks[bi].axisDown) 0 else 1
+                                onEditBoundary?.invoke(bnd.before, bnd.after, bnd.occ, bnd.alt, rising, lo, hi)
+                            }
+                        }
+                    }
                 }
                 twoFinger = false; previewY = -1f; invalidate()
                 return true
