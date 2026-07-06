@@ -433,10 +433,14 @@ errCode captureRunner::loop(void)
 					{
 						if (alive) { waitFailStreak = 0; }
 						else if (++waitFailStreak >= kWaitMaxFail)
-						{	// 連続失敗で接続断と判定(検知ログは1回だけ)。
-							waitDisconnected = true;
-							if (onError_) { onError_(ERR_HGC_NOT_FOUND, "待機中に接続断を検知 → 先回り再接続"); }
-							if (onState_) { onState_(ST_NOCAMERA); }	// 待機中のカメラ未検出(✖点灯)
+						{	// A-1: まず静かに再接続を試みる。一過性の失敗ならここで復帰しNOCAMERA(✖点灯・スマホ
+							//      ポップ)を出さず待機を継続する。復帰できなければ接続断と判定して提示する。
+							if (onReconnect_ && onReconnect_() && establishSession()) { waitFailStreak = 0; }	// 静かに復帰(ポップ無し)
+							else
+							{	waitDisconnected = true;
+								if (onError_) { onError_(ERR_HGC_NOT_FOUND, "待機中に接続断を検知 → 先回り再接続"); }
+								if (onState_) { onState_(ST_NOCAMERA); }	// 待機中のカメラ未検出(✖点灯)
+							}
 						}
 					}
 					if (waitDisconnected)
@@ -805,18 +809,23 @@ errCode captureRunner::loop(void)
 		// 撮影が連続失敗 → カメラ接続が切れたとみなし再接続(3a: 中止まで無限)。復帰後は現在時刻から周期を取り直す。
 		if (shootFailStreak >= kMaxConsecutiveFail)
 		{
-			if (onState_) { onState_(ST_NOCAMERA); }	// 撮影中のカメラ未検出(✖点灯)
-			if (onError_) { onError_(ERR_HGC_NOT_FOUND, "撮影中にカメラ接続が切れました。再接続を試行します(中止するまで継続)"); }
-			bool recovered = false;
-			while (running_)
-			{
-				if (onReconnect_ && onReconnect_() && establishSession()) { recovered = true; break; }
-				interruptibleSleep(kReconnectWaitMs);	// 再試行間隔(中止でsleep中断)
+			// A-1: まず1回だけ静かに再接続を試みる。一過性のブリップ(混雑WiFi等)ならここで復帰し、
+			//      NOCAMERA(✖点灯・スマホの「カメラが見つかりません」ポップ)を出さずに撮影を継続する。
+			bool recovered = (onReconnect_ && onReconnect_() && establishSession());
+			if (!recovered)
+			{	// 静かな復帰に失敗 → ここで初めて NOCAMERA を提示し、中止まで再接続を続ける。
+				if (onState_) { onState_(ST_NOCAMERA); }	// 撮影中のカメラ未検出(✖点灯)
+				if (onError_) { onError_(ERR_HGC_NOT_FOUND, "撮影中にカメラ接続が切れました。再接続を試行します(中止するまで継続)"); }
+				while (running_)
+				{
+					if (onReconnect_ && onReconnect_() && establishSession()) { recovered = true; break; }
+					interruptibleSleep(kReconnectWaitMs);	// 再試行間隔(中止でsleep中断)
+				}
+				if (!recovered) { break; }	// 中止された(running_=false)→ 終了処理へ
+				if (onState_) { onState_(ST_CAPTURING); }	// 緑へ戻す(NOCAMERAを出していた場合のみ意味を持つ)
 			}
-			if (!recovered) { break; }	// 中止された(running_=false)→ 終了処理へ
 			shootFailStreak = 0;
 			avgBuf.clear();								// 測光移動平均をリセット
-			if (onState_) { onState_(ST_CAPTURING); }	// 緑へ戻す
 			mono = tool::startElapse(); boundaryIdx = 0;	// 再接続後は現在時刻から周期をアンカーし直す
 			pending = target;
 			continue;	// 次コマから再開(establishSession でキャッシュclear済=フル適用)
