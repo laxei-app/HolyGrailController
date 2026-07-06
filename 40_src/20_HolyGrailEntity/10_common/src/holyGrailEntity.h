@@ -19,7 +19,8 @@ enum hgeEvent
 	HGE_EV_CAPTURED = 3,	// 1枚撮影完了    {"frame","iso","ss","fn","luminance"}
 	HGE_EV_DEVICE   = 4,	// デバイス検出   [{"uuid","model","serialno"},...]
 	HGE_EV_SCHEDULE = 5,	// スケジュール   {"name","events":[...],"windows":[...]}
-	HGE_EV_ERROR    = 6		// エラー         {"code":int,"msg":string}
+	HGE_EV_ERROR    = 6,	// エラー         {"code":int,"msg":string}
+	HGE_EV_PRESENCE = 7		// プレゼンス変化 [{"serial","model","ip","online"}](スマホ常駐マップ)
 };
 
 // 撮影状態 (47 §2.3)
@@ -62,6 +63,13 @@ int32_t hge_connectManual(const char* host);
 // スマホから発見中のオンラインカメラ一覧(§6 cameraInfo)を受け取り、既知カメラテーブルを更新する。
 // json = [{"serial","model","ip","online"}]。エッジ役の発見が IP直結の最優先ヒントに使う。
 int32_t hge_setKnownCameras(const char* json, int32_t len);
+
+// --- スマホ役: 常駐プレゼンスマップ(§3.2/§5.4。スマホ役のみ実体、エッジ役は no-op) ---
+// 起動時M-SEARCH+NOTIFY+定期疎通でオンラインカメラを常時把握。変化のたび HGE_EV_PRESENCE を通知する
+// (UIが最新IPを撮影中/待機中のエッジへプッシュ)。MulticastLock は Android UI 側で保持すること。
+int32_t hge_presenceStart(void);
+int32_t hge_presenceStop(void);
+int32_t hge_presenceJson(char* buf, int32_t* inoutLen);	// [{"serial","model","ip","online"}]
 
 // --- 撮影計画(MVP は固定データ) ---
 int32_t hge_loadFixedPlan(void);	// 固定データの撮影計画を生成し保持する

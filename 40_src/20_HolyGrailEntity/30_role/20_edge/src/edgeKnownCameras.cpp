@@ -181,4 +181,9 @@ void loadPersisted()
 	} catch (const std::exception&) { /* 壊れていれば無視(次回の接続成功で上書き保存される) */ }
 }
 
+// スマホ役の常駐プレゼンスマップ(§5.4)はエッジには不要。no-op。
+void presenceStart(std::function<void()> /*onChange*/) {}
+void presenceStop() {}
+std::string presenceJson() { return "[]"; }
+
 }}	// namespace hge::role

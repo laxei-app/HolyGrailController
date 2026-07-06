@@ -33,4 +33,14 @@ void noteConnected(const std::string& serial, const std::string& model, const st
 // 起動時に不揮発の既知カメラを読み込む(エッジ役)。スマホ役は no-op。
 void loadPersisted();
 
+// --- スマホ役: 常駐プレゼンスマップ(§3.2 / §5.4) ---
+// スマホが「オンラインのカメラ一覧」を常時保持する。起動時 M-SEARCH + 受動NOTIFY + 定期の
+// 軽量疎通確認で最新化し、マップが変化(オンライン化/オフライン化/IP変更)するたび onChange を呼ぶ。
+// 呼び手(スマホUI)は onChange を受けて、撮影中/待機中のエッジへ最新IPをプッシュする。
+// マップは presence(見えているか)のみで CCAPIセッションは張らない(占有しない)。エッジ役は no-op。
+void presenceStart(std::function<void()> onChange);
+void presenceStop();
+// 現在のオンラインカメラ一覧 JSON [{serial,model,ip,online}]。エッジ役は "[]"。
+std::string presenceJson();
+
 }}  // namespace hge::role

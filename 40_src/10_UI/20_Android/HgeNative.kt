@@ -20,6 +20,7 @@ object HgeNative {
     const val EV_DEVICE = 4
     const val EV_SCHEDULE = 5
     const val EV_ERROR = 6
+    const val EV_PRESENCE = 7    // スマホ常駐プレゼンスマップの変化 [{serial,model,ip,online}]
 
     // 撮影状態 (47 §2.3)
     const val ST_IDLE = 0
@@ -91,6 +92,10 @@ object HgeNative {
     external fun nativeSetOwnedCameraDetail(origName: String, json: String): Int  // 620 詳細編集
     external fun nativeSetOwnedLensDetail(origName: String, json: String): Int    // 630 詳細編集
     external fun nativeSearchDevicesList(): String         // 接続カメラ検索: [{"model","friendly","serial"},...]
+    // スマホ常駐プレゼンスマップ(§3.2/§5.4)。start でオンラインカメラの常時把握を開始、変化は EV_PRESENCE。
+    external fun nativePresenceStart(): Int
+    external fun nativePresenceStop(): Int
+    external fun nativePresenceJson(): String              // [{"serial","model","ip","online"}]
     external fun nativeAddOwnedDetected(index: Int): Int   // 検出カメラを所持へ追加
     external fun nativeGetColors(): String                 // システム共通の色 {"night":{"text","bg"},...}
     external fun nativeSetColors(json: String): Int

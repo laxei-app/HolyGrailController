@@ -1128,6 +1128,25 @@ int32_t hge_setKnownCameras(const char* json, int32_t len)
 	return static_cast<int32_t>(hge::role::setKnownCameras(json, static_cast<int>(len)));
 }
 
+// スマホ常駐プレゼンスマップ(§3.2/§5.4)。マップ変化のたび HGE_EV_PRESENCE を通知する。
+int32_t hge_presenceStart(void)
+{
+	hge::role::presenceStart([]() { notify(HGE_EV_PRESENCE, hge::role::presenceJson()); });
+	return ERR_HGC_OK;
+}
+
+int32_t hge_presenceStop(void)
+{
+	hge::role::presenceStop();
+	return ERR_HGC_OK;
+}
+
+int32_t hge_presenceJson(char* buf, int32_t* inoutLen)
+{
+	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return copyOut(hge::role::presenceJson(), buf, inoutLen);
+}
+
 int32_t hge_loadFixedPlan(void)
 {
 	return loadFixedPlanImpl();

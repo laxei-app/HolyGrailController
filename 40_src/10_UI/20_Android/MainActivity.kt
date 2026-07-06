@@ -197,6 +197,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         refreshPlanList()   // 複数計画リスト(分割バー上)を構築
         restoreEdgeState()  // 再起動時: エッジが撮影中なら状態を復元(item9)
         resumePhoneCapture()  // 再起動時: スマホ直結で撮影中だった計画を再開(item2)
+        Thread { try { HgeNative.nativePresenceStart() } catch (_: Exception) {} }.start()  // P4: 常駐プレゼンスマップ開始
     }
 
     // アプリ再起動時、スマホ直結で撮影中だった計画(/asset/capturing.json)を再開する(item2)。
@@ -2761,11 +2762,24 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     override fun onDestroy() {
         handler.removeCallbacks(edgePoll)
+        Thread { try { HgeNative.nativePresenceStop() } catch (_: Exception) {} }.start()  // P4: 常駐プレゼンスマップ停止
         HgeNative.nativeSetListener(null)
         HgeNative.nativeCaptureStop()
         HgeNative.nativeTerm()
         releaseMulticastLock()
         super.onDestroy()
+    }
+
+    // EV_PRESENCE: オンラインカメラ一覧が変化 → 撮影中/待機中/未検出のエッジへ最新の (serial,model,ip,online) を
+    //  プッシュし、エッジのIP直結ヒントを最新化する(待機中にカメラがオンライン化した時点でも即反映される)。
+    private fun pushPresenceToActiveEdges(presenceJson: String) {
+        val ids = capturingPlans + waitingPlans + disconnectedPlans
+        if (ids.isEmpty()) return
+        val targets = ids.mapNotNull { planEdge(it) }.filter { it.ip.isNotEmpty() }.distinctBy { it.ip }
+        if (targets.isEmpty()) return
+        Thread {
+            for (e in targets) { try { HgeNative.nativeEdgeCameraInfo(e.ip, e.port, presenceJson) } catch (_: Exception) {} }
+        }.start()
     }
 
     // 3b: SSDP受動待ち受け用の MulticastLock。Wi-Fi ドライバの受信フィルタを緩め、239.255.255.250:1900
@@ -2842,6 +2856,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 }
                 HgeNative.EV_SCHEDULE -> { latestSchedule = json; updatePlanDisplay(json) }
                 HgeNative.EV_DEVICE -> {}
+                HgeNative.EV_PRESENCE -> { pushPresenceToActiveEdges(json) }   // P4: マップ変化→アクティブエッジへ最新IPをpush
                 HgeNative.EV_ERROR -> {
                     val o = JSONObject(json)
                     val msg = o.optString("msg")
