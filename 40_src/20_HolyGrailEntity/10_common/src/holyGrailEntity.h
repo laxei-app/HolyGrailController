@@ -59,6 +59,10 @@ int32_t hge_searchDevices(void);
 // host : カメラのIPアドレス(例 "192.168.1.4")。
 int32_t hge_connectManual(const char* host);
 
+// スマホから発見中のオンラインカメラ一覧(§6 cameraInfo)を受け取り、既知カメラテーブルを更新する。
+// json = [{"serial","model","ip","online"}]。エッジ役の発見が IP直結の最優先ヒントに使う。
+int32_t hge_setKnownCameras(const char* json, int32_t len);
+
 // --- 撮影計画(MVP は固定データ) ---
 int32_t hge_loadFixedPlan(void);	// 固定データの撮影計画を生成し保持する
 

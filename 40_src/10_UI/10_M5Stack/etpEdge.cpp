@@ -169,6 +169,9 @@ namespace
 		case etp::C_RESEARCH:	// 継続: カメラ未検出時の即再探索(取得フェーズの60秒待ちを前倒し)
 			hge_pokeAcquire(pk.data.empty() ? nullptr : pk.data.c_str());
 			break;
+		case etp::C_CAMERA_INFO:	// スマホが発見中のオンラインカメラ情報。既知IPテーブルを更新(発見のIP直結ヒント)
+			if (!pk.data.empty()) { hge_setKnownCameras(pk.data.c_str(), (int32_t)pk.data.size()); }
+			break;
 		case etp::C_PROGRESS:
 		{
 			char b[256];

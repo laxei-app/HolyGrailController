@@ -321,6 +321,23 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeResearch(JNIEnv* env, jobject, jstr
 	return (m == etp::M_ACK) ? 0 : -2;
 }
 
+// エッジ端末へ発見中のオンラインカメラ情報(cameraInfo)を送る。json=[{serial,model,ip,online}]。
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeEdgeCameraInfo(JNIEnv* env, jobject, jstring host_, jint port, jstring json_)
+{
+	const char* host = env->GetStringUTFChars(host_, nullptr);
+	const char* js   = json_ ? env->GetStringUTFChars(json_, nullptr) : nullptr;
+	std::string hostS = host ? host : "";
+	std::string jsonS = js ? js : "";
+	env->ReleaseStringUTFChars(host_, host);
+	if (js) { env->ReleaseStringUTFChars(json_, js); }
+
+	std::lock_guard<std::mutex> lk(g_connMtx);
+	std::string rd;
+	int m = firstReq(hostS, port, etp::C_CAMERA_INFO, etp::M_PUT, jsonS, rd);
+	return (m == etp::M_ACK) ? 0 : -2;
+}
+
 // エッジ端末の進捗を取得する。progress の JSON を返す(失敗時 "")。
 JNIEXPORT jstring JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeEdgeProgress(JNIEnv* env, jobject, jstring host_, jint port)

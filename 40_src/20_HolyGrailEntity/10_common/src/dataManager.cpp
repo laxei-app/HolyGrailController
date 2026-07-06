@@ -397,6 +397,25 @@ namespace
 		{
 			m.erase(0, maker.size());
 			while (!m.empty() && (m.front() == ' ' || m.front() == '\t')) { m.erase(0, 1); }
+			return m;
+		}
+		// メーカー名が model 先頭と完全一致しない場合(例 UPnPは"Canon"だがCCAPI deviceinformation は
+		// "Canon.Inc")、双方の先頭英数字ラン(区切り文字直前まで)が一致すれば、その1語を型番から除く。
+		auto alnumRun = [](const std::string& s) -> size_t {
+			size_t i = 0;
+			while (i < s.size() && ((s[i] >= 'A' && s[i] <= 'Z') || (s[i] >= 'a' && s[i] <= 'z') ||
+			                        (s[i] >= '0' && s[i] <= '9'))) { ++i; }
+			return i;
+		};
+		if (!maker.empty())
+		{
+			size_t mk = alnumRun(maker);
+			size_t md = alnumRun(m);
+			if (mk > 0 && mk == md && m.compare(0, md, maker, 0, mk) == 0)
+			{
+				m.erase(0, md);
+				while (!m.empty() && (m.front() == ' ' || m.front() == '\t')) { m.erase(0, 1); }
+			}
 		}
 		return m;
 	}

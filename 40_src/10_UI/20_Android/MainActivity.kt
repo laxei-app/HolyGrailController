@@ -3391,6 +3391,21 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val name = try { JSONObject(latestSchedule).optString("name") } catch (_: Exception) { "" }
         val nameBmp = makeNameBitmapBytes(if (name.isEmpty()) "撮影計画" else name)
         Thread {
+            // 発見中のオンラインカメラをエッジへ通知(IP直結ヒント)。エッジは (model,serial) で本人確認して直結する。
+            try {
+                val arr = org.json.JSONArray(HgeNative.nativeSearchDevicesList())
+                val push = org.json.JSONArray()
+                for (i in 0 until arr.length()) {
+                    val d = arr.optJSONObject(i) ?: continue
+                    if (d.optString("ip").isEmpty()) continue
+                    push.put(JSONObject()
+                        .put("serial", d.optString("serial"))
+                        .put("model", d.optString("model"))
+                        .put("ip", d.optString("ip"))
+                        .put("online", true))
+                }
+                if (push.length() > 0) HgeNative.nativeEdgeCameraInfo(e.ip, e.port, push.toString())
+            } catch (_: Exception) {}
             val r = HgeNative.nativeEdgeStart(e.ip, e.port, s, off, nameBmp, planId)
             runOnUiThread {
                 if (r == 0) {

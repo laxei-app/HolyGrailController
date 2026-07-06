@@ -28,7 +28,8 @@ namespace etp
 		C_SEARCH = 1000, C_ACTION = 1, C_STOP = 2, C_PROGRESS = 3,
 		C_DIRECTION = 4, C_CAPTURE_PLAN = 5, C_CONTROL_METHOD = 6, C_TIME = 7,
 		C_NAME_BMP = 8,	// 計画名のモノクロ2値ビットマップ(width u16LE, height u16LE, 1bpp pixels)
-		C_RESEARCH = 9	// 継続(カメラ未検出時の即再探索)。data=計画id(空=全取得フェーズ)。スマホ→エッジ
+		C_RESEARCH = 9,	// 継続(カメラ未検出時の即再探索)。data=計画id(空=全取得フェーズ)。スマホ→エッジ
+		C_CAMERA_INFO = 10	// オンラインカメラ情報の通知。data=JSON配列[{serial,model,ip,online}]。既知IPテーブル更新。スマホ→エッジ
 
 	};
 
