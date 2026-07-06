@@ -4,6 +4,7 @@
 #include "netThread.h"
 #include <algorithm>
 #include <mutex>
+#include <ctime>
 
 // URL("http://host:port/..")からホスト部を取り出す(AP列挙のdedup用)。
 static std::string hostOfUrl(const std::string& url)
@@ -38,6 +39,28 @@ size_t cameraController::detectTarget(std::vector<class device> & devices)
 	static std::mutex discoverMutex;
 	std::lock_guard<std::mutex> lock(discoverMutex);
 
+	// A-2: 発見の短命共有キャッシュ。近接して起動する2セッション目(discoverMutex 直列化で待たされた側)が
+	//  再び 3×M-SEARCH を回すのは無駄なので、直近発見ホストへ connectManual で再構成して SSDP を省く。
+	//  ・キャッシュは「ホスト一覧+時刻」のみ(apiBase は保持しない)。各セッションは connectManual で
+	//    自前の apiBase を得るため、ポインタ共有/二重解放は起きない(device の所有契約と整合)。
+	//  ・TTL 内でもホストが落ちていれば connectManual が失敗し不採用=自己修復(runner が後で再探索)。
+	static std::vector<std::string> s_cacheHosts;
+	static long long                s_cacheAtSec = 0;
+	constexpr long long kDiscoverCacheTtlSec = 10;
+	const long long nowSec = static_cast<long long>(std::time(nullptr));
+	if (!s_cacheHosts.empty() && (nowSec - s_cacheAtSec) <= kDiscoverCacheTtlSec)
+	{
+		for (const auto& host : s_cacheHosts)
+		{
+			for (auto& be : backends())
+			{
+				class device dev;
+				if (be->makeManualDevice(host, dev)) { devices.push_back(dev); break; }
+			}
+		}
+		if (!devices.empty()) { return devices.size(); }	// 全滅なら通常SSDPへフォールスルー(下へ)
+	}
+
 	for (auto& be : backends())
 	{	// 各種別バックエンドで検出(統合・apiBase 初期化はバックエンド内で完結)。
 		be->detect(devices);
@@ -55,6 +78,13 @@ size_t cameraController::detectTarget(std::vector<class device> & devices)
 			class device dev;
 			if (be->makeManualDevice(host, dev)) { devices.push_back(dev); break; }
 		}
+	}
+	// A-2: 発見できたホスト一覧を短命キャッシュへ記録(次の近接セッションが再構成に使う)。
+	if (!devices.empty())
+	{
+		s_cacheHosts.clear();
+		for (const auto& d : devices) { std::string h = hostOfUrl(d.urlAccess); if (!h.empty()) { s_cacheHosts.push_back(h); } }
+		s_cacheAtSec = static_cast<long long>(std::time(nullptr));
 	}
 	return devices.size();
 }
