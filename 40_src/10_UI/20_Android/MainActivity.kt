@@ -288,6 +288,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         resetButton = findViewById(R.id.plan_resetButton)
         placeText = findViewById(R.id.plan_placeText)
         latlngText = findViewById(R.id.plan_latlngText)
+        // 撮影場所をタップ → 入力方法の選択(テキスト貼り付け / 地図から選択)。撮影中は編集不可。
+        val placeClick = View.OnClickListener { if (!planReadOnly) showPlaceEditChooser() }
+        placeText.setOnClickListener(placeClick)
+        latlngText.setOnClickListener(placeClick)
         cameraText = findViewById(R.id.plan_cameraText)
         lensText = findViewById(R.id.plan_lensText)
         intervalText = findViewById(R.id.plan_intervalText)
@@ -2909,6 +2913,112 @@ class MainActivity : AppCompatActivity(), HgeListener {
             renderScheduleView(o)                  // §7.3.2 太陽高度帯+境目編集ビュー(計画画面)
             renderSchedule(capSchedule, o, true)   // 撮影画面は従来のイベント時系列
         } catch (_: Exception) {}
+    }
+
+    // --- 撮影場所の入力(緯度経度)。テキスト貼り付け(全ユーザー) / 地図から選択(osmdroid) ---
+    private fun showPlaceEditChooser() {
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("撮影場所を設定")
+            .setItems(arrayOf("テキストで貼り付け", "地図から選択")) { _, which ->
+                when (which) { 0 -> showPlacePasteDialog(); 1 -> openMapPicker() }
+            }
+            .show()
+    }
+
+    // "35.6810, 139.7670" 等から緯度・経度を取り出す(カンマ/空白/余分な文字に寛容)。範囲外は null。
+    private fun parseLatLng(s: String): Pair<Double, Double>? {
+        // 全角の数字/符号/小数点(IMEやコピー由来)を半角へ正規化してから抽出。
+        val norm = buildString {
+            for (c in s) append(when (c) {
+                in '０'..'９' -> '0' + (c - '０')
+                '．', '。' -> '.'
+                '＋' -> '+'
+                '－', '−', 'ー' -> '-'
+                '，' -> ','
+                else -> c
+            })
+        }
+        val nums = Regex("[-+]?\\d+(?:\\.\\d+)?").findAll(norm).mapNotNull { it.value.toDoubleOrNull() }.toList()
+        if (nums.size < 2) return null
+        val lat = nums[0]; val lng = nums[1]
+        if (lat < -90.0 || lat > 90.0 || lng < -180.0 || lng > 180.0) return null
+        return Pair(lat, lng)
+    }
+
+    private fun showPlacePasteDialog() {
+        val et = EditText(this).apply {
+            hint = "例: 35.6810, 139.7670"
+            try { setText(JSONObject(latestSchedule).optString("latlng")) } catch (_: Exception) {}
+        }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(24), dp(8), dp(24), dp(4))
+            addView(TextView(this@MainActivity).apply {
+                text = "緯度, 経度 を貼り付け（Googleマップの座標をそのまま貼れます）"; textSize = 12f; setTextColor(0xFF888888.toInt())
+            })
+            addView(et)
+        }
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("緯度経度を貼り付け")
+            .setView(box)
+            .setPositiveButton("設定") { _, _ ->
+                val p = parseLatLng(et.text.toString())
+                if (p == null) Toast.makeText(this, "緯度経度を認識できません（例: 35.681, 139.767）", Toast.LENGTH_LONG).show()
+                else applyPlace(p.first, p.second, "")
+            }
+            .setNegativeButton("キャンセル", null)
+            .show()
+    }
+
+    // 緯度経度を Entity へ反映(スケジュール再生成)。name 空=地名は据え置き。
+    private fun applyPlace(lat: Double, lng: Double, name: String) {
+        Thread {
+            val r = HgeNative.nativeSetPlanLocation(lat, lng, name)
+            val sched = HgeNative.nativeScheduleJson()
+            runOnUiThread {
+                if (r == 0) { latestSchedule = sched; updatePlanDisplay(sched)
+                    Toast.makeText(this, "撮影場所を更新: %.4f, %.4f".format(lat, lng), Toast.LENGTH_SHORT).show() }
+                else Toast.makeText(this, "撮影場所の設定に失敗 (code=$r)", Toast.LENGTH_LONG).show()
+            }
+        }.start()
+    }
+
+    // 地図から選択(osmdroid=OpenStreetMap。タイルは無料・APIキー不要)。タップで地点を選び「設定」で反映。
+    private fun openMapPicker() {
+        org.osmdroid.config.Configuration.getInstance().apply {
+            userAgentValue = packageName                 // OSMタイルサーバは UserAgent 必須
+            osmdroidBasePath = java.io.File(cacheDir, "osmdroid")
+            osmdroidTileCache = java.io.File(cacheDir, "osmdroid/tiles")
+        }
+        var lat = 35.681; var lng = 139.767
+        try { parseLatLng(JSONObject(latestSchedule).optString("latlng"))?.let { lat = it.first; lng = it.second } } catch (_: Exception) {}
+        val map = org.osmdroid.views.MapView(this).apply {
+            setTileSource(org.osmdroid.tileprovider.tilesource.TileSourceFactory.MAPNIK)
+            setMultiTouchControls(true); minZoomLevel = 3.0
+        }
+        val start = org.osmdroid.util.GeoPoint(lat, lng)
+        map.controller.setZoom(12.0); map.controller.setCenter(start)
+        val marker = org.osmdroid.views.overlay.Marker(map).apply { position = start; setAnchor(0.5f, 1.0f) }
+        map.overlays.add(marker)
+        var picked = start
+        val recv = object : org.osmdroid.events.MapEventsReceiver {
+            override fun singleTapConfirmedHelper(p: org.osmdroid.util.GeoPoint): Boolean { picked = p; marker.position = p; map.invalidate(); return true }
+            override fun longPressHelper(p: org.osmdroid.util.GeoPoint): Boolean { picked = p; marker.position = p; map.invalidate(); return true }
+        }
+        map.overlays.add(0, org.osmdroid.views.overlay.MapEventsOverlay(recv))
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(TextView(this@MainActivity).apply { text = "地図をタップして撮影場所を選択"; textSize = 12f; setPadding(dp(16), dp(8), dp(16), dp(4)); setTextColor(0xFF888888.toInt()) })
+            addView(map, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(420)))
+        }
+        val dlg = androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("地図から選択")
+            .setView(box)
+            .setPositiveButton("この地点に設定") { _, _ -> applyPlace(picked.latitude, picked.longitude, "") }
+            .setNegativeButton("キャンセル", null)
+            .create()
+        dlg.setOnDismissListener { map.onPause(); map.onDetach() }
+        dlg.show()
+        map.onResume()
     }
 
     // 型→色テーブルキー。

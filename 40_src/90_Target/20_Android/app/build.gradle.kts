@@ -62,4 +62,5 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("com.jaredrummler:colorpicker:1.1.0")   // 色の設定(文字/背景)のカラーピッカー
     implementation("com.google.android.gms:play-services-code-scanner:16.1.0")  // エッジ設定QR(PoP)スキャン §8.2.2(GMSコードスキャナ。Camera2ベースで実機堅牢)
+    implementation("org.osmdroid:osmdroid-android:6.1.20")  // 撮影場所の地図選択(OpenStreetMap。APIキー不要・無料)
 }

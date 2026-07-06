@@ -1778,6 +1778,22 @@ int32_t hge_setPlanLens(const char* name)
 	return saveCurrentPlan();	// 編集を即永続化
 }
 
+// 撮影場所(緯度経度)を設定する。地図/テキスト貼り付けの両入力から呼ぶ。標高は変更しない(既存値を維持)。
+// 位置が変わると日の出/日の入り/薄明時刻が変わるためスケジュールを再生成して通知する。
+int32_t hge_setPlanLocation(double latitude, double longitude, const char* name)
+{
+	if (latitude < -90.0 || latitude > 90.0 || longitude < -180.0 || longitude > 180.0) { return ERR_HGC_INVALID_ARG; }
+	if (!g_planReady) { errCode e = loadFixedPlanImpl(); if (e != ERR_HGC_OK) { return e; } }
+	g_plan.place.latitude  = latitude;
+	g_plan.place.longitude = longitude;
+	if (name != nullptr && name[0]) { g_plan.place.name = name; }
+	errCode e = astro::buildSchedule(g_plan, g_planCcm, g_offMin);	// 位置変化→太陽/月の時刻が変わる
+	if (e != ERR_HGC_OK) { return e; }
+	buildScheduleJson();
+	notify(HGE_EV_SCHEDULE, g_schedJson);
+	return saveCurrentPlan();	// 編集を即永続化
+}
+
 int32_t hge_setOwnedCameraDetail(const char* origName, const char* json)
 {
 	if (origName == nullptr || json == nullptr) { return ERR_HGC_INVALID_ARG; }

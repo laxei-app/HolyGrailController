@@ -199,6 +199,8 @@ int32_t hge_setOwnedCameraAutoInsert(const char* name, int32_t autoInsert);
 // 所持機材を撮影計画(cs)へ反映し、スケジュールを再生成して通知する。
 int32_t hge_setPlanCamera(const char* name);
 int32_t hge_setPlanLens(const char* name);
+// 撮影場所(緯度経度)を設定しスケジュールを再生成する。name は地名(空可)。標高は変更しない。
+int32_t hge_setPlanLocation(double latitude, double longitude, const char* name);
 
 // 所持カメラ/レンズの詳細(全項目)を JSON で更新/新規作成して保存する(620/630 詳細編集)。
 //  origName 一致を置換、無ければ新規追加。json キーは dataManager の同名関数を参照。
