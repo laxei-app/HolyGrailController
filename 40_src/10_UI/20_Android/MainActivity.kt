@@ -88,6 +88,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private val nocamDialogShown = mutableSetOf<String>() // カメラ未検出ポップアップを表示済みの計画 id(多重表示抑止。Phase3)
     private val schedulePages = mutableListOf<ScheduleView>()   // §7.3.2 薄明ページの ScheduleView(読取専用切替に使う)
     private val twilightPages = mutableListOf<View>()           // 薄明ページのラッパ(計画名ヘッダ+ScheduleView)。ページャ追加/削除用
+    private val twilightBoxViews = mutableListOf<TextView>()    // 概要の薄明移動ボックス(幅/高さ揃え用)
     private lateinit var captureStatus: TextView     // 撮影中ステータス(plan画面内)
     private var planReadOnly = false                 // 撮影中の計画を表示中=編集不可(item7)
     private var blinkOn = true              // 撮影中カメラアイコンの点滅状態
@@ -3541,12 +3542,42 @@ class MainActivity : AppCompatActivity(), HgeListener {
         tv.text = if (morning) "朝の薄明" else "夕方の薄明"
         tv.setTextColor(0xFFFFFFFF.toInt()); tv.textSize = 13f; tv.setTypeface(null, Typeface.BOLD)
         tv.gravity = Gravity.CENTER
+        tv.maxLines = 2   // 言語によって長い場合は2行に折り返す(幅キャップと併用)
         tv.background = g
         tv.setPadding(dp(14), dp(8), dp(14), dp(8))
         tv.layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(6), 0, dp(6)) }
         tv.setOnClickListener { planPager.setCurrent(page, true) }
+        twilightBoxViews.add(tv)
         return tv
+    }
+
+    // 薄明移動ボックスの幅・高さを全ボックスで揃える(言語非依存)。
+    //  幅=各ラベルの1行幅の最大値。ただし列幅(2列時は約半分)を上限とし、超える言語は2行に折り返す。
+    //  高さ=その幅での各ボックスの折り返し後の高さの最大値(1行/2行が混在しても箱サイズを統一)。
+    private fun equalizeTwilightBoxes(twoCol: Boolean) {
+        val boxes = twilightBoxViews
+        if (boxes.isEmpty()) return
+        val avail = resources.displayMetrics.widthPixels - dp(24)     // フォーム左右パディング分
+        val cap = if (twoCol) (avail - dp(8)) / 2 else avail          // 2列なら列幅、1列なら全幅
+        var maxLine = 0
+        for (b in boxes) {
+            val w = Math.ceil(b.paint.measureText(b.text.toString()).toDouble()).toInt() + b.paddingLeft + b.paddingRight
+            if (w > maxLine) maxLine = w
+        }
+        val targetW = minOf(maxLine, cap).coerceAtLeast(dp(48))
+        var maxH = 0
+        for (b in boxes) {
+            val innerW = (targetW - b.paddingLeft - b.paddingRight).coerceAtLeast(1)
+            val sl = android.text.StaticLayout.Builder.obtain(b.text, 0, b.text.length, b.paint, innerW).build()
+            val h = sl.height + b.paddingTop + b.paddingBottom
+            if (h > maxH) maxH = h
+        }
+        for (b in boxes) {
+            val lp = b.layoutParams
+            lp.width = targetW; lp.height = maxH
+            b.layoutParams = lp
+        }
     }
 
     private fun makeDateBadge(md: String): View {
@@ -3574,6 +3605,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 薄明が2つ以上なら縦2列に分割(日付境で分割。同一日付の朝夕のみのときは昼間=日の入で分割)。1つなら1列。
     private fun renderOverview(o: JSONObject) {
         planOverview.removeAllViews()
+        twilightBoxViews.clear()
         val want = mapOf(1 to "Start", 12 to "End", 9 to "日の出", 2 to "日の入", 10 to "月の出", 11 to "月の入")
         fun parse(s: String): Long = try { fmtIso.parse(s)?.time ?: 0L } catch (_: Exception) { 0L }
         fun mdOf(d: String): String = if (d.length >= 10)
@@ -3660,6 +3692,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             col.addView(makeEventRow(ev.time, ev.label))
             after[idx]?.forEach { col.addView(makeTwilightBox(it.page, it.morning)) }
         }
+        equalizeTwilightBoxes(twoCol)   // 全ボックスの幅・高さを揃える(言語非依存)
     }
 
     // §7.3.2 薄明ページ(横スライド)を再構築する。blocks[] の各要素=1ページ(ScheduleView)。
