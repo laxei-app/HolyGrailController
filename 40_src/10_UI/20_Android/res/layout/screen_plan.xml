@@ -48,23 +48,38 @@
         android:layout_height="0dp"
         android:layout_weight="1">
 
-        <!-- ページ0: 先頭フォーム(縦スクロール) -->
-        <ScrollView
-            android:id="@+id/plan_formScroll"
+        <!-- ページ0: 先頭ページ(計画リスト + 分割バー + フォーム縦スクロール) -->
+        <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="match_parent">
+            android:layout_height="match_parent"
+            android:orientation="vertical">
+
+            <!-- 撮影計画リスト(先頭ページのみ)。タップで選択、左アイコンで開始/停止、⋮で操作。
+                 常に「新規撮影計画」行あり。分割バーで高さを調整できる。 -->
+            <ScrollView android:id="@+id/plan_listScroll"
+                android:layout_width="match_parent" android:layout_height="120dp">
+                <LinearLayout android:id="@+id/plan_listContainer"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="vertical" android:padding="4dp" />
+            </ScrollView>
+            <FrameLayout android:id="@+id/plan_listDivider"
+                android:layout_width="match_parent" android:layout_height="26dp"
+                android:background="#ECEFF1" android:clickable="true" android:focusable="true">
+                <View android:layout_width="48dp" android:layout_height="5dp" android:layout_gravity="center"
+                    android:background="@drawable/divider_handle" />
+            </FrameLayout>
+
+            <ScrollView
+                android:id="@+id/plan_formScroll"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
                 android:padding="12dp">
-
-                <!-- 撮影計画リスト(先頭ページのみ)。タップで選択、左アイコンで開始/停止、⋮で操作。
-                     常に「新規撮影計画」行あり。分割バーは廃止し、フォームと一体で縦スクロールする。 -->
-                <LinearLayout android:id="@+id/plan_listContainer"
-                    android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:orientation="vertical" />
 
                 <!-- 撮影中ステータス(撮影中のみ表示。読取専用) -->
                 <TextView
@@ -221,6 +236,7 @@
                         android:layout_height="wrap_content" android:textSize="11sp" android:text="接続" />
                 </LinearLayout>
             </LinearLayout>
-        </ScrollView>
+            </ScrollView>
+        </LinearLayout>
     </app.laxei.holygrail.PlanPager>
 </LinearLayout>

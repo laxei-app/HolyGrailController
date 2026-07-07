@@ -76,6 +76,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private lateinit var planOverview: LinearLayout      // 概要スケジュール(先頭ページ・表示専用)
     private lateinit var planPager: PlanPager            // 横スライドのページャ(先頭+薄明ページ)
     private lateinit var planFormScroll: ScrollView      // 先頭ページのフォーム縦スクロール
+    private lateinit var planListScroll: ScrollView      // 先頭ページの計画リスト(分割バー上)
     private lateinit var planListContainer: LinearLayout
     private var currentPlanId = ""          // 編集対象の計画 id
     // 計画の選択・改名・各種編集(g_plan/g_editIdを触る操作)は単一スレッドで直列化し競合を防ぐ
@@ -315,6 +316,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         planOverview = findViewById(R.id.plan_overviewContainer)
         planPager = findViewById(R.id.plan_pager)
         planFormScroll = findViewById(R.id.plan_formScroll)
+        planListScroll = findViewById(R.id.plan_listScroll)
         planPager.onPageChanged = { updatePagerTitle() }
         planListContainer = findViewById(R.id.plan_listContainer)
         captureStatus = findViewById(R.id.plan_captureStatus)
@@ -386,6 +388,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val host = ipInput.text.toString().trim()
             Thread { HgeNative.nativeConnectManual(host) }.start()
         }
+        // 撮影計画リスト(分割バー上)の分割バー。
+        setupDivider(R.id.plan_listDivider, R.id.plan_listScroll)
         // 撮影周期(タップでキーボード入力)。最小未満は警告。
         intervalText.setOnClickListener { editInterval() }
         // 横向き(ランドスケープ)。
@@ -1241,7 +1245,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 MotionEvent.ACTION_DOWN -> { startY = ev.rawY; startH = list.height; true }
                 MotionEvent.ACTION_MOVE -> {
                     val root = list.parent as ViewGroup
-                    val headerH = root.getChildAt(0).height
+                    val headerH = list.top    // リスト上の余白(ヘッダ等)。計画画面はリストが先頭=0。
                     val minH = dp(48)                                                   // 1行が見える(最初の項目まで上げられる)
                     // 画面3/4より下には下げない上限。
                     val quarterMax = root.height - headerH - divider.height - resources.displayMetrics.heightPixels / 4
@@ -2626,8 +2630,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
             for (i in 0 until arr.length()) { planListContainer.addView(buildPlanRow(arr.getJSONObject(i))) }
         } catch (_: Exception) {}
         // 再構築直後に選択中行のEditTextが自動フォーカスしてキーボードが出るのを防ぐ(フォーカスをスクロールへ)。
-        planFormScroll.isFocusableInTouchMode = true
-        planFormScroll.requestFocus()
+        planListScroll.isFocusableInTouchMode = true
+        planListScroll.requestFocus()
+        // リスト件数が少なければ内容ぴったりまで縮める(item6: リスト最下段で止める)。
+        setInitialSplit(R.id.plan_listScroll, R.id.plan_listContainer)
     }
 
     private fun buildPlanRow(p: JSONObject): View {
@@ -2689,8 +2695,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             tv.setOnEditorActionListener { v, actionId, _ ->
                 if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
                     val nm = v.text.toString().trim()
-                    planFormScroll.isFocusableInTouchMode = true
-                    planFormScroll.requestFocus()   // 隣行へ飛ばずキーボードを閉じる
+                    planListScroll.isFocusableInTouchMode = true
+                    planListScroll.requestFocus()   // 隣行へ飛ばずキーボードを閉じる
                     (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
                         .hideSoftInputFromWindow(v.windowToken, 0)
                     if (nm.isNotEmpty()) planExec.execute {
