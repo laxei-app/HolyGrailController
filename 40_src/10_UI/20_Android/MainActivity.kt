@@ -86,7 +86,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private val disconnectedPlans = mutableSetOf<String>() // カメラ未検出(NOCAMERA/旧DISCONNECTED)の計画 id 群=✖点灯
     private val waitingPlans = mutableSetOf<String>()    // 撮影要求済・撮影窓前で待機中(カメラOK)の計画 id 群=カメラ点灯
     private val nocamDialogShown = mutableSetOf<String>() // カメラ未検出ポップアップを表示済みの計画 id(多重表示抑止。Phase3)
-    private val schedulePages = mutableListOf<ScheduleView>()   // §7.3.2 薄明ページ(1ブロック=1ページ)
+    private val schedulePages = mutableListOf<ScheduleView>()   // §7.3.2 薄明ページの ScheduleView(読取専用切替に使う)
+    private val twilightPages = mutableListOf<View>()           // 薄明ページのラッパ(計画名ヘッダ+ScheduleView)。ページャ追加/削除用
     private lateinit var captureStatus: TextView     // 撮影中ステータス(plan画面内)
     private var planReadOnly = false                 // 撮影中の計画を表示中=編集不可(item7)
     private var blinkOn = true              // 撮影中カメラアイコンの点滅状態
@@ -3581,9 +3582,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun rebuildTwilightPages(o: JSONObject) {
         curSunriseMode = o.optInt("sunriseMode", 0)
         curSunsetMode = o.optInt("sunsetMode", 0)
-        for (sv in schedulePages) planPager.removeView(sv)
+        for (p in twilightPages) planPager.removeView(p)
+        twilightPages.clear()
         schedulePages.clear()
         val ed = !planReadOnly
+        val planName = o.optString("name")
         o.optJSONArray("blocks")?.let { arr ->
             for (i in 0 until arr.length()) {
                 val b = arr.getJSONObject(i)
@@ -3615,8 +3618,22 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 sv.onSetBand = { rising, insert -> setBand(rising, insert) }
                 sv.isEnabled = ed
                 sv.setData(listOf(block))
-                planPager.addView(sv, FrameLayout.LayoutParams(
+                // ページ=[計画名ヘッダ(タイトル行の下)] + [ScheduleView(残り全面)]。縦スクロールなし。
+                val page = LinearLayout(this)
+                page.orientation = LinearLayout.VERTICAL
+                val nameTv = TextView(this)
+                nameTv.text = planName.ifEmpty { "撮影計画" }
+                nameTv.setTypeface(null, Typeface.BOLD); nameTv.textSize = 15f
+                nameTv.maxLines = 1; nameTv.ellipsize = android.text.TextUtils.TruncateAt.END
+                nameTv.setPadding(dp(12), dp(6), dp(12), dp(6))
+                nameTv.setBackgroundColor(0xFFE3F2FD.toInt())
+                page.addView(nameTv, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+                page.addView(sv, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+                planPager.addView(page, FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                twilightPages.add(page)
                 schedulePages.add(sv)
             }
         }
@@ -3624,13 +3641,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         updatePagerTitle()
     }
 
-    // タイトル行のページ番号(先頭=1/n)。薄明ページは計画名+番号を表示する。
+    // タイトル行は全ページ共通で「撮影計画 現在/総数」。計画名は薄明ページ内(タイトル行の下)に表示する。
     private fun updatePagerTitle() {
         val n = planPager.pageCount.coerceAtLeast(1)
         val cur = planPager.current
-        val name = try { JSONObject(latestSchedule).optString("name") } catch (_: Exception) { "" }
-        val base = if (cur == 0) "撮影計画" else name.ifEmpty { "撮影計画" }
-        findViewById<TextView>(R.id.plan_title).text = "$base  ${cur + 1}/$n"
+        findViewById<TextView>(R.id.plan_title).text = "撮影計画  ${cur + 1}/$n"
     }
 
     // 撮影要求済(撮影中/待機/未検出)の計画を表示しているときは一切編集できない(item7)。各操作部の有効/無効を切替。
