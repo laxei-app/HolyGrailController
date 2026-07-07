@@ -3529,22 +3529,45 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // §7.3.2 スケジュール表示/編集ビュー(計画画面)。太陽高度軸(+6..-24)で夕方/朝方を分けて表示。
     private var curSunriseMode = 0
     private var curSunsetMode = 0
+    // 薄明ページ(横スライド)への移動ボックスを概要スケジュールに追加する。時刻は出さない。
+    //  朝の薄明=濃紺(上)→オレンジ(下)、夕方の薄明=オレンジ(上)→濃紺(下)のグラデーション。タップでそのページへ。
+    private fun addTwilightBox(page: Int, morning: Boolean) {
+        val orange = 0xFFF57C00.toInt(); val navy = 0xFF14274E.toInt()
+        val colors = if (morning) intArrayOf(navy, orange) else intArrayOf(orange, navy)
+        val g = android.graphics.drawable.GradientDrawable(
+            android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM, colors)
+        g.cornerRadius = dp(8).toFloat()
+        val tv = TextView(this)
+        tv.text = if (morning) "朝の薄明" else "夕方の薄明"
+        tv.setTextColor(0xFFFFFFFF.toInt()); tv.textSize = 14f; tv.setTypeface(null, Typeface.BOLD)
+        tv.gravity = Gravity.CENTER
+        tv.background = g
+        tv.setPadding(dp(12), dp(12), dp(12), dp(12))
+        tv.layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(6), 0, dp(6)) }
+        tv.setOnClickListener { planPager.setCurrent(page, true) }
+        planOverview.addView(tv)
+    }
+
     // 先頭ページ: 概要スケジュール(表示専用)。時刻とイベント(Start/End/日の出/日の入/月の出/月の入)を
-    // 日付ごとにまとめて時系列表示する。編集項目は無し。
+    // 日付ごとにまとめて時系列表示し、各薄明ページへ移動できるボックスを適切な位置に差し込む。
     private fun renderOverview(o: JSONObject) {
         planOverview.removeAllViews()
         val want = mapOf(1 to "Start", 12 to "End", 9 to "日の出", 2 to "日の入", 10 to "月の出", 11 to "月の入")
         fun parse(s: String): Long = try { fmtIso.parse(s)?.time ?: 0L } catch (_: Exception) { 0L }
-        data class Ev(val t: Long, val date: String, val time: String, val label: String)
+        fun mdOf(d: String): String = if (d.length >= 10)
+            "${d.substring(5, 7).toInt()}/${d.substring(8, 10).toInt()}" else d
+        data class Ev(val t: Long, val code: Int, val md: String, val time: String, val label: String)
         val evs = ArrayList<Ev>()
         o.optJSONArray("events")?.let { arr ->
             for (i in 0 until arr.length()) {
                 val e = arr.getJSONObject(i)
-                val label = want[e.optInt("event")] ?: continue
+                val code = e.optInt("event")
+                val label = want[code] ?: continue
                 val w = e.optString("when")
                 val date = if (w.length >= 10) w.substring(0, 10) else w
                 val time = if (w.length >= 16) w.substring(11, 16) else w
-                evs.add(Ev(parse(w), date, time, label))
+                evs.add(Ev(parse(w), code, mdOf(date), time, label))
             }
         }
         evs.sortBy { it.t }
@@ -3552,28 +3575,54 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val tv = TextView(this); tv.text = "—"; tv.textSize = 13f; tv.setTextColor(0xFF888888.toInt())
             planOverview.addView(tv); return
         }
-        // 日付は年を外し M/d に。薄明ページの日付バッジと同じ緑の角丸ボタン状で表示する。
-        fun mdOf(d: String): String = if (d.length >= 10)
-            "${d.substring(5, 7).toInt()}/${d.substring(8, 10).toInt()}" else d
+
+        // 薄明ブロック(=薄明ページ)。ページ0=フォームなので block i → ページ i+1。
+        data class Nav(val page: Int, val morning: Boolean, val md: String)
+        val navs = ArrayList<Nav>()
+        o.optJSONArray("blocks")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val b = arr.getJSONObject(i)
+                navs.add(Nav(i + 1, b.optString("axis") != "down", b.optString("date")))
+            }
+        }
+        // 移動ボックスの差し込み位置: 朝=日の出(code9)の前、夕方=日の入(code2)の後。
+        // 該当イベントが無ければ End(code12)の前(例: プランがEndで切れる夕方薄明)。
+        val before = HashMap<Int, MutableList<Nav>>()
+        val after = HashMap<Int, MutableList<Nav>>()
+        val endIdx = evs.indexOfLast { it.code == 12 }
+        for (nv in navs) {
+            if (nv.morning) {
+                val i = evs.indexOfFirst { it.code == 9 && it.md == nv.md }
+                val at = if (i >= 0) i else endIdx
+                if (at >= 0) before.getOrPut(at) { mutableListOf() }.add(nv)
+            } else {
+                val i = evs.indexOfLast { it.code == 2 && it.md == nv.md }
+                if (i >= 0) after.getOrPut(i) { mutableListOf() }.add(nv)
+                else if (endIdx >= 0) before.getOrPut(endIdx) { mutableListOf() }.add(nv)
+            }
+        }
+
         var curDate = ""
-        for (ev in evs) {
-            if (ev.date != curDate) {
-                curDate = ev.date
+        for ((idx, ev) in evs.withIndex()) {
+            if (ev.md != curDate) {
+                curDate = ev.md
                 val dh = TextView(this)
-                dh.text = mdOf(ev.date); dh.setTypeface(null, Typeface.BOLD); dh.textSize = 12f
+                dh.text = ev.md; dh.setTypeface(null, Typeface.BOLD); dh.textSize = 12f
                 dh.setTextColor(0xFFFFFFFF.toInt())
                 dh.setPadding(dp(12), dp(3), dp(12), dp(3))
                 dh.background = android.graphics.drawable.GradientDrawable().apply {
-                    cornerRadius = dp(9).toFloat(); setColor(0xFF66BB6A.toInt())   // 薄明ページの badgeFill と同色
+                    cornerRadius = dp(9).toFloat(); setColor(0xFF66BB6A.toInt())
                 }
                 dh.layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(8), 0, dp(2)) }
                 planOverview.addView(dh)
             }
+            before[idx]?.forEach { addTwilightBox(it.page, it.morning) }
             val tv = TextView(this)
             tv.text = "${ev.time}   ${ev.label}"; tv.textSize = 13f
             tv.setPadding(dp(12), dp(5), dp(8), dp(5))
             planOverview.addView(tv)
+            after[idx]?.forEach { addTwilightBox(it.page, it.morning) }
         }
     }
 
@@ -3608,7 +3657,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         marks.add(ScheduleView.Mark(m.optString("label"), m.optString("time"), m.optDouble("alt")))
                     }
                 }
-                val block = ScheduleView.Block(b.optString("title"), b.optString("axis") == "down",
+                val axisDown = b.optString("axis") == "down"
+                val block = ScheduleView.Block(if (axisDown) "夕方の薄明" else "朝の薄明", axisDown,
                     b.optString("date"), segs, marks)
                 val sv = ScheduleView(this)
                 sv.onTapType = { t -> ccmTypeToKey[t]?.let { k -> openPlanCcmEdit(k) } }
