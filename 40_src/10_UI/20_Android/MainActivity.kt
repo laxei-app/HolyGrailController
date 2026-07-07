@@ -2629,12 +2629,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // この計画に指定されたエッジ端末の"名称"(無ければスマホで撮影)。
         val name = planEdgeName(id)
         if (name.isEmpty()) {
-            // スマホで撮影。
+            // スマホで撮影。撮影開始要求(§7.4): 重なり2件超/受付100件超は受付時にエラー。
             planExec.execute {
                 HgeNative.nativeSelectPlan(id)
+                val r = HgeNative.nativeCaptureStartPlan(id)
                 runOnUiThread {
-                    currentPlanId = id; waitingPlans.add(id)   // まずは待機(点灯)。実状態はEV_STATEで即補正される
-                    HgeNative.nativeCaptureStartPlan(id)
+                    currentPlanId = id
+                    when (r) {
+                        HgeNative.ERR_OVERLAP_LIMIT -> Toast.makeText(this, "撮影期間が重なる計画は2件までです。時間をずらすか他の計画を停止してください", Toast.LENGTH_LONG).show()
+                        HgeNative.ERR_QUEUE_FULL   -> Toast.makeText(this, "撮影開始要求が上限(100件)に達しました", Toast.LENGTH_LONG).show()
+                        else -> waitingPlans.add(id)   // まずは待機(点灯)。実状態はEV_STATEで即補正される
+                    }
                     refreshPlanList(); updateReadOnly()
                 }
             }

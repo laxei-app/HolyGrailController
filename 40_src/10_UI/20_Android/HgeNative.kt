@@ -33,6 +33,8 @@ object HgeNative {
     const val ST_WAITING = 7        // 撮影要求済・撮影窓前・カメラOKで待機中。カメラアイコン点灯(点滅しない)
     const val ST_NOCAMERA = 8       // 武装/撮影中いずれでもカメラ未検出。✖カメラアイコン点灯
     const val ERR_NAME_DUP = 31     // 名称が既に使用されている(errCode の ERR_HGC_NAME_DUP。item5)
+    const val ERR_OVERLAP_LIMIT = 32 // 撮影期間が重なる自撮影計画が2件を超える(§7.4)
+    const val ERR_QUEUE_FULL = 33    // 撮影開始要求の受付上限(100件)超過(§7.4)
 
     external fun nativeSetLogDir(dir: String)
     external fun nativeInit(): Int

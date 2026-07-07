@@ -1,6 +1,7 @@
 ﻿#include "common.h"
 #include "holyGrailEntity.h"
 #include "captureRunner.h"
+#include "tool.h"			// tool::sleep(予約セッションの開始待ち)
 #include "astroSched.h"
 #include "osClock.h"
 #include "cameraController.h"
@@ -46,8 +47,14 @@ namespace
 	bool                  g_inited = false;
 
 	// --- 並行撮影セッション(Phase3。計画ごとに1セッション=1ランナー+1カメラ) ---
-	// 同時実行は当面 MAX_CONCURRENT まで。将来はこの定数とカメラ台数を増やせば拡張できる。
+	// 同時に「重なって」撮影できるのは MAX_CONCURRENT(=2)台まで(=カメラ台数)。
+	// ただし撮影開始要求(=予約)は MAX_PENDING(=100)件まで登録でき、撮影期間が重ならなければ
+	// いくつでも受け付ける(§7.4)。将来はこの定数とカメラ台数を増やせば拡張できる。
 	constexpr size_t MAX_CONCURRENT = 2;
+	constexpr size_t MAX_PENDING    = 100;	// 自撮影の撮影開始要求(予約含む)の受付上限
+	// 撮影期間 = [撮影窓 start の PRE_MARGIN_SEC 秒前, 撮影窓 end の 1フレーム(=interval秒)後]。
+	// PRE_MARGIN_SEC は撮影窓前の初期露出収束(captureRunner::kPreConvergeSec=30秒)に一致させる。
+	constexpr long long PRE_MARGIN_SEC = 30;
 	struct captureSession
 	{
 		std::string                   planId;
@@ -61,8 +68,30 @@ namespace
 		bool                          logCapturing = false;	// START/STOP検出
 		std::string                   lastCcm;				// CCMSW検出
 		void*                         startThread = nullptr;
+		std::atomic<bool>             cancel{ false };		// 停止要求(予約待ちの開始スレッドを中断する)
+		std::atomic<bool>             armed{ false };		// 撮影窓前の予約待ちを抜けカメラ確保フェーズへ入ったか
 	};
 	std::vector<std::unique_ptr<captureSession>> g_sessions;
+
+	// 撮影期間(±マージン)が同時に重なる自撮影セッション数の最大が MAX_CONCURRENT を超えるか。
+	// 既存の全セッション + 新規1件[ns,ne) を掃引して判定する(半開区間=端点接触は重ならない)。
+	bool selfCaptureOverlapExceeds(long long ns, long long ne)
+	{
+		struct Ev { long long t; int d; };
+		std::vector<Ev> ev;
+		auto add = [&](long long s, long long e) { if (e > s) { ev.push_back({ s, +1 }); ev.push_back({ e, -1 }); } };
+		for (auto& s : g_sessions)
+		{
+			long long ss = hgc::toUnixUtc(s->plan.start, g_offMin) - PRE_MARGIN_SEC;
+			long long se = hgc::toUnixUtc(s->plan.end, g_offMin) + (long long)std::llround(s->plan.interval);
+			add(ss, se);
+		}
+		add(ns, ne);
+		std::sort(ev.begin(), ev.end(), [](const Ev& a, const Ev& b) { return a.t != b.t ? a.t < b.t : a.d < b.d; });
+		int cur = 0, mx = 0;
+		for (auto& e : ev) { cur += e.d; if (cur > mx) { mx = cur; } }
+		return mx > (int)MAX_CONCURRENT;
+	}
 
 	// 既知カメラテーブル(エッジ役: スマホからの cameraInfo プッシュ由来のIP直結ヒント)と、それを使う
 	// IP直結+本人確認のオーケストレーションは 30_role/20_edge へ移設した(スマホ役 10_phone はスタブ)。
@@ -771,6 +800,28 @@ namespace
 	// 1セッションの撮影開始シーケンス(カメラ割当→配線→ループ起動)。ワーカースレッドで実行。
 	errCode startSessionSequence(captureSession* S)
 	{
+		// §7.4 予約(将来開始)の撮影要求は、撮影窓の PRE_MARGIN_SEC 秒前までカメラを確保しない。
+		//   これにより「重ならなければ何件でも予約」しても、同時にカメラを掴むのは重なり制限どおり最大2台に収まる。
+		//   待機中は WAITING(待機表示)。停止要求(cancel)で即座に中断する。
+		{
+			long long armAt = hgc::toUnixUtc(S->plan.start, g_offMin) - PRE_MARGIN_SEC;
+			if ((long long)std::time(nullptr) < armAt)
+			{
+				S->state = HGE_ST_WAITING; notifyStateP(S->planId, HGE_ST_WAITING); refreshAggregateState();
+				while (!S->cancel.load() && (long long)std::time(nullptr) < armAt) { tool::sleep(500); }
+				if (S->cancel.load()) { return ERR_HGC_OK; }	// 予約待ち中に停止された
+			}
+		}
+		// カメラ確保フェーズへ。ずらしスロットは「今まさに確保中(armed)」の他セッションを避けて割り当てる。
+		S->armed = true;
+		{
+			bool used[MAX_CONCURRENT] = { false };
+			for (auto& s : g_sessions) { if (s.get() != S && s->armed.load() && s->slot >= 0 && (size_t)s->slot < MAX_CONCURRENT) { used[s->slot] = true; } }
+			int slot = 0;
+			while (slot < (int)MAX_CONCURRENT && used[slot]) { ++slot; }
+			S->slot = (slot < (int)MAX_CONCURRENT) ? slot : 0;
+			S->runner->setStagger((double)S->slot / (double)MAX_CONCURRENT);	// Phase4: 周期内スロット位置でずらす
+		}
 		S->state = HGE_ST_SEARCHING; notifyStateP(S->planId, HGE_ST_SEARCHING); refreshAggregateState();
 		// 撮影開始操作をした時点(=実際の撮影開始時刻より前。例: 1時間後開始の計画でもタップ時)で
 		// カメラ検索が走ることを記録する。後続の「カメラ接続 …」(成功経路) または ERR「…見つかりません」と
@@ -1017,6 +1068,7 @@ namespace
 	void stopSessionAt(size_t i)
 	{
 		captureSession* s = g_sessions[i].get();
+		s->cancel = true;	// 予約待ち中の開始スレッドを中断させてから join する(長時間 sleep のデッドロック回避)
 		pokeUnregister(s->runner ? s->runner.get() : nullptr);	// 3b: ポーク対象から外す(runner破棄前)
 		s->state = HGE_ST_STOPPING; notifyStateP(s->planId, HGE_ST_STOPPING); refreshAggregateState();
 		if (s->startThread) { ossc::threadEnd(s->startThread); s->startThread = nullptr; }
@@ -1042,6 +1094,7 @@ namespace
 			bool running = g_sessions[i]->runner && g_sessions[i]->runner->isRunning();
 			if (!running && (st == HGE_ST_IDLE || st == HGE_ST_ERROR))
 			{
+				g_sessions[i]->cancel = true;	// 予約待ちスレッドが残っていても抜けられるように
 				pokeUnregister(g_sessions[i]->runner ? g_sessions[i]->runner.get() : nullptr);	// 3b
 				if (g_sessions[i]->startThread) { ossc::threadEnd(g_sessions[i]->startThread); g_sessions[i]->startThread = nullptr; }
 				if (g_sessions[i]->runner)      { g_sessions[i]->runner->stop(); }
@@ -1974,19 +2027,13 @@ int32_t hge_captureStartPlan(const char* planId_)
 	if (planId.empty()) { return ERR_HGC_INVALID_ARG; }
 	reapDeadSessions();		// 終了/エラーで残った同名セッションを掃除し、再開始できるようにする
 	if (sessionFor(planId)) { return ERR_HGC_INVALID_STATE; }	// まだ実行中なら二重開始しない
-	if (g_sessions.size() >= MAX_CONCURRENT) { notifyError(ERR_HGC_INVALID_STATE, "max concurrent reached"); return ERR_HGC_INVALID_STATE; }
+	// §7.4 受付上限: 自撮影の撮影開始要求(予約含む)は MAX_PENDING(=100)件まで。
+	//  ユーザー通知は UI 側(戻り値→日本語トースト)で行うため、ここは記録のみ(EV_ERRORは出さない)。
+	if (g_sessions.size() >= MAX_PENDING) { dataManager::logEvent("INFO", "capture request rejected: queue full (100)"); return ERR_HGC_QUEUE_FULL; }
 
 	auto sess = std::make_unique<captureSession>();
 	sess->planId = planId;
 	sess->state  = HGE_ST_SEARCHING;	// 起動シーケンス実行前から非IDLEにし、reapDeadSessions に消されないようにする
-	// Phase4: 同時撮影のずらし用に、現在使われていない最小スロットを割り当てる(1台目終了→再開でも衝突しない)。
-	{
-		bool used[MAX_CONCURRENT] = { false };
-		for (auto& s : g_sessions) { if (s->slot >= 0 && (size_t)s->slot < MAX_CONCURRENT) { used[s->slot] = true; } }
-		int slot = 0;
-		while (slot < (int)MAX_CONCURRENT && used[slot]) { ++slot; }
-		sess->slot = (slot < (int)MAX_CONCURRENT) ? slot : 0;
-	}
 	if (planId == g_editId)
 	{
 		sess->plan = g_plan; sess->planCcm = g_planCcm; sess->planMoon = g_planMoon;	// 編集中スナップショット
@@ -2000,8 +2047,14 @@ int32_t hge_captureStartPlan(const char* planId_)
 		if (!sess->planMoon) { sess->planMoon = dataManager::factoryMoon(); }
 		if (sess->plan.ccmList.empty()) { astro::buildSchedule(sess->plan, sess->planCcm, g_offMin); }
 	}
+	// §7.4 重なり制限: 撮影期間[start-30s, end+1フレーム]が同時に重なる自撮影は2件まで。
+	//  受付(=撮影開始要求)の時点でエラーにする。スマホ→エッジ投げ(hge_edgeStart)はこの経路を通らず対象外。
+	{
+		long long ns = hgc::toUnixUtc(sess->plan.start, g_offMin) - PRE_MARGIN_SEC;
+		long long ne = hgc::toUnixUtc(sess->plan.end, g_offMin) + (long long)std::llround(sess->plan.interval);
+		if (selfCaptureOverlapExceeds(ns, ne)) { dataManager::logEvent("INFO", "capture request rejected: overlap limit (2)"); return ERR_HGC_OVERLAP_LIMIT; }
+	}
 	sess->runner = std::make_unique<captureRunner>();
-	sess->runner->setStagger((double)sess->slot / (double)MAX_CONCURRENT);	// Phase4: 周期内スロット位置でずらす
 	captureSession* raw = sess.get();
 	g_sessions.push_back(std::move(sess));
 	pokeRegister(raw->runner.get());	// 3b: SSDP出現ポークの対象に登録
