@@ -58,4 +58,17 @@ namespace osfile
 		std::fclose(f);
 		return true;
 	}
+
+	bool readRange(const std::string& path, size_t offset, size_t maxLen, std::string& out)
+	{
+		out.clear();
+		FILE* f = std::fopen(path.c_str(), "rb");
+		if (f == nullptr) { return false; }
+		if (offset > 0) { std::fseek(f, static_cast<long>(offset), SEEK_SET); }
+		out.resize(maxLen);
+		size_t n = std::fread(&out[0], 1, maxLen, f);
+		out.resize(n);
+		std::fclose(f);
+		return true;
+	}
 }

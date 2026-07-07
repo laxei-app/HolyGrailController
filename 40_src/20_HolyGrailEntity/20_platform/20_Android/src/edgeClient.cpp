@@ -352,4 +352,43 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeProgress(JNIEnv* env, jobject, jstr
 	return env->NewStringUTF((m == etp::M_ACK) ? rd.c_str() : "");
 }
 
+// エッジのログファイル名一覧(JSON配列 ["hg_....log",...])を取得する。失敗時 "[]"。
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeEdgeLogList(JNIEnv* env, jobject, jstring host_, jint port)
+{
+	const char* host = env->GetStringUTFChars(host_, nullptr);
+	std::string hostS = host ? host : "";
+	env->ReleaseStringUTFChars(host_, host);
+
+	std::lock_guard<std::mutex> lk(g_connMtx);
+	std::string rd;
+	int m = firstReq(hostS, port, etp::C_LOG_LIST, etp::M_GET, "", rd);
+	return env->NewStringUTF((m == etp::M_ACK) ? rd.c_str() : "[]");
+}
+
+// エッジのログファイル name の offset バイト目から1チャンク(最大4KB)を取得する。返り値=生バイト。
+// 空配列=EOF(またはエラー)。応答末尾の番兵(0x01)は除去して返す。
+JNIEXPORT jbyteArray JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeEdgeLogRead(JNIEnv* env, jobject, jstring host_, jint port, jstring name_, jint offset)
+{
+	const char* host = env->GetStringUTFChars(host_, nullptr);
+	const char* name = name_ ? env->GetStringUTFChars(name_, nullptr) : nullptr;
+	std::string hostS = host ? host : "";
+	std::string nameS = name ? name : "";
+	env->ReleaseStringUTFChars(host_, host);
+	if (name) { env->ReleaseStringUTFChars(name_, name); }
+
+	std::string rd;
+	{
+		std::lock_guard<std::mutex> lk(g_connMtx);
+		std::string data = nameS + "\t" + std::to_string((long)offset);
+		int m = firstReq(hostS, port, etp::C_LOG_READ, etp::M_GET, data, rd);
+		if (m != etp::M_ACK) { rd.clear(); }
+	}
+	if (!rd.empty() && rd.back() == '\x01') { rd.pop_back(); }	// 番兵を除去
+	jbyteArray arr = env->NewByteArray(static_cast<jsize>(rd.size()));
+	if (arr && !rd.empty()) { env->SetByteArrayRegion(arr, 0, static_cast<jsize>(rd.size()), reinterpret_cast<const jbyte*>(rd.data())); }
+	return arr;
+}
+
 } // extern "C"

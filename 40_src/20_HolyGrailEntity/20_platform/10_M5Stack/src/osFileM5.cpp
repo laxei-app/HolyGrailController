@@ -115,6 +115,23 @@ namespace osfile
 		return true;
 	}
 
+	// offset バイト目から最大 maxLen バイトを読む(大きなログの分割転送。RAM節約)。
+	bool readRange(const std::string& path, size_t offset, size_t maxLen, std::string& out)
+	{
+		ensureInit();
+		out.clear();
+		if (g_fs == nullptr) { return false; }
+		File f = g_fs->open(path.c_str(), FILE_READ);
+		if (!f) { return false; }
+		if (offset > 0) { f.seek(offset); }
+		out.reserve(maxLen);
+		std::vector<uint8_t> buf(maxLen);
+		int n = f.read(buf.data(), maxLen);	// 一括読み(<=maxLen)。EOF近傍は要求より少ない
+		if (n > 0) { out.assign(reinterpret_cast<const char*>(buf.data()), static_cast<size_t>(n)); }
+		f.close();
+		return true;	// offsetがEOF以降でも out空で成功(呼び手は空=EOFと判断)
+	}
+
 	const char* backendName(void)
 	{
 		ensureInit();

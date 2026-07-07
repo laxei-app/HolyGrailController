@@ -3,8 +3,10 @@ package app.laxei.holygrail
 import android.Manifest
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
+import android.content.ContentValues
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.provider.MediaStore
 import android.os.Build
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -598,10 +600,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         tv.setPadding(dp(12), dp(6), dp(12), dp(6))
         box.addView(tv)
     }
-    private fun gearItem(box: LinearLayout, title: String, onClick: () -> Unit) {
+    private fun gearItem(box: LinearLayout, title: String, enabled: Boolean = true, onClick: () -> Unit) {
         val tv = TextView(this); tv.text = title; tv.textSize = 16f
         tv.setPadding(dp(28), dp(12), dp(12), dp(12))
-        tv.setOnClickListener { onClick() }
+        if (enabled) { tv.setTextColor(Color.BLACK); tv.setOnClickListener { onClick() } }
+        else { tv.setTextColor(Color.parseColor("#BBBBBB")) }   // グレー表示(撮影中/開始要求中は不可)
         box.addView(tv)
         box.addView(thinDivider())
     }
@@ -646,6 +649,108 @@ class MainActivity : AppCompatActivity(), HgeListener {
         gearBand(box, "エッジ端末")
         gearItem(box, "エッジ端末の登録") { manageEdges() }
         gearItem(box, "エッジ端末設定") { openEdgeSettings() }
+        gearBand(box, "ログ")
+        // 撮影中/開始要求中はグレー表示で不可(コピー処理が撮影と競合しないように)。
+        gearItem(box, "ログ取得", enabled = !isCaptureBusy()) { retrieveLogs() }
+    }
+
+    // 撮影実行中/開始要求(待機・未検出含む)中か。ログ取得の可否判定に使う。
+    private fun isCaptureBusy(): Boolean =
+        capturingPlans.isNotEmpty() || waitingPlans.isNotEmpty() || disconnectedPlans.isNotEmpty()
+
+    // ログ取得: スマホ自身のログ + オンラインの各エッジのログを、ユーザーが見える
+    // Download/HolyGrail/<日時>/ へコピーする。エッジのログはエッジ名のサブフォルダに入れる。
+    // コピー中はキャンセル不可のダイアログで他操作を抑止する(§ログ取得。仕様書外の追加機能)。
+    private fun retrieveLogs() {
+        if (isCaptureBusy()) { Toast.makeText(this, "撮影中/開始要求中はログ取得できません", Toast.LENGTH_SHORT).show(); return }
+        // API28以下は公開Downloadsへ直接書くため書込み権限が要る(29+はMediaStoreで不要)。
+        if (Build.VERSION.SDK_INT < 29 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), 4713)
+            Toast.makeText(this, "ストレージ権限を許可してからもう一度お試しください", Toast.LENGTH_LONG).show()
+            return
+        }
+        val dlg = AlertDialog.Builder(this).setTitle("ログ取得中").setMessage("準備中...").setCancelable(false).create()
+        dlg.setCanceledOnTouchOutside(false); dlg.show()
+        fun setMsg(m: String) = runOnUiThread { dlg.setMessage(m) }
+        Thread {
+            var copied = 0
+            val errors = StringBuilder()
+            val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(java.util.Date())
+            val baseRel = "HolyGrail/$stamp"
+            try {
+                // 1) スマホ自身のログ(getExternalFilesDir/log/hg_*.log)
+                setMsg("スマホのログをコピー中...")
+                val logDir = java.io.File(getExternalFilesDir(null), "log")
+                val phoneLogs = logDir.listFiles { f -> f.isFile && f.name.endsWith(".log") } ?: emptyArray()
+                for (f in phoneLogs) {
+                    try { saveToDownloads(baseRel, "", f.name, f.readBytes()); copied++ }
+                    catch (e: Exception) { errors.append("phone/${f.name} ") }
+                }
+                // 2) オンラインのエッジ端末のログ(エッジ名のサブフォルダへ)
+                setMsg("エッジ端末を検索中...")
+                val edgesJson = try { JSONArray(HgeNative.nativeEdgeSearch(2500)) } catch (e: Exception) { JSONArray() }
+                for (i in 0 until edgesJson.length()) {
+                    val o = edgesJson.optJSONObject(i) ?: continue
+                    val ip = o.optString("ip"); val port = o.optInt("port", 50506)
+                    if (ip.isEmpty()) continue
+                    val ename = o.optString("name").ifEmpty { "edge_$ip" }
+                    setMsg("エッジ「$ename」のログ一覧を取得中...")
+                    val listJson = try { JSONArray(HgeNative.nativeEdgeLogList(ip, port)) } catch (e: Exception) { JSONArray() }
+                    for (k in 0 until listJson.length()) {
+                        val logName = listJson.optString(k); if (logName.isEmpty()) continue
+                        setMsg("エッジ「$ename」: $logName")
+                        val bytes = fetchEdgeLog(ip, port, logName)
+                        if (bytes.isNotEmpty()) {
+                            try { saveToDownloads(baseRel, sanitizeFolder(ename), logName, bytes); copied++ }
+                            catch (e: Exception) { errors.append("$ename/$logName ") }
+                        }
+                    }
+                }
+            } catch (e: Exception) { errors.append("(${e.message}) ") }
+            val n = copied
+            runOnUiThread {
+                dlg.dismiss()
+                val where = "Download/$baseRel"
+                val msg = if (errors.isEmpty()) "ログ $n 件を\n$where\nに保存しました" else "ログ $n 件を保存(一部失敗: $errors)"
+                AlertDialog.Builder(this).setTitle("ログ取得").setMessage(msg).setPositiveButton("OK", null).show()
+            }
+        }.start()
+    }
+
+    // エッジのログ name を分割取得して全バイトを返す(4KBチャンクで offset を進める)。
+    private fun fetchEdgeLog(ip: String, port: Int, name: String): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        var offset = 0; var guard = 0
+        while (guard++ < 20000) {
+            val chunk = try { HgeNative.nativeEdgeLogRead(ip, port, name, offset) } catch (e: Exception) { ByteArray(0) }
+            if (chunk.isEmpty()) break
+            out.write(chunk); offset += chunk.size
+            if (chunk.size < 4096) break   // <CHUNK = EOF
+        }
+        return out.toByteArray()
+    }
+
+    private fun sanitizeFolder(s: String): String = s.replace(Regex("[^A-Za-z0-9._-]"), "_").ifEmpty { "edge" }
+
+    // Download/<baseRel>[/sub]/fileName へ bytes を書く。API29+ は MediaStore(権限不要)、以前は公開Downloads。
+    private fun saveToDownloads(baseRel: String, sub: String, fileName: String, bytes: ByteArray) {
+        val subPart = if (sub.isEmpty()) "" else "/$sub"
+        if (Build.VERSION.SDK_INT >= 29) {
+            val values = ContentValues().apply {
+                put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                put(MediaStore.Downloads.MIME_TYPE, "text/plain")
+                put(MediaStore.Downloads.RELATIVE_PATH, "Download/$baseRel$subPart")
+            }
+            val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw java.io.IOException("MediaStore insert failed")
+            contentResolver.openOutputStream(uri)?.use { it.write(bytes) } ?: throw java.io.IOException("openOutputStream failed")
+        } else {
+            @Suppress("DEPRECATION")
+            val dir = java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), "$baseRel$subPart")
+            dir.mkdirs()
+            java.io.File(dir, fileName).writeBytes(bytes)
+        }
     }
 
     // ---------- 8.2 エッジ端末設定(QR+PoP プロビジョニング) ----------

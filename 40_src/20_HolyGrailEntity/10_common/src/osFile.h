@@ -32,6 +32,11 @@ namespace osfile
 	// path の内容をすべて out に読み込む(検証・ログ転送用)。return: 成功
 	bool readAll(const std::string& path, std::string& out);
 
+	// path の offset バイト目から最大 maxLen バイトを out に読み込む(大きなログの分割転送用。RAM節約)。
+	// out には実際に読めたバイト数分だけ入る(< maxLen なら EOF)。return: 成功(offsetがEOF以降でも空で成功)。
+	// M5Stack 実装のみ(エッジのログ転送で使用)。他プラットフォームはスタブ(false)。
+	bool readRange(const std::string& path, size_t offset, size_t maxLen, std::string& out);
+
 	// 現在採用しているファイルシステム名("SD"/"LittleFS"/"none")を返す(検証用)。
 	const char* backendName(void);
 

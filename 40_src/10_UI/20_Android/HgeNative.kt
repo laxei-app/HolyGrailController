@@ -126,6 +126,8 @@ object HgeNative {
     external fun nativeEdgeResearch(host: String, port: Int, planId: String): Int // 継続: エッジへ即再探索を送る
     external fun nativeEdgeCameraInfo(host: String, port: Int, json: String): Int // 発見中オンラインカメラ[{serial,model,ip,online}]をエッジへ通知(IP直結ヒント)
     external fun nativeEdgeProgress(host: String, port: Int): String // progress の JSON
+    external fun nativeEdgeLogList(host: String, port: Int): String   // ログファイル名一覧の JSON 配列 ["hg_....log",...]
+    external fun nativeEdgeLogRead(host: String, port: Int, name: String, offset: Int): ByteArray // ログの1チャンク(最大4KB)。空=EOF/失敗
 
     fun stateName(s: Int): String = when (s) {
         ST_IDLE -> "IDLE"

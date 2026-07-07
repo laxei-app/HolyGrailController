@@ -7,12 +7,14 @@
 #include <sys/time.h>
 #include <ctime>
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 #include "etp.h"
 #include "holyGrailEntity.h"
 #include "hgcCommon.h"
 #include "errorCode.h"
+#include "osFile.h"		// ログ一覧/分割読み出し(C_LOG_LIST / C_LOG_READ)
 #include "debugOut.h"
 
 using json = nlohmann::json;
@@ -182,6 +184,28 @@ namespace
 		case etp::C_DIRECTION:
 			rd = "{\"azimuth\":0,\"elevation\":0}";
 			break;
+		case etp::C_LOG_LIST:	// ログファイル名一覧を JSON 配列で返す(スマホがログ取得メニューで使用)
+		{
+			json arr = json::array();
+			for (auto& n : osfile::logFileNames()) { arr.push_back(n); }
+			rd = arr.dump();
+			break;
+		}
+		case etp::C_LOG_READ:	// data="name\t<offset>"。offset から最大 CHUNK バイトを生バイトで返す(分割転送)
+		{
+			constexpr size_t CHUNK = 4096;
+			size_t tab = pk.data.find('\t');
+			std::string name = (tab != std::string::npos) ? pk.data.substr(0, tab) : pk.data;
+			size_t off = (tab != std::string::npos) ? (size_t)strtoul(pk.data.c_str() + tab + 1, nullptr, 10) : 0;
+			// パストラバーサル防止: 区切り文字を含む名前は拒否(logDir 直下のみ許可)。
+			if (name.empty() || name.find('/') != std::string::npos || name.find("..") != std::string::npos) { rm = etp::M_NAK; break; }
+			std::string chunk;
+			if (!osfile::readRange(osfile::logDir() + "/" + name, off, CHUNK, chunk)) { rm = etp::M_NAK; break; }
+			// ETPフレームは末尾の空白/NULを除去する(etp::decode)。ログは固定長128Bの空白詰めのため、
+			// チャンク末尾の実データ空白が失われないよう番兵 0x01 を付ける(スマホ側で1バイト除去)。
+			rd = chunk; rd.push_back('\x01');	// 空チャンク(=EOF)でも rd="\x01" となり ACK で返る
+			break;
+		}
 		default:
 			rm = etp::M_NAK;
 			break;

@@ -10,6 +10,9 @@
     <!-- 撮影場所の「現在地を取得」(§7.9)。粗い測位も許可 -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
+    <!-- ログ取得: API28以下で公開Downloadsへ書き込む(29+はMediaStoreで権限不要) -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+
     <!-- エッジ設定QR(PoP)スキャン §8.2.2 -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
