@@ -3144,12 +3144,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
             openMapPicker(la0, lo0) { la, lo -> onPlaceCoord(la, lo) }
         })
         btnRow.addView(linkText("✎ 貼り付け") { showPlacePasteDialog("%.6f, %.6f".format(placeLat, placeLng)) { la, lo -> onPlaceCoord(la, lo) } })
-        btnRow.addView(linkText("＋ 現在地") { fetchCurrentLocation { la, lo, alt -> onPlaceCoord(la, lo); if (alt != 0.0) placeAltEt?.setText(alt.toInt().toString()) } })
+        btnRow.addView(linkText("＋ 現在地") { fetchCurrentLocation { la, lo, alt -> if (alt != 0.0) placeAltEt?.setText(alt.toInt().toString()); onPlaceCoord(la, lo) } })
         box.addView(btnRow)
         val coordTv = TextView(this).apply { textSize = 18f; setTextColor(Color.BLACK); setPadding(0, dp(2), 0, dp(8)) }
         placeCoordTv = coordTv; box.addView(coordTv); refreshPlaceCoordText()
-        // 標高
-        box.addView(TextView(this).apply { text = "標高 [m]"; textSize = 13f; setTextColor(Color.GRAY) })
+        // 標高(緯度経度から自動取得。手動再取得も可)
+        val altHdr = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        altHdr.addView(TextView(this).apply { text = "標高 [m]"; textSize = 13f; setTextColor(Color.GRAY) })
+        altHdr.addView(linkText("　🗻 緯度経度から取得") {
+            if (placeLat == 0.0 && placeLng == 0.0) Toast.makeText(this, "先に緯度・経度を設定してください", Toast.LENGTH_SHORT).show()
+            else fetchElevationInto(placeLat, placeLng)
+        })
+        box.addView(altHdr)
         val altEt = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
             setText(o.optDouble("altitude", 0.0).toInt().toString())
@@ -3170,6 +3176,34 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun onPlaceCoord(lat: Double, lng: Double) {
         placeLat = lat; placeLng = lng; refreshPlaceCoordText()
         persistPlaceDetail(false, rebuildList = true)   // 座標変更を即保存し一覧の座標表示も更新
+        fetchElevationInto(lat, lng)                    // 標高を緯度経度から自動取得(§7.9。Open-Meteo 全世界・無料)
+    }
+
+    // Open-Meteo Elevation API(APIキー不要・全世界・無料。Copernicus DEM GLO-90)で標高を取得し
+    // 標高欄へ反映して保存する。ネット不通などは黙って無視(手入力で対応可能)。
+    private fun fetchElevationInto(lat: Double, lng: Double) {
+        val target = selPlace
+        Thread {
+            try {
+                val u = String.format(Locale.US, "https://api.open-meteo.com/v1/elevation?latitude=%.6f&longitude=%.6f", lat, lng)
+                val conn = (java.net.URL(u).openConnection() as java.net.HttpURLConnection).apply {
+                    connectTimeout = 6000; readTimeout = 6000; requestMethod = "GET"
+                }
+                val body = conn.inputStream.bufferedReader().use { it.readText() }
+                conn.disconnect()
+                val arr = JSONObject(body).optJSONArray("elevation")
+                val elev = arr?.optDouble(0, Double.NaN) ?: Double.NaN
+                if (!elev.isNaN()) runOnUiThread {
+                    if (selPlace == target) {   // 取得中に別の場所へ切替えていたら反映しない
+                        placeAltEt?.setText(elev.toInt().toString())
+                        persistPlaceDetail(false, rebuildList = true)
+                        Toast.makeText(this, "標高を取得: ${elev.toInt()}m", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: Exception) {
+                // オフライン等。標高は手入力できるので通知は控えめに省略。
+            }
+        }.start()
     }
     private fun refreshPlaceCoordText() {
         placeCoordTv?.text = if (placeLat == 0.0 && placeLng == 0.0) "未設定（ボタンで取得）"
