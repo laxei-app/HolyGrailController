@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 640.撮影場所リスト(§7.9)。上=登録済み場所の一覧(タップ選択)/下=選択場所の詳細(緯度経度/標高/メモ)。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="#1565C0"
+        android:gravity="center_vertical"
+        android:padding="8dp">
+        <ImageView android:id="@+id/places_back" android:layout_width="32dp" android:layout_height="32dp"
+            android:clickable="true" android:focusable="true" android:src="@drawable/ic_back" />
+        <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+            android:gravity="center" android:text="撮影場所リスト" android:textColor="#FFFFFF"
+            android:textSize="20sp" android:textStyle="bold" />
+        <ImageView android:id="@+id/places_menu" android:layout_width="32dp" android:layout_height="32dp"
+            android:clickable="true" android:focusable="true" android:src="@drawable/ic_menu" />
+    </LinearLayout>
+
+    <!-- 上: 一覧(高さは Kotlin で初期設定。分割バーで可変) -->
+    <ScrollView android:id="@+id/places_listScroll"
+        android:layout_width="match_parent" android:layout_height="120dp">
+        <LinearLayout android:id="@+id/places_container"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:padding="8dp" />
+    </ScrollView>
+
+    <!-- 分割バー(ドラッグで上下比率を変更) -->
+    <FrameLayout android:id="@+id/places_divider"
+        android:layout_width="match_parent" android:layout_height="26dp"
+        android:background="#ECEFF1" android:clickable="true" android:focusable="true">
+        <View android:layout_width="48dp" android:layout_height="5dp" android:layout_gravity="center"
+            android:background="@drawable/divider_handle" />
+    </FrameLayout>
+
+    <!-- 下: 選択場所の詳細(残り全部) -->
+    <ScrollView android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+        <LinearLayout android:id="@+id/places_detail"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:padding="12dp" />
+    </ScrollView>
+</LinearLayout>

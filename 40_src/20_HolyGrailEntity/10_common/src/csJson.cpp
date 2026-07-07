@@ -50,13 +50,14 @@ namespace csjson
 
 		json placeToJson(const hgc::place& p)
 		{
-			return json{ {"name", p.name}, {"latitude", p.latitude}, {"longitude", p.longitude},
+			return json{ {"name", p.name}, {"memo", p.memo}, {"latitude", p.latitude}, {"longitude", p.longitude},
 			             {"altitude", p.altitude}, {"autoInsert", p.autoInsert} };
 		}
 		hgc::place placeFromJson(const json& j)
 		{
 			hgc::place p;
 			p.name       = j.value("name", std::string());
+			p.memo       = j.value("memo", std::string());
 			p.latitude   = j.value("latitude", 0.0);
 			p.longitude  = j.value("longitude", 0.0);
 			p.altitude   = j.value("altitude", 0.0);
@@ -428,6 +429,22 @@ namespace csjson
 		json j = json::parse(s, nullptr, false);
 		if (j.is_discarded() || !j.is_array()) { return false; }
 		for (const auto& l : j) { if (l.is_object()) { out.push_back(lensFromJson(l)); } }
+		return true;
+	}
+
+	std::string placesToJson(const std::vector<hgc::place>& list)
+	{
+		json arr = json::array();
+		for (const auto& p : list) { arr.push_back(placeToJson(p)); }
+		return arr.dump();
+	}
+
+	bool placesFromJson(const std::string& s, std::vector<hgc::place>& out)
+	{
+		out.clear();
+		json j = json::parse(s, nullptr, false);
+		if (j.is_discarded() || !j.is_array()) { return false; }
+		for (const auto& p : j) { if (p.is_object()) { out.push_back(placeFromJson(p)); } }
 		return true;
 	}
 

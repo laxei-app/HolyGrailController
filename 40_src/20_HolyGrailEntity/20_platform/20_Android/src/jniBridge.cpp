@@ -477,6 +477,44 @@ Java_app_laxei_holygrail_HgeNative_nativeSetOwnedLensDetail(JNIEnv* env, jobject
 	return r;
 }
 
+// --- 撮影場所(§7.9) ---
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeGetPlaces(JNIEnv* env, jobject /*thiz*/)
+{ return callBufGetter(env, hge_getPlacesJson); }
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeAddPlace(JNIEnv* env, jobject /*thiz*/, jstring name)
+{ return callNameCmd(env, name, hge_addPlace); }
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeRemovePlace(JNIEnv* env, jobject /*thiz*/, jstring name)
+{ return callNameCmd(env, name, hge_removePlace); }
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetPlaceAutoInsert(JNIEnv* env, jobject /*thiz*/, jstring name, jint autoInsert)
+{
+	if (name == nullptr) { return -1; }
+	const char* n = env->GetStringUTFChars(name, nullptr);
+	jint r = hge_setPlaceAutoInsert(n ? n : "", autoInsert);
+	env->ReleaseStringUTFChars(name, n);
+	return r;
+}
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetPlaceDetail(JNIEnv* env, jobject /*thiz*/, jstring orig, jstring json)
+{
+	const char* o = env->GetStringUTFChars(orig, nullptr);
+	const char* j = env->GetStringUTFChars(json, nullptr);
+	jint r = hge_setPlaceDetail(o ? o : "", j ? j : "");
+	env->ReleaseStringUTFChars(orig, o);
+	env->ReleaseStringUTFChars(json, j);
+	return r;
+}
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetPlanPlace(JNIEnv* env, jobject /*thiz*/, jstring name)
+{ return callNameCmd(env, name, hge_setPlanPlace); }
+
 JNIEXPORT jstring JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeSearchDevicesList(JNIEnv* env, jobject /*thiz*/)
 { return callBufGetter(env, hge_searchDevicesListJson); }

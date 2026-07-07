@@ -158,12 +158,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val missing = perms.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         if (missing.isEmpty()) action() else { pendingBleAction = action; ActivityCompat.requestPermissions(this, missing.toTypedArray(), BLE_PERM_REQ) }
     }
+    // 撮影場所「現在地を取得」の位置情報権限(§7.9)
+    private var pendingLocAction: (() -> Unit)? = null
+    private val LOC_PERM_REQ = 4712
+
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == BLE_PERM_REQ) {
             if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) pendingBleAction?.invoke()
             else Toast.makeText(this, "BLE権限が必要です", Toast.LENGTH_LONG).show()
             pendingBleAction = null
+        } else if (requestCode == LOC_PERM_REQ) {
+            if (grantResults.isNotEmpty() && grantResults.any { it == PackageManager.PERMISSION_GRANTED }) pendingLocAction?.invoke()
+            else Toast.makeText(this, "位置情報の権限が必要です", Toast.LENGTH_LONG).show()
+            pendingLocAction = null
         }
     }
 
@@ -405,6 +413,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<ImageView>(R.id.lensadd_back).setOnClickListener { leaveLensAdd(false) }
         findViewById<ImageView>(R.id.lensadd_menu).setOnClickListener { leaveLensAdd(true) }
         findViewById<Button>(R.id.lensadd_cancel).setOnClickListener { checkedLensAdd.clear(); buildLensAdd() }
+        // 640 撮影場所リスト(§7.9)。戻る/メニューで離脱時に自動保存。
+        findViewById<ImageView>(R.id.places_back).setOnClickListener { leavePlacesList() }
+        findViewById<ImageView>(R.id.places_menu).setOnClickListener { leavePlacesList() }
+        setupDivider(R.id.places_divider, R.id.places_listScroll)
         // 撮影計画(330)のカメラ/レンズをタップで所持から選択する。
         cameraText.setOnClickListener { choosePlanCamera() }
         lensText.setOnClickListener { choosePlanLens() }
@@ -611,6 +623,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.removeAllViews()
         gearBand(box, "撮影計画")
         gearItem(box, "撮影計画") { flipper.displayedChild = 0 }
+        gearItem(box, "撮影場所") { openPlacesList() }
         gearBand(box, "撮影制御方法 初期値")
         gearItem(box, "月の影響への対処") { openPresetScreen("moon") }
         gearItem(box, "夜間撮影") { openPresetScreen("night") }
@@ -2915,13 +2928,40 @@ class MainActivity : AppCompatActivity(), HgeListener {
         } catch (_: Exception) {}
     }
 
-    // --- 撮影場所の入力(緯度経度)。テキスト貼り付け(全ユーザー) / 地図から選択(osmdroid) ---
+    // --- 撮影場所の入力(緯度経度)。登録済みから選択 / テキスト貼り付け / 地図から選択(osmdroid) ---
     private fun showPlaceEditChooser() {
+        val cur = try { JSONObject(latestSchedule).optString("latlng") } catch (_: Exception) { "" }
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle("撮影場所を設定")
-            .setItems(arrayOf("テキストで貼り付け", "地図から選択")) { _, which ->
-                when (which) { 0 -> showPlacePasteDialog(); 1 -> openMapPicker() }
+            .setItems(arrayOf("登録済みの場所から選択", "テキストで貼り付け", "地図から選択")) { _, which ->
+                when (which) {
+                    0 -> choosePlanFromRegistered()
+                    1 -> showPlacePasteDialog(cur) { lat, lng -> applyPlace(lat, lng, "") }
+                    2 -> { val s = parseLatLng(cur); openMapPicker(s?.first ?: 35.681, s?.second ?: 139.767) { lat, lng -> applyPlace(lat, lng, "") } }
+                }
             }
+            .show()
+    }
+
+    // 登録済み撮影場所(§7.9)から選んで撮影計画へ反映する。
+    private fun choosePlanFromRegistered() {
+        val arr = placeArray(HgeNative.nativeGetPlaces())
+        val names = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("name") }.filter { it.isNotEmpty() }
+        if (names.isEmpty()) { Toast.makeText(this, "登録された場所がありません。メニューの「撮影場所」で追加してください", Toast.LENGTH_LONG).show(); return }
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("登録済みの場所")
+            .setItems(names.toTypedArray()) { _, which ->
+                val nm = names[which]
+                Thread {
+                    val r = HgeNative.nativeSetPlanPlace(nm)
+                    val sched = HgeNative.nativeScheduleJson()
+                    runOnUiThread {
+                        if (r == 0) { latestSchedule = sched; updatePlanDisplay(sched); Toast.makeText(this, "撮影場所: $nm", Toast.LENGTH_SHORT).show() }
+                        else Toast.makeText(this, "撮影場所の設定に失敗 (code=$r)", Toast.LENGTH_LONG).show()
+                    }
+                }.start()
+            }
+            .setNegativeButton("キャンセル", null)
             .show()
     }
 
@@ -2945,11 +2985,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         return Pair(lat, lng)
     }
 
-    private fun showPlacePasteDialog() {
-        val et = EditText(this).apply {
-            hint = "例: 35.6810, 139.7670"
-            try { setText(JSONObject(latestSchedule).optString("latlng")) } catch (_: Exception) {}
-        }
+    private fun showPlacePasteDialog(initial: String, onParsed: (Double, Double) -> Unit) {
+        val et = EditText(this).apply { hint = "例: 35.6810, 139.7670"; setText(initial) }
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setPadding(dp(24), dp(8), dp(24), dp(4))
             addView(TextView(this@MainActivity).apply {
@@ -2963,7 +3000,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .setPositiveButton("設定") { _, _ ->
                 val p = parseLatLng(et.text.toString())
                 if (p == null) Toast.makeText(this, "緯度経度を認識できません（例: 35.681, 139.767）", Toast.LENGTH_LONG).show()
-                else applyPlace(p.first, p.second, "")
+                else onParsed(p.first, p.second)
             }
             .setNegativeButton("キャンセル", null)
             .show()
@@ -2983,19 +3020,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // 地図から選択(osmdroid=OpenStreetMap。タイルは無料・APIキー不要)。タップで地点を選び「設定」で反映。
-    private fun openMapPicker() {
+    private fun openMapPicker(startLat: Double, startLng: Double, onPick: (Double, Double) -> Unit) {
         org.osmdroid.config.Configuration.getInstance().apply {
             userAgentValue = packageName                 // OSMタイルサーバは UserAgent 必須
             osmdroidBasePath = java.io.File(cacheDir, "osmdroid")
             osmdroidTileCache = java.io.File(cacheDir, "osmdroid/tiles")
         }
-        var lat = 35.681; var lng = 139.767
-        try { parseLatLng(JSONObject(latestSchedule).optString("latlng"))?.let { lat = it.first; lng = it.second } } catch (_: Exception) {}
         val map = org.osmdroid.views.MapView(this).apply {
             setTileSource(org.osmdroid.tileprovider.tilesource.TileSourceFactory.MAPNIK)
             setMultiTouchControls(true); minZoomLevel = 3.0
         }
-        val start = org.osmdroid.util.GeoPoint(lat, lng)
+        val start = org.osmdroid.util.GeoPoint(startLat, startLng)
         map.controller.setZoom(12.0); map.controller.setCenter(start)
         val marker = org.osmdroid.views.overlay.Marker(map).apply { position = start; setAnchor(0.5f, 1.0f) }
         map.overlays.add(marker)
@@ -3013,12 +3048,180 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val dlg = androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle("地図から選択")
             .setView(box)
-            .setPositiveButton("この地点に設定") { _, _ -> applyPlace(picked.latitude, picked.longitude, "") }
+            .setPositiveButton("この地点に設定") { _, _ -> onPick(picked.latitude, picked.longitude) }
             .setNegativeButton("キャンセル", null)
             .create()
         dlg.setOnDismissListener { map.onPause(); map.onDetach() }
         dlg.show()
         map.onResume()
+    }
+
+    // ============================================================
+    //  640 撮影場所リスト(§7.9)。登録した場所を撮影計画で選択する。
+    // ============================================================
+    private var selPlace: String? = null
+    private var placeLat = 0.0
+    private var placeLng = 0.0
+    private var placeCoordTv: TextView? = null
+    private var placeAltEt: EditText? = null
+    private var placeMemoEt: EditText? = null
+    private var placeAutoCb: CheckBox? = null
+
+    private fun placeArray(json: String): JSONArray = try { JSONArray(json) } catch (e: Exception) { JSONArray() }
+    private fun placeNames(): List<String> { val a = placeArray(HgeNative.nativeGetPlaces()); return (0 until a.length()).mapNotNull { a.optJSONObject(it)?.optString("name") } }
+
+    private fun openPlacesList() {
+        buildPlacesList(); buildPlaceDetail()
+        setInitialSplit(R.id.places_listScroll, R.id.places_container)
+        flipper.displayedChild = 12
+    }
+    private fun leavePlacesList() { persistPlaceDetail(false); flipper.displayedChild = 5; buildGearMenu() }
+
+    private fun buildPlacesList() {
+        val box = findViewById<LinearLayout>(R.id.places_container)
+        box.removeAllViews()
+        val arr = placeArray(HgeNative.nativeGetPlaces())
+        val names = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("name") }
+        if (selPlace == null || selPlace !in names) selPlace = names.firstOrNull()
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val name = o.optString("name")
+            val sub = "%.4f, %.4f  標高 %dm".format(o.optDouble("latitude", 0.0), o.optDouble("longitude", 0.0), o.optDouble("altitude", 0.0).toInt()) +
+                      (if (o.optString("memo").isNotEmpty()) "  ${o.optString("memo")}" else "")
+            box.addView(listRow(name, sub, name == selPlace,
+                onSelect = { selectPlace(name) },
+                menuItems = listOf("削除" to {
+                    Thread { HgeNative.nativeRemovePlace(name)
+                        runOnUiThread { if (selPlace == name) selPlace = null; buildPlacesList(); buildPlaceDetail() } }.start()
+                }),
+                onRename = { newName -> commitPlaceRename(name, newName) }))
+            box.addView(thinDivider())
+        }
+        box.addView(linkText("＋ 新しい場所の追加") { addPlace() })
+    }
+
+    private fun addPlace() {
+        Thread {
+            HgeNative.nativeAddPlace("")
+            val names = placeNames()
+            runOnUiThread { selPlace = names.lastOrNull(); buildPlacesList(); buildPlaceDetail() }
+        }.start()
+    }
+
+    private fun selectPlace(name: String) {
+        if (name == selPlace) return
+        persistPlaceDetail(false)
+        selPlace = name; buildPlacesList(); buildPlaceDetail()
+    }
+
+    private fun commitPlaceRename(orig: String, newName: String) {
+        val nm = newName.trim()
+        if (nm.isEmpty() || nm == orig) return
+        if (placeNames().any { it == nm }) { showNameInUse(nm); buildPlacesList(); return }
+        selPlace = nm
+        persistPlaceDetail(rebuild = true, origName = orig, newName = nm)
+    }
+
+    private fun buildPlaceDetail() {
+        val box = findViewById<LinearLayout>(R.id.places_detail)
+        box.removeAllViews(); placeCoordTv = null; placeAltEt = null; placeMemoEt = null; placeAutoCb = null
+        val sel = selPlace
+        if (sel == null) {
+            box.addView(TextView(this).apply { text = "「＋ 新しい場所の追加」で場所を登録してください"; setPadding(dp(4), dp(16), dp(4), dp(16)) })
+            return
+        }
+        val arr = placeArray(HgeNative.nativeGetPlaces())
+        var o: JSONObject? = null
+        for (i in 0 until arr.length()) { val x = arr.optJSONObject(i) ?: continue; if (x.optString("name") == sel) { o = x; break } }
+        if (o == null) { box.addView(TextView(this).apply { text = "(データなし)" }); return }
+        placeLat = o.optDouble("latitude", 0.0); placeLng = o.optDouble("longitude", 0.0)
+        // 緯度・経度(DMS表示) + 取得手段(地図/貼り付け/現在地)
+        box.addView(TextView(this).apply { text = "緯度・経度"; textSize = 13f; setTextColor(Color.GRAY); setPadding(0, dp(4), 0, dp(2)) })
+        val btnRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        btnRow.addView(linkText("📍 地図から取得") {
+            val la0 = if (placeLat != 0.0 || placeLng != 0.0) placeLat else 35.681
+            val lo0 = if (placeLat != 0.0 || placeLng != 0.0) placeLng else 139.767
+            openMapPicker(la0, lo0) { la, lo -> onPlaceCoord(la, lo) }
+        })
+        btnRow.addView(linkText("✎ 貼り付け") { showPlacePasteDialog("%.6f, %.6f".format(placeLat, placeLng)) { la, lo -> onPlaceCoord(la, lo) } })
+        btnRow.addView(linkText("＋ 現在地") { fetchCurrentLocation { la, lo, alt -> onPlaceCoord(la, lo); if (alt != 0.0) placeAltEt?.setText(alt.toInt().toString()) } })
+        box.addView(btnRow)
+        val coordTv = TextView(this).apply { textSize = 18f; setTextColor(Color.BLACK); setPadding(0, dp(2), 0, dp(8)) }
+        placeCoordTv = coordTv; box.addView(coordTv); refreshPlaceCoordText()
+        // 標高
+        box.addView(TextView(this).apply { text = "標高 [m]"; textSize = 13f; setTextColor(Color.GRAY) })
+        val altEt = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL or InputType.TYPE_NUMBER_FLAG_SIGNED
+            setText(o.optDouble("altitude", 0.0).toInt().toString())
+        }
+        placeAltEt = altEt; box.addView(altEt)
+        // メモ(説明)
+        box.addView(TextView(this).apply { text = "メモ"; textSize = 13f; setTextColor(Color.GRAY); setPadding(0, dp(8), 0, dp(2)) })
+        val memoEt = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            minLines = 2; gravity = Gravity.TOP or Gravity.START; setText(o.optString("memo"))
+        }
+        placeMemoEt = memoEt; box.addView(memoEt)
+        // 自動挿入
+        val cb = CheckBox(this).apply { text = "撮影計画に自動的に挿入する"; isChecked = o.optBoolean("autoInsert", false) }
+        placeAutoCb = cb; box.addView(cb)
+    }
+
+    private fun onPlaceCoord(lat: Double, lng: Double) {
+        placeLat = lat; placeLng = lng; refreshPlaceCoordText()
+        persistPlaceDetail(false, rebuildList = true)   // 座標変更を即保存し一覧の座標表示も更新
+    }
+    private fun refreshPlaceCoordText() {
+        placeCoordTv?.text = if (placeLat == 0.0 && placeLng == 0.0) "未設定（ボタンで取得）"
+            else "${toDms(placeLat, 'N', 'S')}  ${toDms(placeLng, 'E', 'W')}\n%.5f, %.5f".format(placeLat, placeLng)
+    }
+    private fun toDms(v: Double, pos: Char, neg: Char): String {
+        val hemi = if (v >= 0) pos else neg
+        val a = Math.abs(v); val d = a.toInt(); val mf = (a - d) * 60.0; val m = mf.toInt(); val s = (mf - m) * 60.0
+        return "%d°%02d'%04.1f\"".format(d, m, s) + hemi
+    }
+
+    // 詳細の 標高/メモ/自動挿入/座標 を JSON にして Entity へ保存する。origName=改名前キー。
+    private fun persistPlaceDetail(rebuild: Boolean, origName: String? = null, newName: String? = null, rebuildList: Boolean = false) {
+        val key = origName ?: selPlace ?: return
+        val name = newName ?: selPlace ?: key
+        val alt = placeAltEt?.text?.toString()?.trim()?.toDoubleOrNull() ?: 0.0
+        val memo = placeMemoEt?.text?.toString() ?: ""
+        val auto = placeAutoCb?.isChecked ?: false
+        val json = JSONObject().apply {
+            put("name", name); put("memo", memo)
+            put("latitude", placeLat); put("longitude", placeLng)
+            put("altitude", alt); put("autoInsert", auto)
+        }.toString()
+        Thread {
+            HgeNative.nativeSetPlaceDetail(key, json)
+            if (rebuild) runOnUiThread { buildPlacesList(); buildPlaceDetail() }
+            else if (rebuildList) runOnUiThread { buildPlacesList() }   // 座標だけ更新(詳細の入力欄は保持)
+        }.start()
+    }
+
+    // 現在地(GPS/ネットワーク)を取得して onGot(lat,lng,alt) を呼ぶ(§7.9)。権限が無ければ要求。
+    private fun fetchCurrentLocation(onGot: (Double, Double, Double) -> Unit) {
+        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                      ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            pendingLocAction = { fetchCurrentLocation(onGot) }
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), LOC_PERM_REQ)
+            return
+        }
+        try {
+            val lm = getSystemService(LOCATION_SERVICE) as android.location.LocationManager
+            val loc = lm.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER)
+                ?: lm.getLastKnownLocation(android.location.LocationManager.NETWORK_PROVIDER)
+                ?: lm.getLastKnownLocation(android.location.LocationManager.PASSIVE_PROVIDER)
+            if (loc == null) Toast.makeText(this, "現在地を取得できませんでした（位置情報をONにして屋外でお試しください）", Toast.LENGTH_LONG).show()
+            else {
+                onGot(loc.latitude, loc.longitude, if (loc.hasAltitude()) loc.altitude else 0.0)
+                Toast.makeText(this, "現在地を取得しました", Toast.LENGTH_SHORT).show()
+            }
+        } catch (e: SecurityException) {
+            Toast.makeText(this, "位置情報の権限がありません", Toast.LENGTH_LONG).show()
+        }
     }
 
     // 型→色テーブルキー。

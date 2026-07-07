@@ -45,6 +45,7 @@ namespace hgc
 	struct place
 	{
 		std::string name;			// 場所の名称
+		std::string memo;			// メモ(説明。撮影計画リストでは使わない補足)
 		double latitude   = 0.0;	// 緯度[°]
 		double longitude  = 0.0;	// 経度[°]
 		double altitude   = 0.0;	// 標高[m]

@@ -381,6 +381,46 @@ namespace
 		return osfile::writeAll(p, s.data(), s.size());
 	}
 
+	// --- 撮影場所(/asset/places.json。§5.1/§7.9) ---
+	std::vector<hgc::place> g_places;
+	bool                    g_placesLoaded = false;
+
+	std::string placesPath(void)
+	{
+		std::string d = osfile::dir("asset");
+		return d.empty() ? std::string() : (d + "/places.json");
+	}
+	void ensurePlaces(void)
+	{
+		if (g_placesLoaded) { return; }
+		g_placesLoaded = true;
+		std::string body;
+		std::string p = placesPath();
+		if (!p.empty() && osfile::readAll(p, body)) { csjson::placesFromJson(body, g_places); }
+	}
+	bool savePlaces(void)
+	{
+		std::string p = placesPath();
+		if (p.empty()) { return false; }
+		std::string s = csjson::placesToJson(g_places);
+		return osfile::writeAll(p, s.data(), s.size());
+	}
+	// 重複しない場所名を作る(「新しい場所」「新しい場所2」…)。
+	std::string uniquePlaceName(const std::string& base)
+	{
+		bool taken = false;
+		for (const auto& p : g_places) { if (p.name == base) { taken = true; break; } }
+		if (!taken) { return base; }
+		for (int i = 2; i < 1000; ++i)
+		{
+			std::string cand = base + std::to_string(i);
+			bool used = false;
+			for (const auto& p : g_places) { if (p.name == cand) { used = true; break; } }
+			if (!used) { return cand; }
+		}
+		return base;
+	}
+
 	const hgc::camera* findMasterCamera(const std::string& name)
 	{
 		ensureMaster();
@@ -557,6 +597,72 @@ bool dataManager::setOwnedCameraAutoInsert(const std::string& name, bool autoIns
 	{
 		if (oc.cam.name == name) { oc.autoInsert = autoInsert; return saveOwnedCameras(); }
 	}
+	return false;
+}
+
+// ========================================================================
+//  撮影場所(§5.1/§7.9)。登録した場所を撮影計画で選択する。
+// ========================================================================
+std::string dataManager::placesJson(void)
+{
+	ensurePlaces();
+	return csjson::placesToJson(g_places);
+}
+
+bool dataManager::addPlace(const std::string& name)
+{
+	ensurePlaces();
+	hgc::place p;
+	p.name = uniquePlaceName(name.empty() ? std::string("新しい場所") : name);
+	g_places.push_back(std::move(p));
+	return savePlaces();
+}
+
+bool dataManager::removePlace(const std::string& name)
+{
+	ensurePlaces();
+	auto it = std::remove_if(g_places.begin(), g_places.end(),
+	                         [&](const hgc::place& p) { return p.name == name; });
+	if (it == g_places.end()) { return false; }
+	g_places.erase(it, g_places.end());
+	return savePlaces();
+}
+
+bool dataManager::setPlaceAutoInsert(const std::string& name, bool autoInsert)
+{
+	ensurePlaces();
+	for (auto& p : g_places)
+	{
+		if (p.name == name) { p.autoInsert = autoInsert; return savePlaces(); }
+	}
+	return false;
+}
+
+// 場所の詳細(name/memo/latitude/longitude/altitude/autoInsert)を JSON で更新/新規作成する。
+// origName 一致を置換、無ければ新規追加。改名時は json の "name" を新名にする。
+bool dataManager::setPlaceDetailJson(const std::string& origName, const std::string& jsonStr)
+{
+	ensurePlaces();
+	std::vector<hgc::place> parsed;	// 1件の場所オブジェクトを配列にくるんで既存パーサで復元
+	if (!csjson::placesFromJson(std::string("[") + jsonStr + "]", parsed) || parsed.empty()) { return false; }
+	hgc::place* dst = nullptr;
+	for (auto& p : g_places) { if (p.name == origName) { dst = &p; break; } }
+	if (!dst) { g_places.emplace_back(); dst = &g_places.back(); }
+	*dst = parsed.front();
+	return savePlaces();
+}
+
+bool dataManager::findPlace(const std::string& name, hgc::place& out)
+{
+	ensurePlaces();
+	for (const auto& p : g_places) { if (p.name == name) { out = p; return true; } }
+	return false;
+}
+
+bool dataManager::autoInsertPlace(hgc::place& out)
+{
+	ensurePlaces();
+	for (const auto& p : g_places) { if (p.autoInsert) { out = p; return true; } }
 	return false;
 }
 

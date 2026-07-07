@@ -207,6 +207,16 @@ int32_t hge_setPlanLocation(double latitude, double longitude, const char* name)
 int32_t hge_setOwnedCameraDetail(const char* origName, const char* json);
 int32_t hge_setOwnedLensDetail(const char* origName, const char* json);
 
+// --- 撮影場所(§7.9)。登録した場所を撮影計画で選択する。 ---
+int32_t hge_getPlacesJson(char* buf, int32_t* inoutLen);   // 登録済み場所の配列 JSON
+int32_t hge_addPlace(const char* name);                    // 空可(自動採番)
+int32_t hge_removePlace(const char* name);
+int32_t hge_setPlaceAutoInsert(const char* name, int32_t autoInsert);
+// 場所詳細(name/memo/latitude/longitude/altitude/autoInsert)を JSON で更新/新規作成。origName 一致を置換。
+int32_t hge_setPlaceDetail(const char* origName, const char* json);
+// 登録済みの撮影場所を名称で撮影計画へ反映し、スケジュールを再生成して通知する。
+int32_t hge_setPlanPlace(const char* name);
+
 // システム共通の色(全体設定)。型ごとの文字色/背景色を JSON で取得/設定する。
 //  {"night":{"text":int,"bg":int},...}  型: night/sunrise/sunset/day/moon/preNight/postNight
 int32_t hge_getColorsJson(char* buf, int32_t* inoutLen);

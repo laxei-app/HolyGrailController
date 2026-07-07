@@ -30,6 +30,10 @@ namespace csjson
 	std::string ownedLensesToJson(const std::vector<hgc::lens>& list);
 	bool        ownedLensesFromJson(const std::string& s, std::vector<hgc::lens>& out);
 
+	// --- 撮影場所(§5.1/§7.9)。内部形式(/asset/places.json) ---
+	std::string placesToJson(const std::vector<hgc::place>& list);
+	bool        placesFromJson(const std::string& s, std::vector<hgc::place>& out);
+
 	// --- 機材マスタ(§5.8/5.9)。30_refer 由来の読取専用形式 → 内部 camera/lens へマップ ---
 	bool        camerasFromMasterJson(const std::string& s, std::vector<hgc::camera>& out);
 	bool        lensesFromMasterJson(const std::string& s, std::vector<hgc::lens>& out);

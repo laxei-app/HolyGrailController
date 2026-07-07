@@ -89,7 +89,14 @@ object HgeNative {
     external fun nativeSetOwnedCameraAutoInsert(name: String, autoInsert: Int): Int
     external fun nativeSetPlanCamera(name: String): Int   // 所持→撮影計画へ反映し再生成
     external fun nativeSetPlanLens(name: String): Int
-    external fun nativeSetPlanLocation(lat: Double, lng: Double, name: String): Int  // 撮影場所を設定しスケジュール再生成
+    external fun nativeSetPlanLocation(lat: Double, lng: Double, name: String): Int  // 撮影場所(緯度経度)を直接設定し再生成
+    // --- 撮影場所リスト(§7.9)。登録した場所を撮影計画で選択する ---
+    external fun nativeGetPlaces(): String            // [{"name","memo","latitude","longitude","altitude","autoInsert"},...]
+    external fun nativeAddPlace(name: String): Int    // 空可(自動採番)
+    external fun nativeRemovePlace(name: String): Int
+    external fun nativeSetPlaceAutoInsert(name: String, autoInsert: Int): Int
+    external fun nativeSetPlaceDetail(origName: String, json: String): Int  // name/memo/latitude/longitude/altitude/autoInsert
+    external fun nativeSetPlanPlace(name: String): Int  // 登録済みの場所を撮影計画へ反映し再生成
     external fun nativeSetOwnedCameraDetail(origName: String, json: String): Int  // 620 詳細編集
     external fun nativeSetOwnedLensDetail(origName: String, json: String): Int    // 630 詳細編集
     external fun nativeSearchDevicesList(): String         // 接続カメラ検索: [{"model","friendly","serial"},...]

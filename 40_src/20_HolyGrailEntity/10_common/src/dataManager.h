@@ -66,6 +66,19 @@ public:
 	// 所持カメラの撮影計画への自動挿入フラグを設定して保存する。
 	static bool setOwnedCameraAutoInsert(const std::string& name, bool autoInsert);
 
+	// --- 撮影場所(ユーザー資産。/asset/places.json。§5.1/§7.9) ---
+	static std::string placesJson(void);                 // 登録済み場所の配列 JSON
+	static bool addPlace(const std::string& name);       // 空名可(自動採番)。追加して保存
+	static bool removePlace(const std::string& name);
+	static bool setPlaceAutoInsert(const std::string& name, bool autoInsert);
+	// 場所詳細(name/memo/latitude/longitude/altitude/autoInsert)を JSON で更新/新規作成。
+	// origName 一致を置換、無ければ新規追加。改名は json の "name" を新名にする。
+	static bool setPlaceDetailJson(const std::string& origName, const std::string& json);
+	// 名称で場所を引く。見つからなければ false。
+	static bool findPlace(const std::string& name, hgc::place& out);
+	// 自動挿入フラグが立っている最初の場所を返す(新規撮影計画の初期値)。true=あり。
+	static bool autoInsertPlace(hgc::place& out);
+
 	// 所持カメラの詳細(全項目)を JSON で更新/新規作成して保存する。origName 一致を置換、
 	// 無ければ新規追加(マスタに無い手動カメラ)。json キー:
 	//  maker/model/name/friendly/serial/sensorSize/sensorSizeV/sensorPixel/

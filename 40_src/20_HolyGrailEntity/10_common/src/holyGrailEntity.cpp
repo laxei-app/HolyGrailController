@@ -1337,6 +1337,14 @@ int32_t hge_newPlan(const char* presetName)
 	std::string nm = uniqueName("新規撮影計画", collectPlanNames(""));	// item5: 既存と重複しない名前
 	makeFactoryCurrent("新規撮影計画");
 	g_plan.name = nm;
+	{
+		hgc::place ap;	// §7.9: 「撮影計画に自動的に挿入する」場所があれば初期値に入れ、位置に応じて再生成
+		if (dataManager::autoInsertPlace(ap))
+		{
+			g_plan.place = ap;
+			astro::buildSchedule(g_plan, g_planCcm, g_offMin);
+		}
+	}
 	buildScheduleJson();
 	g_editId = makePlanId();
 	g_planReady = true;
@@ -1798,6 +1806,50 @@ int32_t hge_setOwnedCameraDetail(const char* origName, const char* json)
 {
 	if (origName == nullptr || json == nullptr) { return ERR_HGC_INVALID_ARG; }
 	return dataManager::setOwnedCameraDetailJson(std::string(origName), std::string(json)) ? ERR_HGC_OK : ERR_HGC_JSON_PARSE;
+}
+
+// --- 撮影場所(§7.9)。登録した場所を撮影計画で選択する ---
+int32_t hge_getPlacesJson(char* buf, int32_t* inoutLen)
+{
+	return copyOut(dataManager::placesJson(), buf, inoutLen);
+}
+
+int32_t hge_addPlace(const char* name)
+{
+	return dataManager::addPlace(name ? std::string(name) : std::string()) ? ERR_HGC_OK : ERR_HGC_NO_ELEMENT;
+}
+
+int32_t hge_removePlace(const char* name)
+{
+	if (name == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return dataManager::removePlace(std::string(name)) ? ERR_HGC_OK : ERR_HGC_NO_ELEMENT;
+}
+
+int32_t hge_setPlaceAutoInsert(const char* name, int32_t autoInsert)
+{
+	if (name == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return dataManager::setPlaceAutoInsert(std::string(name), autoInsert != 0) ? ERR_HGC_OK : ERR_HGC_NO_ELEMENT;
+}
+
+int32_t hge_setPlaceDetail(const char* origName, const char* json)
+{
+	if (origName == nullptr || json == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return dataManager::setPlaceDetailJson(std::string(origName), std::string(json)) ? ERR_HGC_OK : ERR_HGC_JSON_PARSE;
+}
+
+// 登録済みの撮影場所を名称で選び、現在の撮影計画へ反映してスケジュールを再生成する。
+int32_t hge_setPlanPlace(const char* name)
+{
+	if (name == nullptr) { return ERR_HGC_INVALID_ARG; }
+	if (!g_planReady) { errCode e = loadFixedPlanImpl(); if (e != ERR_HGC_OK) { return e; } }
+	hgc::place p;
+	if (!dataManager::findPlace(std::string(name), p)) { return ERR_HGC_NO_ELEMENT; }
+	g_plan.place = p;	// name/memo/緯度経度/標高/autoInsert をまるごと反映
+	errCode e = astro::buildSchedule(g_plan, g_planCcm, g_offMin);	// 位置変化→太陽/月の時刻が変わる
+	if (e != ERR_HGC_OK) { return e; }
+	buildScheduleJson();
+	notify(HGE_EV_SCHEDULE, g_schedJson);
+	return saveCurrentPlan();
 }
 
 int32_t hge_setOwnedLensDetail(const char* origName, const char* json)
