@@ -3598,27 +3598,31 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
 
         // 薄明ブロック(=薄明ページ)。ページ0=フォームなので block i → ページ i+1。
-        data class Nav(val page: Int, val morning: Boolean, val md: String)
+        data class Nav(val page: Int, val morning: Boolean)
         val navs = ArrayList<Nav>()
         o.optJSONArray("blocks")?.let { arr ->
             for (i in 0 until arr.length()) {
                 val b = arr.getJSONObject(i)
-                navs.add(Nav(i + 1, b.optString("axis") != "down", b.optString("date")))
+                navs.add(Nav(i + 1, b.optString("axis") != "down"))
             }
         }
         // 移動ボックスの差し込み位置: 朝=日の出(code9)の前、夕方=日の入(code2)の後。
-        // 該当イベントが無ければ End(code12)の前(例: プランがEndで切れる夕方薄明)。
+        // 薄明ブロック・日の出/日の入は共に時系列。日付で対応付けると同日内の朝の日付が
+        // ずれて誤配置になるため、順番(i番目の朝→i番目の日の出)で対応付ける。
+        // 対応するイベントが無ければ End(code12)の前(例: プランがEndで切れる夕方薄明)。
         val before = HashMap<Int, MutableList<Nav>>()
         val after = HashMap<Int, MutableList<Nav>>()
         val endIdx = evs.indexOfLast { it.code == 12 }
+        val sunriseIdx = evs.indices.filter { evs[it].code == 9 }   // 日の出(時系列)
+        val sunsetIdx = evs.indices.filter { evs[it].code == 2 }    // 日の入(時系列)
+        var mi = 0; var si = 0
         for (nv in navs) {
             if (nv.morning) {
-                val i = evs.indexOfFirst { it.code == 9 && it.md == nv.md }
-                val at = if (i >= 0) i else endIdx
+                val at = sunriseIdx.getOrNull(mi++) ?: endIdx
                 if (at >= 0) before.getOrPut(at) { mutableListOf() }.add(nv)
             } else {
-                val i = evs.indexOfLast { it.code == 2 && it.md == nv.md }
-                if (i >= 0) after.getOrPut(i) { mutableListOf() }.add(nv)
+                val at = sunsetIdx.getOrNull(si++)
+                if (at != null) after.getOrPut(at) { mutableListOf() }.add(nv)
                 else if (endIdx >= 0) before.getOrPut(endIdx) { mutableListOf() }.add(nv)
             }
         }
