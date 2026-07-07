@@ -35,6 +35,9 @@ class ScheduleView(context: Context) : View(context) {
     private fun dp(v: Float) = v * resources.displayMetrics.density
     private fun sp(v: Float) = v * resources.displayMetrics.scaledDensity
     private val slop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+    // ドラッグ(境目移動/朝夕帯/ページ送り)と判定する移動量。指タップの微妙なぶれで
+    // 撮影制御方法タップが奪われないよう、素のタッチスロップより大きめにする。
+    private val dragSlop get() = dp(16f)
 
     private val TOP = 6.0; private val BOT = -24.0; private val RANGE = TOP - BOT  // 30°
     private val headerH get() = dp(34f)
@@ -229,7 +232,7 @@ class ScheduleView(context: Context) : View(context) {
             MotionEvent.ACTION_MOVE -> {
                 val dx = e.x - downX; val dy = e.y - downY
                 if (!axisLocked) {
-                    if (abs(dx) < slop && abs(dy) < slop) return true
+                    if (abs(dx) < dragSlop && abs(dy) < dragSlop) return true
                     axisLocked = true
                     if (abs(dy) >= abs(dx)) {
                         // 縦=境目移動。最寄り境目を掴む。無ければ無効(ページ移動もしない)。
