@@ -158,22 +158,48 @@ void edgeAddReceivedPlan(const std::string& id)
 struct nameBmp { int w = 0, h = 0; uint8_t* px = nullptr; };
 static std::map<std::string, nameBmp> g_nameBmps;	// 計画id -> 名前ビットマップ
 
-// 受信データ width(u16LE) height(u16LE) pixels[ceil(w/8)*h] を計画 id に紐づけて取り込む。
-void edgeSetNameBitmap(const std::string& id, const uint8_t* data, int len)
+// 名前ビットマップの永続化パス(/asset/nbmp_<id>.bin。id は yyyyMMdd-HHmmss で安全)。
+static std::string nameBmpPath(const std::string& id) { return osfile::dir("asset") + "/nbmp_" + id + ".bin"; }
+
+// 生バイト width(u16LE) height(u16LE) pixels[ceil(w/8)*h] を解析して RAM(g_nameBmps)へ格納する。
+// return: 格納できた(=有効なビットマップ)。永続化はしない(呼び手が判断)。
+static bool applyNameBitmap(const std::string& id, const uint8_t* data, int len)
 {
-	if (data == nullptr || len < 4) { return; }
+	if (data == nullptr || len < 4) { return false; }
 	int w = data[0] | (data[1] << 8);
 	int h = data[2] | (data[3] << 8);
-	if (w <= 0 || h <= 0 || w > 320 || h > 120) { return; }
+	if (w <= 0 || h <= 0 || w > 320 || h > 120) { return false; }
 	int bpr = (w + 7) / 8; int need = 4 + bpr * h;
-	if (len < need) { return; }
+	if (len < need) { return false; }
 	uint8_t* nb = (uint8_t*)malloc((size_t)(bpr * h));
-	if (!nb) { return; }
+	if (!nb) { return false; }
 	memcpy(nb, data + 4, (size_t)(bpr * h));
 	nameBmp& slot = g_nameBmps[id];
 	if (slot.px) { free(slot.px); }
 	slot.px = nb; slot.w = w; slot.h = h;
 	g_dirty = true;
+	return true;
+}
+
+// スマホから ETP C_NAME_BMP で受信したビットマップを格納し、再起動後も表示できるよう永続化する。
+// (エッジの日本語フォント撤去後、計画名は必ずこのビットマップで描くため、RAMだけだと再起動で名前が消える)
+void edgeSetNameBitmap(const std::string& id, const uint8_t* data, int len)
+{
+	if (!applyNameBitmap(id, data, len)) { return; }
+	osfile::writeAll(nameBmpPath(id), reinterpret_cast<const char*>(data), (size_t)len);	// 受信バイトをそのまま保存
+}
+
+// 起動時: 受信済み計画(g_recvPlans)の名前ビットマップをファイルから復元する。
+static void loadNameBitmaps(void)
+{
+	for (const auto& id : g_recvPlans)
+	{
+		std::string body;
+		if (osfile::readAll(nameBmpPath(id), body) && body.size() >= 4)
+		{
+			applyNameBitmap(id, reinterpret_cast<const uint8_t*>(body.data()), (int)body.size());
+		}
+	}
 }
 
 // 受信計画をエッジから削除する(item4)。受信リスト・プランファイル・名前ビットマップを消す。
@@ -184,6 +210,7 @@ void edgeRemoveReceivedPlan(const std::string& id)
 	hge_deletePlan(id.c_str());
 	auto it = g_nameBmps.find(id);
 	if (it != g_nameBmps.end()) { if (it->second.px) { free(it->second.px); } g_nameBmps.erase(it); }
+	osfile::removeFile("asset", "nbmp_" + id + ".bin");	// 永続化したビットマップも削除
 	g_listDirty = true; g_dirty = true;
 }
 // 削除確認ダイアログ対象の計画id(空=非表示)。item4。
@@ -801,6 +828,7 @@ void setup(void)
 	hge_pruneOldLogs(osclock::utcOffsetMin());
 	hge_loadFixedPlan();		// 出荷時設定(dataManager)から固定撮影計画を生成
 	loadRecvPlans();			// 受信済み計画id を復元(item1。再起動後も表示する)
+	loadNameBitmaps();			// 受信済み計画の名前ビットマップを復元(再起動後も計画名を表示するため)
 	// 注意: STA時の撮影再開(hge_resumeCapture)は カメラを探すため WiFi 接続後に行う(loop内)。
 	if (g_netMode == "ap") { startApAndEtp(); }	// APモード: この時点でSoftAP+ETP+QRを立ち上げる
 	g_state = hge_getState();
@@ -882,6 +910,16 @@ void loop(void)
 		else if (c == 'F')	// 検証用: 現在のログ保存先(SD/LittleFS)を表示
 		{
 			Serial.printf("[FS] backend=%s\n", osfile::backendName());
+		}
+		else if (c == 'N')	// 検証用: 名前ビットマップの保持状況(RAM件数 + 永続ファイル)を表示
+		{
+			Serial.printf("[NBMP] ram=%d recvPlans=%d\n", (int)g_nameBmps.size(), (int)g_recvPlans.size());
+			for (const auto& id : g_recvPlans)
+			{
+				std::string body; bool ok = osfile::readAll(nameBmpPath(id), body);
+				Serial.printf("  id=%s ramHas=%d file=%s(%u B)\n", id.c_str(),
+				              (int)(g_nameBmps.count(id) > 0), ok ? "yes" : "no", (unsigned)body.size());
+			}
 		}
 		else if (c == 'z')	// 検証用: 限定サブネット :8080 バッチ探索(§3.3 tier3)を手動実行し応答IPを表示
 		{

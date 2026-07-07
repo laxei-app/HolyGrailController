@@ -268,9 +268,11 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring
 		if (nlen > 0)
 		{
 			jbyte* nb = env->GetByteArrayElements(nameBmp, nullptr);
-			// data = "id\t<bitmap bytes>"。エッジは計画 id ごとに名前ビットマップを保持する。
+			// data = "id\t<bitmap bytes>\x01"。エッジは計画 id ごとに名前ビットマップを保持する。
 			std::string bmpData = pidS + "\t" + std::string(reinterpret_cast<const char*>(nb), static_cast<size_t>(nlen));
 			env->ReleaseByteArrayElements(nameBmp, nb, JNI_ABORT);
+			// 番兵: ETP decode の末尾空白/NUL除去からビットマップ末尾の黒画素(0x00)を守る(エッジ側で1バイト除去)。
+			bmpData.push_back('\x01');
 			tcpRequest(fd, etp::C_NAME_BMP, etp::M_PUT, bmpData, rd);
 		}
 	}

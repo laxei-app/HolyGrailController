@@ -146,12 +146,14 @@ namespace
 			else { edgeAddReceivedPlan(id); }	// 受信した計画だけリスト表示する
 			break;
 		}
-		case etp::C_NAME_BMP:	// data = "id\t<bitmap>"。計画 id ごとに名前ビットマップを保持する
+		case etp::C_NAME_BMP:	// data = "id\t<bitmap>\x01"。計画 id ごとに名前ビットマップを保持する
 		{
 			size_t tab = pk.data.find('\t');
 			std::string id  = (tab != std::string::npos) ? pk.data.substr(0, tab) : std::string();
 			const char* p   = (tab != std::string::npos) ? pk.data.data() + tab + 1 : pk.data.data();
 			int         pl  = (tab != std::string::npos) ? static_cast<int>(pk.data.size() - tab - 1) : static_cast<int>(pk.data.size());
+			// ETPの末尾空白/NUL除去(etp::decode)でビットマップ末尾の黒画素(0x00)が欠落するのを防ぐ番兵を除去する。
+			if (pl > 0 && p[pl - 1] == '\x01') { --pl; }
 			edgeSetNameBitmap(id, reinterpret_cast<const uint8_t*>(p), pl);
 			break;
 		}
