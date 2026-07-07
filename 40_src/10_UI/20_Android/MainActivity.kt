@@ -662,7 +662,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             if (pw) e.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             box.addView(e); return e
         }
-        val nameE = field("端末識別名", scannedName, false)
+        val nameE = field("端末識別名 (半角英数字。エッジのLCDに表示)", scannedName, false)
+        applyEdgeNameInput(nameE)   // エッジで表示できない日本語等は入力不可(§8.2)
         val ssidE = field("接続先 SSID", "", false)
         val passE = field("接続先 password", "", true)
         // ネットワークモード: OFF=既存ネットに参加(STA。SSID/pass使用) / ON=エッジ自身がAP(屋外・ルーター無し)。
@@ -726,7 +727,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     Toast.makeText(ctx, "先にQRスキャンでPoPを取得してください", Toast.LENGTH_SHORT).show()
                     return@setOnClickListener
                 }
-                val name = nameE.text.toString()
+                val name = nameE.text.toString().trim()
+                if (name.isEmpty() || !isAsciiEdgeName(name)) { Toast.makeText(ctx, "端末識別名は半角英数字で入力してください(エッジ端末で日本語は表示できません)", Toast.LENGTH_LONG).show(); return@setOnClickListener }
                 val ssid = ssidE.text.toString()
                 val pass = passE.text.toString()
                 val mode = if (apSwitch.isChecked) "ap" else "sta"
@@ -3662,6 +3664,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
         refreshEdgeSpinner()
     }
 
+    // エッジ端末名はエッジのLCD(英字フォントのみ表示)で出すため、印字可能なASCIIのみ許可する。
+    // 日本語などの非ASCIIはエッジで表示できないため入力段階で弾く(貼り付けも除去)。
+    private fun asciiEdgeNameFilter() = android.text.InputFilter { source, start, end, _, _, _ ->
+        var changed = false
+        val sb = StringBuilder()
+        for (i in start until end) { val c = source[i]; if (c.code in 0x20..0x7E) sb.append(c) else changed = true }
+        if (changed) sb.toString() else null   // null=変更なし(元の入力をそのまま許可)
+    }
+    private fun applyEdgeNameInput(et: EditText) {
+        et.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        et.filters = arrayOf(asciiEdgeNameFilter(), android.text.InputFilter.LengthFilter(31))
+    }
+    private fun isAsciiEdgeName(s: String): Boolean = s.all { it.code in 0x20..0x7E }
+
     // エッジ端末の登録/管理(設定)。名称+IPで手動登録、削除。オフラインでも登録でき計画で選べる。
     private fun manageEdges() {
         val ctx = this; val d = resources.displayMetrics.density; val pad = (16 * d).toInt()
@@ -3678,12 +3694,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 box.addView(row)
             }
             box.addView(TextView(ctx).apply { text = "追加(端末名称で登録。IPは撮影開始時に自動検索)"; setTypeface(null, Typeface.BOLD); setPadding(0, (14 * d).toInt(), 0, 0) })
-            val nameE = EditText(ctx).apply { hint = "端末名称(初期設定で付けた名前)" }; box.addView(nameE)
+            val nameE = EditText(ctx).apply { hint = "端末名称(半角英数字。例: Edje00)" }; applyEdgeNameInput(nameE); box.addView(nameE)
             box.addView(Button(ctx).apply {
                 text = "登録"
                 setOnClickListener {
                     val nm = nameE.text.toString().trim()
                     if (nm.isEmpty()) { Toast.makeText(ctx, "端末名称を入力してください", Toast.LENGTH_SHORT).show(); return@setOnClickListener }
+                    if (!isAsciiEdgeName(nm)) { Toast.makeText(ctx, "端末名称は半角英数字のみ(エッジ端末で日本語は表示できません)", Toast.LENGTH_LONG).show(); return@setOnClickListener }
                     if (edges.none { it.name == nm }) edges.add(Edge(nm, "", 50506))
                     saveRegisteredEdges(); refreshEdgeSpinner(); rebuild()
                 }
