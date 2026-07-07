@@ -112,9 +112,6 @@ void saveEdgeCreds(const std::string& ssid, const std::string& pass, const std::
 const std::string& edgePop(void) { return g_pop; }
 
 // ── 画面状態 ──────────────────────────────────────────────
-enum { SCR_PLAN = 0, SCR_CCM = 1 };
-static int  g_scr      = SCR_PLAN;
-static int  g_ccmType  = 1;		// CCM詳細画面で表示中の種別
 static int  g_scroll   = 0;		// 計画画面の縦スクロール量[px]
 static int  g_maxScroll = 0;	// スクロール上限(描画時に算出)
 static bool g_listDirty = true;	// 計画リスト(hge_listPlansJson)の再取得が必要
@@ -217,15 +214,8 @@ void edgeRemoveReceivedPlan(const std::string& id)
 static std::string g_confirmDelId;
 
 static constexpr int HEAD_H   = 28;
-static constexpr int FOOT_H   = 32;
-static constexpr int VIEW_TOP = HEAD_H;
-static constexpr int VIEW_BOT = 240 - FOOT_H;	// 28..208
 
 static M5Canvas g_cv(&M5.Display);	// ダブルバッファ(ちらつき防止)
-
-// タップ判定用: 撮影制御方法の行(画面座標 + 種別)
-struct hitRow { int y0; int y1; int type; };
-static std::vector<hitRow> g_hits;
 
 // タップ判定用: 撮影計画リストの行(画面座標 + 計画id + 状態)
 struct planHit { int y0; int y1; std::string id; bool capturing; bool capturable; };
@@ -249,37 +239,6 @@ static const char* stName(int s)
 	case HGE_ST_ERROR:     return "ERROR";
 	case HGE_ST_DISCONNECTED: return "DISCONN";
 	default:               return "?";
-	}
-}
-
-// 撮影制御方法の色(スマホUIと同じ配色)。
-static uint16_t ccmColor(int t)
-{
-	switch (t)
-	{
-	case 1: return M5.Display.color565(0xB3, 0x9D, 0xDB);	// 夜間
-	case 2: return M5.Display.color565(0xFF, 0xF5, 0x9D);	// 朝日
-	case 3: return M5.Display.color565(0xFF, 0xCC, 0x80);	// 夕日
-	case 4: return M5.Display.color565(0x90, 0xCA, 0xF9);	// 日中
-	case 5: return M5.Display.color565(0xCE, 0x93, 0xD8);	// 月対処
-	case 6: return M5.Display.color565(0xA5, 0xD6, 0xA7);	// 夜間前移行
-	case 7: return M5.Display.color565(0x80, 0xCB, 0xC4);	// 夜間後移行
-	default: return M5.Display.color565(0xEE, 0xEE, 0xEE);
-	}
-}
-
-static const char* ccmName(int t)
-{
-	switch (t)
-	{
-	case 1: return "Night";
-	case 2: return "Sunrise";
-	case 3: return "Sunset";
-	case 4: return "Daytime";
-	case 5: return "Moon";
-	case 6: return "Pre-night";
-	case 7: return "Post-night";
-	default: return "?";
 	}
 }
 
@@ -359,42 +318,6 @@ static const json& planList(void)
 	return cache;
 }
 
-// 計画固有の撮影制御方法 JSON を取得する。
-static bool getPlanCcm(json& out)
-{
-	int32_t len = 0;
-	hge_getPlanCcmJson(nullptr, &len);
-	if (len <= 0) { return false; }
-	std::vector<char> buf(static_cast<size_t>(len));
-	if (hge_getPlanCcmJson(buf.data(), &len) != ERR_HGC_OK) { return false; }
-	out = json::parse(buf.data(), nullptr, false);
-	return !out.is_discarded();
-}
-
-// ── 描画ヘルパ(g_cv のカーソルに対して1行描く。戻り値=次のy) ──
-static int line(int y, const std::string& s, uint16_t fg = TFT_WHITE)
-{
-	g_cv.setTextColor(fg);
-	g_cv.setCursor(8, y);
-	g_cv.print(s.c_str());
-	return y + 19;
-}
-static int head(int y, const char* s)
-{
-	g_cv.setTextColor(TFT_WHITE);
-	g_cv.setCursor(6, y);
-	g_cv.print(s);
-	return y + 21;
-}
-static int rowBar(int y, uint16_t bg, uint16_t fg, const std::string& s)
-{
-	g_cv.fillRect(6, y, 308, 20, bg);
-	g_cv.setTextColor(fg);
-	g_cv.setCursor(12, y + 2);
-	g_cv.print(s.c_str());
-	return y + 22;
-}
-
 // ── 撮影計画画面(簡素化: 計画名 + 開始/停止のみ。仕様 8.1) ─────────────
 // 計画名はスマホからモノクロ2値ビットマップで受信していればそれを、無ければ
 // スケジュールJSONの名称テキストを表示する(今後の多言語対応のため §8.2.1)。
@@ -423,6 +346,9 @@ static void renderPlan(void)
 	if (g_scroll > g_maxScroll) { g_scroll = g_maxScroll; }
 
 	g_planHits.clear();
+	// リスト描画をヘッダ帯の下(top..bot)にクリップする。スクロール時に行の名称/ビットマップが
+	// タイトル行へ食い込むのを防ぐ(ヘッダはこの上で既に描画済み)。
+	g_cv.setClipRect(0, top, 320, bot - top);
 	int y = top - g_scroll;
 	for (const auto& p : arr)
 	{
@@ -495,6 +421,7 @@ static void renderPlan(void)
 		g_planHits.push_back({ ry0, ry1, id, active, capturable });
 		y += rowH;
 	}
+	g_cv.clearClipRect();	// 以降のダイアログ等は全画面へ描く
 	if (arr.empty())
 	{
 		g_cv.setTextColor(TFT_LIGHTGREY);
@@ -516,99 +443,6 @@ static void renderPlan(void)
 		g_cv.setCursor(bx + 172, by + 60); g_cv.print("No");
 	}
 
-	g_cv.pushSprite(0, 0);
-}
-
-// ── 撮影制御方法 詳細画面 ────────────────────────────────
-static void renderCcm(void)
-{
-	const char* key = nullptr;
-	switch (g_ccmType)
-	{
-	case 1: key = "night";   break;
-	case 2: key = "sunrise"; break;
-	case 3: key = "sunset";  break;
-	case 4: key = "day";     break;
-	case 5: key = "moon";    break;
-	default: key = nullptr;  break;	// 6=夜間前移行/7=夜間後移行(編集項目なし)
-	}
-
-	g_cv.fillScreen(TFT_BLACK);
-	g_cv.setFont(&fonts::Font2);	// ASCII専用フォント(日本語フォントefontJA_16は撤去。エッジ表示は英語のみ)
-
-	// ヘッダ(撮影制御方法の色, 左に戻る記号)
-	g_cv.fillRect(0, 0, 320, HEAD_H, ccmColor(g_ccmType));
-	g_cv.setTextColor(TFT_BLACK);
-	g_cv.setCursor(8, 6);
-	g_cv.printf("< %s", ccmName(g_ccmType));
-
-	int y = VIEW_TOP + 6;
-	json j;
-	if (key && getPlanCcm(j) && j.contains(key))
-	{
-		const json& c = j[key];
-		char b[96];
-		if (g_ccmType == 1)
-		{
-			std::snprintf(b, sizeof(b), "Fixed exp  Sun alt %.0fdeg", c.value("sunAltitude", 0.0));
-			y = line(y, b);
-			y = line(y, std::string("Auto at frame edge: ") + (c.value("autoEdge", false) ? "ON" : "OFF"));
-			std::snprintf(b, sizeof(b), "Post-night exp %+.1fev", c.value("postNightEv", 0.0));
-			y = line(y, b);
-		}
-		else if (g_ccmType == 2 || g_ccmType == 3)
-		{
-			std::snprintf(b, sizeof(b), "Sun alt %.0fdeg -> %.0fdeg",
-			              c.value("sunAltitude", 0.0), c.value("sunAltitudeEnd", 0.0));
-			y = line(y, b);
-			std::snprintf(b, sizeof(b), "Exp comp %+.1fev", c.value("ev", 0.0));
-			y = line(y, b);
-		}
-		else if (g_ccmType == 4)
-		{
-			std::snprintf(b, sizeof(b), "Exp comp %+.1fev", c.value("ev", 0.0));
-			y = line(y, b);
-		}
-		else if (g_ccmType == 5)
-		{
-			std::snprintf(b, sizeof(b), "Mode %d", c.value("mode", 0));
-			y = line(y, b);
-			std::snprintf(b, sizeof(b), "Start lum %.1fev / comp %.1fev",
-			              c.value("startLuminance", 0.0), c.value("ev", 0.0));
-			y = line(y, b);
-		}
-
-		// 露出限界(UIの暗所限界=limitBright / 明所限界=limitDark)
-		if (c.contains("limitBright") && c.contains("limitDark"))
-		{
-			const json& lb = c["limitBright"];
-			const json& ld = c["limitDark"];
-			y += 6;
-			y = head(y, "Exposure limits");
-			y = line(y, "Dark   ISO" + lb.value("iso", std::string()) + "  " +
-			            lb.value("ss", std::string()) + "  F" + lb.value("fn", std::string()));
-			y = line(y, "Bright ISO" + ld.value("iso", std::string()) + "  " +
-			            ld.value("ss", std::string()) + "  F" + ld.value("fn", std::string()));
-		}
-	}
-	else if (g_ccmType == 6)
-	{
-		y = line(y, "Pre-night");
-		y = line(y, "Smoothly shifts exposure into night");
-	}
-	else if (g_ccmType == 7)
-	{
-		y = line(y, "Post-night");
-		y = line(y, "Smoothly restores exposure after night");
-	}
-	else
-	{
-		y = line(y, "(no data)");
-	}
-
-	g_cv.setTextColor(TFT_LIGHTGREY);
-	g_cv.setCursor(8, VIEW_BOT + 8);
-	g_cv.print("Tap the top bar to go back");
 	g_cv.pushSprite(0, 0);
 }
 
@@ -756,7 +590,7 @@ static void handleTouch(void)
 	else if (pressed && prevPressed)
 	{
 		if (std::abs(tx - startX) > 8 || std::abs(ty - startY) > 8) { moved = true; }
-		if (g_scr == SCR_PLAN && moved)
+		if (moved)
 		{
 			int ns = startScroll - (ty - startY);
 			if (ns < 0) { ns = 0; }
