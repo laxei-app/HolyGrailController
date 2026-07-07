@@ -92,13 +92,6 @@
                     android:textSize="13sp"
                     android:text="撮影中" />
 
-                <!-- 概要スケジュール(表示専用。時刻とイベントのみ) -->
-                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:layout_marginTop="6dp" android:text="概要スケジュール" android:textStyle="bold" />
-                <LinearLayout android:id="@+id/plan_overviewContainer"
-                    android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp" android:orientation="vertical" />
-
                 <!-- 撮影開始/終了 -->
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -210,6 +203,13 @@
                 <TextView android:id="@+id/plan_dirText" android:layout_width="match_parent"
                     android:layout_height="wrap_content" android:gravity="center" android:textSize="12sp" android:textColor="#888888"
                     android:text="撮影方向 90.0°   仰角 10.0°" />
+
+                <!-- 概要スケジュール(表示専用。時刻とイベントのみ)。撮影方向の下・撮影制御方法ボタンの上。 -->
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp" android:text="概要スケジュール" android:textStyle="bold" />
+                <LinearLayout android:id="@+id/plan_overviewContainer"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp" android:orientation="vertical" />
 
                 <!-- 撮影制御方法の編集ボタン(全種・常に定位置)。詳細な薄明帯は横スライドの薄明ページで編集する。 -->
                 <TextView android:id="@+id/plan_ccmEditLabel" android:layout_width="match_parent" android:layout_height="wrap_content"
