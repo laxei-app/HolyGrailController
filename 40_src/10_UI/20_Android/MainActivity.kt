@@ -73,8 +73,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private lateinit var dirText: TextView
     private lateinit var compass: CompassView
     private lateinit var elevationView: ElevationView
-    private lateinit var planSchedule: LinearLayout
-    private lateinit var planListScroll: ScrollView
+    private lateinit var planOverview: LinearLayout      // 概要スケジュール(先頭ページ・表示専用)
+    private lateinit var planPager: PlanPager            // 横スライドのページャ(先頭+薄明ページ)
+    private lateinit var planFormScroll: ScrollView      // 先頭ページのフォーム縦スクロール
     private lateinit var planListContainer: LinearLayout
     private var currentPlanId = ""          // 編集対象の計画 id
     // 計画の選択・改名・各種編集(g_plan/g_editIdを触る操作)は単一スレッドで直列化し競合を防ぐ
@@ -84,7 +85,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private val disconnectedPlans = mutableSetOf<String>() // カメラ未検出(NOCAMERA/旧DISCONNECTED)の計画 id 群=✖点灯
     private val waitingPlans = mutableSetOf<String>()    // 撮影要求済・撮影窓前で待機中(カメラOK)の計画 id 群=カメラ点灯
     private val nocamDialogShown = mutableSetOf<String>() // カメラ未検出ポップアップを表示済みの計画 id(多重表示抑止。Phase3)
-    private var scheduleView: ScheduleView? = null   // §7.3.2 スケジュール表示/編集ビュー
+    private val schedulePages = mutableListOf<ScheduleView>()   // §7.3.2 薄明ページ(1ブロック=1ページ)
     private lateinit var captureStatus: TextView     // 撮影中ステータス(plan画面内)
     private var planReadOnly = false                 // 撮影中の計画を表示中=編集不可(item7)
     private var blinkOn = true              // 撮影中カメラアイコンの点滅状態
@@ -311,8 +312,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         dirText = findViewById(R.id.plan_dirText)
         compass = findViewById(R.id.plan_compass)
         elevationView = findViewById(R.id.plan_elevation)
-        planSchedule = findViewById(R.id.plan_scheduleContainer)
-        planListScroll = findViewById(R.id.plan_listScroll)
+        planOverview = findViewById(R.id.plan_overviewContainer)
+        planPager = findViewById(R.id.plan_pager)
+        planFormScroll = findViewById(R.id.plan_formScroll)
+        planPager.onPageChanged = { updatePagerTitle() }
         planListContainer = findViewById(R.id.plan_listContainer)
         captureStatus = findViewById(R.id.plan_captureStatus)
         edgeSpinner = findViewById(R.id.plan_edgeSpinner)
@@ -383,8 +386,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val host = ipInput.text.toString().trim()
             Thread { HgeNative.nativeConnectManual(host) }.start()
         }
-        // 撮影計画リスト(分割バー上)の分割バー。
-        setupDivider(R.id.plan_listDivider, R.id.plan_listScroll)
         // 撮影周期(タップでキーボード入力)。最小未満は警告。
         intervalText.setOnClickListener { editInterval() }
         // 横向き(ランドスケープ)。
@@ -2625,10 +2626,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             for (i in 0 until arr.length()) { planListContainer.addView(buildPlanRow(arr.getJSONObject(i))) }
         } catch (_: Exception) {}
         // 再構築直後に選択中行のEditTextが自動フォーカスしてキーボードが出るのを防ぐ(フォーカスをスクロールへ)。
-        planListScroll.isFocusableInTouchMode = true
-        planListScroll.requestFocus()
-        // リスト件数が少なければ内容ぴったりまで縮める(item6: リスト最下段で止める)。
-        setInitialSplit(R.id.plan_listScroll, R.id.plan_listContainer)
+        planFormScroll.isFocusableInTouchMode = true
+        planFormScroll.requestFocus()
     }
 
     private fun buildPlanRow(p: JSONObject): View {
@@ -2690,8 +2689,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             tv.setOnEditorActionListener { v, actionId, _ ->
                 if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
                     val nm = v.text.toString().trim()
-                    planListScroll.isFocusableInTouchMode = true
-                    planListScroll.requestFocus()   // 隣行へ飛ばずキーボードを閉じる
+                    planFormScroll.isFocusableInTouchMode = true
+                    planFormScroll.requestFocus()   // 隣行へ飛ばずキーボードを閉じる
                     (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
                         .hideSoftInputFromWindow(v.windowToken, 0)
                     if (nm.isNotEmpty()) planExec.execute {
@@ -3035,7 +3034,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             dirText.text = "撮影方向 %.1f°   仰角 %.1f°".format(az, el)
             capGear.text = o.optString("camera") + " / " + o.optString("lens")
             capDir.text = dirText.text
-            renderScheduleView(o)                  // §7.3.2 太陽高度帯+境目編集ビュー(計画画面)
+            renderOverview(o)                      // 先頭ページ: 概要スケジュール(表示専用)
+            rebuildTwilightPages(o)                // 薄明ページ(横スライド)を再構築し、ページ番号を更新
             renderSchedule(capSchedule, o, true)   // 撮影画面は従来のイベント時系列
         } catch (_: Exception) {}
     }
@@ -3522,25 +3522,55 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // §7.3.2 スケジュール表示/編集ビュー(計画画面)。太陽高度軸(+6..-24)で夕方/朝方を分けて表示。
     private var curSunriseMode = 0
     private var curSunsetMode = 0
-    private fun renderScheduleView(o: JSONObject) {
-        val sv = scheduleView ?: ScheduleView(this).also {
-            it.onTapType = { t -> ccmTypeToKey[t]?.let { k -> openPlanCcmEdit(k) } }
-            it.onMoveBoundary = { before, after, occ, altDeg, rising ->
-                Thread { HgeNative.nativeSetBoundaryByAlt(before, after, occ, altDeg, rising) }.start()
+    // 先頭ページ: 概要スケジュール(表示専用)。時刻とイベント(Start/End/日の出/日の入/月の出/月の入)を
+    // 日付ごとにまとめて時系列表示する。編集項目は無し。
+    private fun renderOverview(o: JSONObject) {
+        planOverview.removeAllViews()
+        val want = mapOf(1 to "Start", 12 to "End", 9 to "日の出", 2 to "日の入", 10 to "月の出", 11 to "月の入")
+        fun parse(s: String): Long = try { fmtIso.parse(s)?.time ?: 0L } catch (_: Exception) { 0L }
+        data class Ev(val t: Long, val date: String, val time: String, val label: String)
+        val evs = ArrayList<Ev>()
+        o.optJSONArray("events")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val e = arr.getJSONObject(i)
+                val label = want[e.optInt("event")] ?: continue
+                val w = e.optString("when")
+                val date = if (w.length >= 10) w.substring(0, 10) else w
+                val time = if (w.length >= 16) w.substring(11, 16) else w
+                evs.add(Ev(parse(w), date, time, label))
             }
-            it.onEditBoundary = { before, after, occ, curAlt, rising, lo, hi ->
-                showBoundaryPicker(before, after, occ, curAlt, rising, lo, hi)
-            }
-            it.onSetBand = { rising, insert -> setBand(rising, insert) }
-            it.onNeedTwoFinger = { Toast.makeText(this, "境目はタップで編集できます", Toast.LENGTH_SHORT).show() }
-            scheduleView = it
-            planSchedule.removeAllViews()
-            planSchedule.addView(it, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         }
+        evs.sortBy { it.t }
+        if (evs.isEmpty()) {
+            val tv = TextView(this); tv.text = "—"; tv.textSize = 13f; tv.setTextColor(0xFF888888.toInt())
+            planOverview.addView(tv); return
+        }
+        var curDate = ""
+        for (ev in evs) {
+            if (ev.date != curDate) {
+                curDate = ev.date
+                val dh = TextView(this)
+                dh.text = ev.date; dh.setTypeface(null, Typeface.BOLD); dh.textSize = 13f
+                dh.setBackgroundColor(0xFFECEFF1.toInt()); dh.setPadding(dp(8), dp(4), dp(8), dp(4))
+                dh.layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(4), 0, 0) }
+                planOverview.addView(dh)
+            }
+            val tv = TextView(this)
+            tv.text = "${ev.time}   ${ev.label}"; tv.textSize = 13f
+            tv.setPadding(dp(12), dp(5), dp(8), dp(5))
+            planOverview.addView(tv)
+        }
+    }
+
+    // §7.3.2 薄明ページ(横スライド)を再構築する。blocks[] の各要素=1ページ(ScheduleView)。
+    // ページ0(フォーム)は残し、以前の薄明ページを差し替える。ページ番号(タイトル)も更新。
+    private fun rebuildTwilightPages(o: JSONObject) {
         curSunriseMode = o.optInt("sunriseMode", 0)
         curSunsetMode = o.optInt("sunsetMode", 0)
-        val blocks = ArrayList<ScheduleView.Block>()
+        for (sv in schedulePages) planPager.removeView(sv)
+        schedulePages.clear()
+        val ed = !planReadOnly
         o.optJSONArray("blocks")?.let { arr ->
             for (i in 0 until arr.length()) {
                 val b = arr.getJSONObject(i)
@@ -3550,7 +3580,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         val s = sa.getJSONObject(k); val ty = s.optInt("type")
                         val col = if (ty in 1..7) ccmColor(ty) else 0
                         val tc = if (ty in 1..7) ccmTextColor(ty) else 0xFF212121.toInt()
-                        val nm = ccmTypeName[ty] ?: s.optString("name")   // 種別の和名を表示
+                        val nm = ccmTypeName[ty] ?: s.optString("name")
                         segs.add(ScheduleView.Seg(ty, nm, s.optDouble("altTop"),
                             s.optDouble("altBottom"), s.optBoolean("used"), col, tc))
                     }
@@ -3562,47 +3592,32 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         marks.add(ScheduleView.Mark(m.optString("label"), m.optString("time"), m.optDouble("alt")))
                     }
                 }
-                blocks.add(ScheduleView.Block(b.optString("title"), b.optString("axis") == "down",
-                    b.optString("date"), segs, marks))
+                val block = ScheduleView.Block(b.optString("title"), b.optString("axis") == "down",
+                    b.optString("date"), segs, marks)
+                val sv = ScheduleView(this)
+                sv.onTapType = { t -> ccmTypeToKey[t]?.let { k -> openPlanCcmEdit(k) } }
+                sv.onMoveBoundary = { before, after, occ, altDeg, rising ->
+                    Thread { HgeNative.nativeSetBoundaryByAlt(before, after, occ, altDeg, rising) }.start()
+                }
+                sv.onSetBand = { rising, insert -> setBand(rising, insert) }
+                sv.isEnabled = ed
+                sv.setData(listOf(block))
+                planPager.addView(sv, FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+                schedulePages.add(sv)
             }
         }
-        sv.setData(blocks)
+        planPager.refreshPages()
+        updatePagerTitle()
     }
 
-    // 境目(撮影制御方法の切替=太陽高度)をタップした時のピッカー編集。2本指ドラッグの代替(操作性改善)。
-    // 太陽高度を 0.5° 刻みで可動範囲[lo,hi]内から選び、OKで nativeSetBoundaryByAlt(ドラッグと同じ)へ。
-    private fun showBoundaryPicker(before: Int, after: Int, occ: Int, curAlt: Double, rising: Int, lo: Double, hi: Double) {
-        val step = 0.5
-        val n = (Math.round((hi - lo) / step).toInt()).coerceAtLeast(1) + 1
-        val labels = Array(n) { "%+.1f°".format(lo + it * step) }
-        val np = android.widget.NumberPicker(this).apply {
-            minValue = 0; maxValue = n - 1
-            displayedValues = labels
-            wrapSelectorWheel = false
-            value = Math.round((curAlt - lo) / step).toInt().coerceIn(0, n - 1)
-        }
-        fun tn(t: Int) = ccmTypeName[t] ?: when (t) { 6, 7 -> "移行" else -> "境目" }
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(24), dp(12), dp(24), dp(4)); gravity = Gravity.CENTER_HORIZONTAL
-            addView(TextView(this@MainActivity).apply {
-                text = "${tn(before)} → ${tn(after)} に切り替わる太陽高度"; textSize = 14f
-                gravity = Gravity.CENTER; setPadding(0, 0, 0, dp(4))
-            })
-            addView(TextView(this@MainActivity).apply {
-                text = "低いほど暗い側で切り替わります"; textSize = 11f; setTextColor(0xFF888888.toInt())
-            })
-            addView(np)
-        }
-        androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("境目の太陽高度")
-            .setView(box)
-            .setPositiveButton("OK") { _, _ ->
-                val altDeg = lo + np.value * step
-                Thread { HgeNative.nativeSetBoundaryByAlt(before, after, occ, altDeg, rising) }.start()
-            }
-            .setNegativeButton("キャンセル", null)
-            .show()
+    // タイトル行のページ番号(先頭=1/n)。薄明ページは計画名+番号を表示する。
+    private fun updatePagerTitle() {
+        val n = planPager.pageCount.coerceAtLeast(1)
+        val cur = planPager.current
+        val name = try { JSONObject(latestSchedule).optString("name") } catch (_: Exception) { "" }
+        val base = if (cur == 0) "撮影計画" else name.ifEmpty { "撮影計画" }
+        findViewById<TextView>(R.id.plan_title).text = "$base  ${cur + 1}/$n"
     }
 
     // 撮影要求済(撮影中/待機/未検出)の計画を表示しているときは一切編集できない(item7)。各操作部の有効/無効を切替。
@@ -3615,7 +3630,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .forEach { findViewById<View>(it).isEnabled = ed }
         intervalText.isEnabled = ed; landscapeCheck.isEnabled = ed
         cameraText.isEnabled = ed; lensText.isEnabled = ed; edgeSpinner.isEnabled = ed
-        compass.isEnabled = ed; elevationView.isEnabled = ed; scheduleView?.isEnabled = ed
+        compass.isEnabled = ed; elevationView.isEnabled = ed; schedulePages.forEach { it.isEnabled = ed }
         findViewById<LinearLayout>(R.id.plan_ccmButtons).let { for (i in 0 until it.childCount) it.getChildAt(i).isEnabled = ed }
         findViewById<View>(R.id.plan_saveButton).alpha = if (ed) 1f else 0.4f
     }

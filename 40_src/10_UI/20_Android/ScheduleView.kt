@@ -1,14 +1,13 @@
 package app.laxei.holygrail
 
-// 撮影計画スケジュール(仕様書10 §7.3.2 / 330.撮影計画設定.png に忠実)。
-// 太陽高度軸(+6°〜-24°)で「夕方の計画」「朝の計画」を別ブロックに分けて表示する。
-//  各ブロック: 左=高度目盛+薄明帯(昼/市民/航海/天文/夜)、中=境目の時刻・太陽高度(開始/終了/月出入り)、
-//             右=撮影制御方法を「使用する/使用しない」の2列(排除した夕日/朝日は使用しない側)。
-// 操作(スクロールとの衝突回避のため編集は2本指):
-//  ・2本指の縦ドラッグ=境目を上下に動かして時刻(=太陽高度)を変更(onMoveBoundary)
-//  ・2本指の横ドラッグ=夕日/朝日の挿入(左)・排除(右)(onSetBand)
+// 撮影計画スケジュール(仕様書10 §7.3.2)。1インスタンス=1薄明ブロック=1ページ(横スライドで切替)。
+// 太陽高度軸(+6°〜-24°)で薄明帯・境目時刻・撮影制御方法(使用する/使用しない)を表示する。
+//  左=高度目盛+薄明帯、中=境目の時刻/太陽高度(開始/終了/月出入り)、右=撮影制御方法の2列。
+// 操作(すべて1本指。縦スクロールはしない=ページ内に収める):
+//  ・境目付近の縦スライド=境目を上下に動かして時刻(=太陽高度)を変更(onMoveBoundary)
+//  ・朝日/夕日(挿入/排除できる帯)の上での横スライド=挿入(左)/排除(右)(onSetBand)
+//  ・上記以外の横スライド=ページ移動(親 PlanPager へ委譲)
 //  ・タップ=その撮影制御方法の編集へ(onTapType)
-//  ・1本指の移動=ページスクロール(親へ委譲)。その際 onNeedTwoFinger で「2本指で」を促す。
 
 import android.content.Context
 import android.graphics.Canvas
@@ -16,6 +15,7 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import kotlin.math.abs
 
 class ScheduleView(context: Context) : View(context) {
@@ -30,17 +30,18 @@ class ScheduleView(context: Context) : View(context) {
 
     var onTapType: ((Int) -> Unit)? = null
     var onMoveBoundary: ((before: Int, after: Int, occ: Int, altDeg: Double, rising: Int) -> Unit)? = null
-    // 境目を「タップ」した時の編集(ピッカー)。2本指ドラッグの代替。curAlt=現在値、lo/hi=可動範囲[°]。
-    var onEditBoundary: ((before: Int, after: Int, occ: Int, curAlt: Double, rising: Int, lo: Double, hi: Double) -> Unit)? = null
     var onSetBand: ((rising: Boolean, insert: Boolean) -> Unit)? = null
-    var onNeedTwoFinger: (() -> Unit)? = null
 
     private fun dp(v: Float) = v * resources.displayMetrics.density
     private fun sp(v: Float) = v * resources.displayMetrics.scaledDensity
+    private val slop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
 
     private val TOP = 6.0; private val BOT = -24.0; private val RANGE = TOP - BOT  // 30°
     private val headerH get() = dp(34f)
-    private val blockH get() = dp(450f)   // 指操作しやすいよう縦を拡大(従来比1.5倍)
+    private val bottomPad get() = dp(20f)
+    private var fillH = dp(500f)
+    // 1ページ=1ブロックを縦いっぱいに収める(縦スクロールしないため画面高から算出)。
+    private val blockH get() = (fillH - headerH - bottomPad).coerceAtLeast(dp(160f))
     private val axisLabelW get() = dp(26f)
     private val bandW get() = dp(40f)
     private val markW get() = dp(94f)
@@ -57,7 +58,6 @@ class ScheduleView(context: Context) : View(context) {
     private val badgeFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF66BB6A.toInt() }
     private val badgeTxt = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFFFFFF.toInt(); textSize = sp(11f); textAlign = Paint.Align.CENTER; isFakeBoldText = true }
 
-    // 薄明帯(高度→色/ラベル)。明るい昼→濃い夜。
     private data class Zone(val top: Double, val bottom: Double, val label: String, val color: Int)
     private val zones = listOf(
         Zone(6.0, 0.0, "昼", 0xFFCFE8FF.toInt()),
@@ -66,11 +66,12 @@ class ScheduleView(context: Context) : View(context) {
         Zone(-12.0, -18.0, "天文薄明", 0xFF3C4A66.toInt()),
         Zone(-18.0, -24.0, "夜", 0xFF1A1F33.toInt()))
 
-    fun setData(blocks: List<Block>) { this.blocks = blocks; requestLayout(); invalidate() }
+    fun setData(blocks: List<Block>) { this.blocks = blocks; invalidate() }
 
     override fun onMeasure(wSpec: Int, hSpec: Int) {
         val w = MeasureSpec.getSize(wSpec)
-        val h = (blocks.size.coerceAtLeast(1) * (headerH + blockH) + dp(24f)).toInt()  // 下に余白(範囲外の終了時刻+編集ボタンと分離)
+        val h = MeasureSpec.getSize(hSpec)
+        fillH = h.toFloat()
         setMeasuredDimension(w, h)
     }
 
@@ -95,7 +96,6 @@ class ScheduleView(context: Context) : View(context) {
         super.onDraw(c)
         if (blocks.isEmpty() || width == 0) return
         for (bi in blocks.indices) drawBlock(c, bi)
-        // 2本指縦ドラッグ中の境目プレビュー線
         if (previewY >= 0f) {
             c.drawLine(axisLabelW + bandW, previewY, width.toFloat(), previewY, previewPaint)
             val bi = targetBi
@@ -106,7 +106,6 @@ class ScheduleView(context: Context) : View(context) {
     private fun drawBlock(c: Canvas, bi: Int) {
         val blk = blocks[bi]
         val hTop = blockTop(bi)
-        // ヘッダ: タイトル / 日付バッジ / 列見出し
         c.drawText(blk.title, dp(2f), hTop + sp(14f), titleTxt)
         if (blk.date.isNotEmpty()) {
             val cx = (axisLabelW + bandW + markW) / 2f + dp(20f)
@@ -118,7 +117,6 @@ class ScheduleView(context: Context) : View(context) {
         c.drawText("使用する", (ccmX0() + usedX1()) / 2f, hTop + sp(13f), colHdr)
         c.drawText("使用しない", (usedX1() + width) / 2f, hTop + sp(13f), colHdr)
 
-        // 薄明帯 + 高度目盛
         val bandX0 = axisLabelW
         for (z in zones) {
             val yt = yOf(bi, z.top); val yb = yOf(bi, z.bottom)
@@ -127,7 +125,6 @@ class ScheduleView(context: Context) : View(context) {
             c.drawRect(bandX0, top, bandX0 + bandW, bot, zoneFill)
             if (bot - top >= sp(12f)) {
                 zoneTxt.color = if (z.color and 0xFF < 0x60) 0xFFFFFFFF.toInt() else 0xFF263238.toInt()
-                // 縦書き風に1文字ずつは複雑なので横書きを中央に
                 c.drawText(z.label, bandX0 + bandW / 2f, (top + bot) / 2f + sp(3f), zoneTxt)
             }
         }
@@ -136,7 +133,6 @@ class ScheduleView(context: Context) : View(context) {
             c.drawText(if (deg >= 0) "+$deg°" else "$deg°", axisLabelW - dp(2f), y + sp(3f), degTxt)
         }
 
-        // 撮影制御方法バンド(使用する=左列 / 使用しない=右列)
         for (s in blk.segs) {
             val yt = yOf(bi, s.altTop); val yb = yOf(bi, s.altBottom)
             val top = minOf(yt, yb); val bot = maxOf(yt, yb)
@@ -151,7 +147,6 @@ class ScheduleView(context: Context) : View(context) {
             }
         }
 
-        // 境目の時刻・太陽高度 / 開始終了 / 月出入り(中列)
         val markX0 = axisLabelW + bandW
         for (m in blk.marks) {
             val inRange = m.alt <= TOP + 0.01 && m.alt >= BOT - 0.01
@@ -161,7 +156,6 @@ class ScheduleView(context: Context) : View(context) {
                 val right = if (m.label.isNotEmpty()) m.label else "%.1f°".format(m.alt)
                 c.drawText("${m.time}  $right", markX0 + dp(2f), y + sp(11f), markTxt)
             } else {
-                // 範囲外(日中で+6°超/深夜で-24°未満)の開始・終了はブロックの外側に時刻だけ描く。
                 val above = yOf(bi, m.alt) < bodyTop(bi)
                 val y = if (above) bodyTop(bi) - dp(3f) else bodyTop(bi) + blockH + sp(11f)
                 val label = if (m.label.isNotEmpty()) m.label else "%.1f°".format(m.alt)
@@ -170,19 +164,13 @@ class ScheduleView(context: Context) : View(context) {
         }
     }
 
-    // ── タッチ(2本指=編集 / 1本指=スクロール+ヒント) ──
-    private var twoFinger = false
-    private var hintShown = false
+    // ── タッチ(すべて1本指。境目=縦 / 朝夕帯=横 / それ以外の横=ページ移動へ委譲) ──
+    private var axisLocked = false
+    private var mode = 0            // 0=未確定/無効, 1=境目移動(縦), 2=挿入排除(横), 3=ページ委譲(横)
     private var downX = 0f; private var downY = 0f
-    private var startMidX = 0f; private var startMidY = 0f
-    private var curMidX = 0f; private var curMidY = 0f
-    private var previewY = -1f   // 2本指縦ドラッグ中の境目プレビュー
+    private var previewY = -1f
     private var targetBi = -1; private var targetBoundary = -1; private var targetSeg = -1
 
-    private fun midX(e: MotionEvent) = if (e.pointerCount >= 2) (e.getX(0) + e.getX(1)) / 2f else e.x
-    private fun midY(e: MotionEvent) = if (e.pointerCount >= 2) (e.getY(0) + e.getY(1)) / 2f else e.y
-
-    // 全ブロックの「使用する」セグメント境目を ccmList 順(=時系列)で列挙し occ を付与。
     private data class Bnd(val bi: Int, val before: Int, val after: Int, val occ: Int, val alt: Double, val y: Float)
     private fun boundaries(): List<Bnd> {
         val res = ArrayList<Bnd>(); val cnt = HashMap<Int, Int>()
@@ -191,33 +179,24 @@ class ScheduleView(context: Context) : View(context) {
             for (k in 0 until u.size - 1) {
                 val bef = u[k].type; val aft = u[k + 1].type
                 val key = bef * 100 + aft; val occ = cnt.getOrDefault(key, 0); cnt[key] = occ + 1
-                // 隣接する2セグメントが接する高度。夕方(降順)は上segの下端、朝方(昇順)は上segの上端。
                 val alt = if (blocks[bi].axisDown) u[k].altBottom else u[k].altTop
                 res.add(Bnd(bi, bef, aft, occ, alt, yOf(bi, alt)))
             }
         }
         return res
     }
-    // 境界の可動範囲[°](仕様7.3.2)。接する種別ペアで決まる。
     private fun clampRange(before: Int, after: Int): Pair<Double, Double> {
         fun has(t: Int) = before == t || after == t
         val sun = has(2) || has(3); val trans = has(6) || has(7)
         return when {
-            has(4) && sun -> 3.0 to 6.0          // 日中↔夕日/朝日(上境界 +6〜+3)
-            sun && trans -> -1.0 to 2.0          // 夕日/朝日↔移行(下境界 +2〜-1)
-            has(4) && trans -> -3.0 to 4.0       // 日中↔移行(日中境界 +4〜-3)
-            has(1) && trans -> -19.0 to -12.0    // 夜間↔移行(夜間境界 -12〜-19)
+            has(4) && sun -> 3.0 to 6.0
+            sun && trans -> -1.0 to 2.0
+            has(4) && trans -> -3.0 to 4.0
+            has(1) && trans -> -19.0 to -12.0
             else -> -24.0 to 6.0
         }
     }
     private fun blockAt(y: Float): Int { for (bi in blocks.indices) { if (y >= blockTop(bi) && y < blockTop(bi) + headerH + blockH) return bi }; return -1 }
-    private fun segAt(bi: Int, y: Float): Int {
-        val b = blocks[bi]
-        for (i in b.segs.indices) { val s = b.segs[i]; val yt = yOf(bi, s.altTop); val yb = yOf(bi, s.altBottom); if (y >= minOf(yt, yb) && y < maxOf(yt, yb)) return i }
-        return -1
-    }
-    // タップ判定は描画している色付きの箱(使用する/使用しない列)の中だけに限定する。
-    // 左の高度軸・薄明帯・時刻列や、箱の無い余白をタップしても遷移しないようにする(自然な操作)。
     private fun segAtXY(bi: Int, x: Float, y: Float): Int {
         val b = blocks[bi]
         for (i in b.segs.indices) {
@@ -231,107 +210,78 @@ class ScheduleView(context: Context) : View(context) {
         }
         return -1
     }
+    // 最寄りの境目(downY から dp22 以内)。無ければ -1。
+    private fun nearestBoundary(bi: Int, y: Float): Int {
+        var best = -1; var bestD = dp(22f); val bs = boundaries()
+        for (idx in bs.indices) { if (bs[idx].bi == bi) { val d = abs(bs[idx].y - y); if (d < bestD) { bestD = d; best = idx } } }
+        return best
+    }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
-        if (!isEnabled) return false   // 撮影中(読取専用)は編集不可。親スクロールへ委ねる。
+        if (!isEnabled) return false   // 撮影中(読取専用)は編集不可→ページャの横スワイプに委ねる
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                downX = e.x; downY = e.y; curMidX = e.x; curMidY = e.y
-                twoFinger = false; hintShown = false; previewY = -1f
-                targetBi = -1; targetBoundary = -1; targetSeg = -1
-                // まずジェスチャを保持(2本指を確実に拾う)。1本指で動いたら親へ返す。
-                parent?.requestDisallowInterceptTouchEvent(true)
-                return true
-            }
-            MotionEvent.ACTION_POINTER_DOWN -> {
-                if (e.pointerCount >= 2) {
-                    twoFinger = true
-                    parent?.requestDisallowInterceptTouchEvent(true)
-                    startMidX = midX(e); startMidY = midY(e); curMidX = startMidX; curMidY = startMidY
-                    targetBi = blockAt(startMidY)
-                    // 境目は「線の近く(±dp22)」を掴んだ時だけ対象にする(帯中央の横ドラッグで
-                    // 誤って境目を動かさないため)。帯本体は常に segAt で挿入/排除の対象にする。
-                    targetBoundary = -1; targetSeg = -1
-                    if (targetBi >= 0) {
-                        var best = -1; var bestD = dp(22f); val bs = boundaries()
-                        for (idx in bs.indices) { if (bs[idx].bi == targetBi) { val d = abs(bs[idx].y - startMidY); if (d < bestD) { bestD = d; best = idx } } }
-                        targetBoundary = best
-                        targetSeg = segAt(targetBi, startMidY)
-                    }
-                }
+                downX = e.x; downY = e.y; axisLocked = false; mode = 0; previewY = -1f
+                targetBi = blockAt(e.y); targetBoundary = -1; targetSeg = -1
+                parent?.requestDisallowInterceptTouchEvent(true)   // まず掴む(1本指の意図が定まるまで)
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
-                if (twoFinger) {
-                    if (e.pointerCount >= 2) { curMidX = midX(e); curMidY = midY(e) }
-                    // 縦移動が優勢なら境目プレビュー線を出す(可動範囲にクランプ)
-                    if (targetBoundary >= 0 && abs(curMidY - startMidY) >= abs(curMidX - startMidX)) {
-                        val bnd = boundaries().getOrNull(targetBoundary)
-                        if (bnd != null) {
-                            val (lo, hi) = clampRange(bnd.before, bnd.after)
-                            val a = altOfY(bnd.bi, curMidY).coerceIn(lo, hi)
-                            previewY = yOf(bnd.bi, a)
-                        } else { previewY = curMidY }
-                        invalidate()
+                val dx = e.x - downX; val dy = e.y - downY
+                if (!axisLocked) {
+                    if (abs(dx) < slop && abs(dy) < slop) return true
+                    axisLocked = true
+                    if (abs(dy) >= abs(dx)) {
+                        // 縦=境目移動。最寄り境目を掴む。無ければ無効(ページ移動もしない)。
+                        mode = 1
+                        targetBoundary = if (targetBi >= 0) nearestBoundary(targetBi, downY) else -1
+                        if (targetBoundary < 0) mode = 0
+                    } else {
+                        // 横=朝夕帯なら挿入排除、それ以外はページ移動へ委譲。
+                        val si = if (targetBi >= 0) segAtXY(targetBi, downX, downY) else -1
+                        val ty = if (si >= 0) blocks[targetBi].segs[si].type else 0
+                        if (si >= 0 && (ty == 2 || ty == 3 || ty == 4)) { mode = 2; targetSeg = si }
+                        else { mode = 3; parent?.requestDisallowInterceptTouchEvent(false) }  // ページャが横スワイプを引き取る
                     }
-                    return true
                 }
-                // 1本指で動いたらヒント+親スクロールへ委譲
-                if (abs(e.x - downX) > dp(10f) || abs(e.y - downY) > dp(10f)) {
-                    if (!hintShown) { hintShown = true; onNeedTwoFinger?.invoke() }
-                    parent?.requestDisallowInterceptTouchEvent(false)
+                if (mode == 3) return true   // 親が intercept するまで保持
+                if (mode == 1 && targetBoundary >= 0) {
+                    val bnd = boundaries().getOrNull(targetBoundary)
+                    if (bnd != null) {
+                        val (lo, hi) = clampRange(bnd.before, bnd.after)
+                        val a = altOfY(bnd.bi, e.y).coerceIn(lo, hi)
+                        previewY = yOf(bnd.bi, a); invalidate()
+                    }
                 }
                 return true
             }
-            MotionEvent.ACTION_POINTER_UP -> { return true }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                if (e.actionMasked == MotionEvent.ACTION_UP && twoFinger) {
-                    commitEdit()
-                } else if (e.actionMasked == MotionEvent.ACTION_UP && !twoFinger &&
-                           abs(e.x - downX) < dp(10f) && abs(e.y - downY) < dp(10f)) {
+                if (e.actionMasked == MotionEvent.ACTION_UP && !axisLocked) {
+                    // タップ=撮影制御方法の編集(色付き箱の中のみ)。
                     val bi = blockAt(e.y)
-                    if (bi >= 0) {
-                        // 色付き箱(撮影制御方法)をタップ → その撮影制御方法の編集。
-                        // 箱以外(高度軸・薄明帯・時刻列・余白)をタップ → 最寄りの境目を編集(太陽高度ピッカー)。
-                        //  精密に境目線を狙わなくてよいので操作しやすい(2本指ドラッグの代替)。
-                        val si = segAtXY(bi, e.x, e.y)
-                        if (si >= 0) {
-                            onTapType?.invoke(blocks[bi].segs[si].type)
-                        } else {
-                            val bnd = boundaries().filter { it.bi == bi }.minByOrNull { abs(it.y - e.y) }
-                            if (bnd != null) {
-                                val (lo, hi) = clampRange(bnd.before, bnd.after)
-                                val rising = if (blocks[bi].axisDown) 0 else 1
-                                onEditBoundary?.invoke(bnd.before, bnd.after, bnd.occ, bnd.alt, rising, lo, hi)
-                            }
-                        }
+                    if (bi >= 0) { val si = segAtXY(bi, e.x, e.y); if (si >= 0) onTapType?.invoke(blocks[bi].segs[si].type) }
+                } else if (e.actionMasked == MotionEvent.ACTION_UP && mode == 1 && targetBoundary >= 0) {
+                    val bnd = boundaries().getOrNull(targetBoundary)
+                    if (bnd != null) {
+                        val (lo, hi) = clampRange(bnd.before, bnd.after)
+                        val a = altOfY(bnd.bi, e.y).coerceIn(lo, hi)
+                        val rising = if (blocks[bnd.bi].axisDown) 0 else 1
+                        onMoveBoundary?.invoke(bnd.before, bnd.after, bnd.occ, a, rising)
+                    }
+                } else if (e.actionMasked == MotionEvent.ACTION_UP && mode == 2 && targetSeg >= 0) {
+                    val s = blocks[targetBi].segs.getOrNull(targetSeg)
+                    val dx = e.x - downX
+                    if (s != null && abs(dx) > slop) {
+                        val rising = !blocks[targetBi].axisDown
+                        val right = dx > 0
+                        if ((s.type == 2 || s.type == 3) && right) onSetBand?.invoke(rising, false)
+                        else if (s.type == 4 && !right) onSetBand?.invoke(rising, true)
                     }
                 }
-                twoFinger = false; previewY = -1f; invalidate()
+                mode = 0; previewY = -1f; targetBoundary = -1; targetSeg = -1; axisLocked = false; invalidate()
                 return true
             }
         }
         return super.onTouchEvent(e)
-    }
-
-    private fun commitEdit() {
-        val bi = targetBi
-        if (bi < 0) return
-        val mvx = curMidX - startMidX; val mvy = curMidY - startMidY
-        if (targetBoundary >= 0 && abs(mvy) >= abs(mvx) && abs(mvy) > dp(8f)) {
-            // 縦ドラッグ=境目の時刻(=高度)変更
-            val bnd = boundaries().getOrNull(targetBoundary) ?: return
-            val (lo, hi) = clampRange(bnd.before, bnd.after)
-            val newAlt = altOfY(bi, curMidY).coerceIn(lo, hi)   // 可動範囲にクランプ(仕様7.3.2)
-            val rising = if (blocks[bi].axisDown) 0 else 1
-            onMoveBoundary?.invoke(bnd.before, bnd.after, bnd.occ, newAlt, rising)
-        } else if (targetSeg >= 0 && abs(mvx) > abs(mvy) && abs(mvx) > dp(20f)) {
-            // 横ドラッグ=夕日/朝日の挿入(左)/排除(右)
-            val s = blocks[bi].segs.getOrNull(targetSeg) ?: return
-            val rising = !blocks[bi].axisDown
-            val right = mvx > 0
-            if ((s.type == 2 || s.type == 3) && right) onSetBand?.invoke(rising, false)
-            else if (s.type == 4 && !right) onSetBand?.invoke(rising, true)
-        }
     }
 }
