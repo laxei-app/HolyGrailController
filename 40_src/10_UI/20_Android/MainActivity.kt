@@ -3551,15 +3551,22 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val tv = TextView(this); tv.text = "—"; tv.textSize = 13f; tv.setTextColor(0xFF888888.toInt())
             planOverview.addView(tv); return
         }
+        // 日付は年を外し M/d に。薄明ページの日付バッジと同じ緑の角丸ボタン状で表示する。
+        fun mdOf(d: String): String = if (d.length >= 10)
+            "${d.substring(5, 7).toInt()}/${d.substring(8, 10).toInt()}" else d
         var curDate = ""
         for (ev in evs) {
             if (ev.date != curDate) {
                 curDate = ev.date
                 val dh = TextView(this)
-                dh.text = ev.date; dh.setTypeface(null, Typeface.BOLD); dh.textSize = 13f
-                dh.setBackgroundColor(0xFFECEFF1.toInt()); dh.setPadding(dp(8), dp(4), dp(8), dp(4))
+                dh.text = mdOf(ev.date); dh.setTypeface(null, Typeface.BOLD); dh.textSize = 12f
+                dh.setTextColor(0xFFFFFFFF.toInt())
+                dh.setPadding(dp(12), dp(3), dp(12), dp(3))
+                dh.background = android.graphics.drawable.GradientDrawable().apply {
+                    cornerRadius = dp(9).toFloat(); setColor(0xFF66BB6A.toInt())   // 薄明ページの badgeFill と同色
+                }
                 dh.layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(4), 0, 0) }
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(8), 0, dp(2)) }
                 planOverview.addView(dh)
             }
             val tv = TextView(this)
