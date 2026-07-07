@@ -3529,9 +3529,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // §7.3.2 スケジュール表示/編集ビュー(計画画面)。太陽高度軸(+6..-24)で夕方/朝方を分けて表示。
     private var curSunriseMode = 0
     private var curSunsetMode = 0
-    // 薄明ページ(横スライド)への移動ボックスを概要スケジュールに追加する。時刻は出さない。
-    //  朝の薄明=濃紺(上)→オレンジ(下)、夕方の薄明=オレンジ(上)→濃紺(下)のグラデーション。タップでそのページへ。
-    private fun addTwilightBox(page: Int, morning: Boolean) {
+    // 薄明ページへの移動ボックス(時刻なし・時刻/イベント行くらいの幅=wrap)。
+    //  朝の薄明=濃紺(上)→オレンジ(下)、夕方の薄明=オレンジ(上)→濃紺(下)。タップでそのページへ横スライド。
+    private fun makeTwilightBox(page: Int, morning: Boolean): View {
         val orange = 0xFFF57C00.toInt(); val navy = 0xFF14274E.toInt()
         val colors = if (morning) intArrayOf(navy, orange) else intArrayOf(orange, navy)
         val g = android.graphics.drawable.GradientDrawable(
@@ -3539,18 +3539,39 @@ class MainActivity : AppCompatActivity(), HgeListener {
         g.cornerRadius = dp(8).toFloat()
         val tv = TextView(this)
         tv.text = if (morning) "朝の薄明" else "夕方の薄明"
-        tv.setTextColor(0xFFFFFFFF.toInt()); tv.textSize = 14f; tv.setTypeface(null, Typeface.BOLD)
+        tv.setTextColor(0xFFFFFFFF.toInt()); tv.textSize = 13f; tv.setTypeface(null, Typeface.BOLD)
         tv.gravity = Gravity.CENTER
         tv.background = g
-        tv.setPadding(dp(12), dp(12), dp(12), dp(12))
+        tv.setPadding(dp(14), dp(8), dp(14), dp(8))
         tv.layoutParams = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(6), 0, dp(6)) }
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(6), 0, dp(6)) }
         tv.setOnClickListener { planPager.setCurrent(page, true) }
-        planOverview.addView(tv)
+        return tv
+    }
+
+    private fun makeDateBadge(md: String): View {
+        val dh = TextView(this)
+        dh.text = md; dh.setTypeface(null, Typeface.BOLD); dh.textSize = 12f
+        dh.setTextColor(0xFFFFFFFF.toInt())
+        dh.setPadding(dp(12), dp(3), dp(12), dp(3))
+        dh.background = android.graphics.drawable.GradientDrawable().apply {
+            cornerRadius = dp(9).toFloat(); setColor(0xFF66BB6A.toInt())
+        }
+        dh.layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(8), 0, dp(2)) }
+        return dh
+    }
+
+    private fun makeEventRow(time: String, label: String): View {
+        val tv = TextView(this)
+        tv.text = "$time   $label"; tv.textSize = 13f
+        tv.setPadding(dp(12), dp(5), dp(8), dp(5))
+        return tv
     }
 
     // 先頭ページ: 概要スケジュール(表示専用)。時刻とイベント(Start/End/日の出/日の入/月の出/月の入)を
-    // 日付ごとにまとめて時系列表示し、各薄明ページへ移動できるボックスを適切な位置に差し込む。
+    // 日付ごとに時系列表示し、各薄明ページへ移動できるボックスを差し込む。
+    // 薄明が2つ以上なら縦2列に分割(日付境で分割。同一日付の朝夕のみのときは昼間=日の入で分割)。1つなら1列。
     private fun renderOverview(o: JSONObject) {
         planOverview.removeAllViews()
         val want = mapOf(1 to "Start", 12 to "End", 9 to "日の出", 2 to "日の入", 10 to "月の出", 11 to "月の入")
@@ -3602,27 +3623,38 @@ class MainActivity : AppCompatActivity(), HgeListener {
             }
         }
 
-        var curDate = ""
-        for ((idx, ev) in evs.withIndex()) {
-            if (ev.md != curDate) {
-                curDate = ev.md
-                val dh = TextView(this)
-                dh.text = ev.md; dh.setTypeface(null, Typeface.BOLD); dh.textSize = 12f
-                dh.setTextColor(0xFFFFFFFF.toInt())
-                dh.setPadding(dp(12), dp(3), dp(12), dp(3))
-                dh.background = android.graphics.drawable.GradientDrawable().apply {
-                    cornerRadius = dp(9).toFloat(); setColor(0xFF66BB6A.toInt())
-                }
-                dh.layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, dp(8), 0, dp(2)) }
-                planOverview.addView(dh)
+        // 縦2列にする分割位置 k(events[k] 以降が右列)。薄明が2つ以上のときだけ2列。
+        var k = 0
+        if (navs.size >= 2) {
+            val dateSplit = evs.indexOfFirst { it.md != evs.first().md }  // 日付が変わる位置
+            k = when {
+                dateSplit > 0 -> dateSplit                                // 日付境で分割
+                else -> evs.indexOfFirst { it.code == 2 }                 // 同一日付 → 昼間(日の入)で分割
             }
-            before[idx]?.forEach { addTwilightBox(it.page, it.morning) }
-            val tv = TextView(this)
-            tv.text = "${ev.time}   ${ev.label}"; tv.textSize = 13f
-            tv.setPadding(dp(12), dp(5), dp(8), dp(5))
-            planOverview.addView(tv)
-            after[idx]?.forEach { addTwilightBox(it.page, it.morning) }
+        }
+        val twoCol = k in 1 until evs.size
+
+        val col1: LinearLayout
+        val col2: LinearLayout
+        if (twoCol) {
+            val rowL = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            col1 = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            col2 = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            rowL.addView(col1, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            rowL.addView(col2, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(dp(8), 0, 0, 0) })
+            planOverview.addView(rowL, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        } else { col1 = planOverview; col2 = planOverview }
+
+        var cd1 = ""; var cd2 = ""
+        for ((idx, ev) in evs.withIndex()) {
+            val right = twoCol && idx >= k
+            val col = if (right) col2 else col1
+            if (right) { if (ev.md != cd2) { cd2 = ev.md; col.addView(makeDateBadge(ev.md)) } }
+            else { if (ev.md != cd1) { cd1 = ev.md; col.addView(makeDateBadge(ev.md)) } }
+            before[idx]?.forEach { col.addView(makeTwilightBox(it.page, it.morning)) }
+            col.addView(makeEventRow(ev.time, ev.label))
+            after[idx]?.forEach { col.addView(makeTwilightBox(it.page, it.morning)) }
         }
     }
 
