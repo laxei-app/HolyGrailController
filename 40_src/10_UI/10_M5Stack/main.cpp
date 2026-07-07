@@ -244,13 +244,13 @@ static const char* ccmName(int t)
 {
 	switch (t)
 	{
-	case 1: return "夜間撮影";
-	case 2: return "朝日撮影";
-	case 3: return "夕日撮影";
-	case 4: return "日中撮影";
-	case 5: return "月の影響";
-	case 6: return "夜間前移行";
-	case 7: return "夜間後移行";
+	case 1: return "Night";
+	case 2: return "Sunrise";
+	case 3: return "Sunset";
+	case 4: return "Daytime";
+	case 5: return "Moon";
+	case 6: return "Pre-night";
+	case 7: return "Post-night";
 	default: return "?";
 	}
 }
@@ -259,12 +259,12 @@ static const char* eventName(int e)
 {
 	switch (e)
 	{
-	case 1: return "Start";          case 2: return "日の入り";
-	case 3: return "市民薄明(夕)";   case 4: return "航海薄明(夕)";
-	case 5: return "天文薄明(夕)";   case 6: return "天文薄明(朝)";
-	case 7: return "航海薄明(朝)";   case 8: return "市民薄明(朝)";
-	case 9: return "日の出";         case 10: return "月の出";
-	case 11: return "月の入り";      case 12: return "End";
+	case 1: return "Start";          case 2: return "Sunset";
+	case 3: return "Civil dusk";     case 4: return "Nautical dusk";
+	case 5: return "Astro dusk";     case 6: return "Astro dawn";
+	case 7: return "Nautical dawn";  case 8: return "Civil dawn";
+	case 9: return "Sunrise";        case 10: return "Moonrise";
+	case 11: return "Moonset";       case 12: return "End";
 	default: return "?";
 	}
 }
@@ -377,7 +377,7 @@ static void renderPlan(void)
 	const json& arr = planList();
 
 	g_cv.fillScreen(TFT_BLACK);
-	g_cv.setFont(&fonts::efontJA_16);
+	g_cv.setFont(&fonts::Font2);	// ASCII専用フォント(日本語フォントefontJA_16は撤去。エッジ表示は英語のみ)
 
 	// ヘッダ
 	g_cv.fillRect(0, 0, 320, HEAD_H, M5.Display.color565(0x15, 0x65, 0xC0));
@@ -470,8 +470,8 @@ static void renderPlan(void)
 	if (arr.empty())
 	{
 		g_cv.setTextColor(TFT_LIGHTGREY);
-		g_cv.setCursor(16, top + 24); g_cv.print("計画なし");
-		g_cv.setCursor(16, top + 48); g_cv.print("スマホから転送してください");
+		g_cv.setCursor(16, top + 24); g_cv.print("No plans");
+		g_cv.setCursor(16, top + 48); g_cv.print("Transfer from phone");
 	}
 
 	// 削除確認ダイアログ(item4)。はい=削除 / いいえ=取消。ボタン座標は onTap と一致させる。
@@ -481,11 +481,11 @@ static void renderPlan(void)
 		g_cv.fillRoundRect(bx, by, 260, 92, 6, M5.Display.color565(0x22, 0x22, 0x22));
 		g_cv.drawRoundRect(bx, by, 260, 92, 6, TFT_WHITE);
 		g_cv.setTextColor(TFT_WHITE);
-		g_cv.setCursor(bx + 16, by + 14); g_cv.print("削除しますか？");
+		g_cv.setCursor(bx + 16, by + 14); g_cv.print("Delete?");
 		g_cv.fillRoundRect(bx + 20,  by + 52, 90, 30, 4, M5.Display.color565(0xCC, 0x44, 0x44));
-		g_cv.setCursor(bx + 50,  by + 60); g_cv.print("はい");
+		g_cv.setCursor(bx + 50,  by + 60); g_cv.print("Yes");
 		g_cv.fillRoundRect(bx + 150, by + 52, 90, 30, 4, M5.Display.color565(0x55, 0x55, 0x55));
-		g_cv.setCursor(bx + 172, by + 60); g_cv.print("いいえ");
+		g_cv.setCursor(bx + 172, by + 60); g_cv.print("No");
 	}
 
 	g_cv.pushSprite(0, 0);
@@ -506,7 +506,7 @@ static void renderCcm(void)
 	}
 
 	g_cv.fillScreen(TFT_BLACK);
-	g_cv.setFont(&fonts::efontJA_16);
+	g_cv.setFont(&fonts::Font2);	// ASCII専用フォント(日本語フォントefontJA_16は撤去。エッジ表示は英語のみ)
 
 	// ヘッダ(撮影制御方法の色, 左に戻る記号)
 	g_cv.fillRect(0, 0, 320, HEAD_H, ccmColor(g_ccmType));
@@ -522,30 +522,30 @@ static void renderCcm(void)
 		char b[96];
 		if (g_ccmType == 1)
 		{
-			std::snprintf(b, sizeof(b), "固定露出 太陽高度 %.0f°", c.value("sunAltitude", 0.0));
+			std::snprintf(b, sizeof(b), "Fixed exp  Sun alt %.0fdeg", c.value("sunAltitude", 0.0));
 			y = line(y, b);
-			y = line(y, std::string("画角端で自動: ") + (c.value("autoEdge", false) ? "ON" : "OFF"));
-			std::snprintf(b, sizeof(b), "夜間後露出補正 %+.1fev", c.value("postNightEv", 0.0));
+			y = line(y, std::string("Auto at frame edge: ") + (c.value("autoEdge", false) ? "ON" : "OFF"));
+			std::snprintf(b, sizeof(b), "Post-night exp %+.1fev", c.value("postNightEv", 0.0));
 			y = line(y, b);
 		}
 		else if (g_ccmType == 2 || g_ccmType == 3)
 		{
-			std::snprintf(b, sizeof(b), "太陽高度 %.0f° → %.0f°",
+			std::snprintf(b, sizeof(b), "Sun alt %.0fdeg -> %.0fdeg",
 			              c.value("sunAltitude", 0.0), c.value("sunAltitudeEnd", 0.0));
 			y = line(y, b);
-			std::snprintf(b, sizeof(b), "露出補正 %+.1fev", c.value("ev", 0.0));
+			std::snprintf(b, sizeof(b), "Exp comp %+.1fev", c.value("ev", 0.0));
 			y = line(y, b);
 		}
 		else if (g_ccmType == 4)
 		{
-			std::snprintf(b, sizeof(b), "露出補正 %+.1fev", c.value("ev", 0.0));
+			std::snprintf(b, sizeof(b), "Exp comp %+.1fev", c.value("ev", 0.0));
 			y = line(y, b);
 		}
 		else if (g_ccmType == 5)
 		{
-			std::snprintf(b, sizeof(b), "対処モード %d", c.value("mode", 0));
+			std::snprintf(b, sizeof(b), "Mode %d", c.value("mode", 0));
 			y = line(y, b);
-			std::snprintf(b, sizeof(b), "補正開始輝度 %.1fev / 補正 %.1fev",
+			std::snprintf(b, sizeof(b), "Start lum %.1fev / comp %.1fev",
 			              c.value("startLuminance", 0.0), c.value("ev", 0.0));
 			y = line(y, b);
 		}
@@ -556,31 +556,31 @@ static void renderCcm(void)
 			const json& lb = c["limitBright"];
 			const json& ld = c["limitDark"];
 			y += 6;
-			y = head(y, "露出限界");
-			y = line(y, "暗所  ISO" + lb.value("iso", std::string()) + "  " +
+			y = head(y, "Exposure limits");
+			y = line(y, "Dark   ISO" + lb.value("iso", std::string()) + "  " +
 			            lb.value("ss", std::string()) + "  F" + lb.value("fn", std::string()));
-			y = line(y, "明所  ISO" + ld.value("iso", std::string()) + "  " +
+			y = line(y, "Bright ISO" + ld.value("iso", std::string()) + "  " +
 			            ld.value("ss", std::string()) + "  F" + ld.value("fn", std::string()));
 		}
 	}
 	else if (g_ccmType == 6)
 	{
-		y = line(y, "夜間前移行");
-		y = line(y, "夜間へ滑らかに露出を変化させます");
+		y = line(y, "Pre-night");
+		y = line(y, "Smoothly shifts exposure into night");
 	}
 	else if (g_ccmType == 7)
 	{
-		y = line(y, "夜間後移行");
-		y = line(y, "夜間から次へ滑らかに露出を戻します");
+		y = line(y, "Post-night");
+		y = line(y, "Smoothly restores exposure after night");
 	}
 	else
 	{
-		y = line(y, "(データなし)");
+		y = line(y, "(no data)");
 	}
 
 	g_cv.setTextColor(TFT_LIGHTGREY);
 	g_cv.setCursor(8, VIEW_BOT + 8);
-	g_cv.print("上の帯をタップで戻る");
+	g_cv.print("Tap the top bar to go back");
 	g_cv.pushSprite(0, 0);
 }
 
@@ -625,11 +625,11 @@ static void renderProv(void)
 	// QR内容: 端末名 + PoP(スマホはこれを読み、PoP由来鍵で暗号化してBLE送信する)。
 	std::string qr = std::string("{\"n\":\"") + g_devName + "\",\"pop\":\"" + g_pop + "\"}";
 	g_cv.qrcode(qr.c_str(), 76, 14, 168, 4);
-	g_cv.setFont(&fonts::efontJA_16);
+	g_cv.setFont(&fonts::Font2);	// ASCII専用フォント(日本語フォントefontJA_16は撤去。エッジ表示は英語のみ)
 	g_cv.setTextColor(TFT_BLACK);
 	g_cv.setTextDatum(textdatum_t::middle_center);
-	g_cv.drawString("スマホでQRを読み取り設定", 160, 198);
-	g_cv.drawString("(画面タップで戻る)", 160, 220);
+	g_cv.drawString("Scan this QR with the phone", 160, 198);
+	g_cv.drawString("(tap screen to go back)", 160, 220);
 	g_cv.setTextDatum(textdatum_t::top_left);
 	g_cv.pushSprite(0, 0);
 }
@@ -641,12 +641,12 @@ static void renderApQr(void)
 	// WIFI:T:WPA;S:<ssid>;P:<pass>;; (SSID/パスは英数のみなのでエスケープ不要)
 	std::string qr = std::string("WIFI:T:WPA;S:") + g_apSsid + ";P:" + g_apPass + ";;";
 	g_cv.qrcode(qr.c_str(), 76, 6, 168, 4);
-	g_cv.setFont(&fonts::efontJA_16);
+	g_cv.setFont(&fonts::Font2);	// ASCII専用フォント(日本語フォントefontJA_16は撤去。エッジ表示は英語のみ)
 	g_cv.setTextColor(TFT_BLACK);
 	g_cv.setTextDatum(textdatum_t::middle_center);
-	g_cv.drawString("APモード: このAPに接続", 160, 184);
+	g_cv.drawString("AP mode: connect to this AP", 160, 184);
 	g_cv.drawString((g_apSsid + " / " + g_apPass).c_str(), 160, 204);
-	g_cv.drawString("(画面タップで計画へ)", 160, 224);
+	g_cv.drawString("(tap screen for plans)", 160, 224);
 	g_cv.setTextDatum(textdatum_t::top_left);
 	g_cv.pushSprite(0, 0);
 }
@@ -788,7 +788,7 @@ void setup(void)
 	g_cv.setPsram(true);
 	g_cv.setColorDepth(16);
 	g_cv.createSprite(320, 240);
-	g_cv.setFont(&fonts::efontJA_16);
+	g_cv.setFont(&fonts::Font2);	// ASCII専用フォント(日本語フォントefontJA_16は撤去。エッジ表示は英語のみ)
 
 	loadEdgeCreds();	// NVS から SSID/password/端末名(無ければフォールバック)
 	wifiConnect::setup();
