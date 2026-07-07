@@ -3,6 +3,7 @@
 #include "cameraController.h"
 #include "dataManager.h"
 #include "osFile.h"
+#include "net.h"			// §3.3 tier3: 限定サブネットのバッチ探索(net::scanSubnetPort)
 #include <json/nlohmann/json.hpp>
 #include <vector>
 #include <mutex>
@@ -110,6 +111,32 @@ bool tryIpDirect(const std::string& wantSerial, const hgc::camera& cam, bool has
 			out = known[0];
 			dataManager::logEvent("NET", (std::string("カメラ接続 IP直結(機種一意) ip=") + kip + " serial=" + known[0].serialno).c_str());
 			return true;
+		}
+	}
+	return false;
+}
+
+bool trySubnetSweep(const std::string& wantSerial, const hgc::camera& cam, bool hasModel,
+                    const std::function<bool(const std::string&)>& serialBusy,
+                    device& out)
+{
+	// 自サブネットで :8080 が開いているホストを一括抽出(生存かつCCAPIサービス有りの候補)。
+	std::vector<std::string> hosts = net::scanSubnetPort(8080, 250, 254);
+	if (hosts.empty()) { return false; }
+	dataManager::logEvent("NET", (std::string("サブネット探索 :8080応答=") + std::to_string(hosts.size()) + "台").c_str());
+	// 応答IPのみ connectManual で本接続し (model, serial) 本人確認。一致した最初の1台を採用する。
+	for (const auto& ip : hosts)
+	{
+		std::vector<class device> cand;
+		if (cameraController::connectManual(cand, ip) <= 0 || !cand[0].apiBase) { continue; }
+		bool ok = false;
+		if (!wantSerial.empty())      { ok = (cand[0].serialno == wantSerial) && knownModelMatch(cand[0].model, cam); }
+		else if (hasModel)            { ok = knownModelMatch(cand[0].model, cam) && !serialBusy(cand[0].serialno); }
+		if (ok)
+		{
+			out = cand[0];
+			dataManager::logEvent("NET", (std::string("カメラ接続 サブネット探索+本人確認 ip=") + ip + " serial=" + cand[0].serialno).c_str());
+			return true;	// 成功IPの永続化(noteConnected)は呼び手側の共通経路が行う
 		}
 	}
 	return false;

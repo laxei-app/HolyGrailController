@@ -266,6 +266,12 @@ namespace net
 		return std::vector<std::string>();
 	}
 
+	// 限定サブネットのバッチ探索はエッジ役(§3.3 tier3)専用。Android(スマホ役)は発見をSSDPに委ねるため非対応。
+	std::vector<std::string> scanSubnetPort(int /*port*/, int /*timeoutMs*/, int /*maxHosts*/)
+	{
+		return std::vector<std::string>();
+	}
+
 	// SSDP 探索開始(指定NICからM-SEARCHを送信)
 	void* ssdpStart(const std::string& query, const std::string& localIp)
 	{

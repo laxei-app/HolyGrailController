@@ -27,6 +27,7 @@
 #include "dataManager.h"
 #include "osFile.h"
 #include "osClock.h"
+#include "net.h"		// 検証用: 限定サブネット :8080 バッチ探索の手動実行(zコマンド)
 #include "debugOut.h"
 
 using json = nlohmann::json;
@@ -881,6 +882,14 @@ void loop(void)
 		else if (c == 'F')	// 検証用: 現在のログ保存先(SD/LittleFS)を表示
 		{
 			Serial.printf("[FS] backend=%s\n", osfile::backendName());
+		}
+		else if (c == 'z')	// 検証用: 限定サブネット :8080 バッチ探索(§3.3 tier3)を手動実行し応答IPを表示
+		{
+			uint32_t t0 = millis();
+			std::vector<std::string> hosts = net::scanSubnetPort(8080, 250, 254);
+			Serial.printf("[SWEEP] :8080 hosts=%d in %lums:", (int)hosts.size(), (unsigned long)(millis() - t0));
+			for (auto& h : hosts) { Serial.printf(" %s", h.c_str()); }
+			Serial.println();
 		}
 		else if (c == 'D')	// 検証用: 内蔵フラッシュ(LittleFS)の /log を全削除
 		{

@@ -21,6 +21,14 @@ bool tryIpDirect(const std::string& wantSerial, const hgc::camera& cam, bool has
                  const std::function<bool(const std::string&)>& serialBusy,
                  device& out);
 
+// §3.3 tier3: 限定サブネットのバッチ探索。前回IP直結(tier1)・M-SEARCH(tier2)が不発の時の最終手段
+// (STA・スマホ不在)。自サブネットの :8080 を一括プローブし、応答IPへ connectManual + (model,serial)
+// 本人確認して計画カメラを1台採れたら out に入れて true を返す。引数は tryIpDirect と同義。
+// エッジ役(20_edge)が実装。スマホ役(10_phone)は常に false(発見はSSDPに委ねる)。
+bool trySubnetSweep(const std::string& wantSerial, const hgc::camera& cam, bool hasModel,
+                    const std::function<bool(const std::string&)>& serialBusy,
+                    device& out);
+
 // スマホから受けた発見中オンラインカメラ一覧(JSON配列 [{serial,model,ip,online}])で既知テーブルを更新。
 // 戻り値は errCode 相当(0=OK)。スマホ役では no-op(0)。
 int setKnownCameras(const char* json, int len);

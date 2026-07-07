@@ -4,7 +4,11 @@
 #include <HTTPClient.h>
 #include <esp_wifi.h>
 #include <esp_netif.h>
+#include <lwip/sockets.h>	// 非ブロッキング connect + select による :8080 バッチ探索(§3.3 tier3)
 #include <cstring>
+#include <cstdio>
+#include <vector>
+#include <cerrno>
 #include "net.h"
 #include "debugOut.h"
 
@@ -48,6 +52,70 @@ std::vector<std::string> apClientIps()
         DBGLN(col::CYN, "apClientIps: %d client(s): %s", (int)ips.size(), joined.c_str());
     }
     return ips;
+}
+
+// 限定サブネットのバッチ探索(§3.3 tier3)。自IP+マスクからホスト範囲を割り出し、非ブロッキング
+// connect をバッチ並行して :port が開いているホストのIPを返す。生存かつサービス有りのIPだけが残る。
+std::vector<std::string> scanSubnetPort(int port, int timeoutMs, int maxHosts)
+{
+    std::vector<std::string> found;
+    if (WiFi.status() != WL_CONNECTED) { return found; }
+    // 自IP/サブネットマスク(いずれも s_addr = ネットワークバイト順の値)からホスト順の整数へ。
+    uint32_t ownH  = ntohl((uint32_t)WiFi.localIP());
+    uint32_t maskH = ntohl((uint32_t)WiFi.subnetMask());
+    if (maskH == 0) { return found; }
+    uint32_t netH   = ownH & maskH;
+    uint32_t bcastH = netH | ~maskH;
+    // ホスト候補(ネットワーク/ブロードキャスト/自IPを除外)。maxHosts で上限。
+    std::vector<uint32_t> cands;
+    for (uint32_t h = netH + 1; h < bcastH && (int)cands.size() < maxHosts; ++h)
+    {
+        if (h == ownH) { continue; }
+        cands.push_back(h);
+    }
+    auto ipStr = [](uint32_t h) -> std::string {
+        char b[16]; std::snprintf(b, sizeof(b), "%u.%u.%u.%u",
+            (unsigned)((h >> 24) & 0xFF), (unsigned)((h >> 16) & 0xFF),
+            (unsigned)((h >> 8) & 0xFF), (unsigned)(h & 0xFF));
+        return std::string(b);
+    };
+    const int BATCH = 10;	// lwIP のソケット数上限に配慮(既存のWiFi/HTTP用も消費するため控えめ)
+    for (size_t i = 0; i < cands.size(); i += BATCH)
+    {
+        int fds[BATCH]; uint32_t ips[BATCH]; int n = 0, maxfd = -1;
+        fd_set wf; FD_ZERO(&wf);
+        for (int k = 0; k < BATCH && i + (size_t)k < cands.size(); ++k)
+        {
+            uint32_t hh = cands[i + k];
+            int s = socket(AF_INET, SOCK_STREAM, 0);
+            if (s < 0) { continue; }
+            int fl = fcntl(s, F_GETFL, 0); fcntl(s, F_SETFL, fl | O_NONBLOCK);
+            struct sockaddr_in sa; std::memset(&sa, 0, sizeof(sa));
+            sa.sin_family = AF_INET; sa.sin_port = htons((uint16_t)port); sa.sin_addr.s_addr = htonl(hh);
+            int r = connect(s, (struct sockaddr*)&sa, sizeof(sa));
+            if (r == 0) { found.push_back(ipStr(hh)); close(s); continue; }	// 即接続(稀)=開いている
+            if (r < 0 && errno != EINPROGRESS) { close(s); continue; }		// 即エラー(到達不能等)
+            fds[n] = s; ips[n] = hh; FD_SET(s, &wf); if (s > maxfd) { maxfd = s; } ++n;
+        }
+        if (n <= 0) { continue; }
+        struct timeval tv; tv.tv_sec = timeoutMs / 1000; tv.tv_usec = (timeoutMs % 1000) * 1000;
+        int sel = select(maxfd + 1, nullptr, &wf, nullptr, &tv);
+        for (int k = 0; k < n; ++k)
+        {
+            if (sel > 0 && FD_ISSET(fds[k], &wf))
+            {	// 接続成立(SO_ERROR==0)なら :port が開いている。
+                int err = 0; socklen_t el = sizeof(err);
+                if (getsockopt(fds[k], SOL_SOCKET, SO_ERROR, &err, &el) == 0 && err == 0) { found.push_back(ipStr(ips[k])); }
+            }
+            close(fds[k]);
+        }
+    }
+    if (!found.empty())
+    {
+        std::string joined; for (auto& s : found) { joined += s + " "; }
+        DBGLN(col::CYN, "scanSubnetPort(:%d): %d host(s): %s", port, (int)found.size(), joined.c_str());
+    }
+    return found;
 }
 
 // SSDP探索開始 (特定のNICを指定してUDP送信)

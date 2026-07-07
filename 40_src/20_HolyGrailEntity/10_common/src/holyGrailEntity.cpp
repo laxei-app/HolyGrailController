@@ -917,6 +917,15 @@ namespace
 			for (auto& d : found) { if (d.apiBase && !serialBusy(d.serialno)) { hit = &d; break; } }
 		}
 
+		// §3.3 tier3: IP直結もSSDPも不発なら、限定サブネットの :8080 バッチ探索で最終確認(STA・スマホ不在の保険)。
+		//   エッジ役のみ実体を持つ(スマホ役は false)。本人確認済みの1台を found へ載せて hit にする。
+		if (hit == nullptr && !ipDirect)
+		{
+			found.emplace_back();
+			if (hge::role::trySubnetSweep(wantSerial, pc, hasModel, serialBusy, found.back())) { hit = &found.back(); }
+			else { found.pop_back(); }
+		}
+
 		if (hit != nullptr)
 		{
 			S->dev = *hit;	// セッション専用 device へコピー(アドレス安定。実行中の他セッションに影響しない)
@@ -1034,10 +1043,19 @@ namespace
 					for (auto& d : found) { if (d.apiBase && dataManager::cameraModelMatches(d, S->plan.camera)) { hit = &d; break; } }
 				}
 			}
-			// 【方針変更 2026-07-05】既知IP直結フォールバックは廃止(別カメラ誤接続の防止)。
-			// SSDP(M-SEARCH再送)で見つからなければ hit は null のまま → 取得/再接続フェーズが後で再試行(その間 NOCAMERA)。
+			// §3.3 tier3: SSDPでも未発見なら限定サブネットのバッチ探索(前回IP永続化+M-SEARCHの保険)。エッジ役のみ実体。
 			if (hit == nullptr)
-			{	// M-SEARCH再探索で未発見。runner の取得/再接続フェーズが後で再試行する。
+			{
+				const hgc::camera& rc = S->plan.camera;
+				bool hasModel = !rc.model.empty() || !rc.name.empty();
+				found.emplace_back();
+				if (hge::role::trySubnetSweep(wantSerial, rc, hasModel, [](const std::string&){ return false; }, found.back())) { hit = &found.back(); }
+				else { found.pop_back(); }
+			}
+			// 【方針変更 2026-07-05】既知IP直結フォールバックは廃止(別カメラ誤接続の防止)。
+			// SSDP(M-SEARCH再送)+サブネット探索で見つからなければ hit は null のまま → 後で再試行(その間 NOCAMERA)。
+			if (hit == nullptr)
+			{	// 再探索で未発見。runner の取得/再接続フェーズが後で再試行する。
 				std::string d = "カメラ取得/再接続失敗 SSDP=" + std::to_string(found.size()) + "台(未発見)";
 				dataManager::logEvent("NET", d.c_str(), true);
 				return false;

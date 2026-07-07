@@ -18,6 +18,13 @@ namespace net
     // APモードでない/非対象プラットフォームでは空を返す(=呼び出し側の挙動は変わらない)。
     std::vector<std::string> apClientIps();
 
+    // 限定サブネットのバッチ探索(§3.3 tier3)。自ホストのIP+ネットマスクから探索範囲(同一サブネットの
+    // ホスト部)を割り出し、指定ポートが開いているホストのIP一覧を返す。非ブロッキング connect を
+    // バッチ並行で行い、応答(接続成立)したIPのみを返す(=生存かつ :port サービス有り)。
+    //  timeoutMs: 1バッチあたりの待ち時間[ms]。maxHosts: 探索する最大ホスト数(コスト上限)。
+    // 前回IP直結(tier1)・M-SEARCH(tier2)が不発の時の最終手段。エッジ(lwIP)のみ実装、他は空を返す。
+    std::vector<std::string> scanSubnetPort(int port, int timeoutMs, int maxHosts);
+
     // SSDP関連(能動: M-SEARCH送信→応答受信)
     void* ssdpStart(const std::string& query, const std::string& localIp = "");
     bool ssdpRead(void* handle, std::string& answer);

@@ -14,6 +14,13 @@ bool tryIpDirect(const std::string& /*wantSerial*/, const hgc::camera& /*cam*/, 
 	return false;	// スマホ役はIP直結ヒントを持たない → 常にSSDP発見へ委ねる
 }
 
+bool trySubnetSweep(const std::string& /*wantSerial*/, const hgc::camera& /*cam*/, bool /*hasModel*/,
+                    const std::function<bool(const std::string&)>& /*serialBusy*/,
+                    device& /*out*/)
+{
+	return false;	// スマホ役はサブネット探索しない(発見はスマホ自身のSSDPに委ねる)
+}
+
 int setKnownCameras(const char* /*json*/, int /*len*/)
 {
 	return 0;	// ERR_HGC_OK 相当。スマホは push 受信側ではないため no-op

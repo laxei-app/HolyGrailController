@@ -46,7 +46,13 @@ bool deInit()
 }
 
 // 利用可能な全NICのIPアドレスを取得
-std::vector<std::string> getLocalIpList() 
+// 限定サブネットのバッチ探索はエッジ役(§3.3 tier3)専用。Windows(検証用・非対象)はスタブ(空)。
+std::vector<std::string> scanSubnetPort(int /*port*/, int /*timeoutMs*/, int /*maxHosts*/)
+{
+    return std::vector<std::string>();
+}
+
+std::vector<std::string> getLocalIpList()
 {
     std::vector<std::string> ips;
     ULONG outBufLen = 15000;
