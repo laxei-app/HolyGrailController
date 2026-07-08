@@ -38,9 +38,13 @@ class EdgeBle(
 ) {
     companion object {
         val SVC  = UUID.fromString("a1b2c3d4-0001-4a5b-8c6d-000000000001")
+        val CTRL = UUID.fromString("a1b2c3d4-0001-4a5b-8c6d-000000000002")  // write "start": エッジにQR(PoP)を表示させる
         val CRED = UUID.fromString("a1b2c3d4-0001-4a5b-8c6d-000000000003")
         val STAT = UUID.fromString("a1b2c3d4-0001-4a5b-8c6d-000000000004")
         val CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+        // 直近の startQr で "start" を送ったエッジのBLEアドレス。エッジが複数(どれも HGC-Edge で
+        // 広告名が同一)でも、送信(provision)を「QRを表示させたのと同じエッジ」へ確実に向けるため。
+        @Volatile var lastAddress: String? = null
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -48,14 +52,33 @@ class EdgeBle(
     private var scanCb: ScanCallback? = null
     private var gatt: BluetoothGatt? = null
     private var payload: ByteArray = ByteArray(0)
+    private var startOnly = false   // true=CTRL に "start" を書くだけ(QR表示要求) / false=CRED送信
     private var done = false
 
+    // エッジに "start" を送って QR(PoP)を LCD に表示させる(スキャン前に呼ぶ)。
+    fun startQr() {
+        done = false; startOnly = true
+        beginScanConnect()
+    }
+
     fun provision(pop: String, plainJson: String) {
-        done = false
+        done = false; startOnly = false
         payload = encrypt(pop, plainJson)
+        beginScanConnect()
+    }
+
+    private fun beginScanConnect() {
         val mgr = ctx.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
         val adapter = mgr?.adapter
         if (adapter == null || !adapter.isEnabled) { finish(false, "Bluetoothが無効です"); return }
+        // 送信(provision)は、直前に QR を表示させたのと同じエッジへ直接接続する(複数エッジでも取り違えない)。
+        if (!startOnly && lastAddress != null) {
+            try {
+                log("エッジへ直接接続中...")
+                connect(adapter.getRemoteDevice(lastAddress))
+                return
+            } catch (_: Exception) { /* だめならスキャンにフォールバック */ }
+        }
         scanner = adapter.bluetoothLeScanner
         val filter = ScanFilter.Builder().setServiceUuid(ParcelUuid(SVC)).build()
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
@@ -75,6 +98,7 @@ class EdgeBle(
     private fun stopScan() { try { scanCb?.let { scanner?.stopScan(it) } } catch (_: Exception) {}; scanCb = null }
 
     private fun connect(dev: BluetoothDevice) {
+        lastAddress = dev.address   // このエッジを覚えておき、送信時に同じ端末へ向ける
         gatt = dev.connectGatt(ctx, false, object : BluetoothGattCallback() {
             override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
                 if (newState == BluetoothProfile.STATE_CONNECTED) { log("接続。MTU要求..."); g.requestMtu(247) }
@@ -83,6 +107,7 @@ class EdgeBle(
             override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) { log("MTU=$mtu。サービス探索..."); g.discoverServices() }
             override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
                 val svc = g.getService(SVC) ?: run { finish(false, "サービスが見つかりません"); return }
+                if (startOnly) { writeCtrlStart(g); return }   // QR表示要求は STAT 通知不要で CTRL に write
                 val stat = svc.getCharacteristic(STAT)
                 if (stat != null) {
                     g.setCharacteristicNotification(stat, true)
@@ -93,7 +118,10 @@ class EdgeBle(
             }
             override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) { writeCred(g) }
             override fun onCharacteristicWrite(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
-                if (c.uuid == CRED) {
+                if (c.uuid == CTRL) {
+                    if (status == BluetoothGatt.GATT_SUCCESS) finish(true, "エッジにQR表示を要求しました")
+                    else finish(false, "start書込失敗 status=$status")
+                } else if (c.uuid == CRED) {
                     if (status == BluetoothGatt.GATT_SUCCESS) log("認証情報を送信。応答待ち...")
                     else finish(false, "書込失敗 status=$status")
                 }
@@ -114,6 +142,20 @@ class EdgeBle(
             s.startsWith("ok")   -> finish(true, "設定を保存しました(エッジがWiFi再接続)")
             s.startsWith("fail") -> finish(false, "エッジ側で復号失敗(PoP不一致)")
         }
+    }
+
+    private fun writeCtrlStart(g: BluetoothGatt) {
+        val ctrl = g.getService(SVC)?.getCharacteristic(CTRL) ?: run { finish(false, "CTRL特性無し"); return }
+        val bytes = "start".toByteArray(Charsets.UTF_8)
+        if (Build.VERSION.SDK_INT >= 33) {
+            g.writeCharacteristic(ctrl, bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+        } else {
+            @Suppress("DEPRECATION") ctrl.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            @Suppress("DEPRECATION") ctrl.value = bytes
+            @Suppress("DEPRECATION") g.writeCharacteristic(ctrl)
+        }
+        // 応答特性は無いので、書込コールバックが来ない実装でも完了扱いにする保険。
+        handler.postDelayed({ if (!done) finish(true, "QR表示を要求(応答待ちタイムアウト)") }, 5000)
     }
 
     private fun writeCred(g: BluetoothGatt) {

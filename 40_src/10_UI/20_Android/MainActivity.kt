@@ -808,7 +808,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .setNegativeButton("閉じる", null)
             .create()
 
-        scanBtn.setOnClickListener {
+        // カメラでエッジのQRを読み取り、PoP/端末名を取得する。
+        fun doCameraScan() {
             val options = GmsBarcodeScannerOptions.Builder()
                 .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
                 .build()
@@ -821,7 +822,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         scannedPop = o.optString("pop", "")
                         scannedName = o.optString("n", "")
                         if (scannedName.isNotEmpty() && nameE.text.isNullOrEmpty()) nameE.setText(scannedName)
-                        popView.text = "PoP: $scannedPop"
+                        popView.text = "PoP: $scannedPop(取得済)。SSID等を入力し送信"
                         android.util.Log.i("EdgeProv", "QR decoded: name=$scannedName pop=$scannedPop raw=$contents")
                         Toast.makeText(ctx, "QR読取 OK: $scannedName / PoP=$scannedPop", Toast.LENGTH_LONG).show()
                     } catch (e: Exception) {
@@ -836,6 +837,21 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     android.util.Log.w("EdgeProv", "scan failed: ${e.message}")
                     Toast.makeText(ctx, "スキャン失敗: ${e.message}", Toast.LENGTH_LONG).show()
                 }
+        }
+
+        // ボタン: まず BLE でエッジに "start" を送って QR を表示させ、その後カメラでスキャンする。
+        // (エッジは start を受けて初めて PoP を生成しQRを出すため、この順序が必要)
+        scanBtn.setOnClickListener {
+            ensureBlePermissions {
+                popView.text = "エッジにQR表示を要求中(BLE)..."
+                EdgeBle(ctx,
+                    log = { m -> runOnUiThread { popView.text = m } },
+                    result = { ok, m -> runOnUiThread {
+                        if (ok) { popView.text = "QR表示OK。カメラでスキャンしてください"; doCameraScan() }
+                        else { popView.text = m; Toast.makeText(ctx, "QR表示要求に失敗: $m", Toast.LENGTH_LONG).show() }
+                    } }
+                ).startQr()
+            }
         }
 
         dlg.setOnShowListener {
