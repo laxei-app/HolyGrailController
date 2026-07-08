@@ -5,7 +5,7 @@ package app.laxei.holygrail
 //  左=高度目盛+薄明帯、中=境目の時刻/太陽高度(開始/終了/月出入り)、右=撮影制御方法の2列。
 // 操作(すべて1本指。縦スクロールはしない=ページ内に収める):
 //  ・境目付近の縦スライド=境目を上下に動かして時刻(=太陽高度)を変更(onMoveBoundary)
-//  ・朝日/夕日(挿入/排除できる帯)の上での横スライド=挿入(左)/排除(右)(onSetBand)
+//  ・朝日/夕日の帯の上での横スライド=左へ挿入(戻す)/右へ排除(onSetBand)。排除した箱(使用しない列)も左で戻せる
 //  ・上記以外の横スライド=ページ移動(親 PlanPager へ委譲)
 //  ・タップ=その撮影制御方法の編集へ(onTapType)
 
@@ -277,7 +277,10 @@ class ScheduleView(context: Context) : View(context) {
                     if (s != null && abs(dx) > slop) {
                         val rising = !blocks[targetBi].axisDown
                         val right = dx > 0
-                        if ((s.type == 2 || s.type == 3) && right) onSetBand?.invoke(rising, false)
+                        // 朝日/夕日の帯: 右へ=「使用しない」へ(排除) / 左へ=「使用する」へ(挿入・戻す)。
+                        // 排除した帯(使用しない列の箱)を左へドラッグすればスケジュールへ戻せる。
+                        if (s.type == 2 || s.type == 3) onSetBand?.invoke(rising, !right)
+                        // 日中の帯を左へドラッグでも朝日/夕日を挿入(戻す)できる。
                         else if (s.type == 4 && !right) onSetBand?.invoke(rising, true)
                     }
                 }
