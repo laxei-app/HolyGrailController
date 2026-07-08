@@ -1653,10 +1653,26 @@ int32_t hge_setBoundaryByAlt(int32_t beforeType, int32_t afterType, int32_t occ,
 	if (rising != 0) { searchBase = localFromUnix(hgc::toUnixUtc(base, g_offMin) - 18 * 3600); }
 	astro::altTime at = astro::sunAltitudeTime(g_plan.place, searchBase, altDeg, rising != 0, g_offMin);
 	if (!at.valid) { return ERR_HGC_NOT_FOUND; }
-	char iso[32];
-	std::snprintf(iso, sizeof(iso), "%04u-%02u-%02uT%02u:%02u:%02u",
-	              at.when.year, at.when.month, at.when.day, at.when.hour, at.when.min, at.when.sec);
-	return hge_setBoundary(beforeType, afterType, occ, iso);
+	// 境目は「時刻」ではなく「太陽高度(移動範囲でクランプ済)」で保存する。撮影日時を変えても
+	// その高度で現在の窓内に再適用でき、古い時刻の使い回しでスケジュールが壊れない(§7.3.2)。
+	hgc::boundaryOverride bo;
+	bo.before = static_cast<hgc::ccmType>(beforeType);
+	bo.after  = static_cast<hgc::ccmType>(afterType);
+	bo.occ    = static_cast<uint16_t>(occ < 0 ? 0 : occ);
+	bo.when   = at.when;			// 表示/後方互換用
+	bo.altDeg = altDeg;				// 適用時の主データ(移動範囲でクランプ済)
+	bo.rising = (rising != 0);
+	bool replaced = false;
+	for (auto& b : g_plan.boundaries)
+	{
+		if (b.before == bo.before && b.after == bo.after && b.occ == bo.occ) { b = bo; replaced = true; break; }
+	}
+	if (!replaced) { g_plan.boundaries.push_back(bo); }
+	errCode e = astro::buildSchedule(g_plan, g_planCcm, g_offMin);
+	if (e != ERR_HGC_OK) { return e; }
+	buildScheduleJson();
+	notify(HGE_EV_SCHEDULE, g_schedJson);
+	return ERR_HGC_OK;
 }
 
 int32_t hge_clearScheduleEdits(void)

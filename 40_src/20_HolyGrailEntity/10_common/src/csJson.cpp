@@ -273,7 +273,8 @@ namespace csjson
 		for (const auto& b : plan.boundaries)
 		{
 			bl.push_back(json{ {"before", static_cast<int>(b.before)}, {"after", static_cast<int>(b.after)},
-			                   {"occ", b.occ}, {"when", dtToJson(b.when)} });
+			                   {"occ", b.occ}, {"when", dtToJson(b.when)},
+			                   {"altDeg", b.altDeg}, {"rising", b.rising} });
 		}
 		j["boundaries"] = bl;
 
@@ -331,6 +332,8 @@ namespace csjson
 				bo.after  = static_cast<hgc::ccmType>(b.value("after", 0));
 				bo.occ    = b.value("occ", 0);
 				if (b.contains("when")) { bo.when = dtFromJson(b["when"]); }
+				bo.altDeg = b.value("altDeg", -100.0);
+				bo.rising = b.value("rising", false);
 				plan.boundaries.push_back(bo);
 			}
 		}

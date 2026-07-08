@@ -306,13 +306,31 @@ namespace astro
 				if (bo.before != bt || bo.after != at || bo.occ != occ) { continue; }
 				astro_time_t lo = toAstro(plan.ccmList[i].start, off);
 				astro_time_t hi = toAstro(plan.ccmList[i + 1].end, off);
-				astro_time_t w  = toAstro(bo.when, off);
 				const double minGap = 60.0 / 86400.0;	// 1分は最低残す
-				double wut = w.ut;
+				// 適用時刻の決定。境目は「太陽高度」で保持しているので、現在の隣接窓ペアの区間
+				// [窓i開始, 窓i+1終了] の中でその高度になる時刻を探す。撮影日時を変えても正しい高度で
+				// 再適用でき、区間外(=別日付/別窓に紐づく古い指定)は適用しない(=自動のまま)ので壊れない。
+				double wut = -1.0;
+				if (bo.altDeg > -90.0)
+				{
+					for (size_t s = 1; s < samples.size(); ++s)
+					{
+						if (samples[s].t.ut < lo.ut || samples[s].t.ut > hi.ut) { continue; }
+						if (samples[s].rising != bo.rising) { continue; }	// 昇降方向が一致する交差のみ
+						if ((samples[s - 1].h - bo.altDeg) * (samples[s].h - bo.altDeg) <= 0.0) { wut = samples[s].t.ut; break; }
+					}
+				}
+				else
+				{
+					// 旧データ(高度未保存): when を使う。ただし区間外(古い日付)は無視して自動のまま。
+					astro_time_t w = toAstro(bo.when, off);
+					if (w.ut >= lo.ut && w.ut <= hi.ut) { wut = w.ut; }
+				}
+				if (wut < 0.0) { break; }						// 区間内に該当高度なし→自動(壊さない)
 				if (wut < lo.ut + minGap) { wut = lo.ut + minGap; }
 				if (wut > hi.ut - minGap) { wut = hi.ut - minGap; }
 				if (wut <= lo.ut || wut >= hi.ut) { break; }	// 縮退(隣接窓が短すぎ)→無視
-				astro_time_t wc = Astronomy_AddDays(w, wut - w.ut);
+				astro_time_t wc = Astronomy_AddDays(lo, wut - lo.ut);
 				hgc::dateTime nd = fromAstro(wc, off);
 				plan.ccmList[i].end       = nd;
 				plan.ccmList[i + 1].start = nd;

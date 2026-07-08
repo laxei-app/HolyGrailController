@@ -55,7 +55,11 @@ namespace hgc
 		ccmType  before = ccmType::invalid;	// 境目の前の窓の種別
 		ccmType  after  = ccmType::invalid;	// 境目の後の窓の種別
 		uint16_t occ    = 0;				// 同じ型ペアの出現順(0始まり)
-		dateTime when;						// 上書きする境目の時刻
+		dateTime when;						// 上書きする境目の時刻(後方互換/表示用)
+		// 境目の太陽高度(移動範囲でクランプ済み)。適用時はこの高度から現在の窓内で時刻を再計算するため、
+		// 撮影日時を変えても正しい高度で再適用できる(旧データは -100=未設定で when にフォールバック)。
+		double   altDeg = -100.0;
+		bool     rising = false;			// 朝(上昇)=true / 夕(下降)=false
 	};
 
 	// 4.5 撮影計画
