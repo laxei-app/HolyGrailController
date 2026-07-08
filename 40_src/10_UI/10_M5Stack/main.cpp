@@ -335,8 +335,17 @@ static void renderPlan(void)
 	g_cv.setTextColor(TFT_WHITE);
 	// 画面先頭に端末名称を表示(どのエッジか区別できるように)。未定義なら "NoName"。
 	g_cv.setCursor(8, 6);   g_cv.print(g_devName.empty() ? "NoName" : g_devName.c_str());
-	if (wifiConnect::isApActive())     { g_cv.setCursor(288, 6); g_cv.print("AP"); }
-	else if (WiFi.status() == WL_CONNECTED) { g_cv.setCursor(276, 6); g_cv.print(g_edgeUp ? "ETP" : "WiFi"); }
+	// 右上にネットワーク状態を色分けで常時表示(スマホから発見できる状態か一目で分かる)。
+	//  ONLINE(緑)=STA接続+ETP稼働 / AP(緑)=APモードで待受 / WiFi(黄)=接続直後でETP未起動 /
+	//  OFFLINE(赤)=WiFi未接続(SSID誤り等でネットワークに居ない)。
+	const char* stz; uint16_t stcol;
+	if (wifiConnect::isApActive())          { stz = "AP";      stcol = M5.Display.color565(0x66, 0xEE, 0x66); }
+	else if (WiFi.status() == WL_CONNECTED) { stz = g_edgeUp ? "ONLINE" : "WiFi"; stcol = g_edgeUp ? M5.Display.color565(0x66, 0xEE, 0x66) : M5.Display.color565(0xFF, 0xE0, 0x40); }
+	else                                    { stz = "OFFLINE"; stcol = M5.Display.color565(0xFF, 0x55, 0x55); }
+	g_cv.setTextColor(stcol);
+	g_cv.setCursor(320 - g_cv.textWidth(stz) - 6, 6);
+	g_cv.print(stz);
+	g_cv.setTextColor(TFT_WHITE);
 
 	const int rowH = 50;
 	const int top  = HEAD_H;
