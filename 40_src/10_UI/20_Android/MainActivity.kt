@@ -665,8 +665,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun isCaptureBusy(): Boolean =
         capturingPlans.isNotEmpty() || waitingPlans.isNotEmpty() || disconnectedPlans.isNotEmpty()
 
-    // ログ取得: スマホ自身のログ + オンラインの各エッジのログを、ユーザーが見える
-    // Download/HolyGrail/<日時>/ へコピーする。エッジのログはエッジ名のサブフォルダに入れる。
+    // ログ取得: スマホ自身のログ + オンラインの各エッジのログを、ユーザーが見える場所へコピーする。
+    // 保存先: スマホ = Download/hgclog/、エッジ = Download/hgclog-<端末名>/(何のフォルダか分かるように)。
+    // 同名ファイルは上書き(内容は同じはずなので日時フォルダで増やさない)。
     // コピー中はキャンセル不可のダイアログで他操作を抑止する(§ログ取得。仕様書外の追加機能)。
     private fun retrieveLogs() {
         if (isCaptureBusy()) { Toast.makeText(this, "撮影中/開始要求中はログ取得できません", Toast.LENGTH_SHORT).show(); return }
@@ -683,15 +684,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         Thread {
             var copied = 0
             val errors = StringBuilder()
-            val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(java.util.Date())
-            val baseRel = "HolyGrail/$stamp"
             try {
-                // 1) スマホ自身のログ(getExternalFilesDir/log/hg_*.log)
+                // 1) スマホ自身のログ(getExternalFilesDir/log/hg_*.log)→ Download/hgclog/
                 setMsg("スマホのログをコピー中...")
                 val logDir = java.io.File(getExternalFilesDir(null), "log")
                 val phoneLogs = logDir.listFiles { f -> f.isFile && f.name.endsWith(".log") } ?: emptyArray()
                 for (f in phoneLogs) {
-                    try { saveToDownloads(baseRel, "", f.name, f.readBytes()); copied++ }
+                    try { saveToDownloads("hgclog", f.name, f.readBytes()); copied++ }
                     catch (e: Exception) { errors.append("phone/${f.name} ") }
                 }
                 // 2) オンラインのエッジ端末のログ(エッジ名のサブフォルダへ)
@@ -709,7 +708,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         setMsg("エッジ「$ename」: $logName")
                         val bytes = fetchEdgeLog(ip, port, logName)
                         if (bytes.isNotEmpty()) {
-                            try { saveToDownloads(baseRel, sanitizeFolder(ename), logName, bytes); copied++ }
+                            try { saveToDownloads("hgclog-" + sanitizeFolder(ename), logName, bytes); copied++ }
                             catch (e: Exception) { errors.append("$ename/$logName ") }
                         }
                     }
@@ -718,8 +717,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val n = copied
             runOnUiThread {
                 dlg.dismiss()
-                val where = "Download/$baseRel"
-                val msg = if (errors.isEmpty()) "ログ $n 件を\n$where\nに保存しました" else "ログ $n 件を保存(一部失敗: $errors)"
+                val msg = if (errors.isEmpty()) "ログ $n 件を\nDownload/hgclog(スマホ)・hgclog-<端末名>(エッジ)\nに保存しました" else "ログ $n 件を保存(一部失敗: $errors)"
                 AlertDialog.Builder(this).setTitle("ログ取得").setMessage(msg).setPositiveButton("OK", null).show()
             }
         }.start()
@@ -740,23 +738,30 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun sanitizeFolder(s: String): String = s.replace(Regex("[^A-Za-z0-9._-]"), "_").ifEmpty { "edge" }
 
-    // Download/<baseRel>[/sub]/fileName へ bytes を書く。API29+ は MediaStore(権限不要)、以前は公開Downloads。
-    private fun saveToDownloads(baseRel: String, sub: String, fileName: String, bytes: ByteArray) {
-        val subPart = if (sub.isEmpty()) "" else "/$sub"
+    // Download/<folder>/fileName へ bytes を書く。同名は上書き。API29+ は MediaStore(権限不要)、以前は公開Downloads。
+    private fun saveToDownloads(folder: String, fileName: String, bytes: ByteArray) {
         if (Build.VERSION.SDK_INT >= 29) {
+            val relPath = "Download/$folder"
+            // 上書き: MediaStore は同名があると "(1)" を付けるため、既存エントリを先に削除する。
+            // MIME=text/plain で .txt が付く環境もあるので .txt 付きも消す。RELATIVE_PATH は末尾スラッシュ付きで保存される。
+            try {
+                val sel = "${MediaStore.Downloads.RELATIVE_PATH}=? AND ${MediaStore.Downloads.DISPLAY_NAME}=?"
+                contentResolver.delete(MediaStore.Downloads.EXTERNAL_CONTENT_URI, sel, arrayOf("$relPath/", fileName))
+                contentResolver.delete(MediaStore.Downloads.EXTERNAL_CONTENT_URI, sel, arrayOf("$relPath/", "$fileName.txt"))
+            } catch (_: Exception) {}
             val values = ContentValues().apply {
                 put(MediaStore.Downloads.DISPLAY_NAME, fileName)
                 put(MediaStore.Downloads.MIME_TYPE, "text/plain")
-                put(MediaStore.Downloads.RELATIVE_PATH, "Download/$baseRel$subPart")
+                put(MediaStore.Downloads.RELATIVE_PATH, relPath)
             }
             val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 ?: throw java.io.IOException("MediaStore insert failed")
             contentResolver.openOutputStream(uri)?.use { it.write(bytes) } ?: throw java.io.IOException("openOutputStream failed")
         } else {
             @Suppress("DEPRECATION")
-            val dir = java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), "$baseRel$subPart")
+            val dir = java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS), folder)
             dir.mkdirs()
-            java.io.File(dir, fileName).writeBytes(bytes)
+            java.io.File(dir, fileName).writeBytes(bytes)   // File.writeBytes は既定で上書き
         }
     }
 
