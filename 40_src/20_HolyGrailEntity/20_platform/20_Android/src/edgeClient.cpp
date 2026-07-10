@@ -306,6 +306,25 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeStop(JNIEnv* env, jobject, jstring 
 	return (m == etp::M_ACK) ? 0 : -2;
 }
 
+// エッジ端末へ時刻同期(C_TIME)だけを能動的に送る。撮影開始と無関係に定期同期する用
+// (RTC無し機=StickS3が電波悪い所でもスマホが近くにあれば時計を保てるように)。
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeEdgeSyncTime(JNIEnv* env, jobject, jstring host_, jint port, jstring datetime_, jint offMin)
+{
+	const char* host = env->GetStringUTFChars(host_, nullptr);
+	const char* dt   = datetime_ ? env->GetStringUTFChars(datetime_, nullptr) : nullptr;
+	std::string hostS = host ? host : "";
+	std::string dtS   = dt ? dt : "";
+	env->ReleaseStringUTFChars(host_, host);
+	if (dt) { env->ReleaseStringUTFChars(datetime_, dt); }
+
+	std::lock_guard<std::mutex> lk(g_connMtx);
+	std::string rd;
+	std::string timeJson = "{\"datetime\":\"" + dtS + "\",\"utcOffsetMin\":" + std::to_string(offMin) + "}";
+	int m = firstReq(hostS, port, etp::C_TIME, etp::M_PUT, timeJson, rd);
+	return (m == etp::M_ACK) ? 0 : -2;
+}
+
 // エッジ端末へ「継続(カメラ未検出時の即再探索)」を送る。planId 空=全取得フェーズ。
 JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeEdgeResearch(JNIEnv* env, jobject, jstring host_, jint port, jstring planId_)

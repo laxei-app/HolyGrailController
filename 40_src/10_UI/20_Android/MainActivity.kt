@@ -223,6 +223,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 起動時のログ整理(当日以外が5件以上なら古い順に削除、最新4件まで残す)。端末TZで「当日」を判定。
         val tzOffMin = java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60000
         Thread { HgeNative.nativePruneOldLogs(tzOffMin) }.start()
+        handler.postDelayed(edgeTimeSync, 3000)   // 選択中エッジへ能動的な時刻同期を開始(RTC無し機/電波悪環境向け)
         loadColors()
         loadExpoValues()
         buildExposureEditors()
@@ -4162,6 +4163,23 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // edgePoll を単一インスタンスで(再)起動する。多重 postDelayed による二重ループを防ぐ。
     private fun ensureEdgePoll() { handler.removeCallbacks(edgePoll); handler.postDelayed(edgePoll, 2000) }
+
+    // 能動的な時刻同期。エッジは電波の悪い所ではNTP不可、かつStickS3はRTC無しで再起動時に時計を失う。
+    // スマホが「選択中のエッジ」へ定期的に現在時刻(C_TIME)を送って時計を保つ(撮影開始と無関係に常時)。
+    // 同期後はエッジ内部タイマが時計を進めるので、KEY1ローカル開始や無人撮影でも撮影窓を正しく判定できる。
+    // 選択エッジがオフライン/IP未解決なら送信は失敗し無視する。
+    private val edgeTimeSync = object : Runnable {
+        override fun run() {
+            val e = selectedEdge()
+            if (e != null && e.ip.isNotEmpty()) {
+                val now = Calendar.getInstance()
+                val s = fmtIso.format(now.time)
+                val off = TimeZone.getDefault().getOffset(now.timeInMillis) / 60000
+                Thread { try { HgeNative.nativeEdgeSyncTime(e.ip, e.port, s, off) } catch (_: Exception) {} }.start()
+            }
+            handler.postDelayed(this, 30000)   // 30秒ごと
+        }
+    }
 
     // 計画名をモノクロ2値ビットマップ(width u16LE, height u16LE, 1bpp MSB先頭, 1=白)に変換する。
     // エッジ端末はフォントに依存せず名称を表示できる(§8.2.1 多言語対応)。
