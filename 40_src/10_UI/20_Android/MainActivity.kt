@@ -78,7 +78,26 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private lateinit var planFormScroll: ScrollView      // 先頭ページのフォーム縦スクロール
     private lateinit var planListScroll: ScrollView      // 先頭ページの計画リスト(分割バー上)
     private lateinit var planListContainer: LinearLayout
-    private var currentPlanId = ""          // 編集対象の計画 id
+    // 編集対象の計画 id。切替(選択/新規/複製/起動時)のたびに「変更の取り消し」用のベースラインを取り直す。
+    private var currentPlanId: String = ""
+        set(value) { val changed = field != value; field = value; if (changed) capturePlanBaseline() }
+    private var planBaseline = ""           // 変更の取り消し用: 計画/画面に入った時点の cs JSON(nativeGetPlanJson)
+    // 撮影計画画面の「変更の取り消し」ボタンの dirty 連動(現在の計画 != ベースライン なら有効)。
+    // 計画画面表示中のみ、planExec 上で現在値を取り比較する(編集と直列化して安全)。
+    private val planDirtyWatch = object : Runnable {
+        override fun run() {
+            if (::flipper.isInitialized && flipper.displayedChild == 0 && ::resetButton.isInitialized) {
+                planExec.execute {
+                    val cur = try { HgeNative.nativeGetPlanJson() } catch (e: Exception) { "" }
+                    runOnUiThread {
+                        if (flipper.displayedChild == 0)
+                            setCancelEnabled(resetButton, !planReadOnly && planBaseline.isNotEmpty() && cur != planBaseline)
+                    }
+                }
+            }
+            handler.postDelayed(this, 500)
+        }
+    }
     // 計画の選択・改名・各種編集(g_plan/g_editIdを触る操作)は単一スレッドで直列化し競合を防ぐ
     // (例: 改名と別計画選択が並走すると選択がファイルから古い名前を読み戻して改名が無効化される)。
     private val planExec = java.util.concurrent.Executors.newSingleThreadExecutor()
@@ -295,6 +314,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
         updateTimeButtons()
         latestSchedule = sched
         updatePlanDisplay(sched)
+        capturePlanBaseline()
+    }
+
+    // 「変更の取り消し」用のベースライン(計画/画面に入った時点の cs JSON)を取り直す。
+    // 計画切替(currentPlanId setter)・画面再入・起動時に呼ぶ。編集と直列化(planExec)して安全に取得。
+    private fun capturePlanBaseline() {
+        if (!::resetButton.isInitialized) return
+        planExec.execute {
+            val j = try { HgeNative.nativeGetPlanJson() } catch (e: Exception) { "" }
+            runOnUiThread { planBaseline = j; if (::resetButton.isInitialized) setCancelEnabled(resetButton, false) }
+        }
     }
 
     private fun bindViews() {
@@ -350,21 +380,22 @@ class MainActivity : AppCompatActivity(), HgeListener {
         startTime.setOnClickListener { pickTime(startCal) }
         endDate.setOnClickListener { pickDate(endCal) }
         endTime.setOnClickListener { pickTime(endCal) }
+        // 旧「リセット」→「変更の取り消し」(他画面と同じ)。画面/計画に入った時点(planBaseline)へ戻す。
+        styleCancelButton(resetButton)
+        setCancelEnabled(resetButton, false)
         resetButton.setOnClickListener {
-            val now = Calendar.getInstance()
-            startCal.timeInMillis = now.timeInMillis
-            endCal.timeInMillis = now.timeInMillis
-            endCal.add(Calendar.HOUR_OF_DAY, 2)
-            updateTimeButtons(); pushTimesToEntity()
-        }
-        findViewById<Button>(R.id.plan_saveButton).setOnClickListener {
+            if (planReadOnly) return@setOnClickListener               // 撮影中は編集不可
+            val base = planBaseline
+            if (base.isEmpty()) return@setOnClickListener
             planExec.execute {
-                val r = HgeNative.nativeSavePlan()
-                runOnUiThread {
-                    Toast.makeText(this, if (r == 0) "撮影計画を保存しました" else "保存に失敗しました", Toast.LENGTH_SHORT).show()
-                }
+                HgeNative.nativeSetPlanJson(base)                     // g_plan をベースラインへ戻す
+                HgeNative.nativeSavePlan()                            // ファイルも戻す
+                HgeNative.nativeSelectPlan(currentPlanId)             // 再読込→EV_SCHEDULE でUI更新
             }
         }
+        // 「この撮影計画を保存」ボタンは廃止。編集は各操作でその場保存され、画面移動/撮影開始/
+        // 他計画の選択でも保存される(他画面と同じ自動保存)。
+        handler.postDelayed(planDirtyWatch, 800)                     // 「変更の取り消し」ボタンの dirty 監視開始
         capStopButton.setOnClickListener {
             val e = selectedEdge()
             if (e == null) {
@@ -409,7 +440,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         buildCcmEditButtons()
         // メニュー(plan_menu→600.メニュー)。帯付きの一覧から各画面へ分岐。
         planMenu.setOnClickListener { openGearMenu() }
-        findViewById<ImageView>(R.id.gmenu_back).setOnClickListener { flipper.displayedChild = 0 }
+        findViewById<ImageView>(R.id.gmenu_back).setOnClickListener { flipper.displayedChild = 0; capturePlanBaseline() }
         // 620 所持カメラ(戻る/メニューで離脱時に自動保存)
         findViewById<ImageView>(R.id.cameralist_back).setOnClickListener { leaveCameraList() }
         findViewById<ImageView>(R.id.cameralist_menu).setOnClickListener { leaveCameraList() }
@@ -3852,15 +3883,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun updateReadOnly() {
         planReadOnly = capturingPlans.contains(currentPlanId) || waitingPlans.contains(currentPlanId) || disconnectedPlans.contains(currentPlanId)
         val ed = !planReadOnly
+        // plan_resetButton(=変更の取り消し)は planDirtyWatch が有効/無効を管理(撮影中は自動で無効)。
         intArrayOf(R.id.plan_startDate, R.id.plan_startTime, R.id.plan_endDate, R.id.plan_endTime,
-            R.id.plan_resetButton, R.id.plan_saveButton, R.id.plan_gearConst,
+            R.id.plan_gearConst,
             R.id.plan_edgeSearchButton, R.id.searchButton, R.id.connectButton)
             .forEach { findViewById<View>(it).isEnabled = ed }
         intervalText.isEnabled = ed; landscapeCheck.isEnabled = ed
         cameraText.isEnabled = ed; lensText.isEnabled = ed; edgeSpinner.isEnabled = ed
         compass.isEnabled = ed; elevationView.isEnabled = ed; schedulePages.forEach { it.isEnabled = ed }
         findViewById<LinearLayout>(R.id.plan_ccmButtons).let { for (i in 0 until it.childCount) it.getChildAt(i).isEnabled = ed }
-        findViewById<View>(R.id.plan_saveButton).alpha = if (ed) 1f else 0.4f
     }
 
     // 夕日/朝日の帯を挿入(insert=true)/排除(insert=false)。他方の帯モードは保持する。

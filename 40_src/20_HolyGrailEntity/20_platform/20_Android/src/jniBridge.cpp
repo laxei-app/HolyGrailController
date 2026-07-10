@@ -172,6 +172,16 @@ Java_app_laxei_holygrail_HgeNative_nativeGetPlanJson(JNIEnv* env, jobject /*thiz
 	return env->NewStringUTF(buf.data());
 }
 
+// 撮影計画(cs)JSONを現在の編集計画へ復元する(変更の取り消し用)。保存はしない。
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetPlanJson(JNIEnv* env, jobject /*thiz*/, jstring json)
+{
+	const char* s = json ? env->GetStringUTFChars(json, nullptr) : nullptr;
+	jint r = -1;
+	if (s != nullptr) { r = hge_setPlanJson(s, static_cast<int32_t>(std::strlen(s))); env->ReleaseStringUTFChars(json, s); }
+	return r;
+}
+
 // 撮影シミュレーション(画面360)。恒星リストを一度読み込む。
 JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeSimLoadStars(JNIEnv* env, jobject /*thiz*/, jstring json)

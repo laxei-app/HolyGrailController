@@ -218,11 +218,9 @@
                     android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="4dp" android:orientation="vertical" />
 
-                <!-- 計画を保存 -->
-                <Button android:id="@+id/plan_saveButton"
-                    android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:text="この撮影計画を保存" android:textSize="16sp" />
+                <!-- 「この撮影計画を保存」ボタンは廃止。編集は各操作でその場保存され、画面移動/
+                     撮影開始/他計画の選択でも保存される(他画面と同じ自動保存)。取り消しは
+                     時刻ボックス内の「変更の取り消し」(旧リセット)で画面に入った時点へ戻す。 -->
 
                 <!-- エミュレータ用(手動IP接続。実機では不要) -->
                 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
