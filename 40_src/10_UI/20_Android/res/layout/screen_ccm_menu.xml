@@ -14,7 +14,7 @@
         android:gravity="center_vertical"
         android:padding="8dp">
         <ImageView android:id="@+id/cmenu_back" android:layout_width="32dp" android:layout_height="32dp"
-            android:clickable="true" android:focusable="true" android:src="@drawable/ic_back" />
+            android:clickable="true" android:focusable="true" android:src="@drawable/ic_back_r" />
         <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
             android:gravity="center" android:text="撮影制御方法 初期値" android:textColor="#FFFFFF"
             android:textSize="20sp" android:textStyle="bold" />

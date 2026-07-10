@@ -19,7 +19,7 @@
         <ImageView
             android:layout_width="32dp"
             android:layout_height="32dp"
-            android:src="@drawable/ic_back" />
+            android:src="@drawable/ic_back_r" />
 
         <TextView
             android:id="@+id/plan_title"
@@ -38,7 +38,7 @@
             android:layout_height="32dp"
             android:clickable="true"
             android:focusable="true"
-            android:src="@drawable/ic_menu" />
+            android:src="@drawable/ic_menu_r" />
     </LinearLayout>
 
     <!-- 横スライドのページャ。ページ0=下記フォーム、ページ1..=薄明ページ(コードで追加)。 -->
