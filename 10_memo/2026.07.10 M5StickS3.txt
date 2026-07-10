@@ -1,0 +1,19 @@
+﻿M5StickS3をUSBで接続しています。
+M5StickS3の仕様については以下を見てください。
+https://docs.m5stack.com/ja/core/StickS3
+https://www.switch-science.com/products/10921?srsltid=AfmBOooYQcMnJdRPp6Xt8QLubVHvkhBG9OhqPVUqoZGYsLUw9CDOYi0n
+
+M5Stickにエッジ端末の機能を実装してください。
+10_UI、20_HolyGrailEntity\20_platform、90_target下、その他必要か所があれば 15_M5StickS3
+フォルダを追加してください。
+
+M5StickS3は LCD が小さくタッチパネルには対応していません。
+2つのkey(物理ボタン)があります。
+key2 が横で、key1が正面です。
+key2でスクロール、key1で撮影開始、停止、長押しで削除にしようかな。
+上下スクロールはできないので1方向でローリングするようにしてください。
+LCDは横向きに使って端末名称と1つの撮影計画名しか表示されないようにしましょう。
+M5StackCoreS3と比べると横のサイズも小さいので撮影計画名称は2段に折り返して表示してみてください。
+M5Stack と同様に撮影計画名称と日付、時刻は表示してください。
+
+

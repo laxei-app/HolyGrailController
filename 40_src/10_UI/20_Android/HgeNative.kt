@@ -51,6 +51,11 @@ object HgeNative {
     external fun nativePokeAcquire(planId: String): Int   // 継続: スマホ直接撮影のNOCAMERA計画に即再探索を促す
     external fun nativeScheduleJson(): String
     external fun nativeGetPlanJson(): String
+    // 撮影シミュレーション(画面360)。恒星リスト(fixed_star.json)を一度読み込む(戻り=星数)。
+    external fun nativeSimLoadStars(starsJson: String): Int
+    // params(datetime/offMin/lat/lon/alt/az/el/landscape/fisheye/focal/sensorW/sensorH/magLimit)から
+    // 画角内の天体を投影した JSON {"objects":[{name,x,y,mag,color,kind}],"aspect",...} を返す。
+    external fun nativeSimulateSky(paramsJson: String): String
     external fun nativeSetPlanTimes(start: String, end: String, offMin: Int): Int
     external fun nativeSetPlanDirection(azimuth: Double, elevation: Double): Int  // 撮影方向/仰角を設定し再生成
     external fun nativeSetPlanInterval(seconds: Double): Int   // 撮影周期。最小(最長ss+2)未満は失敗

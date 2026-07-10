@@ -88,6 +88,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private val nocamDialogShown = mutableSetOf<String>() // カメラ未検出ポップアップを表示済みの計画 id(多重表示抑止。Phase3)
     private val schedulePages = mutableListOf<ScheduleView>()   // §7.3.2 薄明ページの ScheduleView(読取専用切替に使う)
     private val twilightPages = mutableListOf<View>()           // 薄明ページのラッパ(計画名ヘッダ+ScheduleView)。ページャ追加/削除用
+    private var simPage: SimPage? = null                        // 撮影シミュレーション(§7.3 画面360)。ページャ最終ページ(永続1インスタンス)
+    private var starsLoadStarted = false                        // fixed_star.json の読み込みを開始済み
+    // シミュレーションのネイティブ投影計算・恒星読み込み用(planExecを塞がないよう専用の単一スレッド)。
+    private val simExec = java.util.concurrent.Executors.newSingleThreadExecutor()
     private val twilightBoxViews = mutableListOf<TextView>()    // 概要の薄明移動ボックス(幅/高さ揃え用)
     private lateinit var captureStatus: TextView     // 撮影中ステータス(plan画面内)
     private var planReadOnly = false                 // 撮影中の計画を表示中=編集不可(item7)
@@ -1203,16 +1207,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  機材マスタ・所持機材(600/620/622/630/632。データ構造仕様書43 §5.5〜5.9 / §7.6)
     // ============================================================
 
-    // インストール同梱の assets/master/*.json を /master へコピーする(無ければ)。
+    // インストール同梱の assets/master/*.json を /master へコピーする。
     // osfile のベース = getExternalFilesDir(null) なので dataManager は /master で読める。
-    // 将来サーバ更新は filesDir 側を上書きする(本タスクでは未実装)。
+    // 同梱アセットを常に上書きコピーする: lenses_list.json 等の機材マスタ(fisheye 等)を
+    // 編集→ビルドすれば、次回起動で即反映される(「ファイルを変更すれば即反映」)。
+    // (将来サーバ更新を入れる場合は、内容差分やバージョンで上書き可否を判断する。)
     private fun copyMasterAssets(baseDir: java.io.File) {
         try {
             val dir = java.io.File(baseDir, "master")
             if (!dir.exists()) dir.mkdirs()
             for (name in listOf("cameras.json", "lenses.json")) {
                 val out = java.io.File(dir, name)
-                if (out.exists() && out.length() > 0L) continue   // 既にあれば残す(更新は別途)
                 assets.open("master/$name").use { ins ->
                     out.outputStream().use { os -> ins.copyTo(os) }
                 }
@@ -3777,8 +3782,47 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 schedulePages.add(sv)
             }
         }
+        // 最終ページ = 撮影シミュレーション(§7.3 画面360)。永続1インスタンスを毎回末尾へ付け直す。
+        ensureSimReady()
+        simPage?.let { sp ->
+            planPager.removeView(sp)
+            planPager.addView(sp, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            // 方位磁石の日の出/日の入・月マーカー(表示JSONに含まれる)を反映。
+            sp.setMarkers(
+                o.optDouble("sunriseAz", Double.NaN).toFloat(),
+                o.optDouble("sunsetAz", Double.NaN).toFloat(),
+                o.optDouble("moonriseAz", Double.NaN).toFloat(),
+                o.optDouble("moonsetAz", Double.NaN).toFloat())
+            // 自己完結の撮影計画JSON(place/camera/lens/start/end 等)を読んで初期化・描画。
+            // マスターレンズ(起動時にアセットから再コピー)も渡し、fisheye をファイル由来で即反映させる。
+            simExec.execute {
+                val raw = try { HgeNative.nativeGetPlanJson() } catch (e: Exception) { "" }
+                val ml = try { HgeNative.nativeGetMasterLenses() } catch (e: Exception) { "[]" }
+                runOnUiThread { sp.bind(raw, ml) }
+            }
+        }
         planPager.refreshPages()
         updatePagerTitle()
+    }
+
+    // シミュレーションページの下準備: 恒星(fixed_star.json)を一度読み込み、ページを1度だけ生成する。
+    private fun ensureSimReady() {
+        if (!starsLoadStarted) {
+            starsLoadStarted = true
+            simExec.execute {
+                try {
+                    val json = assets.open("fixed_star.json").bufferedReader().use { it.readText() }
+                    HgeNative.nativeSimLoadStars(json)
+                } catch (_: Exception) {}
+            }
+        }
+        if (simPage == null) {
+            simPage = SimPage(this, simExec) { checked ->
+                // 横向きチェックは撮影計画へ反映(先頭ページと同じ)。再生成→EV_SCHEDULEで再bind。
+                planExec.execute { HgeNative.nativeSetPlanLandscape(if (checked) 1 else 0) }
+            }
+        }
     }
 
     // タイトル行は全ページ共通で「撮影計画 現在/総数」。計画名は薄明ページ内(タイトル行の下)に表示する。

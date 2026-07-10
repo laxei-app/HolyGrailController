@@ -1,6 +1,7 @@
 ﻿// 撮影計画(cs)・撮影制御方法(ccm)の JSON 相互変換(データ構造仕様書43)。
 #include "csJson.h"
 #include <json/nlohmann/json.hpp>
+#include <cctype>
 
 using json = nlohmann::json;
 
@@ -88,10 +89,19 @@ namespace csjson
 			return c;
 		}
 
+		// 魚眼判定のフォールバック: マスタ/計画に "fisheye" が無い場合はレンズ名で判定する。
+		//  データ側(lenses_list.json の "fisheye")が真の情報源。名前判定は未設定時のみ。
+		bool isFisheyeName(const std::string& name)
+		{
+			std::string lo = name;
+			for (auto& c : lo) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
+			return lo.find("fisheye") != std::string::npos;
+		}
 		json lensToJson(const hgc::lens& l)
 		{
 			return json{ {"maker", l.maker}, {"name", l.name}, {"focalLength", l.focalLength},
-			             {"fn", l.fn}, {"fnMax", l.fnMax}, {"hasContact", l.hasContact} };
+			             {"fn", l.fn}, {"fnMax", l.fnMax}, {"hasContact", l.hasContact},
+			             {"fisheye", l.fisheye} };
 		}
 		hgc::lens lensFromJson(const json& j)
 		{
@@ -102,6 +112,7 @@ namespace csjson
 			l.fn          = j.value("fn", 0.0);
 			l.fnMax       = j.value("fnMax", 0.0);
 			l.hasContact  = j.value("hasContact", true);
+			l.fisheye     = j.value("fisheye", isFisheyeName(l.name));	// フィールド優先・無ければ名前判定
 			return l;
 		}
 
@@ -502,6 +513,7 @@ namespace csjson
 			l.fn          = m.value("fnum_min_wide", 0.0);
 			l.fnMax       = m.value("fnum_max", 0.0);
 			l.hasContact  = m.value("electronic_contacts", true);
+			l.fisheye     = m.value("fisheye", isFisheyeName(l.name));	// フィールド優先・無ければ名前判定
 			out.push_back(std::move(l));
 		}
 		return true;
