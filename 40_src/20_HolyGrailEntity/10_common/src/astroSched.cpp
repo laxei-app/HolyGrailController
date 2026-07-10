@@ -215,15 +215,19 @@ namespace astro
 		constexpr double sunDirectMaxAlt = 3.0;	// これ以上高い太陽は日中扱い(朝日/夕日の上限既定+3°)
 
 		// 第1パス: 全サンプルの高度・上昇/下降・画角侵入を収集する。
-		struct Sample { astro_time_t t; double h; bool rising; bool inF; };
+		// 時刻は ut(double) のみ保持し、必要時に Astronomy_TimeFromDays(ut) で astro_time_t へ復元する。
+		// astro_time_t(約56B)をサンプルごとに持つと小RAM機(StickS3=内蔵のみ)で vector が溢れて
+		// bad_alloc → abort するため。さらに reserve でリアロケーション(倍々=一時ピーク3倍)を避ける。
+		struct Sample { double ut; double h; bool rising; bool inF; };
 		std::vector<Sample> samples;
+		samples.reserve(static_cast<size_t>((tEnd.ut - tStart.ut) / stepDays) + 2);
 		double prevAlt = sunHorizAt(Astronomy_AddDays(tStart, -stepDays), obs).altitude;
 		for (astro_time_t t = tStart; t.ut <= tEnd.ut + 1e-9; t = Astronomy_AddDays(t, stepDays))
 		{
 			horiz s = sunHorizAt(t, obs);
 			bool rising = (s.altitude - prevAlt) >= 0.0;
 			bool inF = inFrame(s, plan.azimuth, plan.elevation, f);
-			samples.push_back({ t, s.altitude, rising, inF });
+			samples.push_back({ t.ut, s.altitude, rising, inF });
 			prevAlt = s.altitude;
 		}
 
@@ -283,9 +287,9 @@ namespace astro
 		{
 			if (types[i] != runType)
 			{
-				flushRun(samples[i].t);
+				flushRun(Astronomy_TimeFromDays(samples[i].ut));
 				runType = types[i];
-				runStart = samples[i].t;
+				runStart = Astronomy_TimeFromDays(samples[i].ut);
 			}
 		}
 		flushRun(tEnd);
@@ -315,9 +319,9 @@ namespace astro
 				{
 					for (size_t s = 1; s < samples.size(); ++s)
 					{
-						if (samples[s].t.ut < lo.ut || samples[s].t.ut > hi.ut) { continue; }
+						if (samples[s].ut < lo.ut || samples[s].ut > hi.ut) { continue; }
 						if (samples[s].rising != bo.rising) { continue; }	// 昇降方向が一致する交差のみ
-						if ((samples[s - 1].h - bo.altDeg) * (samples[s].h - bo.altDeg) <= 0.0) { wut = samples[s].t.ut; break; }
+						if ((samples[s - 1].h - bo.altDeg) * (samples[s].h - bo.altDeg) <= 0.0) { wut = samples[s].ut; break; }
 					}
 				}
 				else

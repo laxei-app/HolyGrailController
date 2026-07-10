@@ -93,7 +93,10 @@ public:
 };
 
 static DisplayS3        g_lcd;
-static lgfx::LGFX_Sprite g_cv(&g_lcd);	// ダブルバッファ
+// 表示はLCDへ直接描画する。全画面スプライト(240x135x2=64KB)は内蔵RAMを圧迫し、
+// PSRAMもこのモジュールでは使えない(OPIハング)ため撮影パイプライン(CCAPIパース/測光)が
+// メモリ不足で落ちる。g_cv を g_lcd への参照にして 64KB を恒久的に空ける(描画APIは共通基底)。
+static lgfx::LovyanGFX& g_cv = g_lcd;
 static int              g_scrW = 240, g_scrH = 135;	// 横向きの論理サイズ
 
 // ── 物理ボタン(生GPIO。M5Unified は本ボードのボタンを対応付けないため直接読む) ──
@@ -395,7 +398,6 @@ static void renderPlan(void)
 		g_cv.setTextColor(TFT_LIGHTGREY);
 		g_cv.setCursor(8, 44);  g_cv.print("No plans");
 		g_cv.setCursor(8, 66);  g_cv.print("Send from phone");
-		g_cv.pushSprite(0, 0);
 		return;
 	}
 	if (g_cur < 0 || g_cur >= (int)arr.size()) { g_cur = 0; }
@@ -453,7 +455,6 @@ static void renderPlan(void)
 		g_cv.setTextColor(g_cv.color565(0xFF, 0x88, 0x88));
 		g_cv.setCursor(32, 70); g_cv.print("KEY1:Yes   KEY2:No");
 	}
-	g_cv.pushSprite(0, 0);
 }
 
 // ── プロビジョニング/AP QR ──
@@ -494,7 +495,6 @@ static void renderProv(void)
 	g_cv.setTextDatum(textdatum_t::bottom_center);
 	g_cv.drawString("Scan with phone", g_scrW / 2, g_scrH - 2);
 	g_cv.setTextDatum(textdatum_t::top_left);
-	g_cv.pushSprite(0, 0);
 }
 static void renderApQr(void)
 {
@@ -507,7 +507,6 @@ static void renderApQr(void)
 	g_cv.setTextDatum(textdatum_t::bottom_center);
 	g_cv.drawString((g_apSsid).c_str(), g_scrW / 2, g_scrH - 2);
 	g_cv.setTextDatum(textdatum_t::top_left);
-	g_cv.pushSprite(0, 0);
 }
 static void startApAndEtp(void)
 {
@@ -615,14 +614,8 @@ void setup(void)
 	g_lcd.setRotation(3);	// 横向き(240x135)。上下逆なら 1 に。
 	g_lcd.setBrightness(200);
 	g_scrW = g_lcd.width(); g_scrH = g_lcd.height();
-	// スプライトは内蔵RAM(240x135x2=約64KB)。PSRAMはモジュール差で不確実なため使わない。
-	g_cv.setPsram(false);
-	g_cv.setColorDepth(16);
-	void* buf = g_cv.createSprite(g_scrW, g_scrH);
-	if (buf == nullptr)
-	{
-		Serial.println("[LCD] createSprite FAILED -> draw direct to LCD");
-	}
+	// スプライト(全画面64KB)は廃止し LCD へ直接描画する(内蔵RAM節約)。g_cv は g_lcd の別名。
+	g_lcd.fillScreen(TFT_BLACK);
 	g_cv.setFont(&fonts::Font2);
 
 	g_key1.begin(PIN_KEY1);
@@ -656,11 +649,16 @@ void loop(void)
 		if (ok)
 		{
 			Serial.printf("[WIFI] connected. IP=%s RSSI=%d\n", WiFi.localIP().toString().c_str(), (int)WiFi.RSSI());
+			// StickS3 は RTC 無し=再起動で時計(1970)がリセットされ、撮影窓(2026)と一致せず WAITING のまま
+			// になる。WiFi接続時に NTP で時刻(UTC)を取得する。取得後は ESP32 内部タイマがシステム時計を
+			// 進める(settimeofday 相当)ので、次ループ以降 time() が正しくなり WAITING→CAPTURING に自動遷移。
+			// ネット非到達時はスマホの時刻同期(C_TIME)に頼る。UTCオフセットはNVS保存値(前回C_TIME)を使用。
+			configTime(0, 0, "ntp.nict.jp", "pool.ntp.org", "time.google.com");
 			if (!g_edgeUp)
 			{
 				etpEdge::setup(g_devName);
 				g_edgeUp = true;
-				hge_resumeCapture();
+				hge_resumeCapture();	// PSRAM有効化で測光/CCAPIがPSRAMに載りOOMしない。無人再起動の撮影再開を復活。
 				g_state = hge_getState();
 			}
 			g_dirty = true;
