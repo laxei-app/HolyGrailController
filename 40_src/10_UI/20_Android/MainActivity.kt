@@ -2718,22 +2718,38 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (id == currentPlanId) tv.setTypeface(null, Typeface.BOLD)
         tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         if (!active && id == currentPlanId) {
-            // 選択中かつ非実行中の計画 → 名前タップで編集可能(キーボード)。確定で改名。
+            // 選択中かつ非実行中の計画 → 名前タップで編集可能(キーボード)。
+            //  確定は「完了(Done)」だけでなく、フォーカスが外れた時(別の場所をタップ)にも行う。
+            //  従来は Done を押さずにタップで抜けると改名されなかった。
             tv.isFocusableInTouchMode = true; tv.isFocusable = true
-            tv.setOnEditorActionListener { v, actionId, _ ->
-                if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
-                    val nm = v.text.toString().trim()
-                    planListScroll.isFocusableInTouchMode = true
-                    planListScroll.requestFocus()   // 隣行へ飛ばずキーボードを閉じる
-                    (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
-                        .hideSoftInputFromWindow(v.windowToken, 0)
-                    if (nm.isNotEmpty()) planExec.execute {
+            var committed = false   // 二重発火(Done→フォーカス喪失, refreshでの破棄)を防ぐ
+            val commit = {
+                val nm = tv.text.toString().trim()
+                if (!committed && nm.isNotEmpty() && nm != name) {
+                    committed = true
+                    planExec.execute {
                         val r = HgeNative.nativeRenamePlan(id, nm)   // item5: 重複なら ERR_NAME_DUP
                         runOnUiThread { if (r == HgeNative.ERR_NAME_DUP) showNameInUse(nm); refreshPlanList() }
                     }
+                }
+            }
+            tv.setOnEditorActionListener { v, actionId, _ ->
+                if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
+                    planListScroll.isFocusableInTouchMode = true
+                    planListScroll.requestFocus()   // 隣行へ飛ばずキーボードを閉じる(→OnFocusChangeで確定)
+                    (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
+                        .hideSoftInputFromWindow(v.windowToken, 0)
+                    commit()
                     true
                 } else false
             }
+            tv.setOnFocusChangeListener { _, hasFocus -> if (!hasFocus) commit() }   // 他のEditTextへ移ったら確定
+            // 他の計画選択/メニュー/新規作成などでリストが再構築(refreshPlanList)されると、この行の
+            // EditText が破棄される。その時に保留中の編集を確定する(タップで抜けても保存される)。
+            tv.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+                override fun onViewAttachedToWindow(v: View) {}
+                override fun onViewDetachedFromWindow(v: View) { commit() }
+            })
         } else {
             // 未選択(または撮影中)の行 → タップで選択のみ(キーボードは出さない)。
             tv.isFocusable = false; tv.isFocusableInTouchMode = false
