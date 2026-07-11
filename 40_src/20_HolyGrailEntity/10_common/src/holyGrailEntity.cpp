@@ -2090,6 +2090,31 @@ int32_t hge_getProgressJsonFor(const char* planId, char* buf, int32_t* inoutLen)
 	return ERR_HGC_OK;
 }
 
+// 実行中セッションの一覧を JSON 配列で返す(バッファ規約)。[{"id":"<planId>","state":N},...]
+// エッジ端末が C_SEARCH 応答(edgeInfo)へ載せ、スマホの常時スイープが「このエッジで何が走っているか」を
+// 1リクエストで把握する。エッジ側ローカル開始/再起動後の自動再開の検出用。UDP 1データグラムに収める
+// ため件数を制限する(同時撮影は2件・予約を含めても実用上は数件)。
+int32_t hge_getSessionsJson(char* buf, int32_t* inoutLen)
+{
+	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
+	constexpr size_t kMaxSessions = 8;	// UDP応答(スマホ側受信バッファ2KB)に収める上限
+	std::string s = "[";
+	size_t n = 0;
+	for (auto& sess : g_sessions)
+	{
+		if (n >= kMaxSessions) { break; }
+		if (n > 0) { s += ","; }
+		s += "{\"id\":\"" + jesc(sess->planId) + "\",\"state\":" + std::to_string(sess->state.load()) + "}";
+		++n;
+	}
+	s += "]";
+	int32_t need = static_cast<int32_t>(s.size()) + 1;
+	if (buf == nullptr || *inoutLen < need) { *inoutLen = need; return ERR_HGC_BUF_SHORT; }
+	std::memcpy(buf, s.c_str(), need);
+	*inoutLen = need;
+	return ERR_HGC_OK;
+}
+
 // 計画id指定で撮影開始(並行撮影。planId 空=編集対象 g_editId)。
 int32_t hge_captureStartPlan(const char* planId_)
 {

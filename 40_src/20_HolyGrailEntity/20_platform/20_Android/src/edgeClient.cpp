@@ -196,7 +196,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeSearch(JNIEnv* env, jobject, jint t
 
 	std::string arr = "[";
 	std::set<std::string> seen;	// ip で重複排除
-	uint8_t buf[1024];
+	uint8_t buf[2048];	// edgeInfo は sessions(実行中セッション一覧・最大8件)を含むため余裕を持つ
 	for (int i = 0; i < 32; ++i)
 	{
 		ssize_t n = recvfrom(fd, buf, sizeof(buf), 0, nullptr, nullptr);

@@ -260,6 +260,11 @@ int32_t hge_getProgressJson(char* buf, int32_t* inoutLen);
 // エッジ端末が C_PROGRESS(data=planId) 応答に使う。計画別に状態を返すことで誤NOCAMERAポップを防ぐ。
 int32_t hge_getProgressJsonFor(const char* planId, char* buf, int32_t* inoutLen);
 
+// 実行中セッションの一覧 JSON 配列(バッファ規約)。[{"id":"<planId>","state":N},...] (最大8件)
+// エッジ端末が C_SEARCH 応答(edgeInfo)の "sessions" に載せる。スマホの常時スイープが
+// エッジ側ローカル開始/自動再開を検出して表示へ反映するために使う。
+int32_t hge_getSessionsJson(char* buf, int32_t* inoutLen);
+
 // --- 撮影実行 ---
 int32_t hge_captureStart(void);		// 撮影開始(非同期。編集対象計画)。進捗は HGE_EV_PROGRESS
 int32_t hge_captureStop(void);		// 撮影停止(編集対象計画)
