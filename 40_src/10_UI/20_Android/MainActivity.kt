@@ -107,6 +107,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private val nocamDialogShown = mutableSetOf<String>() // カメラ未検出ポップアップを表示済みの計画 id(多重表示抑止。Phase3)
     private val nocamDialogs = mutableMapOf<String, androidx.appcompat.app.AlertDialog>() // 表示中のNOCAMERAダイアログ(状態が復帰/停止したら閉じるための参照)
     private val stoppingPlans = mutableSetOf<String>()   // 「中止」操作済みで停止(IDLE)確定待ちの計画 id。確定までNOCAMERAダイアログを抑止し無限再表示を防ぐ
+    private val startingPlans = mutableSetOf<String>()   // 開始操作中(タップ〜開始要求の結果確定まで)の計画 id。この間のポーリングIDLE(=まだ届いていないだけ)で
+                                                          // 集合から外して“開始前アイコン+ポーリング対象外”に落ちるレースを防ぐ(2台順次開始は直列化で到達が遅れる)
     private val schedulePages = mutableListOf<ScheduleView>()   // §7.3.2 薄明ページの ScheduleView(読取専用切替に使う)
     private val twilightPages = mutableListOf<View>()           // 薄明ページのラッパ(計画名ヘッダ+ScheduleView)。ページャ追加/削除用
     private var simPage: SimPage? = null                        // 撮影シミュレーション(§7.3 画面360)。ページャ最終ページ(永続1インスタンス)
@@ -2818,7 +2820,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         stoppingPlans.remove(id)   // 再開する計画は「中止確定待ち」を解除(NOCAMERA抑止をリセット)
         // 即時フィードバック: タップの瞬間に待機(カメラ点灯)へ変える。「押したのが効いたか分からない」対策。
         // 発見/開始要求は後追いで行い、失敗したらここで足した待機を取り消してトーストで知らせる。
-        waitingPlans.add(id)
+        // startingPlans: 開始要求がエッジへ届く前のポーリングが IDLE を拾って集合から外すレースを防ぐ。
+        waitingPlans.add(id); startingPlans.add(id)
         refreshPlanList(); updateReadOnly()
         // この計画に指定されたエッジ端末の"名称"(無ければスマホで撮影)。
         val name = planEdgeName(id)
@@ -2829,6 +2832,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 val r = HgeNative.nativeCaptureStartPlan(id)
                 runOnUiThread {
                     currentPlanId = id
+                    startingPlans.remove(id)   // 開始要求の結果確定
                     when (r) {
                         HgeNative.ERR_OVERLAP_LIMIT -> { waitingPlans.remove(id); Toast.makeText(this, "撮影期間が重なる計画は2件までです。時間をずらすか他の計画を停止してください", Toast.LENGTH_LONG).show() }
                         HgeNative.ERR_QUEUE_FULL   -> { waitingPlans.remove(id); Toast.makeText(this, "撮影開始要求が上限(100件)に達しました", Toast.LENGTH_LONG).show() }
@@ -2844,18 +2848,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val e = discoverEdgeByName(name)
             runOnUiThread {
                 if (e == null) {
-                    waitingPlans.remove(id); refreshPlanList(); updateReadOnly()   // タップ時の即時反映を取り消す
+                    waitingPlans.remove(id); startingPlans.remove(id); refreshPlanList(); updateReadOnly()   // タップ時の即時反映を取り消す
                     Toast.makeText(this, "エッジ端末(${name})が見つからないため撮影を開始できません", Toast.LENGTH_LONG).show()
                     return@runOnUiThread
                 }
                 updateEdgeIp(name, e.ip, e.port)   // 解決したIPを保持(停止/状態確認に使う)
                 planExec.execute {
+                    // 選択→計画JSON送信→開始 を planExec(単一スレッド)上で原子化する。
+                    // nativeEdgeStart は「選択中の計画」のJSONを送るため、2計画の順次開始で別スレッドに
+                    // 逃がすと後発の nativeSelectPlan が割り込み、前の計画idに別計画の内容を送る競合があった。
                     HgeNative.nativeSelectPlan(id)
-                    runOnUiThread {
-                        currentPlanId = id; waitingPlans.add(id)   // まずは待機(点灯)。実状態はedgePollで補正される
-                        startOnEdge(e, id)
-                        refreshPlanList(); updateReadOnly()
-                    }
+                    runOnUiThread { currentPlanId = id; refreshPlanList(); updateReadOnly() }   // 待機はタップ時に反映済み
+                    startOnEdge(e, id)   // planExec 上で同期実行(内部でネットワークI/O)
                 }
             }
         }.start()
@@ -4149,6 +4153,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val o = JSONObject(pj)
             val st = o.optInt("state")
             var changed = false
+            // 開始操作中(開始要求が未達の可能性)は IDLE 報告を無視する。開始要求の結果確定(startOnEdge)後に
+            // 通常のポーリング反映へ戻る。これが無いと2台順次開始(直列化)の2台目が「まだIDLE」を拾われて
+            // 集合から外れ、ポーリング対象からも消えて“エッジ撮影中なのに開始前アイコン”のまま固まる。
+            if (startingPlans.contains(pid)) return
             // 「中止」操作済みの計画は停止(IDLE/ERROR)確定まで NOCAMERA を無視(ダイアログ無限再表示を防ぐ)。
             if (stoppingPlans.contains(pid)) {
                 if (st == HgeNative.ST_IDLE || st == HgeNative.ST_ERROR) {
@@ -4266,6 +4274,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         return out.toByteArray()
     }
 
+    // エッジへ計画を送って撮影開始する。ブロッキングI/Oを含むため planExec(バックグラウンド)から呼ぶこと。
+    // 呼び出し元の nativeSelectPlan と同一スレッドで連続実行することで「選択→計画JSON送信」を原子化する
+    // (別スレッド化すると2計画の順次開始で後発の選択が割り込み、別計画の内容を送る競合があった)。
     private fun startOnEdge(e: Edge, planId: String) {
         // 時刻同期(C_TIME)はエッジ端末の時計を「現在時刻」に合わせるためのもの。現在時刻を送る。
         val nowCal = Calendar.getInstance()
@@ -4273,7 +4284,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val off = TimeZone.getDefault().getOffset(nowCal.timeInMillis) / 60000
         val name = try { JSONObject(latestSchedule).optString("name") } catch (_: Exception) { "" }
         val nameBmp = makeNameBitmapBytes(if (name.isEmpty()) "撮影計画" else name)
-        Thread {
+        run {
             // 発見中のオンラインカメラをエッジへ通知(IP直結ヒント)。エッジは (model,serial) で本人確認して直結する。
             try {
                 val arr = org.json.JSONArray(HgeNative.nativeSearchDevicesList())
@@ -4305,6 +4316,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 }
             }
             runOnUiThread {
+                startingPlans.remove(planId)   // 開始要求の結果確定(以降はポーリングが実状態を反映)
                 if (running) {
                     // waitingPlans には startPlan で追加済み。以降は edgePoll(全エッジ計画対象)が各計画の状態を反映する。
                     if (currentPlanId == planId) { captureStatus.text = "● エッジ端末へ転送・撮影開始"; captureStatus.visibility = View.VISIBLE }
@@ -4315,7 +4327,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     Toast.makeText(this, "エッジ端末 開始できませんでした (code=$r)", Toast.LENGTH_LONG).show()
                 }
             }
-        }.start()
+        }
     }
 
     // エッジ計画の停止。停止確定(IDLE)まで抑止しつつ非同期停止する共通経路(beginStop)へ委譲。

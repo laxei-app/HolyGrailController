@@ -240,6 +240,10 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring
 	ELOG("edgeStart C_TIME method=%d fd=%d", mTime, g_connFd);
 	if (mTime != etp::M_ACK) { closeConn(); return -2; }
 	int fd = g_connFd;	// 以降は確立済みの同一接続で送る
+	// C_CAPTURE_PLAN(約5.5KB)のインポートはエッジ側でSD書込み+スケジュール構築に~5秒かかり、
+	// さらに他セッションのカメラ確立と重なると遅れる。既定の受信5秒では2台目の順次開始が
+	// ちょうどタイムアウトして開始不発になるため、この操作の間だけ受信タイムアウトを延ばす。
+	setRcvTimeout(fd, 15000);
 
 	// 2) 撮影計画(現在の計画JSONを entity から取得)
 	if (result == 0)
@@ -286,6 +290,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring
 	}
 
 	if (result != 0) { closeConn(); }	// 失敗時は接続を破棄し、次回はクリーンに張り直す(残骸混入を防ぐ)
+	else { setRcvTimeout(fd, 5000); }	// 受信タイムアウトを既定(5秒)へ戻す(この接続は使い回される)
 	ELOG("edgeStart result=%d", (int)result);
 	return result;
 }
