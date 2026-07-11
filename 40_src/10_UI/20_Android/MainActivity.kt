@@ -105,6 +105,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private val disconnectedPlans = mutableSetOf<String>() // カメラ未検出(NOCAMERA/旧DISCONNECTED)の計画 id 群=✖点灯
     private val waitingPlans = mutableSetOf<String>()    // 撮影要求済・撮影窓前で待機中(カメラOK)の計画 id 群=カメラ点灯
     private val nocamDialogShown = mutableSetOf<String>() // カメラ未検出ポップアップを表示済みの計画 id(多重表示抑止。Phase3)
+    private val nocamDialogs = mutableMapOf<String, androidx.appcompat.app.AlertDialog>() // 表示中のNOCAMERAダイアログ(状態が復帰/停止したら閉じるための参照)
+    private val stoppingPlans = mutableSetOf<String>()   // 「中止」操作済みで停止(IDLE)確定待ちの計画 id。確定までNOCAMERAダイアログを抑止し無限再表示を防ぐ
+    private val startingPlans = mutableSetOf<String>()   // 開始操作中(タップ〜開始要求の結果確定まで)の計画 id。この間のポーリングIDLE(=まだ届いていないだけ)で
+                                                          // 集合から外して“開始前アイコン+ポーリング対象外”に落ちるレースを防ぐ(2台順次開始は直列化で到達が遅れる)
     private val schedulePages = mutableListOf<ScheduleView>()   // §7.3.2 薄明ページの ScheduleView(読取専用切替に使う)
     private val twilightPages = mutableListOf<View>()           // 薄明ページのラッパ(計画名ヘッダ+ScheduleView)。ページャ追加/削除用
     private var simPage: SimPage? = null                        // 撮影シミュレーション(§7.3 画面360)。ページャ最終ページ(永続1インスタンス)
@@ -259,41 +263,40 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     found.add(Edge(o.optString("name", "エッジ端末"), o.optString("ip"), o.optInt("port", 50506)))
                 }
             } catch (_: Exception) {}
+            // ローカル計画一覧(id)。各エッジに planId 別に問い合わせ、そのエッジで走行中の“全”計画を復元する。
+            // 従来は集約(g_plan.name=最後に撮影した1件)で1台しか復元できず、1エッジ複数カメラの2台目が
+            // “開始前アイコン”のまま取り残されていた(エッジ撮影中なのにスマホ開始前)。per-plan で解消する。
+            val localPlans = ArrayList<String>()
+            try {
+                val pa = JSONArray(HgeNative.nativeListPlans())
+                for (k in 0 until pa.length()) { val po = pa.optJSONObject(k) ?: continue; val id = po.optString("id"); if (id.isNotEmpty()) localPlans.add(id) }
+            } catch (_: Exception) {}
             for (ed in found) {
-                val pj = HgeNative.nativeEdgeProgress(ed.ip, ed.port)
-                if (pj.isEmpty()) continue
-                try {
-                    val o = JSONObject(pj)
-                    val st = o.optInt("state")
-                    if (st == HgeNative.ST_CAPTURING || st == HgeNative.ST_SEARCHING || st == HgeNative.ST_DISCONNECTED || st == HgeNative.ST_WAITING || st == HgeNative.ST_NOCAMERA) {
-                        val nm = o.optString("name")
-                        var pid = ""
-                        try {
-                            val pa = JSONArray(HgeNative.nativeListPlans())
-                            for (k in 0 until pa.length()) { val po = pa.getJSONObject(k); if (po.optString("name") == nm) { pid = po.optString("id"); break } }
-                        } catch (_: Exception) {}
-                        val disc = (st == HgeNative.ST_DISCONNECTED || st == HgeNative.ST_NOCAMERA)
-                        val wait = (st == HgeNative.ST_WAITING || st == HgeNative.ST_SEARCHING)
-                        runOnUiThread {
-                            // 復元: このエッジ(名称)を登録一覧へ統合し、復元中の計画のエッジ名称として設定する。
-                            updateEdgeIp(ed.name, ed.ip, ed.port)
-                            if (pid.isNotEmpty()) setPlanEdgeName(pid, ed.name)
-                            refreshEdgeSpinner()
-                            if (pid.isNotEmpty()) {
-                                when { disc -> disconnectedPlans.add(pid); wait -> waitingPlans.add(pid); else -> { capturingPlans.add(pid); startBlink() } }
-                                refreshPlanList(); updateReadOnly()
-                            }
+                runOnUiThread { updateEdgeIp(ed.name, ed.ip, ed.port); refreshEdgeSpinner() }   // 発見したエッジは撮影有無に関わらず登録
+                for (pid in localPlans) {
+                    val pj = try { HgeNative.nativeEdgeProgress(ed.ip, ed.port, pid) } catch (_: Exception) { "" }
+                    if (pj.isEmpty()) continue
+                    val st = try { JSONObject(pj).optInt("state", HgeNative.ST_IDLE) } catch (_: Exception) { HgeNative.ST_IDLE }
+                    val active = st == HgeNative.ST_CAPTURING || st == HgeNative.ST_SEARCHING || st == HgeNative.ST_WAITING ||
+                                 st == HgeNative.ST_NOCAMERA || st == HgeNative.ST_DISCONNECTED || st == HgeNative.ST_STOPPING
+                    if (!active) continue   // このエッジはこの計画を走らせていない(IDLE)
+                    val disc = (st == HgeNative.ST_DISCONNECTED || st == HgeNative.ST_NOCAMERA)
+                    val wait = (st == HgeNative.ST_WAITING || st == HgeNative.ST_SEARCHING)
+                    runOnUiThread {
+                        setPlanEdgeName(pid, ed.name)   // この計画のエッジ担当を復元(以降の停止/ポールに使う)
+                        when { disc -> disconnectedPlans.add(pid); wait -> waitingPlans.add(pid); else -> { capturingPlans.add(pid); startBlink() } }
+                        if (currentPlanId == pid) {
                             when {
                                 disc -> { captureStatus.text = "● カメラが見つかりません(エッジ)"; captureStatus.setTextColor(0xFFD32F2F.toInt()) }
                                 wait -> { captureStatus.text = "● 撮影開始待ち(エッジ)"; captureStatus.setTextColor(0xFF1565C0.toInt()) }
                                 else -> { captureStatus.text = "● エッジ撮影中(復元)"; captureStatus.setTextColor(0xFF2E7D32.toInt()) }
                             }
                             captureStatus.visibility = View.VISIBLE
-                            ensureEdgePoll()
                         }
-                        // 複数エッジが並行撮影中の場合もあるため return せず、見つかった全エッジを復元する。
+                        refreshPlanList(); updateReadOnly(); ensureEdgePoll()
                     }
-                } catch (_: Exception) {}
+                    // 複数エッジ/複数計画が並行撮影の場合もあるため continue で全て復元する。
+                }
             }
         }.start()
     }
@@ -2814,6 +2817,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private fun startPlan(id: String) {
+        stoppingPlans.remove(id)   // 再開する計画は「中止確定待ち」を解除(NOCAMERA抑止をリセット)
+        // 即時フィードバック: タップの瞬間に待機(カメラ点灯)へ変える。「押したのが効いたか分からない」対策。
+        // 発見/開始要求は後追いで行い、失敗したらここで足した待機を取り消してトーストで知らせる。
+        // startingPlans: 開始要求がエッジへ届く前のポーリングが IDLE を拾って集合から外すレースを防ぐ。
+        waitingPlans.add(id); startingPlans.add(id)
+        refreshPlanList(); updateReadOnly()
         // この計画に指定されたエッジ端末の"名称"(無ければスマホで撮影)。
         val name = planEdgeName(id)
         if (name.isEmpty()) {
@@ -2823,10 +2832,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 val r = HgeNative.nativeCaptureStartPlan(id)
                 runOnUiThread {
                     currentPlanId = id
+                    startingPlans.remove(id)   // 開始要求の結果確定
                     when (r) {
-                        HgeNative.ERR_OVERLAP_LIMIT -> Toast.makeText(this, "撮影期間が重なる計画は2件までです。時間をずらすか他の計画を停止してください", Toast.LENGTH_LONG).show()
-                        HgeNative.ERR_QUEUE_FULL   -> Toast.makeText(this, "撮影開始要求が上限(100件)に達しました", Toast.LENGTH_LONG).show()
-                        else -> waitingPlans.add(id)   // まずは待機(点灯)。実状態はEV_STATEで即補正される
+                        HgeNative.ERR_OVERLAP_LIMIT -> { waitingPlans.remove(id); Toast.makeText(this, "撮影期間が重なる計画は2件までです。時間をずらすか他の計画を停止してください", Toast.LENGTH_LONG).show() }
+                        HgeNative.ERR_QUEUE_FULL   -> { waitingPlans.remove(id); Toast.makeText(this, "撮影開始要求が上限(100件)に達しました", Toast.LENGTH_LONG).show() }
+                        else -> {}   // 待機はタップ時に反映済み。実状態はEV_STATEで即補正される
                     }
                     refreshPlanList(); updateReadOnly()
                 }
@@ -2838,17 +2848,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val e = discoverEdgeByName(name)
             runOnUiThread {
                 if (e == null) {
+                    waitingPlans.remove(id); startingPlans.remove(id); refreshPlanList(); updateReadOnly()   // タップ時の即時反映を取り消す
                     Toast.makeText(this, "エッジ端末(${name})が見つからないため撮影を開始できません", Toast.LENGTH_LONG).show()
                     return@runOnUiThread
                 }
                 updateEdgeIp(name, e.ip, e.port)   // 解決したIPを保持(停止/状態確認に使う)
                 planExec.execute {
+                    // 選択→計画JSON送信→開始 を planExec(単一スレッド)上で原子化する。
+                    // nativeEdgeStart は「選択中の計画」のJSONを送るため、2計画の順次開始で別スレッドに
+                    // 逃がすと後発の nativeSelectPlan が割り込み、前の計画idに別計画の内容を送る競合があった。
                     HgeNative.nativeSelectPlan(id)
-                    runOnUiThread {
-                        currentPlanId = id; waitingPlans.add(id)   // まずは待機(点灯)。実状態はedgePollで補正される
-                        startOnEdge(e, id)
-                        refreshPlanList(); updateReadOnly()
-                    }
+                    runOnUiThread { currentPlanId = id; refreshPlanList(); updateReadOnly() }   // 待機はタップ時に反映済み
+                    startOnEdge(e, id)   // planExec 上で同期実行(内部でネットワークI/O)
                 }
             }
         }.start()
@@ -2869,33 +2880,64 @@ class MainActivity : AppCompatActivity(), HgeListener {
         return "カメラ"
     }
 
+    // NOCAMERAダイアログの抑止フラグ解除＋表示中なら閉じる。状態が「未検出以外」(復帰/待機/撮影/IDLE)へ
+    // 移ったとき、および停止確定時に呼ぶ。これで復帰しても閉じない/中止しても再表示される問題を根絶する。
+    private fun clearNoCam(id: String) {
+        nocamDialogShown.remove(id)
+        nocamDialogs.remove(id)?.let { runCatching { if (it.isShowing) it.dismiss() } }
+    }
+
+    // 「中止」操作の共通処理。タップの瞬間にアイコンを撮影中→開始前へ戻し(即時フィードバック。
+    // 「押したのが効いたか分からない」対策)、停止は非同期送信。停止(IDLE)が確定するまでは
+    // stoppingPlans で NOCAMERA ダイアログとポーリングの再追加を抑止する(確定は reconcileEdgePlan /
+    // EV_STATE の IDLE 到達。保険で一定時間後に強制掃除)。
+    private fun beginStop(id: String, doStop: () -> Unit) {
+        stoppingPlans.add(id)
+        capturingPlans.remove(id); waitingPlans.remove(id); disconnectedPlans.remove(id)   // 即時にアイコンを戻す
+        clearNoCam(id)
+        if (capturingPlans.isEmpty()) stopBlink()
+        if (currentPlanId == id) captureStatus.visibility = View.GONE
+        refreshPlanList(); updateReadOnly()
+        Thread { runCatching { doStop() } }.start()
+        // 保険: 一定時間内に IDLE を検知できなくても抑止/集合を掃除し、UIとポーリングを正常化する。
+        handler.postDelayed({
+            if (stoppingPlans.remove(id)) {
+                capturingPlans.remove(id); waitingPlans.remove(id); disconnectedPlans.remove(id); clearNoCam(id)
+                if (capturingPlans.isEmpty()) stopBlink()
+                if (currentPlanId == id) captureStatus.visibility = View.GONE
+                refreshPlanList(); updateReadOnly()
+                if (activeEdgePlans().isEmpty()) handler.removeCallbacks(edgePoll)
+            }
+        }, 20000)
+    }
+
     private fun showNoCameraDialog(id: String) {
+        if (stoppingPlans.contains(id)) return      // 中止操作済み(停止確定待ち)は出さない
         if (nocamDialogShown.contains(id)) return   // 既に表示中/継続中は出さない
         nocamDialogShown.add(id)
         val cam = planCameraLabel(id)
         val e = planEdge(id)   // null=スマホ直接
-        androidx.appcompat.app.AlertDialog.Builder(this)
+        val dlg = androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle("カメラが見つかりません")
             .setMessage("${cam}が見つかりません。オンラインにしてください。")
             .setCancelable(false)
-            .setPositiveButton("継続") { dlg, _ ->
-                dlg.dismiss()
+            .setPositiveButton("継続") { d, _ ->
+                d.dismiss(); nocamDialogs.remove(id)
                 // 即再探索(取得フェーズの60秒待ちを前倒し)。ネットワークI/Oは別スレッド。
                 Thread { if (e == null) HgeNative.nativePokeAcquire(id) else HgeNative.nativeEdgeResearch(e.ip, e.port, id) }.start()
                 // 猶予後もまだ未検出なら再度ポップアップ(継続の間は nocamDialogShown を維持して多重表示を防ぐ)。
                 handler.postDelayed({
-                    if (disconnectedPlans.contains(id)) { nocamDialogShown.remove(id); showNoCameraDialog(id) }
+                    if (disconnectedPlans.contains(id) && !stoppingPlans.contains(id)) { nocamDialogShown.remove(id); showNoCameraDialog(id) }
                 }, 12000)
             }
-            .setNegativeButton("中止") { dlg, _ ->
-                dlg.dismiss()
+            .setNegativeButton("中止") { d, _ ->
+                d.dismiss(); nocamDialogs.remove(id)
                 val e2 = planEdge(id)
-                capturingPlans.remove(id); waitingPlans.remove(id); disconnectedPlans.remove(id); nocamDialogShown.remove(id)
-                if (capturingPlans.isEmpty()) stopBlink()
-                refreshPlanList(); updateReadOnly()
-                Thread { if (e2 == null) HgeNative.nativeCaptureStopPlan(id) else stopOnEdge(e2, id) }.start()
+                beginStop(id) { if (e2 == null) HgeNative.nativeCaptureStopPlan(id) else HgeNative.nativeEdgeStop(e2.ip, e2.port, id) }
             }
-            .show()
+            .create()
+        nocamDialogs[id] = dlg
+        dlg.show()
     }
 
     private fun confirmStop(id: String) {
@@ -2906,11 +2948,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .setPositiveButton("中止する") { dlg, _ ->
                 dlg.dismiss()   // 中止選択で即ダイアログを閉じる(停止処理の完了は待たない。指示4)
                 val e = planEdge(id)   // この計画のエッジ(無ければスマホ)
-                capturingPlans.remove(id); waitingPlans.remove(id); disconnectedPlans.remove(id); nocamDialogShown.remove(id)
-                if (capturingPlans.isEmpty()) stopBlink()
-                refreshPlanList(); updateReadOnly()
-                // 停止指示はネットワークI/Oを伴うためバックグラウンドで実行(UIを固めない)。
-                Thread { if (e == null) HgeNative.nativeCaptureStopPlan(id) else stopOnEdge(e, id) }.start()
+                // 停止確定(IDLE)まで抑止しつつ非同期停止(NOCAMERAダイアログの無限再表示も防ぐ)。
+                beginStop(id) { if (e == null) HgeNative.nativeCaptureStopPlan(id) else HgeNative.nativeEdgeStop(e.ip, e.port, id) }
             }
             .setNegativeButton("続ける", null)
             .show()
@@ -3017,14 +3056,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     val pid = o.optString("planId")
                     capState.text = "state: ${HgeNative.stateName(st)}"
                     if (pid.isNotEmpty()) {
+                        // 「中止」操作済みは停止(IDLE/ERROR)確定までNOCAMERAを無視(無限再表示を防ぐ)。
+                        if (stoppingPlans.contains(pid) && st != HgeNative.ST_IDLE && st != HgeNative.ST_ERROR) {
+                            // 抑止中: 何も表示更新しない(確定は下の IDLE/ERROR 分岐で行う)。
+                        } else
                         // 状態→3集合(撮影中=点滅 / 待機=点灯 / 未検出=✖)。各計画はいずれか一つ。
                         when (st) {
                             HgeNative.ST_CAPTURING, HgeNative.ST_STOPPING -> {
-                                capturingPlans.add(pid); waitingPlans.remove(pid); disconnectedPlans.remove(pid); nocamDialogShown.remove(pid)
+                                capturingPlans.add(pid); waitingPlans.remove(pid); disconnectedPlans.remove(pid); clearNoCam(pid)
                                 startBlink()
                             }
                             HgeNative.ST_WAITING, HgeNative.ST_SEARCHING -> {
-                                waitingPlans.add(pid); capturingPlans.remove(pid); disconnectedPlans.remove(pid); nocamDialogShown.remove(pid)
+                                waitingPlans.add(pid); capturingPlans.remove(pid); disconnectedPlans.remove(pid); clearNoCam(pid)
                                 if (capturingPlans.isEmpty()) stopBlink()
                             }
                             HgeNative.ST_NOCAMERA, HgeNative.ST_DISCONNECTED -> {
@@ -3033,8 +3076,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
                                 showNoCameraDialog(pid)   // Phase3c: 継続/中止ポップアップ(多重抑止あり)
                             }
                             HgeNative.ST_IDLE, HgeNative.ST_ERROR -> {
+                                stoppingPlans.remove(pid)
                                 capturingPlans.remove(pid); waitingPlans.remove(pid); disconnectedPlans.remove(pid)
-                                nocamDialogShown.remove(pid)
+                                clearNoCam(pid)
                                 if (capturingPlans.isEmpty()) stopBlink()
                             }
                         }
@@ -4003,7 +4047,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //    IPがDHCPで変わっていれば probe は無応答 → null(=本当に見つからない)で従来どおりトースト。
         val cached = edges.firstOrNull { it.name == name && it.ip.isNotEmpty() }
         if (cached != null) {
-            val pj = try { HgeNative.nativeEdgeProgress(cached.ip, cached.port) } catch (_: Exception) { "" }
+            val pj = try { HgeNative.nativeEdgeProgress(cached.ip, cached.port, "") } catch (_: Exception) { "" }   // 生存確認のみ(内容は不問)
             if (pj.isNotEmpty()) return cached
         }
         return null
@@ -4097,7 +4141,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 撮影中/待機/未検出の「エッジ計画」を列挙する。計画ごとに別エッジを指定でき並行撮影も可能なので、
     // 表示中の1台ではなく“アクティブな全エッジ計画”を対象にする。phone直は planEdge==null で除外される。
     private fun activeEdgePlans(): List<String> =
-        (capturingPlans + waitingPlans + disconnectedPlans).filter { planEdge(it) != null }
+        (capturingPlans + waitingPlans + disconnectedPlans + stoppingPlans).filter { planEdge(it) != null }
+        // stoppingPlans も対象: 中止操作で集合からは即除去(即時アイコン反映)するが、停止(IDLE)の確定は
+        // ポーリングで検知する必要があるため、確定までポールを続ける(reconcileEdgePlan がガード処理)。
 
     // 1つのエッジ計画の進捗JSONを状態集合へ反映する。表示中の計画(currentPlanId)ならステータス行も更新。
     // ST_IDLE/ST_ERROR ならその計画を各集合から除く(=撮影終了)。
@@ -4107,6 +4153,22 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val o = JSONObject(pj)
             val st = o.optInt("state")
             var changed = false
+            // 開始操作中(開始要求が未達の可能性)は IDLE 報告を無視する。開始要求の結果確定(startOnEdge)後に
+            // 通常のポーリング反映へ戻る。これが無いと2台順次開始(直列化)の2台目が「まだIDLE」を拾われて
+            // 集合から外れ、ポーリング対象からも消えて“エッジ撮影中なのに開始前アイコン”のまま固まる。
+            if (startingPlans.contains(pid)) return
+            // 「中止」操作済みの計画は停止(IDLE/ERROR)確定まで NOCAMERA を無視(ダイアログ無限再表示を防ぐ)。
+            if (stoppingPlans.contains(pid)) {
+                if (st == HgeNative.ST_IDLE || st == HgeNative.ST_ERROR) {
+                    stoppingPlans.remove(pid)
+                    capturingPlans.remove(pid); waitingPlans.remove(pid); disconnectedPlans.remove(pid); clearNoCam(pid)
+                    if (capturingPlans.isEmpty()) stopBlink()
+                    if (currentPlanId == pid) captureStatus.visibility = View.GONE
+                    refreshPlanList(); updateReadOnly()
+                    if (activeEdgePlans().isEmpty()) handler.removeCallbacks(edgePoll)
+                }
+                return
+            }
             when (st) {
                 HgeNative.ST_NOCAMERA, HgeNative.ST_DISCONNECTED -> {
                     if (disconnectedPlans.add(pid)) changed = true
@@ -4119,21 +4181,21 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     if (waitingPlans.add(pid)) changed = true
                     if (capturingPlans.remove(pid)) changed = true
                     if (disconnectedPlans.remove(pid)) changed = true
-                    nocamDialogShown.remove(pid)
+                    clearNoCam(pid)   // 未検出→待機へ復帰: 表示中のNOCAMERAダイアログを閉じる
                     if (currentPlanId == pid) { captureStatus.text = "● 撮影開始待ち(エッジ)"; captureStatus.setTextColor(0xFF1565C0.toInt()); captureStatus.visibility = View.VISIBLE }
                 }
                 HgeNative.ST_CAPTURING, HgeNative.ST_STOPPING -> {
                     if (capturingPlans.add(pid)) changed = true
                     if (waitingPlans.remove(pid)) changed = true
                     if (disconnectedPlans.remove(pid)) changed = true
-                    nocamDialogShown.remove(pid)
+                    clearNoCam(pid)   // 未検出→撮影へ復帰: 表示中のNOCAMERAダイアログを閉じる
                     if (currentPlanId == pid) { captureStatus.text = "● エッジ撮影中  ${o.optInt("frame")}/${o.optInt("total")}枚  残り${o.optInt("remainSec")}秒"; captureStatus.setTextColor(0xFF2E7D32.toInt()); captureStatus.visibility = View.VISIBLE }
                 }
                 HgeNative.ST_IDLE, HgeNative.ST_ERROR -> {   // この計画は終了 → 各集合から除去
                     if (capturingPlans.remove(pid)) changed = true
                     if (waitingPlans.remove(pid)) changed = true
                     if (disconnectedPlans.remove(pid)) changed = true
-                    nocamDialogShown.remove(pid)
+                    clearNoCam(pid)
                     if (currentPlanId == pid) captureStatus.visibility = View.GONE
                 }
                 // その他(READY 等)は無視
@@ -4153,7 +4215,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 val e = planEdge(pid) ?: continue
                 if (e.ip.isEmpty()) continue   // IP未解決(名称のみ)はスキップ
                 Thread {
-                    val pj = HgeNative.nativeEdgeProgress(e.ip, e.port)
+                    val pj = HgeNative.nativeEdgeProgress(e.ip, e.port, pid)   // 計画別: この計画idの状態だけを取る(1エッジ複数カメラの誤検出防止)
                     runOnUiThread { reconcileEdgePlan(pid, pj) }
                 }.start()
             }
@@ -4212,6 +4274,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         return out.toByteArray()
     }
 
+    // エッジへ計画を送って撮影開始する。ブロッキングI/Oを含むため planExec(バックグラウンド)から呼ぶこと。
+    // 呼び出し元の nativeSelectPlan と同一スレッドで連続実行することで「選択→計画JSON送信」を原子化する
+    // (別スレッド化すると2計画の順次開始で後発の選択が割り込み、別計画の内容を送る競合があった)。
     private fun startOnEdge(e: Edge, planId: String) {
         // 時刻同期(C_TIME)はエッジ端末の時計を「現在時刻」に合わせるためのもの。現在時刻を送る。
         val nowCal = Calendar.getInstance()
@@ -4219,7 +4284,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val off = TimeZone.getDefault().getOffset(nowCal.timeInMillis) / 60000
         val name = try { JSONObject(latestSchedule).optString("name") } catch (_: Exception) { "" }
         val nameBmp = makeNameBitmapBytes(if (name.isEmpty()) "撮影計画" else name)
-        Thread {
+        run {
             // 発見中のオンラインカメラをエッジへ通知(IP直結ヒント)。エッジは (model,serial) で本人確認して直結する。
             try {
                 val arr = org.json.JSONArray(HgeNative.nativeSearchDevicesList())
@@ -4236,31 +4301,38 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 if (push.length() > 0) HgeNative.nativeEdgeCameraInfo(e.ip, e.port, push.toString())
             } catch (_: Exception) {}
             val r = HgeNative.nativeEdgeStart(e.ip, e.port, s, off, nameBmp, planId)
+            // 開始が失敗コードを返しても、エッジ側では実際に走っている場合がある:
+            //  ・既に同じ計画がエッジで走行中 → C_ACTION が INVALID_STATE で NAK(-4)
+            //  ・2台順次開始のETP競合や ACK 取りこぼしで NAK/タイムアウト
+            // このとき従来は「開始失敗」として待機集合から外し“開始前アイコン”に戻していた(=エッジ撮影中
+            // なのにスマホは開始前)。失敗時はこの計画の実状態を問い合わせ、走っていれば開始成功として扱う。
+            // ネットワークI/Oはこのスレッド上で行う(UIを固めない)。
+            val running = if (r == 0) true else {
+                val pj = try { HgeNative.nativeEdgeProgress(e.ip, e.port, planId) } catch (_: Exception) { "" }
+                if (pj.isEmpty()) true   // エッジ無応答=判定不能 → 除去せず edgePoll に委ねる(誤って開始前へ戻さない)
+                else {
+                    val st = try { JSONObject(pj).optInt("state", HgeNative.ST_IDLE) } catch (_: Exception) { HgeNative.ST_IDLE }
+                    st != HgeNative.ST_IDLE && st != HgeNative.ST_ERROR   // 明示的IDLE/ERROR以外は走っているとみなし維持
+                }
+            }
             runOnUiThread {
-                if (r == 0) {
+                startingPlans.remove(planId)   // 開始要求の結果確定(以降はポーリングが実状態を反映)
+                if (running) {
                     // waitingPlans には startPlan で追加済み。以降は edgePoll(全エッジ計画対象)が各計画の状態を反映する。
                     if (currentPlanId == planId) { captureStatus.text = "● エッジ端末へ転送・撮影開始"; captureStatus.visibility = View.VISIBLE }
                     ensureEdgePoll()
                 } else {
                     capturingPlans.remove(planId); waitingPlans.remove(planId); disconnectedPlans.remove(planId)
                     refreshPlanList(); updateReadOnly()
-                    Toast.makeText(this, "エッジ端末 開始失敗 (code=$r)", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "エッジ端末 開始できませんでした (code=$r)", Toast.LENGTH_LONG).show()
                 }
             }
-        }.start()
+        }
     }
 
+    // エッジ計画の停止。停止確定(IDLE)まで抑止しつつ非同期停止する共通経路(beginStop)へ委譲。
+    // これにより NOCAMERA ダイアログの無限再表示や、停止途中のポーリング競合を防ぐ。
     private fun stopOnEdge(e: Edge, planId: String) {
-        Thread {
-            HgeNative.nativeEdgeStop(e.ip, e.port, planId)
-            runOnUiThread {
-                // この計画だけを各集合から除去する(他のエッジ計画は継続)。
-                capturingPlans.remove(planId); waitingPlans.remove(planId); disconnectedPlans.remove(planId); nocamDialogShown.remove(planId)
-                if (capturingPlans.isEmpty()) stopBlink()
-                if (currentPlanId == planId) captureStatus.visibility = View.GONE
-                refreshPlanList(); updateReadOnly()
-                if (activeEdgePlans().isEmpty()) handler.removeCallbacks(edgePoll)   // 他に撮影中のエッジ計画が無ければポール停止
-            }
-        }.start()
+        beginStop(planId) { HgeNative.nativeEdgeStop(e.ip, e.port, planId) }
     }
 }

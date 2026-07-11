@@ -806,8 +806,10 @@ errCode captureRunner::loop(void)
 			            static_cast<int>(endSec - now), static_cast<int>(now - startSec) });
 		}
 
-		// 撮影が連続失敗 → カメラ接続が切れたとみなし再接続(3a: 中止まで無限)。復帰後は現在時刻から周期を取り直す。
-		if (shootFailStreak >= kMaxConsecutiveFail)
+		// 撮影(シャッター)またはライブビュー(測光)が連続失敗 → カメラ接続/セッションが壊れたとみなし再接続。
+		//   シャッターは通るが測光だけ連続失敗する状態(ライブビューセッション消失等)でも、露出が固定のまま
+		//   復帰しない不具合を防ぐため meterFailStreak でも再establishを起動する(A-1と同じ静かな復帰を試みる)。
+		if (shootFailStreak >= kMaxConsecutiveFail || meterFailStreak >= kMaxMeterFail)
 		{
 			// A-1: まず1回だけ静かに再接続を試みる。一過性のブリップ(混雑WiFi等)ならここで復帰し、
 			//      NOCAMERA(✖点灯・スマホの「カメラが見つかりません」ポップ)を出さずに撮影を継続する。
@@ -825,6 +827,7 @@ errCode captureRunner::loop(void)
 				if (onState_) { onState_(ST_CAPTURING); }	// 緑へ戻す(NOCAMERAを出していた場合のみ意味を持つ)
 			}
 			shootFailStreak = 0;
+			meterFailStreak = 0;						// 再establishでライブビューが張り直る=測光失敗もリセット
 			avgBuf.clear();								// 測光移動平均をリセット
 			mono = tool::startElapse(); boundaryIdx = 0;	// 再接続後は現在時刻から周期をアンカーし直す
 			pending = target;

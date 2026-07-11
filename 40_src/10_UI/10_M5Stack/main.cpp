@@ -6,6 +6,7 @@
 // 縦スクロール表示し、撮影制御方法をタップするとその方法の画面に切り替わる。
 
 #include <M5Unified.h>
+#include <esp_heap_caps.h>	// heap_caps_malloc_extmem_enable(malloc の PSRAM 閾値を実行時設定)
 #include <WiFi.h>
 #include <Preferences.h>
 #include <esp_random.h>
@@ -655,6 +656,12 @@ void setup(void)
 	auto cfg = M5.config();
 	M5.begin(cfg);
 	dbg::init();
+
+	// ①内部DRAM節約: malloc の PSRAM 振り分け閾値を実行時に下げる。512B超の確保(ライブビュー生文字列
+	// ~14KB・計画JSON・CCAPIパースの中〜大確保等)を PSRAM へ載せ、内部DRAMを空ける。tiny確保(<=512B)は
+	// 内部のまま高速維持。CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL のランタイム版でフレームワーク再ビルド不要。
+	// 2カメラで minFree≒388B まで落ちる測光スパイクを緩和し、同時制御カメラ数を増やす下地にする。
+	heap_caps_malloc_extmem_enable(512);
 
 	g_cv.setPsram(true);
 	g_cv.setColorDepth(16);

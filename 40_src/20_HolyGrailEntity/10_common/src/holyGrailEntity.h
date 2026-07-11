@@ -255,6 +255,11 @@ int32_t hge_addOwnedDetected(int32_t index);
 //  エッジ端末が progress(get) 応答に使う。
 int32_t hge_getProgressJson(char* buf, int32_t* inoutLen);
 
+// 計画id指定の進捗JSON(1エッジ複数カメラ対応)。planId 空/NULL は上の集約版へフォールバック。
+// planId 指定時は該当セッションの状態/進捗を返し、該当セッションが無ければ state=IDLE を返す。
+// エッジ端末が C_PROGRESS(data=planId) 応答に使う。計画別に状態を返すことで誤NOCAMERAポップを防ぐ。
+int32_t hge_getProgressJsonFor(const char* planId, char* buf, int32_t* inoutLen);
+
 // --- 撮影実行 ---
 int32_t hge_captureStart(void);		// 撮影開始(非同期。編集対象計画)。進捗は HGE_EV_PROGRESS
 int32_t hge_captureStop(void);		// 撮影停止(編集対象計画)

@@ -829,6 +829,50 @@ errCode apiCanonCCAPI::rdyMetering(void)
 
 }
 
+// ③測光メモリ削減: liveviewdata.histogram を nlohmann の SAX で直接 histoRaw へ抽出する。
+// 従来の json::parse は 14KB の JSON を DOM 化して多数の小確保を内部DRAMに積み、2カメラ同時で
+// 内部が瞬間枯渇(minFree)する主因だった。SAX は DOM を作らずヒストグラム値だけを拾うので
+// 内部DRAM をほぼ消費しない。抽出対象: {"liveviewdata":{"histogram":[[y...],[r...],[g...],[b...]]}}。
+namespace
+{
+	struct HistoSax
+	{
+		using number_integer_t  = json::number_integer_t;
+		using number_unsigned_t = json::number_unsigned_t;
+		using number_float_t    = json::number_float_t;
+		using string_t          = json::string_t;
+		using binary_t          = json::binary_t;
+
+		std::vector<std::vector<uint32_t>>& out;
+		std::string curKey;
+		bool inLiveview = false;
+		bool inHisto    = false;
+		int  depth      = 0;
+
+		explicit HistoSax(std::vector<std::vector<uint32_t>>& o) : out(o) {}
+
+		bool key(string_t& v)          { curKey = v; return true; }
+		bool start_object(std::size_t) { if (curKey == "liveviewdata") { inLiveview = true; } curKey.clear(); return true; }
+		bool end_object()              { return true; }
+		bool start_array(std::size_t)
+		{
+			if (inHisto)                                       { ++depth; if (depth == 2) { out.emplace_back(); } }
+			else if (inLiveview && curKey == "histogram")      { inHisto = true; depth = 1; }
+			curKey.clear();
+			return true;
+		}
+		bool end_array()               { if (inHisto) { --depth; if (depth == 0) { inHisto = false; } } return true; }
+		bool number_unsigned(number_unsigned_t v) { if (inHisto && depth == 2) { out.back().push_back(static_cast<uint32_t>(v)); } return true; }
+		bool number_integer(number_integer_t v)   { if (inHisto && depth == 2) { out.back().push_back(static_cast<uint32_t>(v)); } return true; }
+		bool number_float(number_float_t, const string_t&) { return true; }
+		bool boolean(bool)             { return true; }
+		bool null()                    { return true; }
+		bool string(string_t&)         { return true; }
+		bool binary(binary_t&)         { return true; }
+		bool parse_error(std::size_t, const std::string&, const json::exception&) { return false; }
+	};
+}
+
 // 測光解析
 // rdyMetering()で得た情報を元に最適化されたヒストグラムを生成する
 // meteringParm : rdyMetering()で取得した情報
@@ -861,18 +905,16 @@ errCode apiCanonCCAPI::alzMetering(cmdt::HISTOGRAM& histoOut)
             DBGLN(col::RED, "len(%u) histogramRaw(%u)",len, liveViewInfo.length());
             return ERR_HGC_NOT_LIVE_FORMAT;
         }
-        auto json = json::parse(liveViewInfo.begin()+7, liveViewInfo.end()-2);
-//        auto json = json::parse(liveViewInfo.begin()+7,answer.end()-2);
-        std::string key0 = "liveviewdata";
-        std::string key1 = "histogram";
-        if (!json.contains(key0))
+        // ③ SAX抽出: DOMを作らず histogram の 4×bin を直接取り出す(内部DRAMの測光スパイクを消す)。
+        std::vector<std::vector<uint32_t>> histoRaw;
+        HistoSax sax(histoRaw);
+        bool ok = json::sax_parse(liveViewInfo.begin()+7, liveViewInfo.end()-2, &sax);
+        if (!ok || histoRaw.empty())
         {
-            DBGLN(col::RED, "parse error");
+            DBGLN(col::RED, "parse error(sax)");
             return ERR_HGC_API_ANALIZE;
         }
-        std::vector<std::vector<uint32_t>> histoRaw;
-        histoRaw = json[key0][key1];
-        DBGLN(col::CYN,"%s:elapse(%ums) json parse.", __func__, tool::getElapse(ela));
+        DBGLN(col::CYN,"%s:elapse(%ums) sax parse.", __func__, tool::getElapse(ela));
 
         // yrgb の要素があること
         // yrgb の bin の数が一緒であること
