@@ -360,16 +360,20 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeCameraInfo(JNIEnv* env, jobject, js
 }
 
 // エッジ端末の進捗を取得する。progress の JSON を返す(失敗時 "")。
+// planId 指定時は「その計画」の状態/進捗を返す(1エッジ複数カメラで誤検出を防ぐ)。空文字は集約(復元/生存確認)。
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeEdgeProgress(JNIEnv* env, jobject, jstring host_, jint port)
+Java_app_laxei_holygrail_HgeNative_nativeEdgeProgress(JNIEnv* env, jobject, jstring host_, jint port, jstring planId_)
 {
 	const char* host = env->GetStringUTFChars(host_, nullptr);
+	const char* pid  = planId_ ? env->GetStringUTFChars(planId_, nullptr) : nullptr;
 	std::string hostS = host ? host : "";
+	std::string pidS  = pid ? pid : "";
 	env->ReleaseStringUTFChars(host_, host);
+	if (pid) { env->ReleaseStringUTFChars(planId_, pid); }
 
 	std::lock_guard<std::mutex> lk(g_connMtx);
 	std::string rd;
-	int m = firstReq(hostS, port, etp::C_PROGRESS, etp::M_GET, "", rd);
+	int m = firstReq(hostS, port, etp::C_PROGRESS, etp::M_GET, pidS, rd);
 	return env->NewStringUTF((m == etp::M_ACK) ? rd.c_str() : "");
 }
 

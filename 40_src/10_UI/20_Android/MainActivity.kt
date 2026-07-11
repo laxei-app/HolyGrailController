@@ -260,7 +260,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 }
             } catch (_: Exception) {}
             for (ed in found) {
-                val pj = HgeNative.nativeEdgeProgress(ed.ip, ed.port)
+                val pj = HgeNative.nativeEdgeProgress(ed.ip, ed.port, "")   // 復元: 計画id未知 → 集約で「何か撮っているか」を問う
                 if (pj.isEmpty()) continue
                 try {
                     val o = JSONObject(pj)
@@ -4003,7 +4003,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //    IPがDHCPで変わっていれば probe は無応答 → null(=本当に見つからない)で従来どおりトースト。
         val cached = edges.firstOrNull { it.name == name && it.ip.isNotEmpty() }
         if (cached != null) {
-            val pj = try { HgeNative.nativeEdgeProgress(cached.ip, cached.port) } catch (_: Exception) { "" }
+            val pj = try { HgeNative.nativeEdgeProgress(cached.ip, cached.port, "") } catch (_: Exception) { "" }   // 生存確認のみ(内容は不問)
             if (pj.isNotEmpty()) return cached
         }
         return null
@@ -4153,7 +4153,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 val e = planEdge(pid) ?: continue
                 if (e.ip.isEmpty()) continue   // IP未解決(名称のみ)はスキップ
                 Thread {
-                    val pj = HgeNative.nativeEdgeProgress(e.ip, e.port)
+                    val pj = HgeNative.nativeEdgeProgress(e.ip, e.port, pid)   // 計画別: この計画idの状態だけを取る(1エッジ複数カメラの誤検出防止)
                     runOnUiThread { reconcileEdgePlan(pid, pj) }
                 }.start()
             }

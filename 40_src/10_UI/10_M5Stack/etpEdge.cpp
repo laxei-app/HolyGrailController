@@ -178,9 +178,12 @@ namespace
 			break;
 		case etp::C_PROGRESS:
 		{
+			// data=planId なら計画別の状態/進捗を返す(1エッジ複数カメラで誤NOCAMERAポップを防ぐ)。
+			// data 空は従来の集約スナップショット(復元/生存確認用)。
 			char b[256];
 			int32_t len = sizeof(b);
-			if (hge_getProgressJson(b, &len) == ERR_HGC_OK) { rd = b; }
+			const char* pid = pk.data.empty() ? nullptr : pk.data.c_str();
+			if (hge_getProgressJsonFor(pid, b, &len) == ERR_HGC_OK) { rd = b; }
 			break;
 		}
 		case etp::C_DIRECTION:

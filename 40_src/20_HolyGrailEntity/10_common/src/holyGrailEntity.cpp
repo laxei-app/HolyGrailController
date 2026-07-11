@@ -70,6 +70,11 @@ namespace
 		void*                         startThread = nullptr;
 		std::atomic<bool>             cancel{ false };		// 停止要求(予約待ちの開始スレッドを中断する)
 		std::atomic<bool>             armed{ false };		// 撮影窓前の予約待ちを抜けカメラ確保フェーズへ入ったか
+		// 進捗スナップショット(このセッション専用)。C_PROGRESS の「計画別」応答に使う。集約 g_pg*(最後に
+		// 撮影したセッションの値)とは別物。1エッジ複数カメラ時、スマホが計画idごとに正しい状態/進捗を取れる。
+		int                           pgFrame = 0, pgTotal = 0, pgRemain = 0, pgElapsed = 0;
+		hgc::exposure                 pgExp{};
+		std::string                   pgCcm;
 	};
 	std::vector<std::unique_ptr<captureSession>> g_sessions;
 
@@ -989,6 +994,7 @@ namespace
 				{ setCapturing(S->planId, false); }
 			},
 			[S](const captureRunner::progressInfo& p) {
+				S->pgFrame = p.frame; S->pgTotal = p.total; S->pgRemain = p.remainSec; S->pgElapsed = p.elapsedSec;	// 計画別(C_PROGRESS応答)
 				g_pgFrame = p.frame; g_pgTotal = p.total; g_pgRemain = p.remainSec; g_pgElapsed = p.elapsedSec;
 				char b[160];
 				std::snprintf(b, sizeof(b), "{\"planId\":\"%s\",\"frame\":%d,\"total\":%d,\"remainSec\":%d,\"elapsedSec\":%d}",
@@ -996,6 +1002,7 @@ namespace
 				notify(HGE_EV_PROGRESS, b);
 			},
 			[S](const captureRunner::capturedInfo& c) {
+				S->pgExp = c.exp; S->pgCcm = c.ccm;	// 計画別(C_PROGRESS応答)
 				g_pgExp = c.exp; g_pgCcm = c.ccm;
 				char b[256];
 				std::snprintf(b, sizeof(b), "{\"planId\":\"%s\",\"frame\":%d,\"iso\":\"%s\",\"ss\":\"%s\",\"fn\":\"%s\",\"luminance\":%.3f}",
@@ -2048,6 +2055,36 @@ int32_t hge_getProgressJson(char* buf, int32_t* inoutLen)
 		*inoutLen = need;
 		return ERR_HGC_BUF_SHORT;
 	}
+	std::memcpy(buf, tmp, need);
+	*inoutLen = need;
+	return ERR_HGC_OK;
+}
+
+// 計画id指定の進捗JSON(1エッジ複数カメラ対応)。planId 空/NULL は従来の集約スナップショットへフォールバック
+// (復元時の「このエッジは何か撮っているか」問い合わせ・生存確認用)。planId 指定時は該当セッションの
+// state/frame/total/… を返し、該当が無ければ state=IDLE(=この端末ではその計画は走っていない)を返す。
+// これにより、同一エッジで2台撮影中に片方の一過性状態がもう片方の計画へ貼られる誤NOCAMERAポップを解消する。
+int32_t hge_getProgressJsonFor(const char* planId, char* buf, int32_t* inoutLen)
+{
+	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
+	if (planId == nullptr || planId[0] == '\0') { return hge_getProgressJson(buf, inoutLen); }
+
+	int st = HGE_ST_IDLE; std::string nm, ccm; hgc::exposure exp{};
+	int fr = 0, tot = 0, rem = 0, el = 0;
+	if (captureSession* S = sessionFor(planId))
+	{
+		st = S->state.load(); nm = S->plan.name;
+		fr = S->pgFrame; tot = S->pgTotal; rem = S->pgRemain; el = S->pgElapsed;
+		ccm = S->pgCcm; exp = S->pgExp;
+	}
+	char tmp[320];
+	std::snprintf(tmp, sizeof(tmp),
+		"{\"state\":%d,\"name\":\"%s\",\"frame\":%d,\"total\":%d,\"remainSec\":%d,\"elapsedSec\":%d,"
+		"\"ccm\":\"%s\",\"iso\":\"%s\",\"ss\":\"%s\",\"fn\":\"%s\"}",
+		st, jesc(nm).c_str(), fr, tot, rem, el,
+		jesc(ccm).c_str(), exp.iso.c_str(), exp.ss.c_str(), exp.fn.c_str());
+	int32_t need = static_cast<int32_t>(std::strlen(tmp)) + 1;
+	if (buf == nullptr || *inoutLen < need) { *inoutLen = need; return ERR_HGC_BUF_SHORT; }
 	std::memcpy(buf, tmp, need);
 	*inoutLen = need;
 	return ERR_HGC_OK;
