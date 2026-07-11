@@ -2816,6 +2816,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun startPlan(id: String) {
         stoppingPlans.remove(id)   // 再開する計画は「中止確定待ち」を解除(NOCAMERA抑止をリセット)
+        // 即時フィードバック: タップの瞬間に待機(カメラ点灯)へ変える。「押したのが効いたか分からない」対策。
+        // 発見/開始要求は後追いで行い、失敗したらここで足した待機を取り消してトーストで知らせる。
+        waitingPlans.add(id)
+        refreshPlanList(); updateReadOnly()
         // この計画に指定されたエッジ端末の"名称"(無ければスマホで撮影)。
         val name = planEdgeName(id)
         if (name.isEmpty()) {
@@ -2826,9 +2830,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 runOnUiThread {
                     currentPlanId = id
                     when (r) {
-                        HgeNative.ERR_OVERLAP_LIMIT -> Toast.makeText(this, "撮影期間が重なる計画は2件までです。時間をずらすか他の計画を停止してください", Toast.LENGTH_LONG).show()
-                        HgeNative.ERR_QUEUE_FULL   -> Toast.makeText(this, "撮影開始要求が上限(100件)に達しました", Toast.LENGTH_LONG).show()
-                        else -> waitingPlans.add(id)   // まずは待機(点灯)。実状態はEV_STATEで即補正される
+                        HgeNative.ERR_OVERLAP_LIMIT -> { waitingPlans.remove(id); Toast.makeText(this, "撮影期間が重なる計画は2件までです。時間をずらすか他の計画を停止してください", Toast.LENGTH_LONG).show() }
+                        HgeNative.ERR_QUEUE_FULL   -> { waitingPlans.remove(id); Toast.makeText(this, "撮影開始要求が上限(100件)に達しました", Toast.LENGTH_LONG).show() }
+                        else -> {}   // 待機はタップ時に反映済み。実状態はEV_STATEで即補正される
                     }
                     refreshPlanList(); updateReadOnly()
                 }
@@ -2840,6 +2844,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val e = discoverEdgeByName(name)
             runOnUiThread {
                 if (e == null) {
+                    waitingPlans.remove(id); refreshPlanList(); updateReadOnly()   // タップ時の即時反映を取り消す
                     Toast.makeText(this, "エッジ端末(${name})が見つからないため撮影を開始できません", Toast.LENGTH_LONG).show()
                     return@runOnUiThread
                 }
@@ -2878,13 +2883,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
         nocamDialogs.remove(id)?.let { runCatching { if (it.isShowing) it.dismiss() } }
     }
 
-    // 「中止」操作の共通処理。停止(IDLE)が確定するまで NOCAMERA ダイアログを抑止(stoppingPlans)し、
-    // 停止は非同期送信。確定は reconcileEdgePlan / EV_STATE の IDLE 到達で行う(保険で一定時間後に強制掃除)。
-    // これにより「停止がエッジに効く前にポーリングが NOCAMERA を拾って再表示」する無限ループを断つ。
+    // 「中止」操作の共通処理。タップの瞬間にアイコンを撮影中→開始前へ戻し(即時フィードバック。
+    // 「押したのが効いたか分からない」対策)、停止は非同期送信。停止(IDLE)が確定するまでは
+    // stoppingPlans で NOCAMERA ダイアログとポーリングの再追加を抑止する(確定は reconcileEdgePlan /
+    // EV_STATE の IDLE 到達。保険で一定時間後に強制掃除)。
     private fun beginStop(id: String, doStop: () -> Unit) {
         stoppingPlans.add(id)
+        capturingPlans.remove(id); waitingPlans.remove(id); disconnectedPlans.remove(id)   // 即時にアイコンを戻す
         clearNoCam(id)
         if (capturingPlans.isEmpty()) stopBlink()
+        if (currentPlanId == id) captureStatus.visibility = View.GONE
         refreshPlanList(); updateReadOnly()
         Thread { runCatching { doStop() } }.start()
         // 保険: 一定時間内に IDLE を検知できなくても抑止/集合を掃除し、UIとポーリングを正常化する。
@@ -4129,7 +4137,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 撮影中/待機/未検出の「エッジ計画」を列挙する。計画ごとに別エッジを指定でき並行撮影も可能なので、
     // 表示中の1台ではなく“アクティブな全エッジ計画”を対象にする。phone直は planEdge==null で除外される。
     private fun activeEdgePlans(): List<String> =
-        (capturingPlans + waitingPlans + disconnectedPlans).filter { planEdge(it) != null }
+        (capturingPlans + waitingPlans + disconnectedPlans + stoppingPlans).filter { planEdge(it) != null }
+        // stoppingPlans も対象: 中止操作で集合からは即除去(即時アイコン反映)するが、停止(IDLE)の確定は
+        // ポーリングで検知する必要があるため、確定までポールを続ける(reconcileEdgePlan がガード処理)。
 
     // 1つのエッジ計画の進捗JSONを状態集合へ反映する。表示中の計画(currentPlanId)ならステータス行も更新。
     // ST_IDLE/ST_ERROR ならその計画を各集合から除く(=撮影終了)。
