@@ -9,11 +9,12 @@
 
 #include <M5Unified.h>
 #include <M5GFX.h>
-#include <lgfx/v1/panel/Panel_ST7789.hpp>	// M5GFX.h は ST7789 パネル型を公開しないため明示include
+#include <lgfx/v1/panel/Panel_ST7789.hpp>	// ST7789 パネル型を明示include
 #include <WiFi.h>
 #include <Preferences.h>
 #include <esp_random.h>
 #include <driver/gpio.h>
+#include <driver/i2c.h>	// I2C_NUM_1(M5PM1 の LCD電源ON を lgfx::i2c で叩くため)
 #include <json/nlohmann/json.hpp>
 #include <cstdio>
 #include <cstdlib>
@@ -28,6 +29,7 @@
 #include "WiFi_Connect.h"
 #include "etpEdge.h"
 #include "edgeProv.h"
+#include "edgeIcons.h"	// CoreS3 と共有する状態アイコン(ICON_START/CAPTURING/CAMERA_NG)
 #include "dataManager.h"
 #include "osFile.h"
 #include "osClock.h"
@@ -38,14 +40,15 @@ using json = nlohmann::json;
 // loopTask のスタック拡張(天文計算の再帰でオーバーフローするため。CoreS3版と同じ理由)。
 SET_LOOP_TASK_STACK_SIZE(16 * 1024);
 
-// ── StickS3 LCD(ST7789P3 135x240)を明示設定する ──
-// M5Unified はこのボードを自動認識しない(汎用 devkit ボードのため)ので、パネルを直接構成する。
-// ピン: MOSI=39 SCK=40 DC=45 CS=41 RST=21 BL=38(M5 StickS3 データシート)。
+// ── StickS3 LCD(ST7789P3 135x240)を手動構成する ──
+// M5.begin にボードを StickS3 と認識させると、M5 が StickS3 の電源IC(M5PM1)まで掌握して IRQ/I2C
+// ポーリングを始め、WiFi/BLE 稼働時に割り込みWDT(TG1)でブートループした。そのため表示は自前で
+// SPI2 に構成し、ちらつき解消に必要な「M5PM1 の LCD電源ON」だけを別途 I2C で手動実行する(m5pm1LcdPowerOn)。
+// ピン: MOSI=39 SCK=40 DC=45 CS=41 RST=21 (M5 StickS3 データシート)。
 class DisplayS3 : public lgfx::LGFX_Device
 {
-	lgfx::Panel_ST7789 _st7789;		// 基底の _panel と名前衝突しないよう別名にする
+	lgfx::Panel_ST7789 _st7789;
 	lgfx::Bus_SPI      _spibus;
-	lgfx::Light_PWM    _backlight;
 public:
 	DisplayS3()
 	{
@@ -69,7 +72,7 @@ public:
 			c.pin_busy      = -1;
 			c.panel_width   = 135;
 			c.panel_height  = 240;
-			c.offset_x      = 52;	// ST7789 135x240 パネルの表示オフセット(StickC Plus系と同じ既定)
+			c.offset_x      = 52;
 			c.offset_y      = 40;
 			c.offset_rotation = 0;
 			c.readable      = false;
@@ -79,24 +82,31 @@ public:
 			c.bus_shared    = false;
 			_st7789.config(c);
 		}
-		{
-			auto c = _backlight.config();
-			c.pin_bl      = 38;
-			c.invert      = false;
-			c.freq        = 44100;
-			c.pwm_channel = 7;
-			_backlight.config(c);
-			_st7789.setLight(&_backlight);
-		}
 		setPanel(&_st7789);
 	}
 };
 
 static DisplayS3        g_lcd;
-// 表示はLCDへ直接描画する。全画面スプライト(240x135x2=64KB)は内蔵RAMを圧迫し、
-// PSRAMもこのモジュールでは使えない(OPIハング)ため撮影パイプライン(CCAPIパース/測光)が
-// メモリ不足で落ちる。g_cv を g_lcd への参照にして 64KB を恒久的に空ける(描画APIは共通基底)。
-static lgfx::LovyanGFX& g_cv = g_lcd;
+// 表示はスプライト(ダブルバッファ)に描いて一度に転送する。全画面スプライト(240x135x2=64KB)は
+// Arduino 3.x で有効化した PSRAM に確保する(内蔵RAMを圧迫しない)。
+static lgfx::LGFX_Sprite g_cv(&g_lcd);
+
+// StickS3 の LCD/バックライト電源は M5PM1(PMIC, I2C 0x6E, SDA=47/SCL=48)から供給される。この初期化を
+// しないと LCD電源レールが不安定で「画面全体のちらつき」が出る。M5GFX の StickS3 初期化と同じ手順で
+// M5PM1 の G2(=LCD Power On)を出力HIGHにし、PMIC のアイドルスリープ(reg 0x09)を無効化して安定化する。
+// M5 本体には StickS3 と認識させない(ブートループ回避)ので、この1点だけを lgfx::i2c で直接叩く。
+static void m5pm1LcdPowerOn(void)
+{
+	constexpr uint8_t  ADDR = 0x6E;
+	constexpr uint32_t FRQ  = 100000;
+	lgfx::i2c::init(I2C_NUM_1, GPIO_NUM_47, GPIO_NUM_48);	// SDA=47, SCL=48
+	lgfx::i2c::bitOff(I2C_NUM_1, ADDR, 0x16, 1 << 2, FRQ);	// G2 を GPIO 機能に
+	lgfx::i2c::bitOn (I2C_NUM_1, ADDR, 0x10, 1 << 2, FRQ);	// G2 を出力モードに
+	lgfx::i2c::bitOff(I2C_NUM_1, ADDR, 0x13, 1 << 2, FRQ);	// G2 プッシュプル
+	lgfx::i2c::bitOn (I2C_NUM_1, ADDR, 0x11, 1 << 2, FRQ);	// G2 出力HIGH => LCD 電源 ON
+	lgfx::i2c::writeRegister8(I2C_NUM_1, ADDR, 0x09, 0x00, 0, FRQ);	// PMIC アイドルスリープ無効(安定化)
+	Serial.println("[PM1] LCD power on (lgfx::i2c 47/48)");
+}
 static int              g_scrW = 240, g_scrH = 135;	// 横向きの論理サイズ
 
 // ── 物理ボタン(生GPIO。M5Unified は本ボードのボタンを対応付けないため直接読む) ──
@@ -206,6 +216,9 @@ static volatile int g_state = HGE_ST_IDLE;
 static bool g_blinkOn = true;
 static bool g_dirty = true;
 static bool g_edgeUp = false;
+static bool     g_spriteOk = false;		// createSprite 成否
+static bool     g_bandDirty = false;	// 状態帯(下部)だけの部分更新。全画面転送を減らして SPI 負荷を抑える
+static const int BAND_H = 40;			// 状態アイコン/文字が収まる下部バンドの高さ(px)
 
 // ── 受信計画の永続化(CoreS3版と同一) ──
 static std::set<std::string> g_recvPlans;
@@ -434,16 +447,37 @@ static void renderPlan(void)
 	g_cv.setCursor(4, ty);      g_cv.print(("Start " + mmddhhmm(st)).c_str());
 	g_cv.setCursor(4, ty + 18); g_cv.print(("End   " + mmddhhmm(en)).c_str());
 
-	// 状態行(下部) + KEY1で何ができるか。
-	int sy = g_scrH - 16;
+	// 状態(下部): CoreS3 と同じ ICON_* を計画名の状態表示として描画 + テキスト + KEY1操作。
+	//   撮影中(CAPTURING)=カメラ点滅 / 待機(WAITING)=カメラ点灯 / 未検出(NOCAMERA)=✖カメラ点灯 / 撮影可=開始アイコン。
+	//   点滅は g_blinkOn(CAPTURING のみ)。アイコン背景はデータに焼込済(CAPTURING/NG=黒地でStickS3の黒背景に馴染む)。
 	uint16_t scol = TFT_LIGHTGREY; const char* stxt = "";
-	if (nocam)          { scol = g_cv.color565(0xFF, 0x55, 0x55); stxt = "NO CAMERA  KEY1:Stop"; }
-	else if (capturing) { scol = g_blinkOn ? g_cv.color565(0x66, 0xEE, 0x66) : TFT_DARKGREY; stxt = "CAPTURING  KEY1:Stop"; }
-	else if (waiting)   { scol = g_cv.color565(0x66, 0xEE, 0x66); stxt = "WAITING    KEY1:Stop"; }
-	else if (capturable){ scol = TFT_WHITE; stxt = "READY      KEY1:Start"; }
-	else                { scol = TFT_DARKGREY; stxt = "(past)"; }
+	bool hasIcon = true; int iconH = ICON_CAPTURING_H;
+	if (nocam)
+	{
+		g_cv.pushImage(4, g_scrH - 2 - ICON_CAMERA_NG_H, ICON_CAMERA_NG_W, ICON_CAMERA_NG_H, ICON_CAMERA_NG);
+		iconH = ICON_CAMERA_NG_H; scol = g_cv.color565(0xFF, 0x55, 0x55); stxt = "NO CAMERA KEY1:Stop";
+	}
+	else if (capturing)
+	{
+		if (g_blinkOn) { g_cv.pushImage(4, g_scrH - 2 - ICON_CAPTURING_H, ICON_CAPTURING_W, ICON_CAPTURING_H, ICON_CAPTURING); }
+		iconH = ICON_CAPTURING_H; scol = g_cv.color565(0x66, 0xEE, 0x66); stxt = "CAPTURING KEY1:Stop";
+	}
+	else if (waiting)
+	{
+		g_cv.pushImage(4, g_scrH - 2 - ICON_CAPTURING_H, ICON_CAPTURING_W, ICON_CAPTURING_H, ICON_CAPTURING);
+		iconH = ICON_CAPTURING_H; scol = g_cv.color565(0x66, 0xEE, 0x66); stxt = "WAITING KEY1:Stop";
+	}
+	else if (capturable)
+	{
+		g_cv.pushImage(4, g_scrH - 2 - ICON_START_H, ICON_START_W, ICON_START_H, ICON_START);
+		iconH = ICON_START_H; scol = TFT_WHITE; stxt = "READY KEY1:Start";
+	}
+	else { hasIcon = false; scol = TFT_DARKGREY; stxt = "(past)"; }
+	// テキストはアイコンの右・縦中心に合わせる(アイコン無し=(past)は左端)。
+	int sx = hasIcon ? (4 + ICON_START_W + 4) : 4;
+	int sy = hasIcon ? (g_scrH - 2 - iconH) + (iconH - 16) / 2 : g_scrH - 16;
 	g_cv.setTextColor(scol);
-	g_cv.setCursor(4, sy); g_cv.print(stxt);
+	g_cv.setCursor(sx, sy); g_cv.print(stxt);
 
 	// 削除確認オーバーレイ。
 	if (g_confirmDel)
@@ -520,11 +554,26 @@ static void startApAndEtp(void)
 	}
 	else { Serial.println("[AP] softAP start FAILED"); }
 }
-static void redraw(void)
+// スプライトの一部(y..y+h 行)だけを LCD へ転送する。全画面転送の掃引=ちらつきを避ける確実な部分更新。
+// スプライト(16bpp)はメモリ上で幅g_scrW×高さ連続なので、y行目の先頭は buf + y*g_scrW。
+static void pushBand(int y, int h)
 {
-	if (g_apQrMode) { renderApQr(); }
-	else if (g_provMode) { renderProv(); }
-	else { renderPlan(); }
+	auto* buf = (const lgfx::rgb565_t*)g_cv.getBuffer();
+	if (!buf) { g_cv.pushSprite(0, 0); return; }
+	if (y < 0) { h += y; y = 0; }
+	if (y + h > g_scrH) { h = g_scrH - y; }
+	if (h <= 0) return;
+	g_lcd.pushImage(0, y, g_scrW, h, buf + (size_t)y * g_scrW);
+}
+// bandOnly=true のとき、スプライトへ全画面描画した上で、LCD へは下部の状態帯だけを転送する
+// (状態アイコン/点滅など「変わるのは下部だけ」の更新でのちらつきを防ぐ)。計画/一覧変更時は false=全画面。
+static void redraw(bool bandOnly)
+{
+	if (g_apQrMode) { renderApQr(); g_cv.pushSprite(0, 0); return; }
+	if (g_provMode) { renderProv(); g_cv.pushSprite(0, 0); return; }
+	renderPlan();
+	if (bandOnly) { pushBand(g_scrH - BAND_H, BAND_H); }
+	else          { g_cv.pushSprite(0, 0); }
 }
 
 // ── ボタン操作 ──
@@ -601,21 +650,49 @@ static void notifyCb(int32_t ev, const char* json_, int32_t len, void* user)
 	case HGE_EV_DEVICE:   std::snprintf(g_msg, sizeof(g_msg), "%s", json_); break;
 	default: break;
 	}
-	g_listDirty = true; g_dirty = true;
+	g_listDirty = true;
+	// 状態/進捗/撮影完了は画面下部の状態帯(アイコン/文字)しか変えない → バンドのみ部分更新でちらつき回避。
+	// それ以外(計画一覧の入替やエラー等・レイアウトが変わりうる)は全画面更新にする。
+	if (ev == HGE_EV_STATE || ev == HGE_EV_PROGRESS || ev == HGE_EV_CAPTURED) { g_bandDirty = true; }
+	else { g_dirty = true; Serial.printf("[EV] full-redraw ev=%ld\n", (long)ev); }
 }
 
+// StickS3 の LCD/バックライト電源は M5PM1(PMIC, I2C 0x6E, SDA=47/SCL=48)から供給される。
+// 汎用ボード指定で M5.begin すると StickS3 として自動認識されず、この PMIC 初期化が走らないため
+// LCD 電源レールが不安定になり「画面全体のちらつき」が出る。M5GFX の StickS3 初期化と同じ手順で
+// G2(=LCD Power On)を出力HIGHにし、PMIC のアイドルスリープ(reg 0x09)を無効化して安定化する。
 void setup(void)
 {
+	m5pm1LcdPowerOn();	// ★ちらつき対策: LCD電源(M5PM1 G2)を安定ONにする(M5.begin より前・自前I2C)
 	auto cfg = M5.config();
-	M5.begin(cfg);		// Rtc/Power 等(ディスプレイは本ボード非対応のため下で明示初期化)
+	M5.begin(cfg);		// board 認識は既定のまま(CoreS3誤検出=無害)。StickS3電源管理はさせない(ブートループ回避)
 	dbg::init();
+	Serial.printf("[M5] board=%d\n", (int)M5.getBoard());
 
-	g_lcd.init();
+	g_lcd.init();			// 自前パネル(SPI2)を初期化
 	g_lcd.setRotation(3);	// 横向き(240x135)。上下逆なら 1 に。
-	g_lcd.setBrightness(200);
+	gpio_reset_pin(GPIO_NUM_38);
+	gpio_set_direction(GPIO_NUM_38, GPIO_MODE_OUTPUT);
+	gpio_set_level(GPIO_NUM_38, 1);	// バックライトenable(実体の電源はM5PM1で安定化済み)
 	g_scrW = g_lcd.width(); g_scrH = g_lcd.height();
-	// スプライト(全画面64KB)は廃止し LCD へ直接描画する(内蔵RAM節約)。g_cv は g_lcd の別名。
+	// 全画面スプライト(240x135x2=64KB)を PSRAM に確保しダブルバッファ描画する。
+	// Arduino 3.x で Octal PSRAM が有効なので PSRAM に載る。失敗時は内蔵RAM(setPsram(false))へフォールバック。
 	g_lcd.fillScreen(TFT_BLACK);
+	g_cv.setColorDepth(16);
+	g_cv.setPsram(true);
+	void* sb = g_cv.createSprite(g_scrW, g_scrH);
+	if (sb == nullptr)
+	{
+		Serial.println("[LCD] PSRAM sprite failed -> internal RAM");
+		g_cv.setPsram(false);
+		sb = g_cv.createSprite(g_scrW, g_scrH);
+		if (sb == nullptr) { Serial.println("[LCD] createSprite FAILED"); }
+	}
+	g_spriteOk = (sb != nullptr);
+	Serial.printf("[LCD] spriteOk=%d buf=%p psramFree=%u internalFree=%u\n",
+	              (int)g_spriteOk, g_cv.getBuffer(),
+	              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+	              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 	g_cv.setFont(&fonts::Font2);
 
 	g_key1.begin(PIN_KEY1);
@@ -633,7 +710,7 @@ void setup(void)
 	loadNameBitmaps();
 	if (g_netMode == "ap") { startApAndEtp(); }
 	g_state = hge_getState();
-	redraw();
+	redraw(false);
 }
 
 void loop(void)
@@ -673,7 +750,9 @@ void loop(void)
 	// 撮影中アイコンの点滅。
 	{
 		static uint32_t lastBlink = 0;
-		if (g_state == HGE_ST_CAPTURING && (now - lastBlink) >= 500) { lastBlink = now; g_blinkOn = !g_blinkOn; g_dirty = true; }
+		// 点滅は状態帯だけの部分更新(g_dirty=全画面 とは別経路)。全画面 pushSprite の掃引が
+		// 500ms ごとに画面全体のちらつきとして見えていた問題を回避する。
+		if (g_state == HGE_ST_CAPTURING && (now - lastBlink) >= 500) { lastBlink = now; g_blinkOn = !g_blinkOn; g_bandDirty = true; }
 	}
 
 	// シリアルコマンド(検証用。CoreS3版と同じ主要コマンド)。
@@ -689,9 +768,9 @@ void loop(void)
 		else if (c == 'u') { hge_setUtcOffset(0);   hge_loadFixedPlan(); g_state = hge_getState(); g_dirty = true; }
 		else if (c == 'i')
 		{
-			Serial.printf("[INFO] dev=%s state=%s wifi=%d IP=%s edgeUp=%d LCD=%dx%d\n",
+			Serial.printf("[INFO] dev=%s state=%s wifi=%d IP=%s edgeUp=%d LCD=%dx%d spriteOk=%d\n",
 			              g_devName.c_str(), stName(g_state), (int)(WiFi.status() == WL_CONNECTED),
-			              WiFi.localIP().toString().c_str(), (int)g_edgeUp, g_scrW, g_scrH);
+			              WiFi.localIP().toString().c_str(), (int)g_edgeUp, g_scrW, g_scrH, (int)g_spriteOk);
 		}
 		else if (c == 'F') { Serial.printf("[FS] backend=%s\n", osfile::backendName()); }
 		else if (c == 'k') { Serial.printf("[KEY] k1=%d k2=%d\n", (int)g_key1.pressedNow(), (int)g_key2.pressedNow()); }
@@ -706,6 +785,8 @@ void loop(void)
 		}
 	}
 
-	if (g_dirty) { redraw(); g_dirty = false; }
+	// 計画/一覧の変化(g_dirty)は全画面更新を優先。状態/進捗/点滅(g_bandDirty)は下部の状態帯だけ部分転送。
+	if (g_dirty) { redraw(false); g_dirty = false; g_bandDirty = false; }
+	else if (g_bandDirty) { redraw(true); g_bandDirty = false; }
 	delay(10);
 }
