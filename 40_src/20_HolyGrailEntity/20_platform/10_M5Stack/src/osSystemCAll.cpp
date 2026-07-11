@@ -46,30 +46,38 @@ namespace ossc
         ctrl->doneSem  = xSemaphoreCreateBinary();
         ctrl->taskHandle = NULL;
 
-        BaseType_t created = xTaskCreatePinnedToCore(
-            taskWrapper,
-            "ossNet",
-            stackBytes,         // 呼び出し側指定(既定16384)。撮影runnerはjson反復収束で16KB必要
-                                // (最初の補正§4.4は loop→initialConverge→alzMetering(json)と1段深くなり
-                                // 8192ではcanary超過)。HTTP/UDP I/Oだけの軽量スレッドは小さくして内部DRAMを空ける。
-            ctrl,
-            3,                  // 優先度
-            &ctrl->taskHandle,
-            0
-        );
+        // タスクスタック(16KB)は内部RAM必須。2カメラ同時の再開/開始バーストでは、他セッションの
+        // タスク生成やWiFi/BLE初期化と重なって内部の「連続領域」が一時的に不足し xTaskCreate が失敗する
+        // ことがある(ヒープ総量は十分でも largest ブロックが足りない)。失敗を即諦めず、少し待って
+        // 数回リトライする。先行タスクの初期化完了/一時確保の解放でほぼ通る(2本目の撮影runner不発を防ぐ)。
+        BaseType_t created = pdFAIL;
+        for (int attempt = 0; attempt < 6; ++attempt)
+        {
+            created = xTaskCreatePinnedToCore(
+                taskWrapper,
+                "ossNet",
+                stackBytes,     // 呼び出し側指定(既定14336)。撮影runnerはjson反復収束で~8.4KB使うため14KB確保。
+                                // Arduino3.xでは内部の最大連続ブロックが約16KBに細切れ化し16384では2本目が入らない。
+                ctrl,
+                3,              // 優先度
+                &ctrl->taskHandle,
+                0
+            );
+            if (created == pdPASS) { break; }
+            vTaskDelay(pdMS_TO_TICKS(200));   // 内部連続領域が空くのを待って再試行
+        }
 
-        // ★重要: タスク生成失敗を握りつぶさない。ヒープ枯渇で xTaskCreate が失敗すると、以前は
-        //   非nullハンドルを返すのにタスクは走らず(例: 2カメラ同時で2本目の撮影runnerが起動せず
-        //   establish不発=撮影開始せず)、原因が見えなかった。失敗時は明示ログ＋nullptr返し。
+        // ★重要: それでも失敗するなら握りつぶさない。非nullハンドルを返すとタスクは走らないのに
+        //   呼び出し側は成功と誤認し(例: 2本目の撮影runnerが起動せず establish不発=撮影開始せず)、
+        //   原因が見えなくなる。失敗時は明示ログ＋nullptr返し。
         if (created != pdPASS)
         {
-            Serial.printf("[THREADdiag] xTaskCreate FAILED r=%d freeHeap=%u minFree=%u\n",
-                          (int)created, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap());
+            Serial.printf("[thread] xTaskCreate failed r=%d free=%u largest=%u\n",
+                          (int)created, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
             vSemaphoreDelete(ctrl->doneSem);
             delete ctrl;
             return nullptr;
         }
-        Serial.printf("[THREADdiag] task created freeHeap=%u\n", (unsigned)ESP.getFreeHeap());
         return (void*)ctrl; // ハンドルとして ThreadControl* を返す
     }
 

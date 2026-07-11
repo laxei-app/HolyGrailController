@@ -255,6 +255,7 @@ void ssdpListenClose(void* handle) { ssdpClose(handle); }
         http_.setReuse(true); 
         
         // タイムアウト設定（3秒の壁を意識して3000ms程度）
+        http_.setConnectTimeout(1500);   // ②不達時に接続で長時間ブロックしない
         http_.setTimeout(3000);
 
         // JSON用のヘッダーを追加
@@ -299,6 +300,7 @@ void ssdpListenClose(void* handle) { ssdpClose(handle); }
 
         HTTPClient http;
         http.begin(url.c_str());
+        http.setConnectTimeout(1500);   // ②カメラ不達時にTCP接続(SYN)で数十秒ブロックしない=復帰を速く。健全な同一LANカメラは<100msで接続する。
         http.setTimeout(500);
         int code = http.GET();
         if(code == 200)
@@ -322,6 +324,7 @@ void ssdpListenClose(void* handle) { ssdpClose(handle); }
     {
         HTTPClient http;
         http.begin(url.c_str());
+        http.setConnectTimeout(1500);   // ②不達時に接続で長時間ブロックしない
         int code = http.POST(body.c_str());
         if (code > 0) response = http.getString().c_str();
         http.end();
@@ -334,6 +337,7 @@ void ssdpListenClose(void* handle) { ssdpClose(handle); }
         HTTPClient http;
         // URLの開始
         http.begin(url.c_str());
+        http.setConnectTimeout(1500);   // ②不達時に接続で長時間ブロックしない
         // Content-Typeを指定（APIの仕様に合わせて適宜変更してください）
         http.addHeader("Content-Type", "application/json");
 
@@ -354,6 +358,7 @@ void ssdpListenClose(void* handle) { ssdpClose(handle); }
     {
         HTTPClient http;
         http.begin(url.c_str());
+        http.setConnectTimeout(1500);   // ②不達時に接続で長時間ブロックしない
 
         // DELETEメソッドの実行
         int code = http.sendRequest("DELETE");
