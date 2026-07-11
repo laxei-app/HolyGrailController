@@ -222,6 +222,13 @@ static M5Canvas g_cv(&M5.Display);	// ダブルバッファ(ちらつき防止)
 struct planHit { int y0; int y1; std::string id; bool capturing; bool capturable; };
 static std::vector<planHit> g_planHits;
 
+// タップ即時反映用: 保留中の開始/停止操作。タップの瞬間にアイコンだけ先に切り替えて描画し、
+// 実処理(開始=計画ファイル読込+スケジュール構築で数百ms / 停止=撮影スレッドjoinで数秒)は
+// 「描き替えた次のループ」で実行する(従来はタップ処理内で同期実行し、完了まで無反応だった)。
+struct pendingOp { std::string id; int kind; };		// kind: 1=開始 2=停止
+static std::vector<pendingOp>       g_opQueue;		// 実行待ち(通常0〜1件。loop末尾で1件ずつ処理)
+static std::map<std::string, int>   g_pendingIcon;	// 計画id → kind。renderPlan が保留アイコンを即時反映
+
 // 撮影中(開始シーケンス〜停止処理中まで)か。フッタのボタン表示と操作の切替に使う。
 static bool isCapturing(void)
 {
@@ -373,6 +380,16 @@ static void renderPlan(void)
 		bool nocam     = (state == HGE_ST_NOCAMERA || state == HGE_ST_DISCONNECTED);
 		bool capturing = (state == HGE_ST_CAPTURING || state == HGE_ST_STOPPING);	// 実撮影中=点滅
 		bool waiting   = (state == HGE_ST_WAITING || state == HGE_ST_SEARCHING);		// 待機/探索=点灯
+		// タップ直後の即時反映: 実処理(開始/停止)はまだ完了していないが、アイコンだけ先に切り替える。
+		// 開始待ち=点灯(実処理後の SEARCHING と同じ字形で切れ目なく繋がる) / 停止待ち=開始アイコンへ戻す。
+		{
+			auto po = g_pendingIcon.find(id);
+			if (po != g_pendingIcon.end())
+			{
+				nocam = false; capturing = false;
+				waiting = (po->second == 1);
+			}
+		}
 		bool active    = (nocam || capturing || waiting);	// 何らか実行中(タップで中止可)
 		int ry0 = y, ry1 = y + rowH;
 		if (ry1 > top && ry0 < bot)
@@ -569,9 +586,19 @@ static void onTap(int x, int y)
 		{
 			if (x < 48)	// 左の開始/停止アイコン領域のタップ
 			{
-				if (h.capturing)       { hge_captureStopPlan(h.id.c_str()); }
-				else if (h.capturable) { hge_captureStartPlan(h.id.c_str()); }
-				g_listDirty = true; g_dirty = true;
+				// 即時反映: アイコンだけ先に切り替えて描画し、実処理は loop 末尾で行う
+				// (開始は計画読込で数百ms・停止はスレッドjoinで数秒ブロックするため、先に描く)。
+				// 同じ計画の処理待ち中の連打は無視する。
+				if (g_pendingIcon.count(h.id) == 0)
+				{
+					int kind = h.capturing ? 2 : (h.capturable ? 1 : 0);
+					if (kind != 0)
+					{
+						g_pendingIcon[h.id] = kind;
+						g_opQueue.push_back({ h.id, kind });
+						g_dirty = true;
+					}
+				}
 			}
 			else if (x >= 280)	// 右端のゴミ箱: 削除確認ダイアログを出す(item4)
 			{
@@ -825,6 +852,20 @@ void loop(void)
 	{
 		g_dirty = false;
 		redraw();
+	}
+
+	// 保留中の開始/停止を実行(タップ時のアイコン切替は上の redraw で反映済み)。
+	// 開始=計画読込+スケジュール構築で数百ms、停止=撮影スレッドjoinで数秒ブロックし得るが、
+	// ユーザーへの応答(アイコン)は既に返っている。1ループ1件ずつ処理する。
+	if (!g_opQueue.empty())
+	{
+		pendingOp op = g_opQueue.front();
+		g_opQueue.erase(g_opQueue.begin());
+		if (op.kind == 1) { hge_captureStartPlan(op.id.c_str()); }
+		else              { hge_captureStopPlan(op.id.c_str()); }
+		g_pendingIcon.erase(op.id);
+		g_state = hge_getState();
+		g_listDirty = true; g_dirty = true;	// 実状態で描き直す(開始=SEARCHING点灯で切れ目なし/停止=開始アイコン)
 	}
 	delay(16);
 }

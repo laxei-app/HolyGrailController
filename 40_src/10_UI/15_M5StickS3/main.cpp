@@ -214,6 +214,13 @@ static bool g_confirmDel = false;	// 表示中計画の削除確認中か
 static bool g_listDirty = true;
 static volatile int g_state = HGE_ST_IDLE;
 static bool g_blinkOn = true;
+
+// KEY1即時反映用: 保留中の開始/停止操作。押した瞬間にアイコンだけ先に切り替えて描画し、
+// 実処理(開始=計画ファイル読込+スケジュール構築で数百ms / 停止=撮影スレッドjoinで数秒)は
+// 「描き替えた次のループ」で実行する(従来はキー処理内で同期実行し、完了まで無反応だった)。
+struct pendingOp { std::string id; int kind; };		// kind: 1=開始 2=停止
+static std::vector<pendingOp>     g_opQueue;		// 実行待ち(通常0〜1件。loop末尾で1件ずつ処理)
+static std::map<std::string, int> g_pendingIcon;	// 計画id → kind。renderPlan が保留アイコンを即時反映
 static bool g_dirty = true;
 static bool g_edgeUp = false;
 static bool     g_spriteOk = false;		// createSprite 成否
@@ -424,6 +431,16 @@ static void renderPlan(void)
 	bool nocam     = (state == HGE_ST_NOCAMERA || state == HGE_ST_DISCONNECTED);
 	bool capturing = (state == HGE_ST_CAPTURING || state == HGE_ST_STOPPING);
 	bool waiting   = (state == HGE_ST_WAITING || state == HGE_ST_SEARCHING);
+	// KEY1直後の即時反映: 実処理(開始/停止)はまだ完了していないが、アイコンだけ先に切り替える。
+	// 開始待ち=点灯(実処理後の SEARCHING と同じ字形で切れ目なく繋がる) / 停止待ち=開始アイコンへ戻す。
+	{
+		auto po = g_pendingIcon.find(id);
+		if (po != g_pendingIcon.end())
+		{
+			nocam = false; capturing = false;
+			waiting = (po->second == 1);
+		}
+	}
 
 	// 右上: 何番目/全体(スクロール位置)。
 	{
@@ -609,7 +626,8 @@ static void handleButtons(uint32_t now)
 	// KEY1 長押し: 表示中の計画を削除(確認へ)。
 	if ((e1 & 2) && !arr.empty()) { g_confirmDel = true; g_dirty = true; return; }
 
-	// KEY1 短押し: 開始/停止。
+	// KEY1 短押し: 開始/停止。即時反映: アイコンだけ先に切り替えて描画し、実処理は loop 末尾で行う
+	// (開始は計画読込で数百ms・停止はスレッドjoinで数秒ブロックするため、先に描く)。処理待ち中の連打は無視。
 	if ((e1 & 1) && !arr.empty() && g_cur < (int)arr.size())
 	{
 		const auto& p = arr[g_cur];
@@ -619,9 +637,16 @@ static void handleButtons(uint32_t now)
 		                  state == HGE_ST_WAITING || state == HGE_ST_SEARCHING ||
 		                  state == HGE_ST_NOCAMERA || state == HGE_ST_DISCONNECTED);
 		bool capturable = p.value("capturable", false);
-		if (capturing)       { hge_captureStopPlan(id.c_str()); }
-		else if (capturable) { hge_captureStartPlan(id.c_str()); }
-		g_listDirty = true; g_dirty = true;
+		if (g_pendingIcon.count(id) == 0)
+		{
+			int kind = capturing ? 2 : (capturable ? 1 : 0);
+			if (kind != 0)
+			{
+				g_pendingIcon[id] = kind;
+				g_opQueue.push_back({ id, kind });
+				g_dirty = true;
+			}
+		}
 	}
 }
 
@@ -788,5 +813,19 @@ void loop(void)
 	// 計画/一覧の変化(g_dirty)は全画面更新を優先。状態/進捗/点滅(g_bandDirty)は下部の状態帯だけ部分転送。
 	if (g_dirty) { redraw(false); g_dirty = false; g_bandDirty = false; }
 	else if (g_bandDirty) { redraw(true); g_bandDirty = false; }
+
+	// 保留中の開始/停止を実行(KEY1時のアイコン切替は上の redraw で反映済み)。
+	// 開始=計画読込+スケジュール構築で数百ms、停止=撮影スレッドjoinで数秒ブロックし得るが、
+	// ユーザーへの応答(アイコン)は既に返っている。1ループ1件ずつ処理する。
+	if (!g_opQueue.empty())
+	{
+		pendingOp op = g_opQueue.front();
+		g_opQueue.erase(g_opQueue.begin());
+		if (op.kind == 1) { hge_captureStartPlan(op.id.c_str()); }
+		else              { hge_captureStopPlan(op.id.c_str()); }
+		g_pendingIcon.erase(op.id);
+		g_state = hge_getState();
+		g_listDirty = true; g_dirty = true;	// 実状態で描き直す(開始=SEARCHING点灯で切れ目なし/停止=開始アイコン)
+	}
 	delay(10);
 }
