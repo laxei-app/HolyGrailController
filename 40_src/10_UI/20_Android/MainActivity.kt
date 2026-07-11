@@ -4398,6 +4398,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
         return out.toByteArray()
     }
 
+    // 計画idから計画名を同期的に引く(計画一覧はid+名前を持つ)。エッジへ送る名前ビットマップ用。
+    // latestSchedule(選択中計画のキャッシュ)は選択後に非同期イベントで遅れて更新されるため、
+    // 2計画の順次開始で別計画の名前を作る競合があった(エッジの計画名取り違えの原因)。idから直接引いて根絶する。
+    private fun planNameFor(id: String): String {
+        try {
+            val pa = JSONArray(HgeNative.nativeListPlans())
+            for (k in 0 until pa.length()) {
+                val po = pa.optJSONObject(k) ?: continue
+                if (po.optString("id") == id) return po.optString("name")
+            }
+        } catch (_: Exception) {}
+        return ""
+    }
+
     // エッジへ計画を送って撮影開始する。ブロッキングI/Oを含むため planExec(バックグラウンド)から呼ぶこと。
     // 呼び出し元の nativeSelectPlan と同一スレッドで連続実行することで「選択→計画JSON送信」を原子化する
     // (別スレッド化すると2計画の順次開始で後発の選択が割り込み、別計画の内容を送る競合があった)。
@@ -4406,7 +4420,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val nowCal = Calendar.getInstance()
         val s = fmtIso.format(nowCal.time)
         val off = TimeZone.getDefault().getOffset(nowCal.timeInMillis) / 60000
-        val name = try { JSONObject(latestSchedule).optString("name") } catch (_: Exception) { "" }
+        val name = planNameFor(planId)   // 対象planIdの名前を同期取得(非同期キャッシュ latestSchedule は使わない)
         val nameBmp = makeNameBitmapBytes(if (name.isEmpty()) "撮影計画" else name)
         run {
             // 発見中のオンラインカメラをエッジへ通知(IP直結ヒント)。エッジは (model,serial) で本人確認して直結する。
