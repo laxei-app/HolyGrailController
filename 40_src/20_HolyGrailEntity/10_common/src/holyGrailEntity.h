@@ -129,6 +129,14 @@ int32_t hge_getScheduleJson(char* buf, int32_t* inoutLen);
 // スマホがエッジ端末へ capturePlan 転送する際に使う(csjson::toJson)。
 int32_t hge_getPlanJson(char* buf, int32_t* inoutLen);
 
+// --- 撮影シミュレーション(スマホ専用・画面360)。実装 30_role/10_phone/src/skySim.cpp ---
+// 恒星リスト(fixed_star.json 配列 [{name,ra,dec,mag,color_code}])を一度読み込む。戻り=星数,負=エラー。
+int32_t hge_simLoadStars(const char* starsJson);
+// params から画角内の天体を投影して返す(バッファ規約)。
+//  params = {datetime:"YYYY/MM/DD HH:MM:SS",offMin,lat,lon,alt,az,el,landscape,fisheye,focal,sensorW,sensorH,magLimit}
+//  返り   = {"objects":[{name,x,y,mag,color,kind}],"aspect","landscape","fisheye"}  x,y∈[-1,1](x右+ y上+)
+int32_t hge_simulateSky(const char* paramsJson, char* buf, int32_t* inoutLen);
+
 // 現在(編集対象)の撮影計画を永続化する(/plan/plan_<id>.json。1計画1ファイル §7.4)。
 // id 未割当なら作成時刻から採番する。計画固有ccmも一緒に保存する。
 int32_t hge_savePlan(void);

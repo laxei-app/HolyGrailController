@@ -76,6 +76,7 @@ namespace hgc
 		double fn = 0.0;			// 開放F値(F最小)
 		double fnMax = 0.0;			// 最小絞り(F最大)。0=未設定
 		bool   hasContact = true;	// 電子接点有無
+		bool   fisheye = false;		// 魚眼レンズ(投影方式=等距離)。マスタ lenses_list.json の "fisheye" 由来
 	};
 
 	// 5.5 所持カメラ(camera + 組み合わせるレンズ + 自動挿入)

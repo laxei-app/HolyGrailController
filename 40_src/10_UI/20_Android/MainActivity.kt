@@ -78,7 +78,26 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private lateinit var planFormScroll: ScrollView      // 先頭ページのフォーム縦スクロール
     private lateinit var planListScroll: ScrollView      // 先頭ページの計画リスト(分割バー上)
     private lateinit var planListContainer: LinearLayout
-    private var currentPlanId = ""          // 編集対象の計画 id
+    // 編集対象の計画 id。切替(選択/新規/複製/起動時)のたびに「変更の取り消し」用のベースラインを取り直す。
+    private var currentPlanId: String = ""
+        set(value) { val changed = field != value; field = value; if (changed) capturePlanBaseline() }
+    private var planBaseline = ""           // 変更の取り消し用: 計画/画面に入った時点の cs JSON(nativeGetPlanJson)
+    // 撮影計画画面の「変更の取り消し」ボタンの dirty 連動(現在の計画 != ベースライン なら有効)。
+    // 計画画面表示中のみ、planExec 上で現在値を取り比較する(編集と直列化して安全)。
+    private val planDirtyWatch = object : Runnable {
+        override fun run() {
+            if (::flipper.isInitialized && flipper.displayedChild == 0 && ::resetButton.isInitialized) {
+                planExec.execute {
+                    val cur = try { HgeNative.nativeGetPlanJson() } catch (e: Exception) { "" }
+                    runOnUiThread {
+                        if (flipper.displayedChild == 0)
+                            setCancelEnabled(resetButton, !planReadOnly && planBaseline.isNotEmpty() && cur != planBaseline)
+                    }
+                }
+            }
+            handler.postDelayed(this, 500)
+        }
+    }
     // 計画の選択・改名・各種編集(g_plan/g_editIdを触る操作)は単一スレッドで直列化し競合を防ぐ
     // (例: 改名と別計画選択が並走すると選択がファイルから古い名前を読み戻して改名が無効化される)。
     private val planExec = java.util.concurrent.Executors.newSingleThreadExecutor()
@@ -88,6 +107,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private val nocamDialogShown = mutableSetOf<String>() // カメラ未検出ポップアップを表示済みの計画 id(多重表示抑止。Phase3)
     private val schedulePages = mutableListOf<ScheduleView>()   // §7.3.2 薄明ページの ScheduleView(読取専用切替に使う)
     private val twilightPages = mutableListOf<View>()           // 薄明ページのラッパ(計画名ヘッダ+ScheduleView)。ページャ追加/削除用
+    private var simPage: SimPage? = null                        // 撮影シミュレーション(§7.3 画面360)。ページャ最終ページ(永続1インスタンス)
+    private var starsLoadStarted = false                        // fixed_star.json の読み込みを開始済み
+    // シミュレーションのネイティブ投影計算・恒星読み込み用(planExecを塞がないよう専用の単一スレッド)。
+    private val simExec = java.util.concurrent.Executors.newSingleThreadExecutor()
     private val twilightBoxViews = mutableListOf<TextView>()    // 概要の薄明移動ボックス(幅/高さ揃え用)
     private lateinit var captureStatus: TextView     // 撮影中ステータス(plan画面内)
     private var planReadOnly = false                 // 撮影中の計画を表示中=編集不可(item7)
@@ -200,6 +223,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 起動時のログ整理(当日以外が5件以上なら古い順に削除、最新4件まで残す)。端末TZで「当日」を判定。
         val tzOffMin = java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60000
         Thread { HgeNative.nativePruneOldLogs(tzOffMin) }.start()
+        handler.postDelayed(edgeTimeSync, 3000)   // 選択中エッジへ能動的な時刻同期を開始(RTC無し機/電波悪環境向け)
         loadColors()
         loadExpoValues()
         buildExposureEditors()
@@ -291,6 +315,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
         updateTimeButtons()
         latestSchedule = sched
         updatePlanDisplay(sched)
+        capturePlanBaseline()
+    }
+
+    // 「変更の取り消し」用のベースライン(計画/画面に入った時点の cs JSON)を取り直す。
+    // 計画切替(currentPlanId setter)・画面再入・起動時に呼ぶ。編集と直列化(planExec)して安全に取得。
+    private fun capturePlanBaseline() {
+        if (!::resetButton.isInitialized) return
+        planExec.execute {
+            val j = try { HgeNative.nativeGetPlanJson() } catch (e: Exception) { "" }
+            runOnUiThread { planBaseline = j; if (::resetButton.isInitialized) setCancelEnabled(resetButton, false) }
+        }
     }
 
     private fun bindViews() {
@@ -346,21 +381,22 @@ class MainActivity : AppCompatActivity(), HgeListener {
         startTime.setOnClickListener { pickTime(startCal) }
         endDate.setOnClickListener { pickDate(endCal) }
         endTime.setOnClickListener { pickTime(endCal) }
+        // 旧「リセット」→「変更の取り消し」(他画面と同じ)。画面/計画に入った時点(planBaseline)へ戻す。
+        styleCancelButton(resetButton)
+        setCancelEnabled(resetButton, false)
         resetButton.setOnClickListener {
-            val now = Calendar.getInstance()
-            startCal.timeInMillis = now.timeInMillis
-            endCal.timeInMillis = now.timeInMillis
-            endCal.add(Calendar.HOUR_OF_DAY, 2)
-            updateTimeButtons(); pushTimesToEntity()
-        }
-        findViewById<Button>(R.id.plan_saveButton).setOnClickListener {
+            if (planReadOnly) return@setOnClickListener               // 撮影中は編集不可
+            val base = planBaseline
+            if (base.isEmpty()) return@setOnClickListener
             planExec.execute {
-                val r = HgeNative.nativeSavePlan()
-                runOnUiThread {
-                    Toast.makeText(this, if (r == 0) "撮影計画を保存しました" else "保存に失敗しました", Toast.LENGTH_SHORT).show()
-                }
+                HgeNative.nativeSetPlanJson(base)                     // g_plan をベースラインへ戻す
+                HgeNative.nativeSavePlan()                            // ファイルも戻す
+                HgeNative.nativeSelectPlan(currentPlanId)             // 再読込→EV_SCHEDULE でUI更新
             }
         }
+        // 「この撮影計画を保存」ボタンは廃止。編集は各操作でその場保存され、画面移動/撮影開始/
+        // 他計画の選択でも保存される(他画面と同じ自動保存)。
+        handler.postDelayed(planDirtyWatch, 800)                     // 「変更の取り消し」ボタンの dirty 監視開始
         capStopButton.setOnClickListener {
             val e = selectedEdge()
             if (e == null) {
@@ -405,7 +441,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         buildCcmEditButtons()
         // メニュー(plan_menu→600.メニュー)。帯付きの一覧から各画面へ分岐。
         planMenu.setOnClickListener { openGearMenu() }
-        findViewById<ImageView>(R.id.gmenu_back).setOnClickListener { flipper.displayedChild = 0 }
+        findViewById<ImageView>(R.id.gmenu_back).setOnClickListener { flipper.displayedChild = 0; capturePlanBaseline() }
         // 620 所持カメラ(戻る/メニューで離脱時に自動保存)
         findViewById<ImageView>(R.id.cameralist_back).setOnClickListener { leaveCameraList() }
         findViewById<ImageView>(R.id.cameralist_menu).setOnClickListener { leaveCameraList() }
@@ -1203,16 +1239,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  機材マスタ・所持機材(600/620/622/630/632。データ構造仕様書43 §5.5〜5.9 / §7.6)
     // ============================================================
 
-    // インストール同梱の assets/master/*.json を /master へコピーする(無ければ)。
+    // インストール同梱の assets/master/*.json を /master へコピーする。
     // osfile のベース = getExternalFilesDir(null) なので dataManager は /master で読める。
-    // 将来サーバ更新は filesDir 側を上書きする(本タスクでは未実装)。
+    // 同梱アセットを常に上書きコピーする: lenses_list.json 等の機材マスタ(fisheye 等)を
+    // 編集→ビルドすれば、次回起動で即反映される(「ファイルを変更すれば即反映」)。
+    // (将来サーバ更新を入れる場合は、内容差分やバージョンで上書き可否を判断する。)
     private fun copyMasterAssets(baseDir: java.io.File) {
         try {
             val dir = java.io.File(baseDir, "master")
             if (!dir.exists()) dir.mkdirs()
             for (name in listOf("cameras.json", "lenses.json")) {
                 val out = java.io.File(dir, name)
-                if (out.exists() && out.length() > 0L) continue   // 既にあれば残す(更新は別途)
                 assets.open("master/$name").use { ins ->
                     out.outputStream().use { os -> ins.copyTo(os) }
                 }
@@ -2713,22 +2750,38 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (id == currentPlanId) tv.setTypeface(null, Typeface.BOLD)
         tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         if (!active && id == currentPlanId) {
-            // 選択中かつ非実行中の計画 → 名前タップで編集可能(キーボード)。確定で改名。
+            // 選択中かつ非実行中の計画 → 名前タップで編集可能(キーボード)。
+            //  確定は「完了(Done)」だけでなく、フォーカスが外れた時(別の場所をタップ)にも行う。
+            //  従来は Done を押さずにタップで抜けると改名されなかった。
             tv.isFocusableInTouchMode = true; tv.isFocusable = true
-            tv.setOnEditorActionListener { v, actionId, _ ->
-                if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
-                    val nm = v.text.toString().trim()
-                    planListScroll.isFocusableInTouchMode = true
-                    planListScroll.requestFocus()   // 隣行へ飛ばずキーボードを閉じる
-                    (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
-                        .hideSoftInputFromWindow(v.windowToken, 0)
-                    if (nm.isNotEmpty()) planExec.execute {
+            var committed = false   // 二重発火(Done→フォーカス喪失, refreshでの破棄)を防ぐ
+            val commit = {
+                val nm = tv.text.toString().trim()
+                if (!committed && nm.isNotEmpty() && nm != name) {
+                    committed = true
+                    planExec.execute {
                         val r = HgeNative.nativeRenamePlan(id, nm)   // item5: 重複なら ERR_NAME_DUP
                         runOnUiThread { if (r == HgeNative.ERR_NAME_DUP) showNameInUse(nm); refreshPlanList() }
                     }
+                }
+            }
+            tv.setOnEditorActionListener { v, actionId, _ ->
+                if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
+                    planListScroll.isFocusableInTouchMode = true
+                    planListScroll.requestFocus()   // 隣行へ飛ばずキーボードを閉じる(→OnFocusChangeで確定)
+                    (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
+                        .hideSoftInputFromWindow(v.windowToken, 0)
+                    commit()
                     true
                 } else false
             }
+            tv.setOnFocusChangeListener { _, hasFocus -> if (!hasFocus) commit() }   // 他のEditTextへ移ったら確定
+            // 他の計画選択/メニュー/新規作成などでリストが再構築(refreshPlanList)されると、この行の
+            // EditText が破棄される。その時に保留中の編集を確定する(タップで抜けても保存される)。
+            tv.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+                override fun onViewAttachedToWindow(v: View) {}
+                override fun onViewDetachedFromWindow(v: View) { commit() }
+            })
         } else {
             // 未選択(または撮影中)の行 → タップで選択のみ(キーボードは出さない)。
             tv.isFocusable = false; tv.isFocusableInTouchMode = false
@@ -3777,8 +3830,47 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 schedulePages.add(sv)
             }
         }
+        // 最終ページ = 撮影シミュレーション(§7.3 画面360)。永続1インスタンスを毎回末尾へ付け直す。
+        ensureSimReady()
+        simPage?.let { sp ->
+            planPager.removeView(sp)
+            planPager.addView(sp, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            // 方位磁石の日の出/日の入・月マーカー(表示JSONに含まれる)を反映。
+            sp.setMarkers(
+                o.optDouble("sunriseAz", Double.NaN).toFloat(),
+                o.optDouble("sunsetAz", Double.NaN).toFloat(),
+                o.optDouble("moonriseAz", Double.NaN).toFloat(),
+                o.optDouble("moonsetAz", Double.NaN).toFloat())
+            // 自己完結の撮影計画JSON(place/camera/lens/start/end 等)を読んで初期化・描画。
+            // マスターレンズ(起動時にアセットから再コピー)も渡し、fisheye をファイル由来で即反映させる。
+            simExec.execute {
+                val raw = try { HgeNative.nativeGetPlanJson() } catch (e: Exception) { "" }
+                val ml = try { HgeNative.nativeGetMasterLenses() } catch (e: Exception) { "[]" }
+                runOnUiThread { sp.bind(raw, ml) }
+            }
+        }
         planPager.refreshPages()
         updatePagerTitle()
+    }
+
+    // シミュレーションページの下準備: 恒星(fixed_star.json)を一度読み込み、ページを1度だけ生成する。
+    private fun ensureSimReady() {
+        if (!starsLoadStarted) {
+            starsLoadStarted = true
+            simExec.execute {
+                try {
+                    val json = assets.open("fixed_star.json").bufferedReader().use { it.readText() }
+                    HgeNative.nativeSimLoadStars(json)
+                } catch (_: Exception) {}
+            }
+        }
+        if (simPage == null) {
+            simPage = SimPage(this, simExec) { checked ->
+                // 横向きチェックは撮影計画へ反映(先頭ページと同じ)。再生成→EV_SCHEDULEで再bind。
+                planExec.execute { HgeNative.nativeSetPlanLandscape(if (checked) 1 else 0) }
+            }
+        }
     }
 
     // タイトル行は全ページ共通で「撮影計画 現在/総数」。計画名は薄明ページ内(タイトル行の下)に表示する。
@@ -3792,15 +3884,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun updateReadOnly() {
         planReadOnly = capturingPlans.contains(currentPlanId) || waitingPlans.contains(currentPlanId) || disconnectedPlans.contains(currentPlanId)
         val ed = !planReadOnly
+        // plan_resetButton(=変更の取り消し)は planDirtyWatch が有効/無効を管理(撮影中は自動で無効)。
         intArrayOf(R.id.plan_startDate, R.id.plan_startTime, R.id.plan_endDate, R.id.plan_endTime,
-            R.id.plan_resetButton, R.id.plan_saveButton, R.id.plan_gearConst,
+            R.id.plan_gearConst,
             R.id.plan_edgeSearchButton, R.id.searchButton, R.id.connectButton)
             .forEach { findViewById<View>(it).isEnabled = ed }
         intervalText.isEnabled = ed; landscapeCheck.isEnabled = ed
         cameraText.isEnabled = ed; lensText.isEnabled = ed; edgeSpinner.isEnabled = ed
         compass.isEnabled = ed; elevationView.isEnabled = ed; schedulePages.forEach { it.isEnabled = ed }
         findViewById<LinearLayout>(R.id.plan_ccmButtons).let { for (i in 0 until it.childCount) it.getChildAt(i).isEnabled = ed }
-        findViewById<View>(R.id.plan_saveButton).alpha = if (ed) 1f else 0.4f
     }
 
     // 夕日/朝日の帯を挿入(insert=true)/排除(insert=false)。他方の帯モードは保持する。
@@ -4071,6 +4163,23 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // edgePoll を単一インスタンスで(再)起動する。多重 postDelayed による二重ループを防ぐ。
     private fun ensureEdgePoll() { handler.removeCallbacks(edgePoll); handler.postDelayed(edgePoll, 2000) }
+
+    // 能動的な時刻同期。エッジは電波の悪い所ではNTP不可、かつStickS3はRTC無しで再起動時に時計を失う。
+    // スマホが「選択中のエッジ」へ定期的に現在時刻(C_TIME)を送って時計を保つ(撮影開始と無関係に常時)。
+    // 同期後はエッジ内部タイマが時計を進めるので、KEY1ローカル開始や無人撮影でも撮影窓を正しく判定できる。
+    // 選択エッジがオフライン/IP未解決なら送信は失敗し無視する。
+    private val edgeTimeSync = object : Runnable {
+        override fun run() {
+            val e = selectedEdge()
+            if (e != null && e.ip.isNotEmpty()) {
+                val now = Calendar.getInstance()
+                val s = fmtIso.format(now.time)
+                val off = TimeZone.getDefault().getOffset(now.timeInMillis) / 60000
+                Thread { try { HgeNative.nativeEdgeSyncTime(e.ip, e.port, s, off) } catch (_: Exception) {} }.start()
+            }
+            handler.postDelayed(this, 30000)   // 30秒ごと
+        }
+    }
 
     // 計画名をモノクロ2値ビットマップ(width u16LE, height u16LE, 1bpp MSB先頭, 1=白)に変換する。
     // エッジ端末はフォントに依存せず名称を表示できる(§8.2.1 多言語対応)。

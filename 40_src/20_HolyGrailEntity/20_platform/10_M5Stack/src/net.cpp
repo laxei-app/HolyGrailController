@@ -4,6 +4,7 @@
 #include <HTTPClient.h>
 #include <esp_wifi.h>
 #include <esp_netif.h>
+#include <esp_idf_version.h>	// ESP_IDF_VERSION_MAJOR(2.x=IDF4 / 3.x=IDF5 の分岐に使用)
 #include <lwip/sockets.h>	// 非ブロッキング connect + select による :8080 バッチ探索(§3.3 tier3)
 #include <cstring>
 #include <cstdio>
@@ -36,6 +37,12 @@ std::vector<std::string> apClientIps()
 {
     std::vector<std::string> ips;
     if ((WiFi.getMode() & WIFI_MODE_AP) == 0) { return ips; }	// APモード時のみ
+#if ESP_IDF_VERSION_MAJOR >= 5
+    // ESP-IDF 5.x(Arduino 3.x)では esp_netif_get_sta_list / esp_netif_sta_list_t が削除された。
+    // AP接続局のIP列挙は DHCPサーバのリース参照へ置き換える必要がある(AP無人運用向け機能)。
+    // 当面は空を返す(STA運用では未使用)。3.xをCoreS3へ反映する際に 5.x 対応の実装へ差し替える。
+    return ips;
+#else
     wifi_sta_list_t staList = {};
     if (esp_wifi_ap_get_sta_list(&staList) != ESP_OK) { return ips; }
     esp_netif_sta_list_t netifList = {};
@@ -52,6 +59,7 @@ std::vector<std::string> apClientIps()
         DBGLN(col::CYN, "apClientIps: %d client(s): %s", (int)ips.size(), joined.c_str());
     }
     return ips;
+#endif
 }
 
 // 限定サブネットのバッチ探索(§3.3 tier3)。自IP+マスクからホスト範囲を割り出し、非ブロッキング
