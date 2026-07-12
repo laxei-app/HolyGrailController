@@ -6,6 +6,12 @@ import android.app.TimePickerDialog
 import android.content.ContentValues
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.net.wifi.WifiInfo
+import android.net.wifi.WifiManager
 import android.provider.MediaStore
 import android.os.Build
 import androidx.core.app.ActivityCompat
@@ -3019,6 +3025,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         handler.removeCallbacks(edgeSweep)
         handler.removeCallbacks(edgeTimeSync)
         handler.removeCallbacks(hgePump)
+        stopEdgeApBinding()   // プロセスのネットワークバインドを解除(次アプリ/他通信のため)
         Thread { try { HgeNative.nativePresenceStop() } catch (_: Exception) {} }.start()  // P4: 常駐プレゼンスマップ停止
         HgeNative.nativeSetListener(null)
         HgeNative.nativeCaptureStop()
@@ -4251,6 +4258,66 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
     }
 
+    // ── APモードのエッジAPへのネットワークバインド(§1.2.1) ──
+    // Android は「インターネットゲートウェイの無いWi-Fi(=エッジのSoftAP)」を数十秒で自動的に
+    // 見限り、母艦LAN(モバイル/別Wi-Fi)へ切り替える。そのままではスマホがエッジと別網になり、
+    // ETP(TCP/UDP)が届かず制御・監視ができない。そこで、現在スマホが接続中のWi-Fiが "HGC-Edge*"
+    // (エッジのSoftAP)のときは、そのNetworkを requestNetwork で確保し bindProcessToNetwork で
+    // プロセス全体の通信(ネイティブのソケットも含む)をそのNICへ固定する。これで自動離脱を防ぎ、
+    // インターネット判定に依らずエッジと通信できる。別SSID(母艦LAN)に居る間はバインドしない=従来動作。
+    private val cm by lazy { getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager }
+    private var edgeApNetwork: Network? = null
+    private var edgeApCallback: ConnectivityManager.NetworkCallback? = null
+
+    // 現在接続中のWi-Fi SSID(引用符除去)。取得不能は null。
+    private fun currentWifiSsid(): String? {
+        return try {
+            val wm = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
+            @Suppress("DEPRECATION") val raw = wm.connectionInfo?.ssid ?: return null
+            raw.trim('"').let { if (it.isEmpty() || it == "<unknown ssid>") null else it }
+        } catch (_: Exception) { null }
+    }
+
+    // SSID が "HGC-Edge" 始まり(=エッジSoftAP)ならバインドを起動、そうでなければ解除する。
+    // edgeSweep(30秒毎)から呼ぶ。冪等(多重 requestNetwork を防ぐ)。
+    private fun updateEdgeApBinding() {
+        val ssid = currentWifiSsid()
+        val onEdgeAp = ssid != null && ssid.startsWith("HGC-Edge")
+        if (onEdgeAp) {
+            if (edgeApCallback != null) return   // 既にバインド機構が稼働中
+            val req = NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)   // インターネット無しWi-Fiも対象に
+                .build()
+            val cb = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    // このNetworkが本当にエッジSoftAPか(SSID一致)を確認してからバインドする(誤バインド防止)。
+                    val nc = cm.getNetworkCapabilities(network)
+                    val wi = nc?.transportInfo as? WifiInfo
+                    val ns = wi?.ssid?.trim('"')
+                    if (ns == null || ns.startsWith("HGC-Edge")) {
+                        edgeApNetwork = network
+                        cm.bindProcessToNetwork(network)
+                        android.util.Log.i("EdgeApBind", "bound to $ns")
+                    }
+                }
+                override fun onLost(network: Network) {
+                    if (network == edgeApNetwork) { cm.bindProcessToNetwork(null); edgeApNetwork = null }
+                }
+            }
+            edgeApCallback = cb
+            try { cm.requestNetwork(req, cb) } catch (_: Exception) { edgeApCallback = null }
+        } else {
+            stopEdgeApBinding()
+        }
+    }
+
+    private fun stopEdgeApBinding() {
+        edgeApCallback?.let { try { cm.unregisterNetworkCallback(it) } catch (_: Exception) {} }
+        edgeApCallback = null
+        if (edgeApNetwork != null) { try { cm.bindProcessToNetwork(null) } catch (_: Exception) {}; edgeApNetwork = null }
+    }
+
     // ── エッジ常時スイープ(§6.2.1 sessions) ──
     // 撮影の有無に関わらず約30秒ごとにUDP検索(C_SEARCH)をブロードキャストし、全エッジの
     //  ・生存(オンライン/オフライン)とIP変動(DHCP)の追従
@@ -4261,6 +4328,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // オフライン判定する(1回の取りこぼしで表示を揺らさない)。
     private val edgeSweep = object : Runnable {
         override fun run() {
+            updateEdgeApBinding()   // エッジSoftAP接続中はそのNICへバインド維持(Androidの自動離脱を防ぐ)
             Thread {
                 val js = try { HgeNative.nativeEdgeSearch(2000) } catch (_: Exception) { "[]" }
                 // name → (edge, sessionsフィールド有無, sessions{planId→state})

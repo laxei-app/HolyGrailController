@@ -53,7 +53,7 @@ static std::string g_pop;				// 現在のPoP(乱数)
 //  "sta" = 既存ネットワークに参加(従来動作) / "ap" = エッジがアクセスポイント。
 //  モードは NVS 保持。切替は保存後に ESP.restart() し、setup() で選んだモードを素直に立ち上げる
 //  (WiFi netif の張り替え・UDP再bindの複雑さを避けるため)。
-static std::string g_netMode = "sta";	// 既定はSTA(開発機が既存LANから外れないように。将来 未設定→AP)
+static std::string g_netMode = "sta";	// NVS設定済み機の既定。未設定機(出荷時)は loadEdgeCreds が AP へ倒す(Phase5)
 static std::string g_apSsid;			// APモードのSSID(初回自動生成しNVS保存)
 static std::string g_apPass;			// APモードのパスワード(初回自動生成しNVS保存)
 static bool        g_apQrMode = false;	// AP参加用QR(SSID/パス)をLCD表示中か
@@ -61,18 +61,23 @@ static bool        g_apQrMode = false;	// AP参加用QR(SSID/パス)をLCD表示
 // NVS(Preferences 名前空間 "hgc")から接続情報を読み込む。
 static void loadEdgeCreds(void)
 {
+	bool hasSta = false, hasMode = false;
 	Preferences p;
 	if (p.begin("hgc", true))
 	{
 		String s = p.getString("ssid", ""), w = p.getString("pass", ""), n = p.getString("devname", "");
-		if (s.length()) { g_ssid = s.c_str(); }
+		if (s.length()) { g_ssid = s.c_str(); hasSta = true; }
 		if (w.length()) { g_pass = w.c_str(); }
 		if (n.length()) { g_devName = n.c_str(); }
-		String nm = p.getString("netmode", ""); if (nm.length()) { g_netMode = nm.c_str(); }
+		String nm = p.getString("netmode", ""); if (nm.length()) { g_netMode = nm.c_str(); hasMode = true; }
 		String as = p.getString("apssid", "");  if (as.length()) { g_apSsid  = as.c_str(); }
 		String ap = p.getString("appass", "");  if (ap.length()) { g_apPass  = ap.c_str(); }
 		p.end();
 	}
+	// 出荷時既定=APモード(Phase5)。一度も設定されていない端末(STA資格もモード指定もNVSに無い)は、
+	// 箱出しで自分のAP(HGC-Edge-xxxx+QR)を立てて屋外ルーター無しでも使えるようにする。
+	// プロビジョニング済み/モード切替済みの端末はNVSの値が優先され従来どおり(開発機のSTAも維持)。
+	if (!hasMode && !hasSta) { g_netMode = "ap"; }
 }
 // ネットワークモード("sta"/"ap")をNVSへ保存する。切替後は ESP.restart() で反映する。
 static void saveNetMode(const char* mode)
@@ -695,7 +700,8 @@ void setup(void)
 	g_cv.createSprite(320, 240);
 	g_cv.setFont(&fonts::Font2);	// ASCII専用フォント(日本語フォントefontJA_16は撤去。エッジ表示は英語のみ)
 
-	loadEdgeCreds();	// NVS から SSID/password/端末名(無ければフォールバック)
+	loadEdgeCreds();	// NVS から SSID/password/端末名(無ければフォールバック。完全未設定=出荷時はAP既定)
+	Serial.printf("[NET] mode=%s devname=%s\n", g_netMode.c_str(), g_devName.c_str());
 	wifiConnect::setup();
 	edgeProv::begin(g_devName);	// 設定プロビジョニング BLE GATT(仕様8.2.2)
 

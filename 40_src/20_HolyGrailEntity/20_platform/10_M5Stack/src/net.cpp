@@ -39,9 +39,21 @@ std::vector<std::string> apClientIps()
     if ((WiFi.getMode() & WIFI_MODE_AP) == 0) { return ips; }	// APモード時のみ
 #if ESP_IDF_VERSION_MAJOR >= 5
     // ESP-IDF 5.x(Arduino 3.x)では esp_netif_get_sta_list / esp_netif_sta_list_t が削除された。
-    // AP接続局のIP列挙は DHCPサーバのリース参照へ置き換える必要がある(AP無人運用向け機能)。
-    // 当面は空を返す(STA運用では未使用)。3.xをCoreS3へ反映する際に 5.x 対応の実装へ差し替える。
-    return ips;
+    // 代替: 接続局のMAC一覧(esp_wifi_ap_get_sta_list)→DHCPサーバのリース(get_clients_by_mac)でIPを引く。
+    wifi_sta_list_t staList = {};
+    if (esp_wifi_ap_get_sta_list(&staList) != ESP_OK || staList.num <= 0) { return ips; }
+    esp_netif_t* ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (ap == nullptr) { return ips; }
+    esp_netif_pair_mac_ip_t pairs[ESP_WIFI_MAX_CONN_NUM] = {};
+    int n = (staList.num > ESP_WIFI_MAX_CONN_NUM) ? ESP_WIFI_MAX_CONN_NUM : staList.num;
+    for (int i = 0; i < n; ++i) { std::memcpy(pairs[i].mac, staList.sta[i].mac, 6); }
+    if (esp_netif_dhcps_get_clients_by_mac(ap, n, pairs) != ESP_OK) { return ips; }
+    for (int i = 0; i < n; ++i)
+    {
+        char buf[16] = {0};
+        esp_ip4addr_ntoa(&pairs[i].ip, buf, sizeof(buf));
+        if (buf[0] && std::strcmp(buf, "0.0.0.0") != 0) { ips.push_back(buf); }
+    }
 #else
     wifi_sta_list_t staList = {};
     if (esp_wifi_ap_get_sta_list(&staList) != ESP_OK) { return ips; }
@@ -53,13 +65,13 @@ std::vector<std::string> apClientIps()
         esp_ip4addr_ntoa(&netifList.sta[i].ip, buf, sizeof(buf));
         if (buf[0] && std::strcmp(buf, "0.0.0.0") != 0) { ips.push_back(buf); }
     }
+#endif
     if (!ips.empty())
     {
         std::string joined; for (auto& s : ips) { joined += s + " "; }
         DBGLN(col::CYN, "apClientIps: %d client(s): %s", (int)ips.size(), joined.c_str());
     }
     return ips;
-#endif
 }
 
 // 限定サブネットのバッチ探索(§3.3 tier3)。自IP+マスクからホスト範囲を割り出し、非ブロッキング

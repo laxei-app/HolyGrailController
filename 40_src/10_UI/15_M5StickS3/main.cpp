@@ -162,18 +162,23 @@ static bool        g_apQrMode = false;
 
 static void loadEdgeCreds(void)
 {
+	bool hasSta = false, hasMode = false;
 	Preferences p;
 	if (p.begin("hgc", true))
 	{
 		String s = p.getString("ssid", ""), w = p.getString("pass", ""), n = p.getString("devname", "");
-		if (s.length()) { g_ssid = s.c_str(); }
+		if (s.length()) { g_ssid = s.c_str(); hasSta = true; }
 		if (w.length()) { g_pass = w.c_str(); }
 		if (n.length()) { g_devName = n.c_str(); }
-		String nm = p.getString("netmode", ""); if (nm.length()) { g_netMode = nm.c_str(); }
+		String nm = p.getString("netmode", ""); if (nm.length()) { g_netMode = nm.c_str(); hasMode = true; }
 		String as = p.getString("apssid", "");  if (as.length()) { g_apSsid  = as.c_str(); }
 		String ap = p.getString("appass", "");  if (ap.length()) { g_apPass  = ap.c_str(); }
 		p.end();
 	}
+	// 出荷時既定=APモード(Phase5)。一度も設定されていない端末(STA資格もモード指定もNVSに無い)は、
+	// 箱出しで自分のAP(HGC-Edge-xxxx+QR)を立てて屋外ルーター無しでも使えるようにする。
+	// プロビジョニング済み/モード切替済みの端末はNVSの値が優先され従来どおり(開発機のSTAも維持)。
+	if (!hasMode && !hasSta) { g_netMode = "ap"; }
 }
 static void saveNetMode(const char* mode)
 {
@@ -551,12 +556,14 @@ static void renderApQr(void)
 {
 	g_cv.fillScreen(TFT_WHITE);
 	std::string qr = std::string("WIFI:T:WPA;S:") + g_apSsid + ";P:" + g_apPass + ";;";
-	int sz = g_scrH - 24;
+	// カメラはQRを読めず手入力のため、SSIDに加えてパスワードも表示する(QRは2行分小さく)。
+	int sz = g_scrH - 40;
 	g_cv.qrcode(qr.c_str(), (g_scrW - sz) / 2, 2, sz, 4);
 	g_cv.setFont(&fonts::Font2);
 	g_cv.setTextColor(TFT_BLACK);
 	g_cv.setTextDatum(textdatum_t::bottom_center);
-	g_cv.drawString((g_apSsid).c_str(), g_scrW / 2, g_scrH - 2);
+	g_cv.drawString((g_apSsid).c_str(), g_scrW / 2, g_scrH - 18);
+	g_cv.drawString(("pass: " + g_apPass).c_str(), g_scrW / 2, g_scrH - 2);
 	g_cv.setTextDatum(textdatum_t::top_left);
 }
 static void startApAndEtp(void)
@@ -723,7 +730,8 @@ void setup(void)
 	g_key1.begin(PIN_KEY1);
 	g_key2.begin(PIN_KEY2);
 
-	loadEdgeCreds();
+	loadEdgeCreds();	// 完全未設定(出荷時)はAP既定
+	Serial.printf("[NET] mode=%s devname=%s\n", g_netMode.c_str(), g_devName.c_str());
 	wifiConnect::setup();
 	edgeProv::begin(g_devName);
 
