@@ -6,6 +6,12 @@ import android.app.TimePickerDialog
 import android.content.ContentValues
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
+import android.net.wifi.WifiInfo
+import android.net.wifi.WifiManager
 import android.provider.MediaStore
 import android.os.Build
 import androidx.core.app.ActivityCompat
@@ -176,6 +182,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // エッジ端末
     private data class Edge(val name: String, val ip: String, val port: Int)
     private val edges = mutableListOf<Edge>()   // 登録済みエッジ端末(設定で追加、prefsに永続化、オフラインでも選択可)
+    // 常時スイープ(edgeSweep)によるエッジ生存状態。true=オンライン/false=オフライン/未登録=不明(起動直後)。
+    private val edgeOnline = mutableMapOf<String, Boolean>()
+    private val edgeMiss = mutableMapOf<String, Int>()   // スイープUDPの連続無応答回数(閾値超えでTCP生存確認→オフライン判定)
     private var suppressEdgeSel = false          // スピナーをプログラムで設定する間は選択保存を抑止
     private val handler = Handler(Looper.getMainLooper())
 
@@ -228,6 +237,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val tzOffMin = java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60000
         Thread { HgeNative.nativePruneOldLogs(tzOffMin) }.start()
         handler.postDelayed(edgeTimeSync, 3000)   // 選択中エッジへ能動的な時刻同期を開始(RTC無し機/電波悪環境向け)
+        handler.postDelayed(edgeSweep, 6000)      // エッジ常時スイープ(生存/IP追従+エッジ側開始・停止の検出。撮影の有無に関わらず30秒毎)
+        handler.postDelayed(hgePump, 5000)        // 遅延アームのポンプ(スマホ直接撮影の予約計画の開始スレッドを期日に生成)
         loadColors()
         loadExpoValues()
         buildExposureEditors()
@@ -3011,6 +3022,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     override fun onDestroy() {
         handler.removeCallbacks(edgePoll)
+        handler.removeCallbacks(edgeSweep)
+        handler.removeCallbacks(edgeTimeSync)
+        handler.removeCallbacks(hgePump)
+        stopEdgeApBinding()   // プロセスのネットワークバインドを解除(次アプリ/他通信のため)
         Thread { try { HgeNative.nativePresenceStop() } catch (_: Exception) {} }.start()  // P4: 常駐プレゼンスマップ停止
         HgeNative.nativeSetListener(null)
         HgeNative.nativeCaptureStop()
@@ -4053,15 +4068,23 @@ class MainActivity : AppCompatActivity(), HgeListener {
         return null
     }
     // 登録一覧の last-seen IP を更新(stop/poll 用に開始時の解決結果を保持)。
+    // 常時スイープからも30秒ごとに呼ばれるため、変化が無ければ prefs へ書かない。
     private fun updateEdgeIp(name: String, ip: String, port: Int) {
         val i = edges.indexOfFirst { it.name == name }
-        if (i >= 0) edges[i] = Edge(name, ip, port) else edges.add(Edge(name, ip, port))
+        if (i >= 0) {
+            if (edges[i].ip == ip && edges[i].port == port) return   // 変化なし
+            edges[i] = Edge(name, ip, port)
+        } else edges.add(Edge(name, ip, port))
         saveRegisteredEdges()
     }
 
     private fun refreshEdgeSpinner() {
         val labels = mutableListOf("無し (スマホで撮影)")
-        edges.forEach { labels.add(it.name) }   // IPは動的なので名称のみ表示
+        // IPは動的なので名称のみ表示。常時スイープの生存状態を ●=オンライン/○=オフライン で付す(不明=無印)。
+        edges.forEach {
+            val mark = when (edgeOnline[it.name]) { true -> "● "; false -> "○ "; null -> "" }
+            labels.add(mark + it.name)
+        }
         val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, labels)
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         suppressEdgeSel = true
@@ -4226,6 +4249,189 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // edgePoll を単一インスタンスで(再)起動する。多重 postDelayed による二重ループを防ぐ。
     private fun ensureEdgePoll() { handler.removeCallbacks(edgePoll); handler.postDelayed(edgePoll, 2000) }
 
+    // 遅延アームのポンプ(§7.4)。スマホ直接撮影の予約(将来窓)計画は開始スレッドを期日(窓90秒前)まで
+    // 作らない(エンティティ側 hge_pump)。エッジはエッジ自身の loop が毎秒ポンプするため対象外。
+    private val hgePump = object : Runnable {
+        override fun run() {
+            Thread { try { HgeNative.nativePump() } catch (_: Exception) {} }.start()
+            handler.postDelayed(this, 5000)
+        }
+    }
+
+    // ── APモードのエッジAPへのネットワークバインド(§1.2.1) ──
+    // Android は「インターネットゲートウェイの無いWi-Fi(=エッジのSoftAP)」を数十秒で自動的に
+    // 見限り、母艦LAN(モバイル/別Wi-Fi)へ切り替える。そのままではスマホがエッジと別網になり、
+    // ETP(TCP/UDP)が届かず制御・監視ができない。そこで、現在スマホが接続中のWi-Fiが "HGC-Edge*"
+    // (エッジのSoftAP)のときは、そのNetworkを requestNetwork で確保し bindProcessToNetwork で
+    // プロセス全体の通信(ネイティブのソケットも含む)をそのNICへ固定する。これで自動離脱を防ぎ、
+    // インターネット判定に依らずエッジと通信できる。別SSID(母艦LAN)に居る間はバインドしない=従来動作。
+    private val cm by lazy { getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager }
+    private var edgeApNetwork: Network? = null
+    private var edgeApCallback: ConnectivityManager.NetworkCallback? = null
+
+    // 現在接続中のWi-Fi SSID(引用符除去)。取得不能は null。
+    private fun currentWifiSsid(): String? {
+        return try {
+            val wm = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
+            @Suppress("DEPRECATION") val raw = wm.connectionInfo?.ssid ?: return null
+            raw.trim('"').let { if (it.isEmpty() || it == "<unknown ssid>") null else it }
+        } catch (_: Exception) { null }
+    }
+
+    // SSID が "HGC-Edge" 始まり(=エッジSoftAP)ならバインドを起動、そうでなければ解除する。
+    // edgeSweep(30秒毎)から呼ぶ。冪等(多重 requestNetwork を防ぐ)。
+    private fun updateEdgeApBinding() {
+        val ssid = currentWifiSsid()
+        val onEdgeAp = ssid != null && ssid.startsWith("HGC-Edge")
+        if (onEdgeAp) {
+            if (edgeApCallback != null) return   // 既にバインド機構が稼働中
+            val req = NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)   // インターネット無しWi-Fiも対象に
+                .build()
+            val cb = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    // このNetworkが本当にエッジSoftAPか(SSID一致)を確認してからバインドする(誤バインド防止)。
+                    val nc = cm.getNetworkCapabilities(network)
+                    val wi = nc?.transportInfo as? WifiInfo
+                    val ns = wi?.ssid?.trim('"')
+                    if (ns == null || ns.startsWith("HGC-Edge")) {
+                        edgeApNetwork = network
+                        cm.bindProcessToNetwork(network)
+                        android.util.Log.i("EdgeApBind", "bound to $ns")
+                    }
+                }
+                override fun onLost(network: Network) {
+                    if (network == edgeApNetwork) { cm.bindProcessToNetwork(null); edgeApNetwork = null }
+                }
+            }
+            edgeApCallback = cb
+            try { cm.requestNetwork(req, cb) } catch (_: Exception) { edgeApCallback = null }
+        } else {
+            stopEdgeApBinding()
+        }
+    }
+
+    private fun stopEdgeApBinding() {
+        edgeApCallback?.let { try { cm.unregisterNetworkCallback(it) } catch (_: Exception) {} }
+        edgeApCallback = null
+        if (edgeApNetwork != null) { try { cm.bindProcessToNetwork(null) } catch (_: Exception) {}; edgeApNetwork = null }
+    }
+
+    // ── エッジ常時スイープ(§6.2.1 sessions) ──
+    // 撮影の有無に関わらず約30秒ごとにUDP検索(C_SEARCH)をブロードキャストし、全エッジの
+    //  ・生存(オンライン/オフライン)とIP変動(DHCP)の追従
+    //  ・実行中セッション一覧(応答の sessions[])によるエッジ側ローカル開始/自動再開/停止の検出
+    // を行う。後から電源を入れたエッジも次のスイープで自動的に現れる。撮影中の進捗詳細は従来どおり
+    // edgePoll(10秒・計画別C_PROGRESS)が担い、スイープは「集合の同期と発見」を担当する役割分担。
+    // UDPは混雑WiFiで取りこぼすため、連続2回無応答の登録エッジはlast-seen IPへTCP生存確認してから
+    // オフライン判定する(1回の取りこぼしで表示を揺らさない)。
+    private val edgeSweep = object : Runnable {
+        override fun run() {
+            updateEdgeApBinding()   // エッジSoftAP接続中はそのNICへバインド維持(Androidの自動離脱を防ぐ)
+            Thread {
+                val js = try { HgeNative.nativeEdgeSearch(2000) } catch (_: Exception) { "[]" }
+                // name → (edge, sessionsフィールド有無, sessions{planId→state})
+                data class Found(val edge: Edge, val hasSessions: Boolean, val sessions: Map<String, Int>)
+                val found = HashMap<String, Found>()
+                try {
+                    val arr = JSONArray(js)
+                    for (i in 0 until arr.length()) {
+                        val o = arr.optJSONObject(i) ?: continue
+                        val nm = o.optString("name"); if (nm.isEmpty()) continue
+                        val sess = HashMap<String, Int>()
+                        val has = o.has("sessions")   // 旧FWのエッジは sessions を返さない→セッション同期はしない
+                        if (has) {
+                            val sa = o.optJSONArray("sessions") ?: JSONArray()
+                            for (k in 0 until sa.length()) {
+                                val so = sa.optJSONObject(k) ?: continue
+                                val id = so.optString("id"); if (id.isNotEmpty()) sess[id] = so.optInt("state")
+                            }
+                        }
+                        found[nm] = Found(Edge(nm, o.optString("ip"), o.optInt("port", 50506)), has, sess)
+                    }
+                } catch (_: Exception) {}
+                // UDP無応答の登録エッジ: 連続2回でTCP生存確認(取りこぼし救済)→それも不応答ならオフライン。
+                val tcpOnline = ArrayList<String>(); val offline = ArrayList<String>()
+                for (ed in edges.toList()) {
+                    if (found.containsKey(ed.name)) continue
+                    val miss = (edgeMiss[ed.name] ?: 0) + 1
+                    edgeMiss[ed.name] = miss
+                    if (miss < 2) continue
+                    val alive = ed.ip.isNotEmpty() &&
+                        (try { HgeNative.nativeEdgeProgress(ed.ip, ed.port, "") } catch (_: Exception) { "" }).isNotEmpty()
+                    if (alive) tcpOnline.add(ed.name) else offline.add(ed.name)
+                }
+                runOnUiThread {
+                    var uiDirty = false
+                    for ((nm, f) in found) {
+                        edgeMiss[nm] = 0
+                        if (edgeOnline[nm] != true) { edgeOnline[nm] = true; uiDirty = true }
+                        updateEdgeIp(nm, f.edge.ip, f.edge.port)   // DHCPのIP変動を常時追従
+                        if (f.hasSessions) reconcileEdgeSessions(f.edge, f.sessions)
+                    }
+                    for (nm in tcpOnline) { edgeMiss[nm] = 0; if (edgeOnline[nm] != true) { edgeOnline[nm] = true; uiDirty = true } }
+                    for (nm in offline)   { if (edgeOnline[nm] != false) { edgeOnline[nm] = false; uiDirty = true } }
+                    if (uiDirty) refreshEdgeSpinner()
+                }
+            }.start()
+            handler.postDelayed(this, 30000)   // 30秒ごと(常時)
+        }
+    }
+
+    // スイープ結果(エッジの実行中セッション一覧)をスマホの表示集合へ同期する。UIスレッドから呼ぶこと。
+    //  ・採用: エッジで走行中なのにスマホが追跡していない計画(エッジ側ローカル開始/自動再開)を集合へ入れ、
+    //          エッジ担当(planEdgeName)も設定 → 計画リストにアイコンが点く。進捗詳細は以降 edgePoll が反映。
+    //  ・除去: このエッジ担当なのにセッションに無い(=エッジ側で停止/終了済み)計画を集合から外す。
+    //  開始/停止操作の過渡(startingPlans/stoppingPlans)中の計画には触れない(操作経路との競合防止)。
+    private fun reconcileEdgeSessions(ed: Edge, sessions: Map<String, Int>) {
+        val localIds = HashSet<String>()
+        try {
+            val pa = JSONArray(HgeNative.nativeListPlans())
+            for (k in 0 until pa.length()) { val id = pa.optJSONObject(k)?.optString("id") ?: ""; if (id.isNotEmpty()) localIds.add(id) }
+        } catch (_: Exception) {}
+        var changed = false
+        for ((pid, st) in sessions) {
+            if (!localIds.contains(pid)) continue   // スマホに無い計画(削除済み等)は表示できない
+            if (startingPlans.contains(pid) || stoppingPlans.contains(pid)) continue
+            val wasTracked = capturingPlans.contains(pid) || waitingPlans.contains(pid) || disconnectedPlans.contains(pid)
+            when (st) {
+                HgeNative.ST_CAPTURING, HgeNative.ST_STOPPING -> {
+                    if (capturingPlans.add(pid)) changed = true
+                    waitingPlans.remove(pid); disconnectedPlans.remove(pid); clearNoCam(pid)
+                }
+                HgeNative.ST_WAITING, HgeNative.ST_SEARCHING -> {
+                    if (waitingPlans.add(pid)) changed = true
+                    capturingPlans.remove(pid); disconnectedPlans.remove(pid); clearNoCam(pid)
+                }
+                HgeNative.ST_NOCAMERA, HgeNative.ST_DISCONNECTED -> {
+                    if (disconnectedPlans.add(pid)) changed = true
+                    capturingPlans.remove(pid); waitingPlans.remove(pid)
+                }
+                else -> {}   // IDLE/ERROR等は下の除去側で扱う
+            }
+            if (!wasTracked && (capturingPlans.contains(pid) || waitingPlans.contains(pid) || disconnectedPlans.contains(pid))) {
+                setPlanEdgeName(pid, ed.name)   // 採用: 以降の停止/ポーリングにこのエッジを使う
+            }
+        }
+        // 除去: このエッジ担当で追跡中なのに、エッジのセッション一覧に無い(=停止/終了済み)計画。
+        // ただし一覧が上限(エッジ側 kMaxSessions=16)まで埋まっている場合は、載り切らなかっただけの
+        // 実行中セッションを停止済みと誤認し得るため除去を保留する(採用側のみ反映)。
+        if (sessions.size >= 16) { if (changed) { if (capturingPlans.isEmpty()) stopBlink() else startBlink(); refreshPlanList(); updateReadOnly(); if (activeEdgePlans().isNotEmpty()) ensureEdgePoll() }; return }
+        for (pid in (capturingPlans + waitingPlans + disconnectedPlans).toList()) {
+            if (sessions.containsKey(pid)) continue
+            if (planEdgeName(pid) != ed.name) continue
+            if (startingPlans.contains(pid) || stoppingPlans.contains(pid)) continue
+            capturingPlans.remove(pid); waitingPlans.remove(pid); disconnectedPlans.remove(pid); clearNoCam(pid)
+            changed = true
+        }
+        if (changed) {
+            if (capturingPlans.isEmpty()) stopBlink() else startBlink()
+            refreshPlanList(); updateReadOnly()
+            if (activeEdgePlans().isNotEmpty()) ensureEdgePoll()   // 採用した計画の進捗詳細を10秒ポールで追従
+        }
+    }
+
     // 能動的な時刻同期。エッジは電波の悪い所ではNTP不可、かつStickS3はRTC無しで再起動時に時計を失う。
     // スマホが「選択中のエッジ」へ定期的に現在時刻(C_TIME)を送って時計を保つ(撮影開始と無関係に常時)。
     // 同期後はエッジ内部タイマが時計を進めるので、KEY1ローカル開始や無人撮影でも撮影窓を正しく判定できる。
@@ -4274,6 +4480,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
         return out.toByteArray()
     }
 
+    // 計画idから計画名を同期的に引く(計画一覧はid+名前を持つ)。エッジへ送る名前ビットマップ用。
+    // latestSchedule(選択中計画のキャッシュ)は選択後に非同期イベントで遅れて更新されるため、
+    // 2計画の順次開始で別計画の名前を作る競合があった(エッジの計画名取り違えの原因)。idから直接引いて根絶する。
+    private fun planNameFor(id: String): String {
+        try {
+            val pa = JSONArray(HgeNative.nativeListPlans())
+            for (k in 0 until pa.length()) {
+                val po = pa.optJSONObject(k) ?: continue
+                if (po.optString("id") == id) return po.optString("name")
+            }
+        } catch (_: Exception) {}
+        return ""
+    }
+
     // エッジへ計画を送って撮影開始する。ブロッキングI/Oを含むため planExec(バックグラウンド)から呼ぶこと。
     // 呼び出し元の nativeSelectPlan と同一スレッドで連続実行することで「選択→計画JSON送信」を原子化する
     // (別スレッド化すると2計画の順次開始で後発の選択が割り込み、別計画の内容を送る競合があった)。
@@ -4282,7 +4502,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val nowCal = Calendar.getInstance()
         val s = fmtIso.format(nowCal.time)
         val off = TimeZone.getDefault().getOffset(nowCal.timeInMillis) / 60000
-        val name = try { JSONObject(latestSchedule).optString("name") } catch (_: Exception) { "" }
+        val name = planNameFor(planId)   // 対象planIdの名前を同期取得(非同期キャッシュ latestSchedule は使わない)
         val nameBmp = makeNameBitmapBytes(if (name.isEmpty()) "撮影計画" else name)
         run {
             // 発見中のオンラインカメラをエッジへ通知(IP直結ヒント)。エッジは (model,serial) で本人確認して直結する。

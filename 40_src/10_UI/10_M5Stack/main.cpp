@@ -53,7 +53,7 @@ static std::string g_pop;				// 現在のPoP(乱数)
 //  "sta" = 既存ネットワークに参加(従来動作) / "ap" = エッジがアクセスポイント。
 //  モードは NVS 保持。切替は保存後に ESP.restart() し、setup() で選んだモードを素直に立ち上げる
 //  (WiFi netif の張り替え・UDP再bindの複雑さを避けるため)。
-static std::string g_netMode = "sta";	// 既定はSTA(開発機が既存LANから外れないように。将来 未設定→AP)
+static std::string g_netMode = "sta";	// NVS設定済み機の既定。未設定機(出荷時)は loadEdgeCreds が AP へ倒す(Phase5)
 static std::string g_apSsid;			// APモードのSSID(初回自動生成しNVS保存)
 static std::string g_apPass;			// APモードのパスワード(初回自動生成しNVS保存)
 static bool        g_apQrMode = false;	// AP参加用QR(SSID/パス)をLCD表示中か
@@ -61,18 +61,23 @@ static bool        g_apQrMode = false;	// AP参加用QR(SSID/パス)をLCD表示
 // NVS(Preferences 名前空間 "hgc")から接続情報を読み込む。
 static void loadEdgeCreds(void)
 {
+	bool hasSta = false, hasMode = false;
 	Preferences p;
 	if (p.begin("hgc", true))
 	{
 		String s = p.getString("ssid", ""), w = p.getString("pass", ""), n = p.getString("devname", "");
-		if (s.length()) { g_ssid = s.c_str(); }
+		if (s.length()) { g_ssid = s.c_str(); hasSta = true; }
 		if (w.length()) { g_pass = w.c_str(); }
 		if (n.length()) { g_devName = n.c_str(); }
-		String nm = p.getString("netmode", ""); if (nm.length()) { g_netMode = nm.c_str(); }
+		String nm = p.getString("netmode", ""); if (nm.length()) { g_netMode = nm.c_str(); hasMode = true; }
 		String as = p.getString("apssid", "");  if (as.length()) { g_apSsid  = as.c_str(); }
 		String ap = p.getString("appass", "");  if (ap.length()) { g_apPass  = ap.c_str(); }
 		p.end();
 	}
+	// 出荷時既定=APモード(Phase5)。一度も設定されていない端末(STA資格もモード指定もNVSに無い)は、
+	// 箱出しで自分のAP(HGC-Edge-xxxx+QR)を立てて屋外ルーター無しでも使えるようにする。
+	// プロビジョニング済み/モード切替済みの端末はNVSの値が優先され従来どおり(開発機のSTAも維持)。
+	if (!hasMode && !hasSta) { g_netMode = "ap"; }
 }
 // ネットワークモード("sta"/"ap")をNVSへ保存する。切替後は ESP.restart() で反映する。
 static void saveNetMode(const char* mode)
@@ -221,6 +226,13 @@ static M5Canvas g_cv(&M5.Display);	// ダブルバッファ(ちらつき防止)
 // タップ判定用: 撮影計画リストの行(画面座標 + 計画id + 状態)
 struct planHit { int y0; int y1; std::string id; bool capturing; bool capturable; };
 static std::vector<planHit> g_planHits;
+
+// タップ即時反映用: 保留中の開始/停止操作。タップの瞬間にアイコンだけ先に切り替えて描画し、
+// 実処理(開始=計画ファイル読込+スケジュール構築で数百ms / 停止=撮影スレッドjoinで数秒)は
+// 「描き替えた次のループ」で実行する(従来はタップ処理内で同期実行し、完了まで無反応だった)。
+struct pendingOp { std::string id; int kind; };		// kind: 1=開始 2=停止
+static std::vector<pendingOp>       g_opQueue;		// 実行待ち(通常0〜1件。loop末尾で1件ずつ処理)
+static std::map<std::string, int>   g_pendingIcon;	// 計画id → kind。renderPlan が保留アイコンを即時反映
 
 // 撮影中(開始シーケンス〜停止処理中まで)か。フッタのボタン表示と操作の切替に使う。
 static bool isCapturing(void)
@@ -373,6 +385,16 @@ static void renderPlan(void)
 		bool nocam     = (state == HGE_ST_NOCAMERA || state == HGE_ST_DISCONNECTED);
 		bool capturing = (state == HGE_ST_CAPTURING || state == HGE_ST_STOPPING);	// 実撮影中=点滅
 		bool waiting   = (state == HGE_ST_WAITING || state == HGE_ST_SEARCHING);		// 待機/探索=点灯
+		// タップ直後の即時反映: 実処理(開始/停止)はまだ完了していないが、アイコンだけ先に切り替える。
+		// 開始待ち=点灯(実処理後の SEARCHING と同じ字形で切れ目なく繋がる) / 停止待ち=開始アイコンへ戻す。
+		{
+			auto po = g_pendingIcon.find(id);
+			if (po != g_pendingIcon.end())
+			{
+				nocam = false; capturing = false;
+				waiting = (po->second == 1);
+			}
+		}
 		bool active    = (nocam || capturing || waiting);	// 何らか実行中(タップで中止可)
 		int ry0 = y, ry1 = y + rowH;
 		if (ry1 > top && ry0 < bot)
@@ -544,6 +566,9 @@ static void startApAndEtp(void)
 
 static void redraw(void)
 {
+	// AP参加QRは撮影/待機が始まったら自動で閉じ、計画・進捗を見せる。スマホから開始した場合でも
+	// 画面タップを待たずに切り替わる(QRは「カメラ/スマホを参加させるまで」の初期表示)。
+	if (g_apQrMode && g_state != HGE_ST_IDLE) { g_apQrMode = false; }
 	if (g_apQrMode) { renderApQr(); }	// APモード: 参加用QR
 	else if (g_provMode) { renderProv(); }	// 仕様8.2: 設定(QR+PoP)表示
 	else            { renderPlan(); }	// 仕様8.1: 計画名+開始/停止のみ
@@ -569,9 +594,19 @@ static void onTap(int x, int y)
 		{
 			if (x < 48)	// 左の開始/停止アイコン領域のタップ
 			{
-				if (h.capturing)       { hge_captureStopPlan(h.id.c_str()); }
-				else if (h.capturable) { hge_captureStartPlan(h.id.c_str()); }
-				g_listDirty = true; g_dirty = true;
+				// 即時反映: アイコンだけ先に切り替えて描画し、実処理は loop 末尾で行う
+				// (開始は計画読込で数百ms・停止はスレッドjoinで数秒ブロックするため、先に描く)。
+				// 同じ計画の処理待ち中の連打は無視する。
+				if (g_pendingIcon.count(h.id) == 0)
+				{
+					int kind = h.capturing ? 2 : (h.capturable ? 1 : 0);
+					if (kind != 0)
+					{
+						g_pendingIcon[h.id] = kind;
+						g_opQueue.push_back({ h.id, kind });
+						g_dirty = true;
+					}
+				}
 			}
 			else if (x >= 280)	// 右端のゴミ箱: 削除確認ダイアログを出す(item4)
 			{
@@ -628,6 +663,7 @@ static void notifyCb(int32_t ev, const char* json_, int32_t len, void* user)
 		const char* p = std::strstr(json_, "\"state\":");	// {"planId":..,"state":d} 形式に対応
 		if (p) { std::sscanf(p, "\"state\":%d", &s); }
 		g_state = s;
+		g_dirty = true;	// 状態変化で再描画(APモードのQR自動解除・状態帯更新を確実にする)
 		Serial.printf("[EV] STATE: %s\n", stName(s));
 		break;
 	}
@@ -668,7 +704,8 @@ void setup(void)
 	g_cv.createSprite(320, 240);
 	g_cv.setFont(&fonts::Font2);	// ASCII専用フォント(日本語フォントefontJA_16は撤去。エッジ表示は英語のみ)
 
-	loadEdgeCreds();	// NVS から SSID/password/端末名(無ければフォールバック)
+	loadEdgeCreds();	// NVS から SSID/password/端末名(無ければフォールバック。完全未設定=出荷時はAP既定)
+	Serial.printf("[NET] mode=%s devname=%s\n", g_netMode.c_str(), g_devName.c_str());
 	wifiConnect::setup();
 	edgeProv::begin(g_devName);	// 設定プロビジョニング BLE GATT(仕様8.2.2)
 
@@ -713,6 +750,13 @@ void loop(void)
 
 	// ETP サーバのポーリング(スマホからの検索/制御を処理)
 	if (g_edgeUp) { etpEdge::loop(); }
+
+	// 遅延アームのポンプ(§7.4): 予約計画の開始スレッドを期日(窓90秒前)に生成する。毎秒1回で十分。
+	{
+		static uint32_t lastPump = 0;
+		uint32_t nowMs = millis();
+		if (nowMs - lastPump >= 1000) { lastPump = nowMs; hge_pump(); }
+	}
 
 	// BLE 設定プロビジョニングの保留要求処理(仕様8.2.2)
 	edgeProv::loop();
@@ -825,6 +869,20 @@ void loop(void)
 	{
 		g_dirty = false;
 		redraw();
+	}
+
+	// 保留中の開始/停止を実行(タップ時のアイコン切替は上の redraw で反映済み)。
+	// 開始=計画読込+スケジュール構築で数百ms、停止=撮影スレッドjoinで数秒ブロックし得るが、
+	// ユーザーへの応答(アイコン)は既に返っている。1ループ1件ずつ処理する。
+	if (!g_opQueue.empty())
+	{
+		pendingOp op = g_opQueue.front();
+		g_opQueue.erase(g_opQueue.begin());
+		if (op.kind == 1) { hge_captureStartPlan(op.id.c_str()); }
+		else              { hge_captureStopPlan(op.id.c_str()); }
+		g_pendingIcon.erase(op.id);
+		g_state = hge_getState();
+		g_listDirty = true; g_dirty = true;	// 実状態で描き直す(開始=SEARCHING点灯で切れ目なし/停止=開始アイコン)
 	}
 	delay(16);
 }

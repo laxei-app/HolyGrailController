@@ -260,6 +260,11 @@ int32_t hge_getProgressJson(char* buf, int32_t* inoutLen);
 // エッジ端末が C_PROGRESS(data=planId) 応答に使う。計画別に状態を返すことで誤NOCAMERAポップを防ぐ。
 int32_t hge_getProgressJsonFor(const char* planId, char* buf, int32_t* inoutLen);
 
+// 実行中セッションの一覧 JSON 配列(バッファ規約)。[{"id":"<planId>","state":N},...] (最大8件)
+// エッジ端末が C_SEARCH 応答(edgeInfo)の "sessions" に載せる。スマホの常時スイープが
+// エッジ側ローカル開始/自動再開を検出して表示へ反映するために使う。
+int32_t hge_getSessionsJson(char* buf, int32_t* inoutLen);
+
 // --- 撮影実行 ---
 int32_t hge_captureStart(void);		// 撮影開始(非同期。編集対象計画)。進捗は HGE_EV_PROGRESS
 int32_t hge_captureStop(void);		// 撮影停止(編集対象計画)
@@ -276,6 +281,9 @@ int32_t hge_pokeAcquire(const char* planId);
 // 電源復帰/アプリ再起動時の撮影再開(item2)。/asset/capturing.json を読み、撮影中だった
 // 計画を再開する。return: 再開を試みた計画数。エッジは起動時、スマホはアプリ起動時に呼ぶ。
 int32_t hge_resumeCapture(void);
+// 遅延アームのポンプ(§7.4)。予約(将来窓)セッションの開始スレッドを期日(窓start-90秒)に生成する。
+// 生成失敗(内部RAM断片化)も10秒間隔で再試行する。エッジ=メインloopから毎秒、スマホ=UIタイマから数秒毎に呼ぶ。
+int32_t hge_pump(void);
 
 #ifdef __cplusplus
 }

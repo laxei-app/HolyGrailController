@@ -118,6 +118,17 @@ namespace
 		j["model"] = "エッジ端末";
 		j["fw"]    = std::string(hge_version());
 		j["state"] = hge_getState();
+		// 実行中セッション一覧。スマホの常時スイープが「このエッジで何が走っているか」を検索応答1発で
+		// 把握し、エッジ側ローカル開始/再起動後の自動再開/停止をスマホ表示へ同期する(§6.2.1)。
+		{
+			char sb[512];
+			int32_t sl = sizeof(sb);
+			if (hge_getSessionsJson(sb, &sl) == ERR_HGC_OK)
+			{
+				json s = json::parse(sb, nullptr, false);
+				if (!s.is_discarded()) { j["sessions"] = s; }
+			}
+		}
 		return j.dump();
 	}
 

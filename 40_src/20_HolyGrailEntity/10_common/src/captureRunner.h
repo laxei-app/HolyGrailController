@@ -57,7 +57,12 @@ public:
 	errCode ready(const hgc::cs& plan, device* dev,
 	              const hgc::exposureSmoothing& smooth, int utcOffsetMin);
 	errCode start(void);	// ワーカースレッドで撮影ループ開始(即 return)
-	errCode stop(void);		// 停止要求して join
+	// 呼び出しスレッド上で撮影ループを実行する(start のインライン版。ループ終了まで戻らない)。
+	// エッジ(M5Stack)では runner 用の2本目のタスクスタック(内部RAM14KB)が断片化で確保できない
+	// ことがあるため、起動シーケンスのスレッドをそのまま撮影ループに使いセッションあたり1本にする。
+	// 停止は stop()(running_ を落とすのみ。join しない)→ 呼び出しスレッド(起動スレッド)の join の順。
+	errCode runInline(void);
+	errCode stop(void);		// 停止要求して join(runInline 実行中は要求のみ。join は起動スレッド側で行う)
 	bool    isRunning(void) const { return running_; }
 
 	// 取得フェーズ(カメラ未取得=apiBase==nullptr の間)の60秒待ちを打ち切り、即再探索させる。
