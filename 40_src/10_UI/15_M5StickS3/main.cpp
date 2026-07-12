@@ -593,6 +593,9 @@ static void pushBand(int y, int h)
 // (状態アイコン/点滅など「変わるのは下部だけ」の更新でのちらつきを防ぐ)。計画/一覧変更時は false=全画面。
 static void redraw(bool bandOnly)
 {
+	// AP参加QRは撮影/待機が始まったら自動で閉じ、計画・進捗を見せる。スマホから開始した場合でも
+	// エッジのボタンを押さずに切り替わる(QRは「カメラ/スマホを参加させるまで」の初期表示)。
+	if (g_apQrMode && g_state != HGE_ST_IDLE) { g_apQrMode = false; }
 	if (g_apQrMode) { renderApQr(); g_cv.pushSprite(0, 0); return; }
 	if (g_provMode) { renderProv(); g_cv.pushSprite(0, 0); return; }
 	renderPlan();
@@ -673,6 +676,7 @@ static void notifyCb(int32_t ev, const char* json_, int32_t len, void* user)
 		const char* p = std::strstr(json_, "\"state\":");
 		if (p) { std::sscanf(p, "\"state\":%d", &s); }
 		g_state = s;
+		if (g_apQrMode && s != HGE_ST_IDLE) { g_dirty = true; }	// QR中に撮影開始→QRを閉じ計画画面へ(全画面再描画)
 		Serial.printf("[EV] STATE: %s\n", stName(s));
 		break;
 	}

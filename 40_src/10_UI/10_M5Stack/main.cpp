@@ -566,6 +566,9 @@ static void startApAndEtp(void)
 
 static void redraw(void)
 {
+	// AP参加QRは撮影/待機が始まったら自動で閉じ、計画・進捗を見せる。スマホから開始した場合でも
+	// 画面タップを待たずに切り替わる(QRは「カメラ/スマホを参加させるまで」の初期表示)。
+	if (g_apQrMode && g_state != HGE_ST_IDLE) { g_apQrMode = false; }
 	if (g_apQrMode) { renderApQr(); }	// APモード: 参加用QR
 	else if (g_provMode) { renderProv(); }	// 仕様8.2: 設定(QR+PoP)表示
 	else            { renderPlan(); }	// 仕様8.1: 計画名+開始/停止のみ
@@ -660,6 +663,7 @@ static void notifyCb(int32_t ev, const char* json_, int32_t len, void* user)
 		const char* p = std::strstr(json_, "\"state\":");	// {"planId":..,"state":d} 形式に対応
 		if (p) { std::sscanf(p, "\"state\":%d", &s); }
 		g_state = s;
+		g_dirty = true;	// 状態変化で再描画(APモードのQR自動解除・状態帯更新を確実にする)
 		Serial.printf("[EV] STATE: %s\n", stName(s));
 		break;
 	}
