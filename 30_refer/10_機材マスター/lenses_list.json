@@ -417,7 +417,7 @@
     "fnum_min_tele": 4.0,
     "fnum_max": 22.0,
     "electronic_contacts": true,
-    "fisheye": false
+    "fisheye": true
   },
   {
     "manufacture": "Canon",
