@@ -741,6 +741,13 @@ void loop(void)
 	// ETP サーバのポーリング(スマホからの検索/制御を処理)
 	if (g_edgeUp) { etpEdge::loop(); }
 
+	// 遅延アームのポンプ(§7.4): 予約計画の開始スレッドを期日(窓90秒前)に生成する。毎秒1回で十分。
+	{
+		static uint32_t lastPump = 0;
+		uint32_t nowMs = millis();
+		if (nowMs - lastPump >= 1000) { lastPump = nowMs; hge_pump(); }
+	}
+
 	// BLE 設定プロビジョニングの保留要求処理(仕様8.2.2)
 	edgeProv::loop();
 

@@ -96,6 +96,13 @@ Java_app_laxei_holygrail_HgeNative_nativeResumeCapture(JNIEnv* /*env*/, jobject 
 	return hge_resumeCapture();
 }
 
+// 遅延アームのポンプ(§7.4)。予約(将来窓)計画の開始スレッドを期日に生成する。UIタイマから数秒毎に呼ぶ。
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativePump(JNIEnv* /*env*/, jobject /*thiz*/)
+{
+	return hge_pump();
+}
+
 // --- 並行撮影(計画id指定) ---
 JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeCaptureStartPlan(JNIEnv* env, jobject /*thiz*/, jstring id)

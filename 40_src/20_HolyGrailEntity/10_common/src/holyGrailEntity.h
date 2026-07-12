@@ -281,6 +281,9 @@ int32_t hge_pokeAcquire(const char* planId);
 // 電源復帰/アプリ再起動時の撮影再開(item2)。/asset/capturing.json を読み、撮影中だった
 // 計画を再開する。return: 再開を試みた計画数。エッジは起動時、スマホはアプリ起動時に呼ぶ。
 int32_t hge_resumeCapture(void);
+// 遅延アームのポンプ(§7.4)。予約(将来窓)セッションの開始スレッドを期日(窓start-90秒)に生成する。
+// 生成失敗(内部RAM断片化)も10秒間隔で再試行する。エッジ=メインloopから毎秒、スマホ=UIタイマから数秒毎に呼ぶ。
+int32_t hge_pump(void);
 
 #ifdef __cplusplus
 }

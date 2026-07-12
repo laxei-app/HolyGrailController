@@ -232,6 +232,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         Thread { HgeNative.nativePruneOldLogs(tzOffMin) }.start()
         handler.postDelayed(edgeTimeSync, 3000)   // 選択中エッジへ能動的な時刻同期を開始(RTC無し機/電波悪環境向け)
         handler.postDelayed(edgeSweep, 6000)      // エッジ常時スイープ(生存/IP追従+エッジ側開始・停止の検出。撮影の有無に関わらず30秒毎)
+        handler.postDelayed(hgePump, 5000)        // 遅延アームのポンプ(スマホ直接撮影の予約計画の開始スレッドを期日に生成)
         loadColors()
         loadExpoValues()
         buildExposureEditors()
@@ -3017,6 +3018,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         handler.removeCallbacks(edgePoll)
         handler.removeCallbacks(edgeSweep)
         handler.removeCallbacks(edgeTimeSync)
+        handler.removeCallbacks(hgePump)
         Thread { try { HgeNative.nativePresenceStop() } catch (_: Exception) {} }.start()  // P4: 常駐プレゼンスマップ停止
         HgeNative.nativeSetListener(null)
         HgeNative.nativeCaptureStop()
@@ -4240,6 +4242,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // edgePoll を単一インスタンスで(再)起動する。多重 postDelayed による二重ループを防ぐ。
     private fun ensureEdgePoll() { handler.removeCallbacks(edgePoll); handler.postDelayed(edgePoll, 2000) }
 
+    // 遅延アームのポンプ(§7.4)。スマホ直接撮影の予約(将来窓)計画は開始スレッドを期日(窓90秒前)まで
+    // 作らない(エンティティ側 hge_pump)。エッジはエッジ自身の loop が毎秒ポンプするため対象外。
+    private val hgePump = object : Runnable {
+        override fun run() {
+            Thread { try { HgeNative.nativePump() } catch (_: Exception) {} }.start()
+            handler.postDelayed(this, 5000)
+        }
+    }
+
     // ── エッジ常時スイープ(§6.2.1 sessions) ──
     // 撮影の有無に関わらず約30秒ごとにUDP検索(C_SEARCH)をブロードキャストし、全エッジの
     //  ・生存(オンライン/オフライン)とIP変動(DHCP)の追従
@@ -4336,6 +4347,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
             }
         }
         // 除去: このエッジ担当で追跡中なのに、エッジのセッション一覧に無い(=停止/終了済み)計画。
+        // ただし一覧が上限(エッジ側 kMaxSessions=16)まで埋まっている場合は、載り切らなかっただけの
+        // 実行中セッションを停止済みと誤認し得るため除去を保留する(採用側のみ反映)。
+        if (sessions.size >= 16) { if (changed) { if (capturingPlans.isEmpty()) stopBlink() else startBlink(); refreshPlanList(); updateReadOnly(); if (activeEdgePlans().isNotEmpty()) ensureEdgePoll() }; return }
         for (pid in (capturingPlans + waitingPlans + disconnectedPlans).toList()) {
             if (sessions.containsKey(pid)) continue
             if (planEdgeName(pid) != ed.name) continue

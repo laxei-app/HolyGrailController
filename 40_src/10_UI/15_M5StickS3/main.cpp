@@ -769,6 +769,13 @@ void loop(void)
 	}
 
 	if (g_edgeUp) { etpEdge::loop(); }
+
+	// 遅延アームのポンプ(§7.4): 予約計画の開始スレッドを期日(窓90秒前)に生成する。毎秒1回で十分。
+	{
+		static uint32_t lastPump = 0;
+		if (now - lastPump >= 1000) { lastPump = now; hge_pump(); }
+	}
+
 	edgeProv::loop();
 	handleButtons(now);
 

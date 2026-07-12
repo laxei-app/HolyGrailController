@@ -55,6 +55,11 @@ namespace
 	// 撮影期間 = [撮影窓 start の PRE_MARGIN_SEC 秒前, 撮影窓 end の 1フレーム(=interval秒)後]。
 	// PRE_MARGIN_SEC は撮影窓前の初期露出収束(captureRunner::kPreConvergeSec=30秒)に一致させる。
 	constexpr long long PRE_MARGIN_SEC = 30;
+	// 遅延アーム: 予約セッションの開始スレッドは armAt(=窓start-PRE_MARGIN_SEC) の ARM_LEAD_SEC 前まで作らない。
+	// 待機セッションごとに 14KB のタスクスタックを常駐させると内部RAM(M5Stack)が断片化し、4件目以降の
+	// xTaskCreate が失敗して SEARCHING のまま固まる(2026-07-12 テスト3で実測: free=84KB でも largest=10.7KB)。
+	// スレッド生成は hge_pump()(エッジ=loop毎秒/スマホ=UIタイマ)が期日に行い、失敗しても再試行する。
+	constexpr long long ARM_LEAD_SEC = 60;
 	struct captureSession
 	{
 		std::string                   planId;
@@ -69,6 +74,10 @@ namespace
 		std::string                   lastCcm;				// CCMSW検出
 		void*                         startThread = nullptr;
 		std::atomic<bool>             cancel{ false };		// 停止要求(予約待ちの開始スレッドを中断する)
+		std::atomic<bool>             deferred{ false };	// 遅延アーム待ち(開始スレッド未生成。hge_pump が期日に生成)
+		std::atomic<bool>             seqActive{ false };	// 起動シーケンス実行中(同時1本に直列化して14KBブロックの競合を減らす)
+		long long                     armAtEpoch = 0;		// カメラ確保開始時刻(=窓start-PRE_MARGIN_SEC, UTC epoch)
+		long long                     nextTryEpoch = 0;		// スレッド生成失敗時の次回再試行時刻(UTC epoch)
 		std::atomic<bool>             armed{ false };		// 撮影窓前の予約待ちを抜けカメラ確保フェーズへ入ったか
 		// 進捗スナップショット(このセッション専用)。C_PROGRESS の「計画別」応答に使う。集約 g_pg*(最後に
 		// 撮影したセッションの値)とは別物。1エッジ複数カメラ時、スマホが計画idごとに正しい状態/進捗を取れる。
@@ -1086,7 +1095,36 @@ namespace
 		hgc::exposureSmoothing smooth = dataManager::currentSmoothing();
 		errCode e = S->runner->ready(S->plan, &S->dev, smooth, g_offMin);
 		if (e != ERR_HGC_OK) { notifyError(e, "ready"); S->state = HGE_ST_ERROR; notifyStateP(S->planId, HGE_ST_ERROR); refreshAggregateState(); return e; }
-		return S->runner->start();
+		// 撮影ループを本スレッド上で実行する(セッションあたり1スレッド)。runner 用の2本目の
+		// タスクスタック(内部RAM14KB)の確保が断片化で慢性的に失敗する問題(2026-07-12 テスト4の
+		// 15:00窓で実測: カメラ確保は毎回成功するが2本目のxTaskCreateだけ失敗し続ける)を、
+		// 確保そのものを不要にして根治する。直列化(seqActive)はカメラ確保までを対象にし、
+		// 撮影ループへ入る前に解除する(次のセッションの起動を塞がない)。
+		S->seqActive = false;
+		return S->runner->runInline();
+	}
+
+	// 起動シーケンスが走行中のセッションが有るか(同時1本に直列化するための判定)。
+	bool anySeqActive(void)
+	{
+		for (auto& s : g_sessions) { if (s->seqActive.load()) { return true; } }
+		return false;
+	}
+
+	// セッションの開始シーケンス(startSessionSequence)を実行するスレッドを生成する。
+	// 失敗(=xTaskCreate 不発)なら false。呼び出し側(hge_captureStartPlan / hge_pump)が deferred で再試行する。
+	bool launchStartThread(captureSession* raw)
+	{
+		if (raw->startThread) { ossc::threadEnd(raw->startThread); raw->startThread = nullptr; }	// 再デファー経路: 前回スレッドの残骸を回収(join+解放)
+		raw->seqActive = true;
+		ossc::THREAD_FUNC fn = [raw](void*) -> errCode {
+			errCode e = startSessionSequence(raw);
+			raw->seqActive = false;
+			return e;
+		};
+		raw->startThread = ossc::threadNet(fn, nullptr);
+		if (raw->startThread == nullptr) { raw->seqActive = false; return false; }
+		return true;
 	}
 
 	// 1セッションを停止・破棄する(ランナーを join してから erase)。
@@ -1094,10 +1132,13 @@ namespace
 	{
 		captureSession* s = g_sessions[i].get();
 		s->cancel = true;	// 予約待ち中の開始スレッドを中断させてから join する(長時間 sleep のデッドロック回避)
+		s->deferred = false;	// 遅延アーム待ちなら hge_pump の生成対象から外す(スレッド未生成のまま破棄)
 		pokeUnregister(s->runner ? s->runner.get() : nullptr);	// 3b: ポーク対象から外す(runner破棄前)
 		s->state = HGE_ST_STOPPING; notifyStateP(s->planId, HGE_ST_STOPPING); refreshAggregateState();
-		if (s->startThread) { ossc::threadEnd(s->startThread); s->startThread = nullptr; }
-		if (s->runner) { s->runner->stop(); }	// ワーカースレッドを join(以後コールバック無し)
+		// 順序が重要: 撮影ループは起動スレッド上で回る(runInline)ため、先に runner->stop() で
+		// running_ を落としてから起動スレッドを join する(逆順だと窓終了まで join が返らない)。
+		if (s->runner) { s->runner->stop(); }
+		if (s->startThread) { ossc::threadEnd(s->startThread); s->startThread = nullptr; }	// ループ終了を join(以後コールバック無し)
 		std::string pid = s->planId;
 		g_sessions.erase(g_sessions.begin() + i);
 		notifyStateP(pid, HGE_ST_IDLE);
@@ -1120,9 +1161,10 @@ namespace
 			if (!running && (st == HGE_ST_IDLE || st == HGE_ST_ERROR))
 			{
 				g_sessions[i]->cancel = true;	// 予約待ちスレッドが残っていても抜けられるように
+				g_sessions[i]->deferred = false;	// 遅延アーム待ちも生成対象から外す
 				pokeUnregister(g_sessions[i]->runner ? g_sessions[i]->runner.get() : nullptr);	// 3b
+				if (g_sessions[i]->runner)      { g_sessions[i]->runner->stop(); }	// runInline: 先に停止要求→起動スレッド join の順
 				if (g_sessions[i]->startThread) { ossc::threadEnd(g_sessions[i]->startThread); g_sessions[i]->startThread = nullptr; }
-				if (g_sessions[i]->runner)      { g_sessions[i]->runner->stop(); }
 				g_sessions.erase(g_sessions.begin() + i);
 				removed = true;
 			}
@@ -2097,7 +2139,8 @@ int32_t hge_getProgressJsonFor(const char* planId, char* buf, int32_t* inoutLen)
 int32_t hge_getSessionsJson(char* buf, int32_t* inoutLen)
 {
 	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
-	constexpr size_t kMaxSessions = 8;	// UDP応答(スマホ側受信バッファ2KB)に収める上限
+	constexpr size_t kMaxSessions = 16;	// UDP応答(スマホ側受信バッファ2KB)に収める上限。1件~34B×16+edgeInfo≒800Bで収まる。
+										// 上限を超えた分は応答に載らない(スマホは満杯時に除去同期を保留する)。
 	std::string s = "[";
 	size_t n = 0;
 	for (auto& sess : g_sessions)
@@ -2152,12 +2195,54 @@ int32_t hge_captureStartPlan(const char* planId_)
 	}
 	sess->runner = std::make_unique<captureRunner>();
 	captureSession* raw = sess.get();
+	if (g_sessions.capacity() < MAX_PENDING) { g_sessions.reserve(MAX_PENDING); }	// push_back での再確保(走査中の他スレッドとの競合)を根絶
 	g_sessions.push_back(std::move(sess));
 	pokeRegister(raw->runner.get());	// 3b: SSDP出現ポークの対象に登録
 	ensureWatching();					// 3b: 共有SSDP受動待ち受けを起動(冪等)
-	ossc::THREAD_FUNC fn = [raw](void*) -> errCode { return startSessionSequence(raw); };
-	raw->startThread = ossc::threadNet(fn, nullptr);
+	// 遅延アーム: 窓が遠い予約は開始スレッドを作らず WAITING 表示のみ(スレッドは hge_pump が期日に生成)。
+	// 期日が近い/過去なら即生成し、失敗(内部RAM断片化)しても deferred に落として hge_pump が再試行する。
+	raw->armAtEpoch = hgc::toUnixUtc(raw->plan.start, g_offMin) - PRE_MARGIN_SEC;
+	long long now = static_cast<long long>(std::time(nullptr));
+	if (now < raw->armAtEpoch - ARM_LEAD_SEC)
+	{
+		raw->deferred = true;
+		raw->state = HGE_ST_WAITING; notifyStateP(raw->planId, HGE_ST_WAITING); refreshAggregateState();
+	}
+	else if (anySeqActive())
+	{	// 起動シーケンスは同時1本(直列化)。実行中なら pump に委ねて数秒後に起動する。
+		// 同窓2計画の一括開始で 14KB タスクスタック×4本の同時要求(断片化した内部RAMで失敗しやすい)を避ける。
+		raw->deferred = true; raw->nextTryEpoch = now + 2;
+		raw->state = HGE_ST_WAITING; notifyStateP(raw->planId, HGE_ST_WAITING); refreshAggregateState();
+	}
+	else if (!launchStartThread(raw))
+	{
+		raw->deferred = true; raw->nextTryEpoch = now + 5;
+		dataManager::logEvent("ERR", ("開始スレッド生成失敗(再試行待ち) 計画=" + raw->plan.name).c_str(), true);
+	}
 	setCapturing(planId, true);	// item2: 撮影意図を記録(電源復帰/再起動で再開する)
+	return ERR_HGC_OK;
+}
+
+// 遅延アームのポンプ。エッジ=メインloop(毎秒)/スマホ=UIタイマ(数秒毎)から呼ぶ。
+// 期日(armAt-ARM_LEAD_SEC)に達した予約セッションの開始スレッドを生成する。生成失敗(内部RAM断片化)は
+// 10秒後に再試行し続ける(自己修復)。呼び出しスレッドは hge の他APIと同じでよい(軽量・非ブロッキング)。
+int32_t hge_pump(void)
+{
+	if (anySeqActive()) { return ERR_HGC_OK; }	// 起動シーケンスは同時1本(直列化)。終わり次第、次のポンプで続きを起動する
+	long long now = static_cast<long long>(std::time(nullptr));
+	for (size_t i = 0; i < g_sessions.size(); ++i)
+	{
+		captureSession* s = g_sessions[i].get();
+		if (!s->deferred.load() || s->cancel.load()) { continue; }
+		if (now < s->armAtEpoch - ARM_LEAD_SEC || now < s->nextTryEpoch) { continue; }
+		if (launchStartThread(s)) { s->deferred = false; }
+		else
+		{
+			s->nextTryEpoch = now + 10;
+			dataManager::logEvent("ERR", ("開始スレッド生成失敗(10秒後に再試行) 計画=" + s->plan.name).c_str(), true);
+		}
+		break;	// 1回のポンプで起動するのは1件(直列化)
+	}
 	return ERR_HGC_OK;
 }
 

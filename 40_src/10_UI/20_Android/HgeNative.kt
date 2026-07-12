@@ -44,6 +44,7 @@ object HgeNative {
     external fun nativeCaptureStop(): Int
     external fun nativeGetState(): Int
     external fun nativeResumeCapture(): Int   // 再起動時の撮影再開(item2)。再開した計画数を返す
+    external fun nativePump(): Int             // 遅延アームのポンプ(§7.4)。予約計画の開始スレッドを期日に生成。数秒毎に呼ぶ
     // 並行撮影(計画id指定。空文字=編集対象)。通知に planId が付く。
     external fun nativeCaptureStartPlan(planId: String): Int
     external fun nativeCaptureStopPlan(planId: String): Int

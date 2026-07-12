@@ -73,7 +73,23 @@ errCode captureRunner::start(void)
 	running_ = true;
 	ossc::THREAD_FUNC fn = [this](void*) -> errCode { return this->loop(); };
 	thread_ = ossc::threadNet(fn, nullptr);
+	if (thread_ == nullptr)
+	{	// xTaskCreate 失敗(内部RAM断片化)。握りつぶすと「開始したのに撮らない」になるため呼び出し側へ返す。
+		running_ = false;
+		return ERR_HGC_NET_THREAD;
+	}
 	return ERR_HGC_OK;
+}
+
+// 呼び出しスレッド上で撮影ループを実行する(ヘッダのコメント参照)。ループ終了まで戻らない。
+errCode captureRunner::runInline(void)
+{
+	if (running_)        { return ERR_HGC_INVALID_STATE; }
+	if (dev_ == nullptr) { return ERR_HGC_READY; }
+	running_ = true;
+	errCode e = loop();
+	running_ = false;
+	return e;
 }
 
 errCode captureRunner::stop(void)
@@ -85,7 +101,7 @@ errCode captureRunner::stop(void)
 		ossc::threadEnd(thread_);	// join して破棄
 		thread_ = nullptr;
 	}
-	return ERR_HGC_OK;
+	return ERR_HGC_OK;	// runInline 実行中は要求のみ(ループは起動スレッド上。join は呼び出し側の threadEnd で行う)
 }
 
 void captureRunner::interruptibleSleep(long ms)
