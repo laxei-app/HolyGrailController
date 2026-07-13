@@ -450,6 +450,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // メニュー(plan_menu→600.メニュー)。帯付きの一覧から各画面へ分岐。
         planMenu.setOnClickListener { openGearMenu() }
         findViewById<ImageView>(R.id.gmenu_back).setOnClickListener { flipper.displayedChild = 0; capturePlanBaseline() }
+        // 650 カメラ予約表(項目17)。戻る/メニューどちらもメニューへ戻す。
+        findViewById<ImageView>(R.id.reserve_back).setOnClickListener { flipper.displayedChild = 5; buildGearMenu() }
+        findViewById<ImageView>(R.id.reserve_menu).setOnClickListener { flipper.displayedChild = 5; buildGearMenu() }
         // 620 所持カメラ(戻る/メニューで離脱時に自動保存)
         findViewById<ImageView>(R.id.cameralist_back).setOnClickListener { leaveCameraList() }
         findViewById<ImageView>(R.id.cameralist_menu).setOnClickListener { leaveCameraList() }
@@ -678,6 +681,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         gearBand(box, "撮影計画")
         gearItem(box, "撮影計画") { flipper.displayedChild = 0 }
         gearItem(box, "撮影場所") { openPlacesList() }
+        gearItem(box, "カメラ予約表") { openReserveTable() }   // 項目17
         gearBand(box, "撮影制御方法 初期値")
         gearItem(box, "月の影響への対処") { openPresetScreen("moon") }
         gearItem(box, "夜間撮影") { openPresetScreen("night") }
@@ -2868,11 +2872,28 @@ class MainActivity : AppCompatActivity(), HgeListener {
         planExec.execute {
             HgeNative.nativeNewPlan("")
             val cur = HgeNative.nativeCurrentPlanId()
+            val list = buildReservations(); saveReservations(list)   // 項目17: 新規作成時に予約表を作り直す
             runOnUiThread { currentPlanId = cur; refreshPlanList() }
         }
     }
 
     private fun startPlan(id: String) {
+        // 項目17: カメラ予約表で二重使用を確かめる。同じカメラを別の端末が重なる時間で使う予約が
+        // あれば、開始もエッジへの送信も行わない(そのカメラを2台の端末が奪い合うのを防ぐ)。
+        reserveBlockedBy(id)?.let { who ->
+            val cam = try {
+                val arr = JSONArray(HgeNative.nativeListPlans())
+                (0 until arr.length()).asSequence().map { arr.optJSONObject(it) }
+                    .firstOrNull { it?.optString("id") == id }
+                    ?.let { it.optString("camModel").ifEmpty { it.optString("camName") } } ?: "カメラ"
+            } catch (_: Exception) { "カメラ" }
+            AlertDialog.Builder(this)
+                .setTitle("開始できません")
+                .setMessage("$cam は $who で使用されています。この計画は開始できません。")
+                .setPositiveButton("OK", null)
+                .show()
+            return
+        }
         stoppingPlans.remove(id)   // 再開する計画は「中止確定待ち」を解除(NOCAMERA抑止をリセット)
         // 即時フィードバック: タップの瞬間に待機(カメラ点灯)へ変える。「押したのが効いたか分からない」対策。
         // 発見/開始要求は後追いで行い、失敗したらここで足した待機を取り消してトーストで知らせる。
@@ -3232,6 +3253,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             renderOverview(o)                      // 先頭ページ: 概要スケジュール(表示専用)
             rebuildTwilightPages(o)                // 薄明ページ(横スライド)を再構築し、ページ番号を更新
             renderSchedule(capSchedule, o, true)   // 撮影画面は従来のイベント時系列
+            refreshReservations()                  // 項目17: 計画を更新したら予約表を作り直す(過去分は落ちる)
         } catch (_: Exception) {}
     }
 
@@ -3383,6 +3405,153 @@ class MainActivity : AppCompatActivity(), HgeListener {
         flipper.displayedChild = 12
     }
     private fun leavePlacesList() { persistPlaceDetail(false); flipper.displayedChild = 5; buildGearMenu() }
+
+    // ============================================================
+    //  650 カメラ予約表(項目17)
+    // ============================================================
+    // 同じカメラを複数の端末(エッジ/スマホ)で同時に使ってしまう事故を防ぐための一覧。
+    //  ・対象: 撮影終了が未来の計画だけ(過去のものは作り直しのたびに捨てる)。
+    //  ・並び: カメラごとにまとめ、その中は開始時刻の昇順。
+    //  ・重なり: 同じカメラで使用時刻が重なる計画は色を変え、行頭に ✕ を付ける。
+    //  ・開始時: 重なる相手が「別の端末」なら開始もエッジへの送信も行わない(警告を出す)。
+    //  ・保存: 撮影計画の新規作成/更新のたびに camReserve.json へ作り直す(§7.6 の /asset 配下)。
+    private data class Reservation(
+        val planId: String, val planName: String,
+        val camKey: String, val camLabel: String,   // camKey=同一機体の判定キー / camLabel=帯の表示
+        val edge: String,                            // 端末名(空=スマホで撮影)
+        val startMs: Long, val endMs: Long,
+        var conflict: Boolean = false)
+
+    private val reserveFmt = SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.JAPAN)
+    // 計画一覧の start/end は Entity の dtToStr 形式("yyyy-MM-ddTHH:mm:ss"。T区切り)。
+    private val planDtFmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.JAPAN)
+
+    // 計画一覧(nativeListPlans)から予約表を作る。終了が過去の計画は除外し、重なりを判定して印を付ける。
+    private fun buildReservations(): List<Reservation> {
+        val now = System.currentTimeMillis()
+        val list = ArrayList<Reservation>()
+        try {
+            val arr = JSONArray(HgeNative.nativeListPlans())
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val id = o.optString("id"); if (id.isEmpty()) continue
+                val s = planDtFmt.parse(o.optString("start"))?.time ?: continue
+                val e = planDtFmt.parse(o.optString("end"))?.time ?: continue
+                if (e <= now) continue                      // 終了が過去 → 予約表に入れない
+                val model = o.optString("camModel").ifEmpty { o.optString("camName") }
+                val serial = o.optString("camSerial")
+                val friendly = o.optString("camFriendly")
+                if (model.isEmpty() && serial.isEmpty()) continue   // カメラ未指定の計画は対象外
+                // 同一機体の判定: シリアルがあればそれが最優先(機種違いの同シリアル衝突は model と併用)。
+                val key = if (serial.isNotEmpty()) "$model#$serial" else model
+                val label = buildString {
+                    append(model.ifEmpty { "(カメラ未設定)" })
+                    if (friendly.isNotEmpty()) append("  $friendly")
+                    if (serial.isNotEmpty()) append("  Sn:$serial")
+                }
+                list.add(Reservation(id, o.optString("name"), key, label, planEdgeName(id), s, e))
+            }
+        } catch (_: Exception) {}
+        list.sortWith(compareBy({ it.camLabel }, { it.startMs }))
+        // 同一カメラ内で時間が重なる組に印を付ける(半開区間[start,end)で判定)。
+        for (i in list.indices) {
+            for (j in i + 1 until list.size) {
+                if (list[i].camKey != list[j].camKey) continue
+                if (list[i].startMs < list[j].endMs && list[j].startMs < list[i].endMs) {
+                    list[i].conflict = true; list[j].conflict = true
+                }
+            }
+        }
+        return list
+    }
+
+    // 予約表をファイルへ保存する(仕様: ファイルに作成された予約表を表示する)。
+    // 表示自体は常に最新の計画から作り直すので、この保存は記録・外部確認用。
+    private fun saveReservations(list: List<Reservation>) {
+        try {
+            val arr = JSONArray()
+            for (r in list) {
+                arr.put(JSONObject().apply {
+                    put("planId", r.planId); put("plan", r.planName)
+                    put("camera", r.camLabel); put("camKey", r.camKey)
+                    put("edge", r.edge)
+                    put("start", reserveFmt.format(java.util.Date(r.startMs)))
+                    put("end", reserveFmt.format(java.util.Date(r.endMs)))
+                    put("conflict", r.conflict)
+                })
+            }
+            val dir = java.io.File(getExternalFilesDir(null), "asset").apply { mkdirs() }
+            java.io.File(dir, "camReserve.json").writeText(arr.toString())
+        } catch (_: Exception) {}
+    }
+
+    // 撮影計画を新規作成/更新したときに呼ぶ(仕様の更新タイミング)。過去の物はここで落ちる。
+    private fun refreshReservations() {
+        planExec.execute {
+            val list = buildReservations()
+            saveReservations(list)
+        }
+    }
+
+    private fun openReserveTable() {
+        buildReserveTable()
+        flipper.displayedChild = 13
+    }
+
+    private fun buildReserveTable() {
+        val box = findViewById<LinearLayout>(R.id.reserve_container)
+        box.removeAllViews()
+        val list = buildReservations()
+        saveReservations(list)
+        if (list.isEmpty()) {
+            box.addView(TextView(this).apply { text = "(予約はありません)"; setTextColor(Color.GRAY) })
+            return
+        }
+        var curCam = ""
+        for (r in list) {
+            if (r.camLabel != curCam) {                  // カメラの帯(見出し)
+                curCam = r.camLabel
+                box.addView(TextView(this).apply {
+                    text = curCam
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(Color.WHITE)
+                    setBackgroundColor(0xFF455A64.toInt())
+                    setPadding(dp(8), dp(6), dp(8), dp(6))
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { setMargins(0, dp(10), 0, dp(2)) }
+                })
+            }
+            val edge = if (r.edge.isEmpty()) "スマホ" else r.edge
+            val line = "%s - %s  %s  %s".format(
+                reserveFmt.format(java.util.Date(r.startMs)),
+                reserveFmt.format(java.util.Date(r.endMs)),
+                edge, r.planName)
+            box.addView(TextView(this).apply {
+                text = (if (r.conflict) "✕ " else "　") + line   // 重なりは行頭に ✕
+                textSize = 13f
+                setPadding(dp(8), dp(4), dp(8), dp(4))
+                if (r.conflict) { setTextColor(0xFFC62828.toInt()); setBackgroundColor(0xFFFFEBEE.toInt()) }
+                else            { setTextColor(Color.DKGRAY) }
+            })
+        }
+    }
+
+    // 項目17: この計画を開始してよいか予約表で確かめる。同じカメラを「別の端末」が重なる時間で
+    // 使う予約があれば、その端末名を返す(=開始不可)。問題なければ null。
+    private fun reserveBlockedBy(planId: String): String? {
+        val list = buildReservations()
+        val me = list.firstOrNull { it.planId == planId } ?: return null
+        for (r in list) {
+            if (r.planId == me.planId) continue
+            if (r.camKey != me.camKey) continue
+            if (r.edge == me.edge) continue                       // 同じ端末なら Entity 側が二重撮影を防ぐ
+            if (me.startMs < r.endMs && r.startMs < me.endMs) {   // 時間が重なる
+                return if (r.edge.isEmpty()) "スマホ" else r.edge
+            }
+        }
+        return null
+    }
 
     private fun buildPlacesList() {
         val box = findViewById<LinearLayout>(R.id.places_container)

@@ -18,4 +18,5 @@
     <include layout="@layout/screen_color" />
     <include layout="@layout/screen_smoothing" />
     <include layout="@layout/screen_places" />
+    <include layout="@layout/screen_reserve" />
 </ViewFlipper>

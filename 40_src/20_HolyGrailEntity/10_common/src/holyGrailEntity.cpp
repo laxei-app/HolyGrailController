@@ -1440,9 +1440,16 @@ int32_t hge_listPlansJson(char* buf, int32_t* inoutLen)
 		bool capturable = endU > static_cast<long long>(now);
 		captureSession* sess = sessionFor(id);
 		int st = sess ? sess->state.load() : static_cast<int>(HGE_ST_IDLE);
+		// カメラ予約表(項目17)と重複開始の抑止に使うため、計画のカメラも載せる。
+		//  model/serial=同一機体の判定に使う / friendly・name=表示用。
+		const hgc::camera& pc = cs.camera;
 		std::string o = "{\"id\":\"" + jesc(id) + "\",\"name\":\"" + jesc(cs.name) + "\"" +
 		     ",\"start\":\"" + dtToStr(cs.start) + "\",\"end\":\"" + dtToStr(cs.end) + "\"" +
 		     ",\"capturable\":" + std::string(capturable ? "true" : "false") +
+		     ",\"camModel\":\"" + jesc(pc.model) + "\"" +
+		     ",\"camName\":\"" + jesc(pc.name) + "\"" +
+		     ",\"camFriendly\":\"" + jesc(pc.friendly) + "\"" +
+		     ",\"camSerial\":\"" + jesc(pc.serial) + "\"" +
 		     ",\"state\":" + std::to_string(st) + "}";
 		rows.push_back(std::make_pair(startU, o));
 	}
