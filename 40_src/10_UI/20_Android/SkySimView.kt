@@ -16,7 +16,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.CheckBox
 import android.widget.LinearLayout
-import android.widget.SeekBar
 import android.widget.TextView
 import org.json.JSONObject
 import java.text.SimpleDateFormat
@@ -199,7 +198,8 @@ class SimPage(
     private val compass = CompassView(context)
     private val elevationView = ElevationView(context)
     private val landscapeCheck = CheckBox(context)
-    private val seek = SeekBar(context)
+    // 時刻スライダー。他画面と同じ Material Slider(大きなつまみ)を使う。
+    private val seek = com.google.android.material.slider.Slider(context)
     // 項目12: 日付/時刻は画像の下辺に描くので、独立したラベルは廃止した。
     private val render = SkyRenderView(context)
 
@@ -228,18 +228,16 @@ class SimPage(
         addView(render, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
-        // ② 時刻スライダー(撮影イメージの直下)。他の画面のスライダーと同じ見た目にするため、
-        //    左右に余白を取り、つまみ/トラックは既定(AppCompat)のままにする。
-        seek.max = 1000
+        // ② 時刻スライダー(撮影イメージの直下)。他の画面と同じ Material Slider を使う
+        //    (素の SeekBar はつまみが小さく指で掴みにくいため。トラック/つまみの大きさも他画面と揃う)。
+        seek.valueFrom = 0f
+        seek.valueTo = 1000f
+        seek.value = (fraction * 1000f).coerceIn(0f, 1000f)
         seek.setPadding(dp(16f), dp(6f), dp(16f), dp(2f))
-        seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(sb: SeekBar?, p: Int, fromUser: Boolean) {
-                fraction = p / 1000f
-                renderSky()          // 日付/時刻の表示は画像の下辺(renderSky が渡す)
-            }
-            override fun onStartTrackingTouch(sb: SeekBar?) {}
-            override fun onStopTrackingTouch(sb: SeekBar?) {}
-        })
+        seek.addOnChangeListener { _, v, _ ->
+            fraction = v / 1000f
+            renderSky()          // 日付/時刻の表示は画像の下辺(renderSky が渡す)
+        }
         addView(seek, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         // ③ 撮影方向 / 仰角(タイトル文字つき)。ドラッグ中もイメージがリアルタイムに追従する。
@@ -324,7 +322,7 @@ class SimPage(
         val (fh, fv) = fovDeg()
         compass.setFov(fh.toFloat())
         elevationView.setFov(fv.toFloat())
-        seek.progress = (fraction * 1000f).toInt()
+        seek.value = (fraction * 1000f).coerceIn(seek.valueFrom, seek.valueTo)
         suppress = false
         renderSky()   // 日付/時刻は画像の下辺に描くので、ここで一緒に更新される
     }
