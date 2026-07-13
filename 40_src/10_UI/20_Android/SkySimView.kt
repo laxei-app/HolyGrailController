@@ -41,7 +41,6 @@ internal data class SkyObj(val x: Float, val y: Float, val mag: Float, val color
 class SkyRenderView(context: Context) : View(context) {
     private var objs: List<SkyObj> = emptyList()
     private var aspect = 1.5f          // 現在の内容の横/縦(縦向きだと<1)
-    private var boxAspect = 1.5f       // 枠の横/縦(常に横向き=≧1に固定。高さの拡大を防ぐ)
     private var sunAlt = -90.0f        // 太陽高度[°](空/地面の色に使う)
     private var camEl = 10.0f          // 撮影仰角[°]
     private var fovV = 50.0f           // 縦画角[°]
@@ -63,22 +62,23 @@ class SkyRenderView(context: Context) : View(context) {
 
     internal fun setData(list: List<SkyObj>, asp: Float, sunAltDeg: Float, elDeg: Float, fovVDeg: Float) {
         objs = list
-        var boxChanged = false
+        var flipped = false
         if (asp > 0f) {
+            val wasLandscape = aspect >= 1f
             aspect = asp
-            // 枠は常に横向きのセンサー比(≧1)。縦向きでも枠サイズは変えない(項目G)。
-            val nb = max(asp, 1f / asp)
-            if (kotlin.math.abs(nb - boxAspect) > 0.001f) { boxAspect = nb; boxChanged = true }
+            // 縦横が入れ替わると枠の高さが変わる(縦向きは背が高くなる)ので測り直す。
+            if (wasLandscape != (aspect >= 1f)) flipped = true
         }
         sunAlt = sunAltDeg; camEl = elDeg; fovV = fovVDeg
-        // 時刻/方向/仰角の変更では枠(高さ)は不変なので invalidate だけ=スライド追従が軽い。
-        // カメラ変更などで枠アスペクトが実際に変わった時だけ測り直す。
-        if (boxChanged) requestLayout()
+        // 時刻/方向/仰角の変更では向きは変わらない=invalidate だけ(スライド追従が軽い)。
+        // 横向きチェックの切替(縦↔横)の時だけ測り直す。
+        if (flipped) requestLayout()
         invalidate()
     }
 
-    // 枠の中に、現在の内容アスペクト(縦向きなら縦長)を収まるように配置する。
-    //  横向き=枠いっぱい / 縦向き=左右に余白を付けて中央へ(レターボックス)。
+    // 撮影イメージの矩形。項目1: 横向きの長方形を「そのまま縦にしただけ(実寸そのまま・90°回転)」にする。
+    //  長辺 = 表示幅。横向き=幅いっぱい(高さ=幅/横比)。縦向き=同じ長方形を縦にしただけ(高さ=幅・幅=幅/横比)で
+    //  左右に余白。=横向きと同じ大きさの四角を縦向きにするだけ(縦向きで縮めない)。
     private fun sensorRect(): RectF {
         val pad = dp(6f)
         val w = width - pad * 2; val h = height - pad * 2
@@ -90,13 +90,16 @@ class SkyRenderView(context: Context) : View(context) {
         return RectF(l, t, l + rw, t + rh)
     }
 
-    // 高さは「幅 ÷ 枠アスペクト(横向き固定)」。横向きチェックの切替では枠が変わらない(項目G)。
+    // 枠の高さ: 横向き=幅/横比(幅いっぱい)。縦向き=表示幅(=横向きの長方形を縦にした長辺)。
+    //  → 縦向きでも横向きと同じ大きさの長方形になる(項目1。縦向きだけ背が高くなる)。
     override fun onMeasure(widthSpec: Int, heightSpec: Int) {
         val w = MeasureSpec.getSize(widthSpec)
         val pad = dp(6f) * 2
-        val a = if (boxAspect > 0.1f) boxAspect else 1.5f
-        val h = ((w - pad) / a + pad).toInt().coerceAtLeast(1)
-        setMeasuredDimension(w, h)
+        val availW = (w - pad).coerceAtLeast(1f)
+        val a = if (aspect > 0.01f) aspect else 1.5f
+        val la = max(a, 1f / a)                               // 横向き時の横比(≧1、例1.5)
+        val frameH = if (a >= 1f) availW / la else availW    // 横向き=幅/横比 / 縦向き=幅(長辺を縦に)
+        setMeasuredDimension(w, (frameH + pad).toInt().coerceAtLeast(1))
     }
 
     // 明るさ 0(夜)〜1(日中)。太陽高度 -18°(天文薄明の始まり)〜 +6°(日中)で滑らかに変化させる。

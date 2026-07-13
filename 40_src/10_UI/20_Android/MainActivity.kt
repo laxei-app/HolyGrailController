@@ -740,7 +740,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         gearItem(box, "カメラ予約表") { openReserveTable() }   // 項目17
         gearItem(box, "操作履歴") { openHistory() }            // 項目9
         gearBand(box, "撮影制御方法 初期値")
-        gearItem(box, "月の影響への対処") { openPresetScreen("moon") }
+        // 項目3: 「月の影響への対処」は撮影制御方法初期値から削除。
         gearItem(box, "夜間撮影") { openPresetScreen("night") }
         gearItem(box, "朝日撮影") { openPresetScreen("sunrise") }
         gearItem(box, "夕日撮影") { openPresetScreen("sunset") }
@@ -748,7 +748,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         gearBand(box, "自動露出")
         gearItem(box, "露出平滑化") { openSmoothingScreen() }
         gearBand(box, "色の設定")
-        gearColorItem(box, "moon", "月の影響への対処")
+        // 項目3: 「月の影響への対処」は色の設定から削除。
         gearColorItem(box, "night", "夜間撮影")
         gearColorItem(box, "sunrise", "朝日撮影")
         gearColorItem(box, "sunset", "夕日撮影")
@@ -1060,9 +1060,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // ピッカー変更で即タイトル背景色に反映。
         p2.setOnColorChangedListener { c -> findViewById<View>(R.id.color_header).setBackgroundColor(0xFF000000.toInt() or (c and 0xFFFFFF)) }
         box.addView(p2); colorBgPicker = p2
+        // 項目2: 色の設定にも「変更の取り消し」ボタンを新設(dirty 連動。取消=保存色から作り直し)。
+        val colorCancel = addCancelButton(box, atTop = true) { buildColorScreen() }
+        startDirtyWatch(colorCancel) { "${colorTextPicker?.color ?: 0},${colorBgPicker?.color ?: 0}" }
     }
 
-    private fun leaveColorScreen() { saveColorScreen(); flipper.displayedChild = 5; buildGearMenu() }
+    private fun leaveColorScreen() { stopDirtyWatch(); saveColorScreen(); flipper.displayedChild = 5; buildGearMenu() }
 
     // ---------- 630 露出平滑化(自動露出 全体設定。settings.json) ----------
     private fun openSmoothingScreen() {
@@ -1576,7 +1579,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             if (o.optJSONObject("camera")?.optString("name") == sel) { cam = o.optJSONObject("camera"); ocObj = o; break }
         }
         if (cam == null) { val tv = TextView(this); tv.text = "(データなし)"; box.addView(tv); return }
-        addCancelButton(box, atTop = true) { buildCameraDetail() }   // 分割バー直下に右寄せ
+        val camCancel = addCancelButton(box, atTop = true) { buildCameraDetail() }   // 分割バー直下に右寄せ(取消=保存内容から作り直し)
         box.addView(editRow("メーカー", "maker", cam.optString("maker")))
         box.addView(editRow("モデル", "model", cam.optString("model")))
         // 名称はリストの行でインライン編集する(分割バー画面共通の動作)。詳細からは除外。
@@ -1602,6 +1605,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val lensBox = LinearLayout(this); lensBox.orientation = LinearLayout.VERTICAL
         box.addView(lensBox); camLensContainer = lensBox
         renderCamLensReorder()
+        // 項目2: 「変更の取り消し」を dirty 連動に(未変更=グレー無効、変更で有効、戻すと無効)。
+        startDirtyWatch(camCancel) { camDetailSig() }
+    }
+
+    // 所持カメラ詳細の編集内容シグネチャ(dirty 比較用)。編集欄・初期値チェック・レンズ順序を連結。
+    private fun camDetailSig(): String {
+        val sb = StringBuilder()
+        camFields.toSortedMap().forEach { (k, v) -> sb.append(k).append('=').append(v.text).append(';') }
+        sb.append("auto=").append(camAutoInsert?.isChecked == true).append(";lens=").append(camLensNames.joinToString(","))
+        return sb.toString()
     }
 
     // 組み合わせレンズの並べ替え行を描く。ハンドル(▲▼)をドラッグ、挿入位置を線で示す(仕様5/6)。
@@ -1684,7 +1697,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .setNegativeButton("キャンセル", null).show()
     }
 
-    private fun leaveCameraList() { persistCameraDetail(false); flipper.displayedChild = 5 }
+    private fun leaveCameraList() { stopDirtyWatch(); persistCameraDetail(false); flipper.displayedChild = 5 }
 
     // リスト選択(タップ)。同じ行の再タップは編集(フォーカス)のみ。別の行なら前の詳細を保存して切替。
     private fun selectCamera(name: String) {
@@ -1795,7 +1808,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         var l: JSONObject? = null
         for (i in 0 until arr.length()) { val o = arr.optJSONObject(i) ?: continue; if (o.optString("name") == sel) { l = o; break } }
         if (l == null) { val tv = TextView(this); tv.text = "(データなし)"; box.addView(tv); return }
-        addCancelButton(box, atTop = true) { buildLensDetail() }   // 分割バー直下に右寄せ
+        val lensCancel = addCancelButton(box, atTop = true) { buildLensDetail() }   // 分割バー直下に右寄せ(取消=保存内容から作り直し)
         box.addView(editRow("メーカー", "maker", l.optString("maker")))
         // 名称(モデル)はリストの行でインライン編集する(分割バー画面共通の動作)。詳細からは除外。
         val cb = CheckBox(this); cb.text = "電子接点あり"; cb.isChecked = l.optBoolean("hasContact", true); lensContact = cb; box.addView(cb)
@@ -1803,9 +1816,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.addView(editRow("焦点距離", "focalLength", l.optDouble("focalLength", 0.0).toString(), true))
         val note = TextView(this); note.text = "ズームの場合は撮影計画実行時の焦点距離を設定してください。"
         note.textSize = 12f; note.setTextColor(Color.GRAY); note.setPadding(0, dp(8), 0, dp(8)); box.addView(note)
+        // 項目2: 「変更の取り消し」を dirty 連動に。
+        startDirtyWatch(lensCancel) { lensDetailSig() }
     }
 
-    private fun leaveLensList() { persistLensDetail(false); flipper.displayedChild = 5 }
+    private fun lensDetailSig(): String {
+        val sb = StringBuilder()
+        lensFields.toSortedMap().forEach { (k, v) -> sb.append(k).append('=').append(v.text).append(';') }
+        sb.append("contact=").append(lensContact?.isChecked == true)
+        return sb.toString()
+    }
+
+    private fun leaveLensList() { stopDirtyWatch(); persistLensDetail(false); flipper.displayedChild = 5 }
 
     private fun selectLens(name: String) {
         if (name == selLens) return
@@ -2001,7 +2023,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun buildCcmEditButtons() {
         val parent = findViewById<LinearLayout>(R.id.plan_ccmButtons)
         parent.removeAllViews()
-        val groups = listOf(listOf(1, 2, 3), listOf(4, 5))
+        // 項目3: 月(タイプ5)は撮影計画の撮影制御方法から削除(1=夜間 2=朝日 3=夕日 4=日中)。
+        val groups = listOf(listOf(1, 2, 3), listOf(4))
         for (group in groups) {
             val row = LinearLayout(this)
             row.orientation = LinearLayout.HORIZONTAL
@@ -2806,6 +2829,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         planExec.execute {
             val js = HgeNative.nativeListPlans()
             val cur = HgeNative.nativeCurrentPlanId()
+            // 項目5: 計画の新規作成/変更/削除いずれの経路も refreshPlanList を通るので、ここで予約表を
+            //  全計画から作り直す(終了が過去の計画は buildReservations 内で除外)。削除した計画が予約表に
+            //  残る・変更が反映されない不具合の根治。buildReservations/saveReservations はUI非依存。
+            saveReservations(buildReservations())
             runOnUiThread { currentPlanId = cur; buildPlanList(js); updateReadOnly(); refreshEdgeSpinner() }
         }
     }
@@ -3480,7 +3507,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         setInitialSplit(R.id.places_listScroll, R.id.places_container)
         flipper.displayedChild = 12
     }
-    private fun leavePlacesList() { persistPlaceDetail(false); flipper.displayedChild = 5; buildGearMenu() }
+    private fun leavePlacesList() { stopDirtyWatch(); persistPlaceDetail(false); flipper.displayedChild = 5; buildGearMenu() }
 
     // ============================================================
     //  650 カメラ予約表(項目17)
@@ -3805,6 +3832,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         var o: JSONObject? = null
         for (i in 0 until arr.length()) { val x = arr.optJSONObject(i) ?: continue; if (x.optString("name") == sel) { o = x; break } }
         if (o == null) { box.addView(TextView(this).apply { text = "(データなし)" }); return }
+        // 項目2: 撮影場所にも「変更の取り消し」ボタンを新設(dirty 連動。取消=保存内容から作り直し)。
+        val placeCancel = addCancelButton(box, atTop = true) { buildPlaceDetail() }
         placeLat = o.optDouble("latitude", 0.0); placeLng = o.optDouble("longitude", 0.0)
         // 緯度・経度(DMS表示) + 取得手段(地図/貼り付け/現在地)
         box.addView(TextView(this).apply { text = "緯度・経度"; textSize = 13f; setTextColor(Color.GRAY); setPadding(0, dp(4), 0, dp(2)) })
@@ -3846,7 +3875,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
             // 即保存してリストを作り直す(他の場所のチェックが外れたことを表示へ反映するため)。
             persistPlaceDetail(false, rebuildList = true)
         }
+        // 項目2: 標高/メモの未保存編集を dirty 判定(座標/自動挿入は即保存で作り直されるため基準が更新される)。
+        startDirtyWatch(placeCancel) { placeDetailSig() }
     }
+
+    private fun placeDetailSig(): String =
+        "$placeLat,$placeLng,alt=${placeAltEt?.text},memo=${placeMemoEt?.text},auto=${placeAutoCb?.isChecked == true}"
 
     private fun onPlaceCoord(lat: Double, lng: Double) {
         placeLat = lat; placeLng = lng; refreshPlaceCoordText()

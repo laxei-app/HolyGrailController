@@ -1507,6 +1507,17 @@ int32_t hge_copyPlan(const char* id)
 int32_t hge_deletePlan(const char* id)
 {
 	if (id == nullptr || id[0] == '\0') { return ERR_HGC_INVALID_ARG; }
+	// 項目9: 削除対象の計画が撮影中/待機中なら、まずセッションを停止してスレッドを破棄する。
+	//  (従来は計画ファイルだけ消してセッションが走り続ける不具合があった。エッジ削除=
+	//   edgeRemoveReceivedPlan 経由でも hge_deletePlan を通るので、エッジ側の撮影も停止する。)
+	{
+		const std::string pid(id);
+		setCapturing(pid, false);	// 実行意図を消す(再起動で再開しない)
+		for (size_t i = 0; i < g_sessions.size(); ++i)
+		{
+			if (g_sessions[i]->planId == pid) { stopSessionAt(i); break; }	// cancel→runner->stop()→erase(スレッド破棄)
+		}
+	}
 	if (!dataManager::deletePlanFile(std::string(id))) { return ERR_HGC_NO_ELEMENT; }
 	if (g_editId == std::string(id))
 	{
