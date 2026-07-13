@@ -453,6 +453,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 650 カメラ予約表(項目17)。戻る/メニューどちらもメニューへ戻す。
         findViewById<ImageView>(R.id.reserve_back).setOnClickListener { flipper.displayedChild = 5; buildGearMenu() }
         findViewById<ImageView>(R.id.reserve_menu).setOnClickListener { flipper.displayedChild = 5; buildGearMenu() }
+        // 660 操作履歴(項目9)
+        findViewById<ImageView>(R.id.history_back).setOnClickListener { flipper.displayedChild = 5; buildGearMenu() }
+        findViewById<ImageView>(R.id.history_menu).setOnClickListener { flipper.displayedChild = 5; buildGearMenu() }
+        findViewById<Button>(R.id.history_clear).setOnClickListener {
+            AlertDialog.Builder(this)
+                .setTitle("履歴削除")
+                .setMessage("操作履歴をすべて削除しますか？")
+                .setPositiveButton("削除する") { _, _ ->
+                    try { histFile().writeText("[]") } catch (_: Exception) {}
+                    buildHistory()
+                }
+                .setNegativeButton("やめる", null)
+                .show()
+        }
         // 620 所持カメラ(戻る/メニューで離脱時に自動保存)
         findViewById<ImageView>(R.id.cameralist_back).setOnClickListener { leaveCameraList() }
         findViewById<ImageView>(R.id.cameralist_menu).setOnClickListener { leaveCameraList() }
@@ -682,6 +696,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         gearItem(box, "撮影計画") { flipper.displayedChild = 0 }
         gearItem(box, "撮影場所") { openPlacesList() }
         gearItem(box, "カメラ予約表") { openReserveTable() }   // 項目17
+        gearItem(box, "操作履歴") { openHistory() }            // 項目9
         gearBand(box, "撮影制御方法 初期値")
         gearItem(box, "月の影響への対処") { openPresetScreen("moon") }
         gearItem(box, "夜間撮影") { openPresetScreen("night") }
@@ -2969,6 +2984,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // stoppingPlans で NOCAMERA ダイアログとポーリングの再追加を抑止する(確定は reconcileEdgePlan /
     // EV_STATE の IDLE 到達。保険で一定時間後に強制掃除)。
     private fun beginStop(id: String, doStop: () -> Unit) {
+        addHistory("user break", id)   // 項目9: ユーザー操作での中止(この後のIDLEを auto end にしない)
+        histUserStop.add(id)
         stoppingPlans.add(id)
         capturingPlans.remove(id); waitingPlans.remove(id); disconnectedPlans.remove(id)   // 即時にアイコンを戻す
         clearNoCam(id)
@@ -3155,6 +3172,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     val st = o.optInt("state", HgeNative.ST_IDLE)
                     val pid = o.optString("planId")
                     capState.text = "state: ${HgeNative.stateName(st)}"
+                    if (pid.isNotEmpty()) histOnState(pid, st)   // 項目9: スマホ直接撮影の履歴
                     if (pid.isNotEmpty()) {
                         // 「中止」操作済みは停止(IDLE/ERROR)確定までNOCAMERAを無視(無限再表示を防ぐ)。
                         if (stoppingPlans.contains(pid) && st != HgeNative.ST_IDLE && st != HgeNative.ST_ERROR) {
@@ -3533,6 +3551,104 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 setPadding(dp(8), dp(4), dp(8), dp(4))
                 if (r.conflict) { setTextColor(0xFFC62828.toInt()); setBackgroundColor(0xFFFFEBEE.toInt()) }
                 else            { setTextColor(Color.DKGRAY) }
+            })
+        }
+    }
+
+    // ============================================================
+    //  660 操作履歴(項目9)
+    // ============================================================
+    // 撮影に関する操作を日時つきで残す。記録はスマホ(opHistory.json)。エッジ端末側で起きたことは、
+    // 既存の進捗ポーリング(10秒・計画別C_PROGRESS)で受け取る「状態」の変化から拾うので、
+    // 新しい通信は増やさない。スマホ直接撮影は EV_STATE の遷移から同じように拾う。
+    //   send plan      … 撮影計画をエッジへ送った
+    //   auto start     … 撮影が始まった(撮影窓に入った)
+    //   user break     … ユーザー操作で中止した
+    //   auto end       … 終了時刻になり自動的に停止した
+    //   lost camera    … カメラがオフラインになった(撮影が止まった)
+    //   connect camera … カメラがオンラインになった
+    private val histFmt = SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.JAPAN)
+    private val histLastState = HashMap<String, Int>()   // planId → 直近の状態(遷移の判定用)
+    private val histUserStop = HashSet<String>()          // ユーザー中止済み(後続のIDLEを auto end にしない)
+
+    private fun histFile() = java.io.File(
+        java.io.File(getExternalFilesDir(null), "asset").apply { mkdirs() }, "opHistory.json")
+
+    private fun histLoad(): JSONArray =
+        try { JSONArray(histFile().readText()) } catch (_: Exception) { JSONArray() }
+
+    // 履歴を1件足す(最新が先頭)。計画名・端末名・カメラ名はその時点の計画から解決する。
+    private fun addHistory(op: String, planId: String) {
+        try {
+            var plan = ""; var cam = ""
+            val arr = JSONArray(HgeNative.nativeListPlans())
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                if (o.optString("id") != planId) continue
+                plan = o.optString("name")
+                cam = o.optString("camModel").ifEmpty { o.optString("camName") }
+                break
+            }
+            val edge = planEdgeName(planId).ifEmpty { "スマホ" }
+            val rec = JSONObject().apply {
+                put("t", System.currentTimeMillis())
+                put("op", op); put("plan", plan); put("edge", edge); put("cam", cam)
+            }
+            val cur = histLoad()
+            val out = JSONArray().put(rec)                       // 最新が先頭
+            for (i in 0 until minOf(cur.length(), 499)) out.put(cur.get(i))   // 上限500件
+            histFile().writeText(out.toString())
+        } catch (_: Exception) {}
+    }
+
+    // 状態の変化から履歴を起こす。エッジのポーリング(reconcileEdgePlan)とスマホ直撮影(EV_STATE)の両方から呼ぶ。
+    private fun histOnState(planId: String, st: Int) {
+        val prev = histLastState[planId]
+        if (prev == st) return
+        histLastState[planId] = st
+        if (prev == null) return    // 初回観測(アプリ起動直後など)は遷移として扱わない
+        val wasActive = prev == HgeNative.ST_CAPTURING || prev == HgeNative.ST_WAITING ||
+                        prev == HgeNative.ST_SEARCHING || prev == HgeNative.ST_NOCAMERA ||
+                        prev == HgeNative.ST_DISCONNECTED || prev == HgeNative.ST_STOPPING
+        val lostPrev = prev == HgeNative.ST_NOCAMERA || prev == HgeNative.ST_DISCONNECTED
+        when {
+            // カメラが復帰した(未検出 → 撮影/待機)
+            lostPrev && (st == HgeNative.ST_CAPTURING || st == HgeNative.ST_WAITING) ->
+                addHistory("connect camera", planId)
+            // カメラを見失った(撮影/待機 → 未検出)
+            !lostPrev && (st == HgeNative.ST_NOCAMERA || st == HgeNative.ST_DISCONNECTED) ->
+                addHistory("lost camera", planId)
+        }
+        // 撮影が始まった
+        if (prev != HgeNative.ST_CAPTURING && st == HgeNative.ST_CAPTURING) addHistory("auto start", planId)
+        // 終了(実行中 → IDLE)。ユーザー中止は beginStop 側で記録済みなので二重に残さない。
+        if (wasActive && st == HgeNative.ST_IDLE) {
+            if (histUserStop.remove(planId)) { /* user break は記録済み */ }
+            else addHistory("auto end", planId)
+        }
+    }
+
+    private fun openHistory() { buildHistory(); flipper.displayedChild = 14 }
+
+    private fun buildHistory() {
+        val box = findViewById<LinearLayout>(R.id.history_container)
+        box.removeAllViews()
+        val arr = histLoad()
+        if (arr.length() == 0) {
+            box.addView(TextView(this).apply { text = "(履歴はありません)"; setTextColor(Color.GRAY) })
+            return
+        }
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val line = "%s  %-13s %s  %s  %s".format(
+                histFmt.format(java.util.Date(o.optLong("t"))),
+                o.optString("op"), o.optString("plan"), o.optString("edge"), o.optString("cam"))
+            box.addView(TextView(this).apply {
+                text = line
+                textSize = 12f
+                typeface = Typeface.MONOSPACE          // 桁を揃えて読みやすくする
+                setTextColor(Color.DKGRAY)
+                setPadding(dp(4), dp(5), dp(4), dp(5))
             })
         }
     }
@@ -4430,6 +4546,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         try {
             val o = JSONObject(pj)
             val st = o.optInt("state")
+            histOnState(pid, st)   // 項目9: エッジ側で起きたこと(開始/終了/カメラ断/復帰)を履歴に残す
             var changed = false
             // 開始操作中(開始要求が未達の可能性)は IDLE 報告を無視する。開始要求の結果確定(startOnEdge)後に
             // 通常のポーリング反映へ戻る。これが無いと2台順次開始(直列化)の2台目が「まだIDLE」を拾われて
@@ -4790,6 +4907,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     st != HgeNative.ST_IDLE && st != HgeNative.ST_ERROR   // 明示的IDLE/ERROR以外は走っているとみなし維持
                 }
             }
+            if (running) addHistory("send plan", planId)   // 項目9: 撮影計画をエッジへ送った
             runOnUiThread {
                 startingPlans.remove(planId)   // 開始要求の結果確定(以降はポーリングが実状態を反映)
                 if (running) {
