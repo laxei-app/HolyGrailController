@@ -352,6 +352,29 @@ static const json& planList(void)
 	return cache;
 }
 
+// 項目2: 終わった撮影計画をエッジから自動削除する。エッジは画面が小さく、終わった計画が溜まると
+// 選択(KEY2送り)の邪魔になるため。条件は「撮影終了時刻が過去(capturable=false)かつ非実行(IDLE)」。
+// スマホ側には計画が残るので、消えても再送すれば使える。実行中/待機中/操作確定待ちの計画は残す。
+static void pruneFinishedPlans(void)
+{
+	const json& arr = planList();
+	std::vector<std::string> gone;
+	for (const auto& p : arr)
+	{
+		const std::string id = p.value("id", std::string());
+		if (id.empty()) { continue; }
+		if (p.value("capturable", false)) { continue; }			// 終了が未来 → 残す
+		if (p.value("state", 0) != HGE_ST_IDLE) { continue; }	// 実行中/待機中など → 残す
+		if (g_pendingIcon.count(id) > 0) { continue; }			// 操作の確定待ち → 残す
+		gone.push_back(id);
+	}
+	for (const auto& id : gone)
+	{
+		Serial.printf("[PRUNE] finished plan removed: %s\n", id.c_str());
+		edgeRemoveReceivedPlan(id);
+	}
+}
+
 // ── 名前ビットマップを最大幅で2段に折り返して描く。戻り値=消費した高さ[px]。 ──
 static int drawNameBitmapWrapped(const nameBmp& nb, int x, int y, int maxW)
 {
@@ -398,6 +421,68 @@ static int drawNameTextWrapped(const std::string& name, int x, int y, int maxW)
 	return lh;
 }
 
+// ── 物理キーのガイダンス(項目1) ──
+// StickS3 は KEY1(正面)/KEY2(側面)が「どのキーか」画面から分からない。この向きでは KEY1 が画面の
+// 左、KEY2 が左下に来るので、物理キーの位置に合わせて「明るい緑のブロック」で機能名を示す。
+//  ・KEY1 = 画面左端の細い縦ブロック(文字は90°回転して縦書き)。場所を取らないよう最小フォント。
+//  ・KEY2 = 画面下端にぴったり寄せた小さな横ブロック(KEY1より少し右)。
+static constexpr int KEY_GUIDE_W = 14;	// KEY1(左端)の縦ブロックの幅[px]
+static constexpr int KEY2_X      = 18;	// KEY2 ブロックの左端(KEY1の右)
+static constexpr int STATUS_X    = 64;	// 下部の状態アイコン/テキストの左端(KEY2ブロックを避ける)
+
+// KEY1 の現在の機能ラベル。表示中の計画が動作中なら Stop、撮影可なら Start(過去計画は Del のみ)。
+static const char* keyGuideKey1Label(const json& arr)
+{
+	if (arr.empty() || g_cur < 0 || g_cur >= (int)arr.size()) { return "-"; }
+	const auto& p = arr[g_cur];
+	int state = p.value("state", 0);
+	bool active = (state == HGE_ST_CAPTURING || state == HGE_ST_STOPPING ||
+	               state == HGE_ST_WAITING   || state == HGE_ST_SEARCHING ||
+	               state == HGE_ST_NOCAMERA  || state == HGE_ST_DISCONNECTED);
+	// KEY1押下直後の保留(即時アイコン反映)中は、押した結果の機能を先に見せる。
+	auto po = g_pendingIcon.find(p.value("id", std::string()));
+	if (po != g_pendingIcon.end()) { active = (po->second == 1); }
+	if (active) { return "Stop"; }
+	return p.value("capturable", false) ? "Start" : "-";
+}
+
+// KEY2 用: 明るい緑のブロックに横書きの小さなラベル(最小フォント Font0=6x8)。
+static void drawKeyBlockH(int x, int y, const char* label, uint16_t bg)
+{
+	g_cv.setFont(&fonts::Font0);
+	int tw = g_cv.textWidth(label);
+	int w  = tw + 6;
+	int h  = g_cv.fontHeight() + 4;
+	g_cv.fillRoundRect(x, y, w, h, 2, bg);
+	g_cv.setTextColor(TFT_BLACK);				// 明るい緑地なので文字は黒
+	g_cv.setCursor(x + 3, y + 2); g_cv.print(label);
+	g_cv.setFont(&fonts::Font2);
+	g_cv.setTextColor(TFT_WHITE);
+}
+
+// KEY1 用: 文字を90°回転した細い縦ブロック。一時スプライトへ描いて pushRotated で転送する
+// (LovyanGFX にテキスト回転が無いため。ブロックはスプライトそのもの=回転後も緑地のまま)。
+// left = ブロックの左辺のx(LCDの左端に寄せるため中心ではなく左辺で指定する)。cy = 縦の中心。
+static void drawKeyBlockV(int left, int cy, const char* label, uint16_t bg)
+{
+	lgfx::LGFX_Sprite sp(&g_cv);
+	sp.setColorDepth(16);
+	sp.setFont(&fonts::Font0);
+	int w = sp.textWidth(label) + 6;		// 回転後は「縦の長さ」になる
+	int h = sp.fontHeight() + 4;			// 回転後は「帯の細さ」= ブロックの幅
+	if (sp.createSprite(w, h) == nullptr) { return; }
+	sp.fillSprite(bg);
+	sp.setTextColor(TFT_BLACK);
+	sp.setCursor(3, 2); sp.print(label);
+	sp.setPivot(w / 2.0f, h / 2.0f);
+	// 回転後の幅は h。左辺を left に合わせるには中心を left + h/2 に置く。
+	g_cv.setPivot((float)(left + h / 2), (float)cy);
+	sp.pushRotated(&g_cv, 270);				// 反時計回り90°=下から上へ読む縦書き
+	sp.deleteSprite();
+	g_cv.setFont(&fonts::Font2);
+	g_cv.setTextColor(TFT_WHITE);
+}
+
 // ── 計画画面(端末名 + 1計画: 名称2段 + 日付/時刻)。 ──
 static void renderPlan(void)
 {
@@ -418,11 +503,21 @@ static void renderPlan(void)
 	g_cv.setCursor(g_scrW - g_cv.textWidth(stz) - 4, 2); g_cv.print(stz);
 	g_cv.setTextColor(TFT_WHITE);
 
+	// 物理キーのガイダンス(項目1): 画面左に縦の帯を置き、物理キーの位置に合わせて機能を示す。
+	//  ・KEY1(正面/この向きでは画面の左)  = 開始/停止 → 上側の枠
+	//  ・KEY2(側面/この向きでは画面の左下)= 計画の送り → 下側の枠
+	// 現在の状態でKEY1の機能(Start/Stop)が変わるので、ラベルもそれに追従させる。
+	const uint16_t kgGreen = g_cv.color565(0x66, 0xEE, 0x66);	// 明るい緑
+	drawKeyBlockV(0, (headH + g_scrH) / 2, keyGuideKey1Label(arr), kgGreen);					// KEY1(LCD左端に密着・縦)
+	drawKeyBlockH(KEY2_X, g_scrH - 12, "Select", kgGreen);									// KEY2(下端にぴったり)
+	const int cx0 = KEY2_X;                 // コンテンツの左端(KEY1の縦帯の右)
+	const int maxW = g_scrW - cx0 - 4;      // コンテンツ幅
+
 	if (arr.empty())
 	{
 		g_cv.setTextColor(TFT_LIGHTGREY);
-		g_cv.setCursor(8, 44);  g_cv.print("No plans");
-		g_cv.setCursor(8, 66);  g_cv.print("Send from phone");
+		g_cv.setCursor(cx0, 44);  g_cv.print("No plans");
+		g_cv.setCursor(cx0, 66);  g_cv.print("Send from phone");
 		return;
 	}
 	if (g_cur < 0 || g_cur >= (int)arr.size()) { g_cur = 0; }
@@ -457,46 +552,47 @@ static void renderPlan(void)
 	// 計画名(2段折り返し)。ビットマップがあればそれを、無ければテキストを折り返す。
 	int nameY = headH + 4;
 	int used = 0;
-	const int maxW = g_scrW - 8;
 	auto it = g_nameBmps.find(id);
-	if (it != g_nameBmps.end() && it->second.px) { used = drawNameBitmapWrapped(it->second, 4, nameY, maxW); }
-	else { used = drawNameTextWrapped(name, 4, nameY, maxW); }
+	if (it != g_nameBmps.end() && it->second.px) { used = drawNameBitmapWrapped(it->second, cx0, nameY, maxW); }
+	else { used = drawNameTextWrapped(name, cx0, nameY, maxW); }
 
 	// 日付/時刻(開始・終了を2行)。
 	int ty = nameY + used + 6;
 	g_cv.setFont(&fonts::Font2);
 	g_cv.setTextColor(TFT_LIGHTGREY);
-	g_cv.setCursor(4, ty);      g_cv.print(("Start " + mmddhhmm(st)).c_str());
-	g_cv.setCursor(4, ty + 18); g_cv.print(("End   " + mmddhhmm(en)).c_str());
+	g_cv.setCursor(cx0, ty);      g_cv.print(("Start " + mmddhhmm(st)).c_str());
+	g_cv.setCursor(cx0, ty + 18); g_cv.print(("End   " + mmddhhmm(en)).c_str());
 
 	// 状態(下部): CoreS3 と同じ ICON_* を計画名の状態表示として描画 + テキスト + KEY1操作。
 	//   撮影中(CAPTURING)=カメラ点滅 / 待機(WAITING)=カメラ点灯 / 未検出(NOCAMERA)=✖カメラ点灯 / 撮影可=開始アイコン。
 	//   点滅は g_blinkOn(CAPTURING のみ)。アイコン背景はデータに焼込済(CAPTURING/NG=黒地でStickS3の黒背景に馴染む)。
 	uint16_t scol = TFT_LIGHTGREY; const char* stxt = "";
 	bool hasIcon = true; int iconH = ICON_CAPTURING_H;
+	// KEY1の操作(Start/Stop)は左のキーガイダンス帯が示すので、状態テキストからは外す。
+	// 下部の状態行は KEY2 ブロック(左下)を避けて STATUS_X から描く。
 	if (nocam)
 	{
-		g_cv.pushImage(4, g_scrH - 2 - ICON_CAMERA_NG_H, ICON_CAMERA_NG_W, ICON_CAMERA_NG_H, ICON_CAMERA_NG);
-		iconH = ICON_CAMERA_NG_H; scol = g_cv.color565(0xFF, 0x55, 0x55); stxt = "NO CAMERA KEY1:Stop";
+		g_cv.pushImage(STATUS_X, g_scrH - 2 - ICON_CAMERA_NG_H, ICON_CAMERA_NG_W, ICON_CAMERA_NG_H, ICON_CAMERA_NG);
+		iconH = ICON_CAMERA_NG_H; scol = g_cv.color565(0xFF, 0x55, 0x55); stxt = "NO CAMERA";
 	}
 	else if (capturing)
 	{
-		if (g_blinkOn) { g_cv.pushImage(4, g_scrH - 2 - ICON_CAPTURING_H, ICON_CAPTURING_W, ICON_CAPTURING_H, ICON_CAPTURING); }
-		iconH = ICON_CAPTURING_H; scol = g_cv.color565(0x66, 0xEE, 0x66); stxt = "CAPTURING KEY1:Stop";
+		if (g_blinkOn) { g_cv.pushImage(STATUS_X, g_scrH - 2 - ICON_CAPTURING_H, ICON_CAPTURING_W, ICON_CAPTURING_H, ICON_CAPTURING); }
+		iconH = ICON_CAPTURING_H; scol = g_cv.color565(0x66, 0xEE, 0x66); stxt = "CAPTURING";
 	}
 	else if (waiting)
 	{
-		g_cv.pushImage(4, g_scrH - 2 - ICON_CAPTURING_H, ICON_CAPTURING_W, ICON_CAPTURING_H, ICON_CAPTURING);
-		iconH = ICON_CAPTURING_H; scol = g_cv.color565(0x66, 0xEE, 0x66); stxt = "WAITING KEY1:Stop";
+		g_cv.pushImage(STATUS_X, g_scrH - 2 - ICON_CAPTURING_H, ICON_CAPTURING_W, ICON_CAPTURING_H, ICON_CAPTURING);
+		iconH = ICON_CAPTURING_H; scol = g_cv.color565(0x66, 0xEE, 0x66); stxt = "WAITING";
 	}
 	else if (capturable)
 	{
-		g_cv.pushImage(4, g_scrH - 2 - ICON_START_H, ICON_START_W, ICON_START_H, ICON_START);
-		iconH = ICON_START_H; scol = TFT_WHITE; stxt = "READY KEY1:Start";
+		g_cv.pushImage(STATUS_X, g_scrH - 2 - ICON_START_H, ICON_START_W, ICON_START_H, ICON_START);
+		iconH = ICON_START_H; scol = TFT_WHITE; stxt = "READY";
 	}
 	else { hasIcon = false; scol = TFT_DARKGREY; stxt = "(past)"; }
 	// テキストはアイコンの右・縦中心に合わせる(アイコン無し=(past)は左端)。
-	int sx = hasIcon ? (4 + ICON_START_W + 4) : 4;
+	int sx = hasIcon ? (STATUS_X + ICON_START_W + 4) : STATUS_X;
 	int sy = hasIcon ? (g_scrH - 2 - iconH) + (iconH - 16) / 2 : g_scrH - 16;
 	g_cv.setTextColor(scol);
 	g_cv.setCursor(sx, sy); g_cv.print(stxt);
@@ -511,6 +607,48 @@ static void renderPlan(void)
 		g_cv.setTextColor(g_cv.color565(0xFF, 0x88, 0x88));
 		g_cv.setCursor(32, 70); g_cv.print("KEY1:Yes   KEY2:No");
 	}
+}
+
+// ── 起動画面(項目8) ──────────────────────────────────────────────
+// 電源投入直後は黒画面で「起動したのか分からない」ため、LCD初期化の直後に即表示する。
+// グレー地に「Holy Grail / Time Lapse」を黒文字+白縁取りで描く。
+// 機種ごとに画像へ差し替えられるようフックを用意する: SPLASH_PX に RGB565 配列を与えればそれを
+// 中央に描画し、nullptr のままならテキストで描く(現状)。
+static const uint16_t* SPLASH_PX = nullptr;	// 例: edgeSplashStickS3.h を include して差し替える
+static const int       SPLASH_W  = 0;
+static const int       SPLASH_H  = 0;
+
+static void renderSplash(void)
+{
+	if (!g_spriteOk) { return; }
+	const uint16_t gray = g_cv.color565(0x9E, 0x9E, 0x9E);
+	g_cv.fillScreen(gray);
+	if (SPLASH_PX != nullptr && SPLASH_W > 0 && SPLASH_H > 0)
+	{
+		g_cv.pushImage((g_scrW - SPLASH_W) / 2, (g_scrH - SPLASH_H) / 2, SPLASH_W, SPLASH_H, SPLASH_PX);
+		g_cv.pushSprite(0, 0);
+		return;
+	}
+	g_cv.setFont(&fonts::Font4);
+	g_cv.setTextDatum(textdatum_t::middle_center);
+	auto outlined = [&](const char* s, int cx, int cy) {
+		g_cv.setTextColor(TFT_WHITE);					// 白の縁取り(8方向へ1pxずらして描く)
+		for (int dx = -1; dx <= 1; ++dx)
+		{
+			for (int dy = -1; dy <= 1; ++dy)
+			{
+				if (dx != 0 || dy != 0) { g_cv.drawString(s, cx + dx, cy + dy); }
+			}
+		}
+		g_cv.setTextColor(TFT_BLACK);					// 本体は黒文字
+		g_cv.drawString(s, cx, cy);
+	};
+	outlined("Holy Grail", g_scrW / 2, g_scrH / 2 - 16);
+	outlined("Time Lapse", g_scrW / 2, g_scrH / 2 + 16);
+	g_cv.setTextDatum(textdatum_t::top_left);
+	g_cv.setTextColor(TFT_WHITE);
+	g_cv.setFont(&fonts::Font2);
+	g_cv.pushSprite(0, 0);
 }
 
 // ── プロビジョニング/AP QR ──
@@ -731,6 +869,8 @@ void setup(void)
 	              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 	g_cv.setFont(&fonts::Font2);
 
+	renderSplash();		// 項目8: 起動画面を即表示(以降の初期化中も出したまま。終わったら計画一覧へ)
+
 	g_key1.begin(PIN_KEY1);
 	g_key2.begin(PIN_KEY2);
 
@@ -786,6 +926,12 @@ void loop(void)
 	{
 		static uint32_t lastPump = 0;
 		if (now - lastPump >= 1000) { lastPump = now; hge_pump(); }
+	}
+
+	// 項目2: 終わった撮影計画をエッジから自動削除する(撮影終了後・過去になった計画)。30秒毎で十分。
+	{
+		static uint32_t lastPrune = 0;
+		if (now - lastPrune >= 30000) { lastPrune = now; pruneFinishedPlans(); }
 	}
 
 	edgeProv::loop();

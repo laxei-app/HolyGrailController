@@ -219,6 +219,12 @@ void edgeRemoveReceivedPlan(const std::string& id)
 // 削除確認ダイアログ対象の計画id(空=非表示)。item4。
 static std::string g_confirmDelId;
 
+// 項目2: 終わった撮影計画をエッジから自動削除する。エッジは画面が小さく、終わった計画が溜まると
+// 選択の邪魔になるため。撮影終了(state=IDLE)かつ撮影終了時刻が過去(capturable=false)の計画が対象。
+// スマホ側には計画が残るので、エッジから消えても再送すれば使える。実行中/待機中の計画は消さない。
+// 実装は planList() のキャッシュを見るだけなので軽い。loop から定期的に呼ぶ。
+static void pruneFinishedPlans(void);
+
 static constexpr int HEAD_H   = 28;
 
 static M5Canvas g_cv(&M5.Display);	// ダブルバッファ(ちらつき防止)
@@ -329,6 +335,29 @@ static const json& planList(void)
 		g_listDirty = false;
 	}
 	return cache;
+}
+
+// 項目2: 終わった撮影計画をエッジから自動削除する(宣言は上部)。
+// 条件: 撮影終了時刻が過去(capturable=false) かつ 非実行(state=IDLE)。実行中/待機中/未検出は残す。
+// 保留操作(g_pendingIcon)中の計画も触らない(押した直後の取り違えを防ぐ)。
+static void pruneFinishedPlans(void)
+{
+	const json& arr = planList();
+	std::vector<std::string> gone;
+	for (const auto& p : arr)
+	{
+		const std::string id = p.value("id", std::string());
+		if (id.empty()) { continue; }
+		if (p.value("capturable", false)) { continue; }			// 終了が未来 → 残す
+		if (p.value("state", 0) != HGE_ST_IDLE) { continue; }	// 実行中/待機中など → 残す
+		if (g_pendingIcon.count(id) > 0) { continue; }			// 操作の確定待ち → 残す
+		gone.push_back(id);
+	}
+	for (const auto& id : gone)
+	{
+		Serial.printf("[PRUNE] finished plan removed: %s\n", id.c_str());
+		edgeRemoveReceivedPlan(id);		// 計画ファイル・名前ビットマップ・受信リストから削除
+	}
 }
 
 // ── 撮影計画画面(簡素化: 計画名 + 開始/停止のみ。仕様 8.1) ─────────────
@@ -564,6 +593,47 @@ static void startApAndEtp(void)
 	else { Serial.println("[AP] softAP start FAILED"); }
 }
 
+// ── 起動画面(項目8) ──────────────────────────────────────────────
+// 電源投入直後は黒画面で「起動したのか分からない」ため、LCDを初期化した直後に即表示する。
+// グレー地に「Holy Grail / Time Lapse」を黒文字+白縁取りで描く。
+// 機種ごとに画像へ差し替えられるようフックを用意する: SPLASH_PX に RGB565 配列(SPLASH_W×SPLASH_H)を
+// 与えればそれを中央に描画し、nullptr のままならテキストで描く(現状)。
+static const uint16_t* SPLASH_PX = nullptr;	// 例: edgeSplashCoreS3.h を include して差し替える
+static const int       SPLASH_W  = 0;
+static const int       SPLASH_H  = 0;
+
+static void renderSplash(void)
+{
+	if (SPLASH_PX != nullptr && SPLASH_W > 0 && SPLASH_H > 0)
+	{
+		g_cv.fillScreen(g_cv.color565(0x9E, 0x9E, 0x9E));
+		g_cv.pushImage((320 - SPLASH_W) / 2, (240 - SPLASH_H) / 2, SPLASH_W, SPLASH_H, SPLASH_PX);
+		g_cv.pushSprite(0, 0);
+		return;
+	}
+	g_cv.fillScreen(g_cv.color565(0x9E, 0x9E, 0x9E));	// グレー地
+	g_cv.setFont(&fonts::Font4);
+	g_cv.setTextDatum(textdatum_t::middle_center);
+	auto outlined = [&](const char* s, int cx, int cy) {
+		g_cv.setTextColor(TFT_WHITE);					// 白の縁取り(8方向へ1pxずらして描く)
+		for (int dx = -1; dx <= 1; ++dx)
+		{
+			for (int dy = -1; dy <= 1; ++dy)
+			{
+				if (dx != 0 || dy != 0) { g_cv.drawString(s, cx + dx, cy + dy); }
+			}
+		}
+		g_cv.setTextColor(TFT_BLACK);					// 本体は黒文字
+		g_cv.drawString(s, cx, cy);
+	};
+	outlined("Holy Grail", 160, 100);
+	outlined("Time Lapse", 160, 140);
+	g_cv.setTextDatum(textdatum_t::top_left);
+	g_cv.setTextColor(TFT_WHITE);
+	g_cv.setFont(&fonts::Font2);
+	g_cv.pushSprite(0, 0);
+}
+
 static void redraw(void)
 {
 	// AP参加QRは撮影/待機が始まったら自動で閉じ、計画・進捗を見せる。スマホから開始した場合でも
@@ -702,7 +772,13 @@ void setup(void)
 	g_cv.setPsram(true);
 	g_cv.setColorDepth(16);
 	g_cv.createSprite(320, 240);
+	// M5Canvas(M5GFX)は TFT_eSPI 互換のため swapBytes が既定ON。生のRGB565配列(edgeIcons.h の
+	// ICON_START/CAPTURING/CAMERA_NG)を pushImage するとR/Bが入れ替わり、StickS3(素のLGFX_Sprite=
+	// swapBytes OFF)やスマホと色が変わってしまう。同じ見た目にするため明示的にOFFへ揃える(項目16)。
+	g_cv.setSwapBytes(false);
 	g_cv.setFont(&fonts::Font2);	// ASCII専用フォント(日本語フォントefontJA_16は撤去。エッジ表示は英語のみ)
+
+	renderSplash();		// 項目8: 起動画面を即表示(以降の初期化中も出したまま。終わったら計画一覧へ)
 
 	loadEdgeCreds();	// NVS から SSID/password/端末名(無ければフォールバック。完全未設定=出荷時はAP既定)
 	Serial.printf("[NET] mode=%s devname=%s\n", g_netMode.c_str(), g_devName.c_str());
@@ -756,6 +832,13 @@ void loop(void)
 		static uint32_t lastPump = 0;
 		uint32_t nowMs = millis();
 		if (nowMs - lastPump >= 1000) { lastPump = nowMs; hge_pump(); }
+	}
+
+	// 項目2: 終わった撮影計画をエッジから自動削除する(撮影終了後・過去になった計画)。30秒毎で十分。
+	{
+		static uint32_t lastPrune = 0;
+		uint32_t nowMs = millis();
+		if (nowMs - lastPrune >= 30000) { lastPrune = nowMs; pruneFinishedPlans(); }
 	}
 
 	// BLE 設定プロビジョニングの保留要求処理(仕様8.2.2)

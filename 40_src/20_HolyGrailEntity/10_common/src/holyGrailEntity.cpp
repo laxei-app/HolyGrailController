@@ -619,6 +619,8 @@ namespace
 	}
 
 	// 出荷時の固定計画を新規生成して現在(編集対象)に据える(開始=現在-60秒、終了=2時間後)。
+	// 撮影制御方法は「優先的な初期値にする」で指定されたプリセットから採る(項目14)。指定が無い型は
+	// 内蔵初期値(factoryCcmSet)で補われる(dataManager::preferredCcmSetJson がフォールバック済み)。
 	void makeFactoryCurrent(const char* name)
 	{
 		time_t now = std::time(nullptr);
@@ -629,7 +631,10 @@ namespace
 		hgc::dateTime endDt;   int o2 = 0; localFromTime(now + 2 * 3600, endDt, o2);
 		g_plan.start = startDt;
 		g_plan.end   = endDt;
-		dataManager::parseCcmSetJson(dataManager::ccmDefaultsJson(), g_planCcm, g_planMoon);
+		if (!dataManager::parseCcmSetJson(dataManager::preferredCcmSetJson(), g_planCcm, g_planMoon))
+		{	// 優先プリセットが壊れている等で解釈できなければ内蔵初期値で確実に立ち上げる。
+			dataManager::parseCcmSetJson(dataManager::ccmDefaultsJson(), g_planCcm, g_planMoon);
+		}
 		if (!g_planMoon) { g_planMoon = dataManager::factoryMoon(); }
 		astro::buildSchedule(g_plan, g_planCcm, g_offMin);
 		buildScheduleJson();

@@ -20,11 +20,18 @@ astro::ccmSet dataManager::factoryCcmSet(void)
 {
 	astro::ccmSet set;
 
+	// 露出限界の呼称: limitBright = 暗所限界(高ISO・長SS・開放側) / limitDark = 明所限界(低ISO・高速SS・絞り側)。
+	// 出荷時は全種別とも 暗所限界 iso1600/ss8/fn1.4 〜 明所限界 iso100/ss1/4000/fn16、基準(initial)=暗所限界。
+	const hgc::exposure limDarkPlace  { "1600", "8",      "1.4" };	// 暗所限界
+	const hgc::exposure limBrightPlace{ "100",  "1/4000", "16"  };	// 明所限界
+
 	auto night = std::make_shared<hgc::ccmNight>();
 	night->name = "night";
 	night->sunAltitude = -18.0;
-	night->limitBright = night->limitDark = hgc::exposure{ "1600", "8", "1.4" };	// 固定露出(3.2)
-	night->initial = night->limitBright;	// 夜間の基準=固定露出
+	night->limitBright = night->limitDark = limDarkPlace;	// 固定露出(3.2): iso1600 / ss8 / fn1.4
+	night->initial = night->limitBright;	// 夜間の基準=固定露出(=暗所限界)
+	night->preNightEv  = 0.0;	// 夜間前露出補正
+	night->postNightEv = 0.0;	// 夜間後露出補正
 	set.night = night;
 
 	auto sunrise = std::make_shared<hgc::ccmSunrise>();
@@ -32,9 +39,9 @@ astro::ccmSet dataManager::factoryCcmSet(void)
 	sunrise->sunAltitude    = -6.0;	// 撮り始め(市民薄明)
 	sunrise->sunAltitudeEnd =  0.0;	// 終わり(日の出)
 	sunrise->ev = -3.0;
-	sunrise->limitBright = hgc::exposure{ "3200", "8", "1.4" };
-	sunrise->limitDark   = hgc::exposure{ "100", "1/4000", "16" };
-	sunrise->initial = sunrise->limitBright;	// 朝日=暗所限界(夜明け前は暗い)から始める
+	sunrise->limitBright = limDarkPlace;
+	sunrise->limitDark   = limBrightPlace;
+	sunrise->initial = sunrise->limitBright;	// 基準=暗所限界
 	sunrise->hysteresis = 0.3; sunrise->movingAverage = 3;	// 朝日は急変するので個別平滑化(§7)
 	set.sunrise = sunrise;
 
@@ -43,18 +50,18 @@ astro::ccmSet dataManager::factoryCcmSet(void)
 	sunset->sunAltitude    =  0.0;	// 撮り始め(日の入り)
 	sunset->sunAltitudeEnd = -6.0;	// 終わり(市民薄明)
 	sunset->ev = -3.0;
-	sunset->limitBright = hgc::exposure{ "3200", "8", "1.4" };
-	sunset->limitDark   = hgc::exposure{ "100", "1/4000", "16" };
-	sunset->initial = sunset->limitDark;	// 夕日=明所限界(日中は明るい)から始める
+	sunset->limitBright = limDarkPlace;
+	sunset->limitDark   = limBrightPlace;
+	sunset->initial = sunset->limitBright;	// 基準=暗所限界(朝日と同じ設定)
 	sunset->hysteresis = 0.3; sunset->movingAverage = 3;	// 夕日は急変するので個別平滑化(§7)
 	set.sunset = sunset;
 
 	auto day = std::make_shared<hgc::ccmDay>();
 	day->name = "day";
 	day->ev = 0.0;
-	day->limitBright = hgc::exposure{ "3200", "8", "1.4" };
-	day->limitDark   = hgc::exposure{ "100", "1/4000", "16" };
-	day->initial = hgc::exposure{ "640", "1/20", "4.5" };	// 中間点(明所/暗所限界のAPEX中間の目安。編集で変更可)
+	day->limitBright = limDarkPlace;
+	day->limitDark   = limBrightPlace;
+	day->initial = day->limitBright;	// 基準=暗所限界
 	set.day = day;
 
 	return set;
@@ -385,6 +392,12 @@ namespace
 	std::vector<hgc::place> g_places;
 	bool                    g_placesLoaded = false;
 
+	// 全体設定(settings.json)。実体の初期化/保存は下の設定セクションで定義するが、場所の読み込み時に
+	// 「自動挿入する場所」(項目10)の移行を行うため、変数と関数をここで先に宣言する。
+	extern json g_settings;
+	void ensureSettings(void);
+	bool saveSettings(void);
+
 	std::string placesPath(void)
 	{
 		std::string d = osfile::dir("asset");
@@ -397,6 +410,17 @@ namespace
 		std::string body;
 		std::string p = placesPath();
 		if (!p.empty() && osfile::readAll(p, body)) { csjson::placesFromJson(body, g_places); }
+		// 項目10の移行: 旧形式(places.json の autoInsert が場所ごと。複数trueになり得た)から、
+		// 全体設定(settings.json の "autoInsertPlace" に名称1つ)へ一度だけ移す。設定が未設定のときのみ、
+		// 最初に autoInsert=true だった場所を採用する(複数あっても1つに収束させる)。
+		ensureSettings();
+		if (!g_settings.contains("autoInsertPlace"))
+		{
+			std::string first;
+			for (const auto& q : g_places) { if (q.autoInsert) { first = q.name; break; } }
+			g_settings["autoInsertPlace"] = first;	// 該当なしなら空
+			saveSettings();
+		}
 	}
 	bool savePlaces(void)
 	{
@@ -603,10 +627,15 @@ bool dataManager::setOwnedCameraAutoInsert(const std::string& name, bool autoIns
 // ========================================================================
 //  撮影場所(§5.1/§7.9)。登録した場所を撮影計画で選択する。
 // ========================================================================
+// 項目10: 自動挿入は全体設定(名称1つ)が真。places.json の autoInsert には依存せず、UI へ返す JSON では
+// 「その場所が指定されているか」を設定から導出して載せる(=チェックが同時に複数入る状態を作れない)。
 std::string dataManager::placesJson(void)
 {
 	ensurePlaces();
-	return csjson::placesToJson(g_places);
+	std::vector<hgc::place> v = g_places;
+	const std::string want = autoInsertPlaceName();
+	for (auto& p : v) { p.autoInsert = (!want.empty() && p.name == want); }
+	return csjson::placesToJson(v);
 }
 
 bool dataManager::addPlace(const std::string& name)
@@ -625,17 +654,39 @@ bool dataManager::removePlace(const std::string& name)
 	                         [&](const hgc::place& p) { return p.name == name; });
 	if (it == g_places.end()) { return false; }
 	g_places.erase(it, g_places.end());
+	// 項目10: 自動挿入に指定されていた場所を消したら、全体設定の指定も外す(存在しない名前を残さない)。
+	ensureSettings();
+	if (g_settings.value("autoInsertPlace", std::string()) == name)
+	{
+		g_settings["autoInsertPlace"] = "";
+		saveSettings();
+	}
 	return savePlaces();
 }
 
+// 項目10: 「撮影計画に自動的に挿入する」場所は全体でただ1つ。場所ごとのデータ(places.json)ではなく
+// 全体設定(settings.json の "autoInsertPlace")に「場所の名称」を1つだけ保存する。これにより複数の
+// 場所にチェックが入る状態を構造的に作れなくする(以前は places.json の autoInsert が複数trueになれた)。
+// autoInsert=false かつ現在の指定がその場所なら解除する。他の場所が指定されている場合は触らない。
 bool dataManager::setPlaceAutoInsert(const std::string& name, bool autoInsert)
 {
 	ensurePlaces();
-	for (auto& p : g_places)
-	{
-		if (p.name == name) { p.autoInsert = autoInsert; return savePlaces(); }
-	}
-	return false;
+	ensureSettings();
+	bool exists = false;
+	for (const auto& p : g_places) { if (p.name == name) { exists = true; break; } }
+	if (!exists) { return false; }
+	const std::string cur = g_settings.value("autoInsertPlace", std::string());
+	if (autoInsert)      { g_settings["autoInsertPlace"] = name; }	// 1つだけ: 上書きで他は自動的に外れる
+	else if (cur == name){ g_settings["autoInsertPlace"] = ""; }		// 自分の指定を解除
+	else                 { return true; }							// 他の場所が指定中 → 変更なし
+	return saveSettings();
+}
+
+// 「自動挿入する場所」の名称(未設定なら空)。UI のチェック状態はこれと突き合わせて決める。
+std::string dataManager::autoInsertPlaceName(void)
+{
+	ensureSettings();
+	return g_settings.value("autoInsertPlace", std::string());
 }
 
 // 場所の詳細(name/memo/latitude/longitude/altitude/autoInsert)を JSON で更新/新規作成する。
@@ -643,13 +694,22 @@ bool dataManager::setPlaceAutoInsert(const std::string& name, bool autoInsert)
 bool dataManager::setPlaceDetailJson(const std::string& origName, const std::string& jsonStr)
 {
 	ensurePlaces();
+	ensureSettings();
 	std::vector<hgc::place> parsed;	// 1件の場所オブジェクトを配列にくるんで既存パーサで復元
 	if (!csjson::placesFromJson(std::string("[") + jsonStr + "]", parsed) || parsed.empty()) { return false; }
 	hgc::place* dst = nullptr;
 	for (auto& p : g_places) { if (p.name == origName) { dst = &p; break; } }
 	if (!dst) { g_places.emplace_back(); dst = &g_places.back(); }
+	const bool wantAuto = parsed.front().autoInsert;	// 受け取ったチェック状態(項目10: 保存先は全体設定)
 	*dst = parsed.front();
-	return savePlaces();
+	dst->autoInsert = false;	// places.json 側は真値として使わない(全体設定が真)
+	const std::string newName = dst->name;
+	if (!savePlaces()) { return false; }
+	// 項目10: 自動挿入は全体設定へ。改名時は指定も追従させる(旧名で指定されていたら新名へ付け替え)。
+	const std::string cur = g_settings.value("autoInsertPlace", std::string());
+	if (wantAuto)                          { g_settings["autoInsertPlace"] = newName; return saveSettings(); }
+	if (cur == origName || cur == newName) { g_settings["autoInsertPlace"] = ""; return saveSettings(); }
+	return true;
 }
 
 bool dataManager::findPlace(const std::string& name, hgc::place& out)
@@ -659,10 +719,13 @@ bool dataManager::findPlace(const std::string& name, hgc::place& out)
 	return false;
 }
 
+// 項目10: 自動挿入する場所は全体設定(名称1つ)で決まる。名称が空/該当場所が消えていれば無し。
 bool dataManager::autoInsertPlace(hgc::place& out)
 {
 	ensurePlaces();
-	for (const auto& p : g_places) { if (p.autoInsert) { out = p; return true; } }
+	const std::string want = autoInsertPlaceName();
+	if (want.empty()) { return false; }
+	for (const auto& p : g_places) { if (p.name == want) { out = p; return true; } }
 	return false;
 }
 
@@ -757,7 +820,7 @@ bool dataManager::setOwnedCameraDetailJson(const std::string& origName, const st
 // ============================================================================
 namespace
 {
-	json g_settings;
+	json g_settings;	// 前方宣言(場所セクション)に対応する実体
 	bool g_settingsLoaded = false;
 
 	std::string settingsPath(void)
@@ -944,6 +1007,31 @@ std::string dataManager::ccmPresetsJson(const std::string& type)
 	ensurePresets();
 	if (g_presets.contains(type) && g_presets[type].is_array()) { return g_presets[type].dump(); }
 	return "[]";
+}
+
+// 撮影計画の新規作成に使う撮影制御方法一式(項目14)。型ごとに「優先的な初期値にする」で指定された
+// プリセットを採用し、指定が無い/そのプリセットが見つからない型はソフトウェア内蔵の初期値
+// (factoryCcmSet)で埋める(初回インストール直後などプリセット未整備でも必ず成立する)。
+std::string dataManager::preferredCcmSetJson(void)
+{
+	ensurePresets();	// 種まき(「標準」+ preferredCcm)もここで済む
+	json def = json::parse(ccmDefaultsJson(), nullptr, false);
+	json out = json::object();
+	for (const char* t : kPresetTypes)
+	{
+		json chosen;
+		const std::string want = preferredCcmName(t);	// 優先指定の名前(空=未指定)
+		if (!want.empty() && g_presets.contains(t) && g_presets[t].is_array())
+		{
+			for (const auto& e : g_presets[t])
+			{
+				if (e.is_object() && e.value("name", std::string()) == want) { chosen = e; break; }
+			}
+		}
+		if (!chosen.is_object() && def.is_object() && def.contains(t)) { chosen = def[t]; }	// 内蔵初期値へフォールバック
+		if (chosen.is_object()) { out[t] = chosen; }
+	}
+	return out.dump();
 }
 
 bool dataManager::setCcmPresetJson(const std::string& type, const std::string& origName, const std::string& ccmJson)

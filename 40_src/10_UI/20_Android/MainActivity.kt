@@ -76,9 +76,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private lateinit var npfText: TextView
     private lateinit var landscapeCheck: CheckBox
     private var suppressLandscape = false   // updatePlanDisplay でのチェック設定が native を呼ばないように
-    private lateinit var dirText: TextView
-    private lateinit var compass: CompassView
-    private lateinit var elevationView: ElevationView
+    // 項目11: 計画1ページ目の撮影方向/仰角ウィジェット(compass/elevationView/dirText)は廃止。
+    // 方向・仰角は撮影シミュレーション画面で設定する(cs の azimuth/elevation は保持)。
     private lateinit var planOverview: LinearLayout      // 概要スケジュール(先頭ページ・表示専用)
     private lateinit var planPager: PlanPager            // 横スライドのページャ(先頭+薄明ページ)
     private lateinit var planFormScroll: ScrollView      // 先頭ページのフォーム縦スクロール
@@ -361,9 +360,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         sensorText = findViewById(R.id.plan_sensorText)
         npfText = findViewById(R.id.plan_npfText)
         landscapeCheck = findViewById(R.id.plan_landscape)
-        dirText = findViewById(R.id.plan_dirText)
-        compass = findViewById(R.id.plan_compass)
-        elevationView = findViewById(R.id.plan_elevation)
         planOverview = findViewById(R.id.plan_overviewContainer)
         planPager = findViewById(R.id.plan_pager)
         planFormScroll = findViewById(R.id.plan_formScroll)
@@ -388,9 +384,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private fun wireListeners() {
-        // 撮影方向(方位磁石)/仰角(カメラの絵)を離した時にEntityへ反映しスケジュール再生成。
-        compass.onCommit = { az -> pushDirectionToEntity(az, elevationView.angle) }
-        elevationView.onCommit = { el -> pushDirectionToEntity(compass.azimuth, el) }
+        // 項目11: 計画1ページ目の方向/仰角ウィジェットは廃止(設定は撮影シミュレーション画面で行う)。
         startDate.setOnClickListener { pickDate(startCal) }
         startTime.setOnClickListener { pickTime(startCal) }
         endDate.setOnClickListener { pickDate(endCal) }
@@ -829,10 +823,56 @@ class MainActivity : AppCompatActivity(), HgeListener {
             if (pw) e.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             box.addView(e); return e
         }
+        // 項目4: 登録済みエッジ端末の一覧。選択するとその端末名で設定できる(削除もここから)。
+        box.addView(TextView(ctx).apply { text = "登録済みエッジ端末(選択して設定)"; setTypeface(null, Typeface.BOLD) })
+        val edgeListBox = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
+        box.addView(edgeListBox)
+
         val nameE = field("端末識別名 (半角英数字。エッジのLCDに表示)", scannedName, false)
         applyEdgeNameInput(nameE)   // エッジで表示できない日本語等は入力不可(§8.2)
         val ssidE = field("接続先 SSID", "", false)
         val passE = field("接続先 password", "", true)
+        // 項目4: STA時のSSIDは周辺のWi-Fiから選べるようにする(手入力も可)。
+        val ssidPickBtn = Button(ctx).apply { text = "SSIDを選択" }
+        box.addView(ssidPickBtn)
+        ssidPickBtn.setOnClickListener { pickWifiSsid { s -> ssidE.setText(s) } }
+
+        // 登録済みリストを描画(選択で端末識別名へ流し込み。削除も可)。
+        var selectedEdgeName = ""
+        fun rebuildEdgeList() {
+            edgeListBox.removeAllViews()
+            if (edges.isEmpty()) {
+                edgeListBox.addView(TextView(ctx).apply { text = "(登録なし。「エッジ端末の登録」から追加)"; setPadding(0, (4 * d).toInt(), 0, 0) })
+                return
+            }
+            edges.toList().forEach { e ->
+                val row = LinearLayout(ctx); row.orientation = LinearLayout.HORIZONTAL; row.gravity = Gravity.CENTER_VERTICAL
+                val sub = if (e.ip.isEmpty()) "" else " (前回 ${e.ip})"
+                val mark = if (e.name == selectedEdgeName) "● " else "○ "
+                val tv = TextView(ctx).apply {
+                    text = mark + e.name + sub
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    setPadding(0, (6 * d).toInt(), 0, (6 * d).toInt())
+                    if (e.name == selectedEdgeName) setTypeface(null, Typeface.BOLD)
+                }
+                tv.setOnClickListener {
+                    selectedEdgeName = e.name
+                    nameE.setText(e.name)   // 選択した端末を設定対象にする
+                    rebuildEdgeList()
+                }
+                row.addView(tv)
+                row.addView(Button(ctx).apply {
+                    text = "削除"
+                    setOnClickListener {
+                        edges.remove(e); saveRegisteredEdges(); refreshEdgeSpinner()
+                        if (selectedEdgeName == e.name) selectedEdgeName = ""
+                        rebuildEdgeList()
+                    }
+                })
+                edgeListBox.addView(row)
+            }
+        }
+        rebuildEdgeList()
         // ネットワークモード: OFF=既存ネットに参加(STA。SSID/pass使用) / ON=エッジ自身がAP(屋外・ルーター無し)。
         // APではエッジ固有のAP資格を使うのでSSID/passは不要(エッジのLCDにQR表示)。
         val apSwitch = android.widget.Switch(ctx).apply {
@@ -2235,10 +2275,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun reloadExpoEditors() { loadExpoValues(); buildExposureEditors() }
 
     private fun buildExposureEditors() {
-        fixEditor = ExposureEditor(findViewById(R.id.edit_fix_container))
-        moonInitEditor = ExposureEditor(findViewById(R.id.moon_init_container))
-        editLimit = LimitEditor(findViewById(R.id.edit_limit_container))
-        moonLimit = LimitEditor(findViewById(R.id.moon_limit_container))
+        // 再構築(reloadExpoEditors: カメラ/レンズ変更・計画選択)ごとにエディタがコンテナへ行を
+        // 追加するため、先にクリアしないとスライダーが1セットずつ積み増しされる(夜間撮影に5セット等)。
+        val fixC = findViewById<LinearLayout>(R.id.edit_fix_container); fixC.removeAllViews()
+        val moonC = findViewById<LinearLayout>(R.id.moon_init_container); moonC.removeAllViews()
+        val limC = findViewById<LinearLayout>(R.id.edit_limit_container); limC.removeAllViews()
+        val moonLimC = findViewById<LinearLayout>(R.id.moon_limit_container); moonLimC.removeAllViews()
+        fixEditor = ExposureEditor(fixC)
+        moonInitEditor = ExposureEditor(moonC)
+        editLimit = LimitEditor(limC)
+        moonLimit = LimitEditor(moonLimC)
     }
 
     // 左=暗(月)→右=明(太陽) を示す明暗バー(仕様5)。スライダーの下地に敷く。
@@ -2671,9 +2717,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
     }
 
-    // 撮影方向/仰角をEntityへ渡してスケジュールを再生成させる(結果はEV_SCHEDULEで反映)。
+    // 撮影方向/仰角をEntityへ渡す(撮影シミュレーション画面から呼ぶ。項目11で計画1ページ目からは削除)。
+    // 画角ゲートは廃止したのでスケジュールの帯分類は変わらないが、cs の azimuth/elevation は保存される。
     private fun pushDirectionToEntity(az: Float, el: Float) {
-        dirText.text = "撮影方向 %.1f°   仰角 %.1f°".format(az, el)
         planExec.execute { HgeNative.nativeSetPlanDirection(az.toDouble(), el.toDouble()) }
     }
 
@@ -2802,12 +2848,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
             tv.setOnClickListener { selectPlanRow(id) }
         }
         row.addView(tv)
-        // ⋮ コンテキストメニュー(削除/コピーを追加)
-        val menu = ImageView(this)
-        menu.layoutParams = LinearLayout.LayoutParams(dp(32), dp(32))
-        menu.setImageResource(R.drawable.ic_menu)
-        menu.setOnClickListener { planContextMenu(it, id, name) }
-        row.addView(menu)
+        // ⋮ コンテキストメニュー(他画面=撮影場所/撮影制御方法リストと同じ緑ピル。項目5)
+        row.addView(ctxMenuButton(listOf(
+            "コピーを追加" to { copyPlanRow(id) },
+            "削除" to { confirmDeletePlan(id, name) },
+            "過去の計画削除" to { confirmDeletePastPlans() })))   // 項目6: 終了日が過去の計画を一括削除
         return row
     }
 
@@ -2966,26 +3011,45 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .show()
     }
 
-    private fun planContextMenu(anchor: View, id: String, name: String) {
-        val pm = PopupMenu(this, anchor)
-        pm.menu.add("コピーを追加")
-        pm.menu.add("削除")
-        pm.setOnMenuItemClickListener { mi ->
-            when (mi.title) {
-                "コピーを追加" -> planExec.execute {
-                    HgeNative.nativeCopyPlan(id)
-                    val c = HgeNative.nativeCurrentPlanId()
-                    runOnUiThread {
-                        // エッジ端末の指定(Android prefs管理)はコピー元から引き継ぐ。他項目はentityが複製済み。
-                        if (c.isNotEmpty()) setPlanEdgeName(c, planEdgeName(id))
-                        currentPlanId = c; refreshPlanList()
-                    }
-                }
-                "削除" -> confirmDeletePlan(id, name)
+    private fun copyPlanRow(id: String) {
+        planExec.execute {
+            HgeNative.nativeCopyPlan(id)
+            val c = HgeNative.nativeCurrentPlanId()
+            runOnUiThread {
+                // エッジ端末の指定(Android prefs管理)はコピー元から引き継ぐ。他項目はentityが複製済み。
+                if (c.isNotEmpty()) setPlanEdgeName(c, planEdgeName(id))
+                currentPlanId = c; refreshPlanList()
             }
-            true
         }
-        pm.show()
+    }
+
+    // 項目6: 終了日が過去の撮影計画をすべて削除する(確認付き)。動作中(撮影/待機/操作過渡)の計画は対象外。
+    private fun confirmDeletePastPlans() {
+        val past = ArrayList<Pair<String, String>>()   // (id, name)
+        try {
+            val arr = JSONArray(HgeNative.nativeListPlans())
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val id = o.optString("id"); if (id.isEmpty()) continue
+                if (o.optBoolean("capturable", true)) continue   // 終了が未来の計画は残す
+                if (capturingPlans.contains(id) || waitingPlans.contains(id) || disconnectedPlans.contains(id) ||
+                    startingPlans.contains(id) || stoppingPlans.contains(id)) continue   // 念のため動作中は残す
+                past.add(id to o.optString("name"))
+            }
+        } catch (_: Exception) {}
+        if (past.isEmpty()) { Toast.makeText(this, "終了日が過去の計画はありません", Toast.LENGTH_SHORT).show(); return }
+        AlertDialog.Builder(this)
+            .setTitle("過去の計画削除")
+            .setMessage("終了日が過去の撮影計画 ${past.size} 件をすべて削除しますか？")
+            .setPositiveButton("削除する") { _, _ ->
+                planExec.execute {
+                    for ((id, _) in past) { HgeNative.nativeDeletePlan(id) }
+                    val cur = HgeNative.nativeCurrentPlanId()
+                    runOnUiThread { currentPlanId = cur; refreshPlanList(); reloadExpoEditors() }
+                }
+            }
+            .setNegativeButton("やめる", null)
+            .show()
     }
 
     private fun confirmDeletePlan(id: String, name: String) {
@@ -3160,21 +3224,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
             landscapeCheck.isChecked = o.optBoolean("landscape")
             suppressLandscape = false
             npfText.text = "NPF %.1f秒   最小周期 %d秒".format(o.optDouble("npf"), o.optInt("minInterval"))
-            // 撮影方向/仰角ウィジェットへ反映(setterは無音=コールバックを呼ばない)
-            val az = o.optDouble("azimuth", 90.0).toFloat()
-            val el = o.optDouble("elevation", 10.0).toFloat()
-            compass.setAzimuth(az)
-            compass.setFov(o.optDouble("fovH", 80.0).toFloat())
-            compass.setMarkers(
-                o.optDouble("sunriseAz", Double.NaN).toFloat(),
-                o.optDouble("sunsetAz", Double.NaN).toFloat(),
-                o.optDouble("moonriseAz", Double.NaN).toFloat(),
-                o.optDouble("moonsetAz", Double.NaN).toFloat())
-            elevationView.setAngle(el)
-            elevationView.setFov(o.optDouble("fovV", 50.0).toFloat())
-            dirText.text = "撮影方向 %.1f°   仰角 %.1f°".format(az, el)
+            // 項目11: 計画1ページ目の方向/仰角ウィジェットは廃止。撮影中画面の表示だけ残す。
+            val az = o.optDouble("azimuth", 90.0)
+            val el = o.optDouble("elevation", 10.0)
             capGear.text = o.optString("camera") + " / " + o.optString("lens")
-            capDir.text = dirText.text
+            capDir.text = "撮影方向 %.1f°   仰角 %.1f°".format(az, el)
             renderOverview(o)                      // 先頭ページ: 概要スケジュール(表示専用)
             rebuildTwilightPages(o)                // 薄明ページ(横スライド)を再構築し、ページ番号を更新
             renderSchedule(capSchedule, o, true)   // 撮影画面は従来のイベント時系列
@@ -3421,9 +3475,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
             minLines = 2; gravity = Gravity.TOP or Gravity.START; setText(o.optString("memo"))
         }
         placeMemoEt = memoEt; box.addView(memoEt)
-        // 自動挿入
-        val cb = CheckBox(this).apply { text = "撮影計画に自動的に挿入する"; isChecked = o.optBoolean("autoInsert", false) }
+        // 自動挿入(項目10: 全体で1つだけ。ONにすると他の場所の指定は自動的に外れる)
+        val cb = CheckBox(this).apply { text = "撮影計画に自動的に挿入する（1つの場所だけ）"; isChecked = o.optBoolean("autoInsert", false) }
         placeAutoCb = cb; box.addView(cb)
+        cb.setOnCheckedChangeListener { _, _ ->
+            // 即保存してリストを作り直す(他の場所のチェックが外れたことを表示へ反映するため)。
+            persistPlaceDetail(false, rebuildList = true)
+        }
     }
 
     private fun onPlaceCoord(lat: Double, lng: Double) {
@@ -3454,7 +3512,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     }
                 }
             } catch (e: Exception) {
-                // オフライン等。標高は手入力できるので通知は控えめに省略。
+                // 失敗を黙って捨てると「地図から取得しても標高が入らない」ように見えるため知らせる(項目10)。
+                // 代表例: エッジのAPへバインド中はインターネットへ出られない(§1.2.1)。手入力でも設定できる。
+                runOnUiThread {
+                    if (selPlace == target) {
+                        Toast.makeText(this, "標高を取得できませんでした（ネット未接続？手入力できます）", Toast.LENGTH_LONG).show()
+                    }
+                }
             }
         }.start()
     }
@@ -3950,7 +4014,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .forEach { findViewById<View>(it).isEnabled = ed }
         intervalText.isEnabled = ed; landscapeCheck.isEnabled = ed
         cameraText.isEnabled = ed; lensText.isEnabled = ed; edgeSpinner.isEnabled = ed
-        compass.isEnabled = ed; elevationView.isEnabled = ed; schedulePages.forEach { it.isEnabled = ed }
+        schedulePages.forEach { it.isEnabled = ed }   // 項目11: compass/elevationView は廃止
         findViewById<LinearLayout>(R.id.plan_ccmButtons).let { for (i in 0 until it.childCount) it.getChildAt(i).isEnabled = ed }
     }
 
@@ -4125,22 +4189,44 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
     private fun isAsciiEdgeName(s: String): Boolean = s.all { it.code in 0x20..0x7E }
 
-    // エッジ端末の登録/管理(設定)。名称+IPで手動登録、削除。オフラインでも登録でき計画で選べる。
+    // 項目4: 周辺のWi-Fi(SSID)一覧から選ばせる。エッジをSTAにする際の接続先入力を楽にする。
+    //  ・スキャン結果は位置情報権限が要る(ACCESS_FINE_LOCATION は取得済み: §7.9の現在地取得と共用)。
+    //  ・取得できない/空のときは手入力を促す(SSIDは非表示APや権限拒否では列挙できないため)。
+    private fun pickWifiSsid(onPick: (String) -> Unit) {
+        val ctx = this
+        val need = Manifest.permission.ACCESS_FINE_LOCATION
+        if (ContextCompat.checkSelfPermission(this, need) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, arrayOf(need), 4321)
+            Toast.makeText(ctx, "SSID一覧には位置情報の許可が必要です。許可後にもう一度お試しください", Toast.LENGTH_LONG).show()
+            return
+        }
+        val wm = applicationContext.getSystemService(WIFI_SERVICE) as WifiManager
+        val ssids = try {
+            @Suppress("DEPRECATION")
+            wm.scanResults.mapNotNull { r ->
+                @Suppress("DEPRECATION") val s = r.SSID?.trim('"') ?: ""
+                if (s.isEmpty()) null else s
+            }.distinct().sorted()
+        } catch (_: Exception) { emptyList() }
+        // 現在接続中のSSIDは先頭に出す(たいていこれを選ぶため)。
+        val cur = currentWifiSsid()
+        val list = (listOfNotNull(cur) + ssids.filter { it != cur }).distinct()
+        if (list.isEmpty()) { Toast.makeText(ctx, "SSIDを取得できませんでした。手入力してください", Toast.LENGTH_LONG).show(); return }
+        AlertDialog.Builder(ctx)
+            .setTitle("接続先SSIDを選択")
+            .setItems(list.toTypedArray()) { _, i -> onPick(list[i]) }
+            .setNegativeButton("やめる", null)
+            .show()
+    }
+
+    // エッジ端末の登録/管理(設定)。名称で手動登録(IPは撮影開始時に自動検索)。オフラインでも登録でき計画で選べる。
     private fun manageEdges() {
         val ctx = this; val d = resources.displayMetrics.density; val pad = (16 * d).toInt()
         val box = LinearLayout(ctx); box.orientation = LinearLayout.VERTICAL; box.setPadding(pad, pad, pad, 0)
         fun rebuild() {
             box.removeAllViews()
-            box.addView(TextView(ctx).apply { text = "登録済みエッジ端末"; setTypeface(null, Typeface.BOLD) })
-            if (edges.isEmpty()) box.addView(TextView(ctx).apply { text = "(なし)"; setPadding(0, (4 * d).toInt(), 0, 0) })
-            edges.toList().forEach { e ->
-                val row = LinearLayout(ctx); row.orientation = LinearLayout.HORIZONTAL; row.gravity = Gravity.CENTER_VERTICAL
-                val sub = if (e.ip.isEmpty()) "" else " (前回 ${e.ip})"
-                row.addView(TextView(ctx).apply { text = e.name + sub; layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f) })
-                row.addView(Button(ctx).apply { text = "削除"; setOnClickListener { edges.remove(e); saveRegisteredEdges(); refreshEdgeSpinner(); rebuild() } })
-                box.addView(row)
-            }
-            box.addView(TextView(ctx).apply { text = "追加(端末名称で登録。IPは撮影開始時に自動検索)"; setTypeface(null, Typeface.BOLD); setPadding(0, (14 * d).toInt(), 0, 0) })
+            // 項目3: 過去に登録したエッジ端末のリストは表示しない(一覧と設定は「エッジ端末設定」に集約)。
+            box.addView(TextView(ctx).apply { text = "追加(端末名称で登録。IPは撮影開始時に自動検索)"; setTypeface(null, Typeface.BOLD) })
             val nameE = EditText(ctx).apply { hint = "端末名称(半角英数字。例: Edje00)" }; applyEdgeNameInput(nameE); box.addView(nameE)
             box.addView(Button(ctx).apply {
                 text = "登録"

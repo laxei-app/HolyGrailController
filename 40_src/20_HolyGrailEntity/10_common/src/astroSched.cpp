@@ -218,7 +218,8 @@ namespace astro
 		// 時刻は ut(double) のみ保持し、必要時に Astronomy_TimeFromDays(ut) で astro_time_t へ復元する。
 		// astro_time_t(約56B)をサンプルごとに持つと小RAM機(StickS3=内蔵のみ)で vector が溢れて
 		// bad_alloc → abort するため。さらに reserve でリアロケーション(倍々=一時ピーク3倍)を避ける。
-		struct Sample { double ut; double h; bool rising; bool inF; };
+		// 項目11: 画角侵入(inFrame)の判定は廃止したので保持しない(帯は太陽高度だけで決める)。
+		struct Sample { double ut; double h; bool rising; };
 		std::vector<Sample> samples;
 		samples.reserve(static_cast<size_t>((tEnd.ut - tStart.ut) / stepDays) + 2);
 		double prevAlt = sunHorizAt(Astronomy_AddDays(tStart, -stepDays), obs).altitude;
@@ -226,8 +227,7 @@ namespace astro
 		{
 			horiz s = sunHorizAt(t, obs);
 			bool rising = (s.altitude - prevAlt) >= 0.0;
-			bool inF = inFrame(s, plan.azimuth, plan.elevation, f);
-			samples.push_back({ t.ut, s.altitude, rising, inF });
+			samples.push_back({ t.ut, s.altitude, rising });
 			prevAlt = s.altitude;
 		}
 
@@ -250,23 +250,23 @@ namespace astro
 				++i;
 				continue;
 			}
-			// 上昇/下降が一定の帯を切り出し、画角侵入の有無で帯全体の種別を決める。
+			// 上昇/下降が一定の帯を切り出し、帯全体の種別を決める。
 			const bool rising = samples[i].rising;
 			const double ta = rising ? twiAltRise : twiAltSet;
 			size_t j = i;
-			bool any = false;
 			while (j < samples.size() && samples[j].rising == rising &&
 			       samples[j].h >= ta && samples[j].h <= sunDirectMaxAlt)
 			{
-				if (samples[j].inF) { any = true; }
 				++j;
 			}
-			// 帯モード(7.3.2): auto=画角侵入で判定 / on=挿入(強制) / off=排除(日中)。
+			// 帯モード(7.3.2): auto=太陽高度の帯をそのまま朝日/夕日とする / on=挿入(強制) / off=排除(日中)。
+			// 【項目11】かつての auto は「太陽が画角に入るか(画角ゲート)」で朝日/夕日か日中かを決めていたが、
+			// 帯はユーザーが挿入/削除できるようになったためゲートを廃止した。これにより、画角の向き次第で
+			// 朝日帯が日中を分断する既知の副作用も解消する(方向/仰角は撮影シミュレーションで確認する)。
 			const hgc::bandMode mode = rising ? plan.sunriseMode : plan.sunsetMode;
 			hgc::ccmType ct;
-			if (mode == hgc::bandMode::off)     { ct = hgc::ccmType::day; }
-			else if (mode == hgc::bandMode::on) { ct = rising ? hgc::ccmType::sunrise : hgc::ccmType::sunset; }
-			else { ct = any ? (rising ? hgc::ccmType::sunrise : hgc::ccmType::sunset) : hgc::ccmType::day; }
+			if (mode == hgc::bandMode::off) { ct = hgc::ccmType::day; }
+			else                            { ct = rising ? hgc::ccmType::sunrise : hgc::ccmType::sunset; }
 			for (size_t k = i; k < j; ++k) { types[k] = ct; }
 			i = j;
 		}

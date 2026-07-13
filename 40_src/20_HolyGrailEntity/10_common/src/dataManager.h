@@ -71,6 +71,9 @@ public:
 	static bool addPlace(const std::string& name);       // 空名可(自動採番)。追加して保存
 	static bool removePlace(const std::string& name);
 	static bool setPlaceAutoInsert(const std::string& name, bool autoInsert);
+	// 項目10: 「撮影計画に自動的に挿入する」場所は全体でただ1つ。全体設定(settings.json の
+	// "autoInsertPlace")に場所の名称を1つだけ保存する。未設定なら空文字。
+	static std::string autoInsertPlaceName(void);
 	// 場所詳細(name/memo/latitude/longitude/altitude/autoInsert)を JSON で更新/新規作成。
 	// origName 一致を置換、無ければ新規追加。改名は json の "name" を新名にする。
 	static bool setPlaceDetailJson(const std::string& origName, const std::string& json);
@@ -105,6 +108,9 @@ public:
 	// 優先的な初期値(型ごとに1つ。settings.json の "preferredCcm")。
 	static std::string preferredCcmName(const std::string& type);
 	static bool        setPreferredCcm(const std::string& type, const std::string& name);
+	// 新規撮影計画に使う撮影制御方法一式(項目14)。型ごとに「優先的な初期値」のプリセットを採用し、
+	// 未指定/不在の型は内蔵初期値(factoryCcmSet)で補う。返り値は ccmSet 相当の JSON。
+	static std::string preferredCcmSetJson(void);
 
 	// --- 撮影計画への機材選択(所持から g_plan へ反映するのは UI/holyGrailEntity 側) ---
 	// 所持カメラ/レンズを名称で引く。見つからなければ false。
