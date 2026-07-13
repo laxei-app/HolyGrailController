@@ -297,13 +297,16 @@ namespace
 			i = j;
 		}
 
-		// 薄明にかからない純夜間の断片(最高高度が低い)はブロックにしない。
+		// 朝日/夕日の「計画ブロック」は、太陽が地平線付近(=実際に朝日/夕日を撮れる高さ)まで
+		// 届く区間だけにする。開始時に既に薄明の途中(例: 20:19で高度-12°の下降)で、そのまま深夜へ
+		// 沈むだけの断片は、夕日撮影にかからないためブロックにしない(項目F: 夕方薄明ボタンの誤表示対策)。
+		// しきい値=市民薄明の上端付近(-6°)。ここより上に届けば地平線近傍の朝日/夕日がある。
 		std::vector<Blk> kept;
 		for (const auto& bk : blks)
 		{
 			if (bk.b <= bk.a) { continue; }
 			double mx = -90.0; for (size_t k = bk.a; k <= bk.b; ++k) { if (sm[k].alt > mx) { mx = sm[k].alt; } }
-			if (mx > -16.0) { kept.push_back(bk); }	// -16°より上に届く=薄明/直接撮影にかかる
+			if (mx > -6.0) { kept.push_back(bk); }	// 地平線近傍(市民薄明以上)に届く=朝日/夕日にかかる
 		}
 
 		std::string out = "[";
@@ -429,7 +432,9 @@ namespace
 		std::snprintf(num, sizeof(num), "%.4f,%.4f", g_plan.place.latitude, g_plan.place.longitude);
 		j += ",\"latlng\":\"" + std::string(num) + "\"";
 		j += ",\"altitude\":" + std::to_string(static_cast<int>(g_plan.place.altitude));
-		j += ",\"camera\":\"" + jesc(g_plan.camera.maker + " " + g_plan.camera.model) + "\"";
+		// 項目C: 計画のカメラ表示はアプリ登録の「名称」(name)に統一する(選択肢と同じ)。
+		//  従来は maker+model("Canon EOS R10")=愛称相当を出していた。name が空なら model へフォールバック。
+		j += ",\"camera\":\"" + jesc(g_plan.camera.name.empty() ? g_plan.camera.model : g_plan.camera.name) + "\"";
 		j += ",\"lens\":\""   + jesc(g_plan.lens.name) + "\"";
 		std::snprintf(num, sizeof(num), "%.1f", g_plan.azimuth);
 		j += ",\"azimuth\":" + std::string(num);

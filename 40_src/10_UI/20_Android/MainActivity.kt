@@ -245,6 +245,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
         refreshEdgeSpinner()
 
         wireListeners()
+
+        // 項目I: Android標準の「戻る」(Pixelの右エッジスワイプや戻るボタン)で、いきなりアプリを
+        //  閉じずに、その画面の戻るボタンと同じ動作(前の画面へ)をする。先頭ページ(撮影計画)でだけ
+        //  従来どおりアプリ終了に委ねる。
+        onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (!goBackOneScreen()) {
+                    isEnabled = false                       // これ以上戻り先が無い → 通常の終了へ委ねる
+                    onBackPressedDispatcher.onBackPressed()
+                    isEnabled = true
+                }
+            }
+        })
+
         restorePlan()    // 保存済み計画があれば復元、無ければ出荷時計画を表示(再生成しない)
         refreshPlanList()   // 複数計画リスト(分割バー上)を構築
         restoreEdgeState()  // 再起動時: エッジが撮影中なら状態を復元(item9)
@@ -381,6 +395,34 @@ class MainActivity : AppCompatActivity(), HgeListener {
         capSchedule = findViewById(R.id.cap_scheduleContainer)
         capStopButton = findViewById(R.id.cap_stopButton)
         planMenu = findViewById(R.id.plan_menu)
+    }
+
+    // 項目I: 現在の画面に応じて「戻る」を実行する。各画面の戻るボタンと同じ動作にする。
+    //  戻り先があれば true、先頭ページ(=これ以上戻れない)なら false を返す。
+    //  ViewFlipper index: 0 撮影計画 / 1 撮影中 / 2 ccmメニュー(未使用) / 3 ccm編集 / 4 月ccm /
+    //   5 メニュー / 6 カメラリスト / 7 カメラ追加 / 8 レンズリスト / 9 レンズ追加 / 10 色 /
+    //   11 露出平滑化 / 12 撮影場所 / 13 カメラ予約表 / 14 操作履歴
+    private fun goBackOneScreen(): Boolean {
+        if (!::flipper.isInitialized) return false
+        when (flipper.displayedChild) {
+            0 -> return false                                            // 撮影計画(先頭)→ アプリ終了に委ねる
+            1 -> { flipper.displayedChild = 0 }                          // 撮影中 → 撮影計画
+            2 -> { flipper.displayedChild = 5; buildGearMenu() }         // ccmメニュー(未使用)→ メニュー
+            3 -> { stopDirtyWatch(); persistCcmEdit(); flipper.displayedChild = if (editingPlanCcm) 0 else 5 }
+            4 -> { stopDirtyWatch(); persistMoonEdit(); flipper.displayedChild = if (editingPlanCcm) 0 else 5 }
+            5 -> { flipper.displayedChild = 0; capturePlanBaseline() }   // メニュー → 撮影計画
+            6 -> leaveCameraList()
+            7 -> leaveCameraAdd(false)
+            8 -> leaveLensList()
+            9 -> leaveLensAdd(false)
+            10 -> leaveColorScreen()
+            11 -> leaveSmoothingScreen()
+            12 -> leavePlacesList()
+            13 -> { flipper.displayedChild = 5; buildGearMenu() }        // カメラ予約表 → メニュー
+            14 -> { flipper.displayedChild = 5; buildGearMenu() }        // 操作履歴 → メニュー
+            else -> { flipper.displayedChild = 0 }
+        }
+        return true
     }
 
     private fun wireListeners() {
@@ -1491,10 +1533,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         for (i in 0 until arr.length()) {
             val cam = arr.optJSONObject(i)?.optJSONObject("camera") ?: continue
             val name = cam.optString("name")
-            val parts = mutableListOf<String>()
-            if (cam.optString("friendly").isNotEmpty()) parts.add("愛称:${cam.optString("friendly")}")
-            if (cam.optString("serial").isNotEmpty()) parts.add("S/N:${cam.optString("serial")}")
-            val sub = if (parts.isEmpty()) cam.optString("maker") else parts.joinToString("  ")
+            // 項目D: 愛称/シリアルは未取得なら「未定義」と出す(SSDPでオンライン取得後に実値が入る)。
+            val fr = cam.optString("friendly").ifEmpty { "未定義" }
+            val sn = cam.optString("serial").ifEmpty { "未定義" }
+            val sub = "愛称:$fr  S/N:$sn"
             box.addView(listRow(name, sub, name == selCamera,
                 onSelect = { selectCamera(name) },
                 menuItems = listOf(
@@ -1538,8 +1580,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.addView(editRow("メーカー", "maker", cam.optString("maker")))
         box.addView(editRow("モデル", "model", cam.optString("model")))
         // 名称はリストの行でインライン編集する(分割バー画面共通の動作)。詳細からは除外。
-        box.addView(editRow("愛称", "friendly", cam.optString("friendly")))
-        box.addView(editRow("シリアルNo.", "serial", cam.optString("serial")))
+        // 項目D: 愛称(FriendlyName)とシリアルNo.は、カメラがオンラインになりSSDPで取得できてから
+        //  自動で入る。手入力はしない(勝手に入れない)。未取得のうちは「未定義」と表示する。
+        box.addView(displayRow("愛称", cam.optString("friendly").ifEmpty { "未定義" }))
+        box.addView(displayRow("シリアルNo.", cam.optString("serial").ifEmpty { "未定義" }))
         box.addView(editRow2("センサーサイズ", "sensorSize", cam.optDouble("sensorSize", 0.0).toString(),
             "sensorSizeV", cam.optDouble("sensorSizeV", 0.0).toString(), "×", "mm", true))
         box.addView(editRow("センサーpixel(横)", "sensorPixel", cam.optInt("sensorPixel", 0).toString(), true))
@@ -1862,6 +1906,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // ラベル＋入力欄1つの行。
+    // 表示専用の行(項目D: 愛称/シリアルなど、SSDP取得で自動的に入る値。手入力させない)。
+    private fun displayRow(label: String, value: String): View {
+        val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL; row.gravity = Gravity.CENTER_VERTICAL
+        row.setPadding(0, dp(3), 0, dp(3))
+        val lab = TextView(this); lab.text = label; lab.textSize = 14f; lab.width = dp(118)
+        val v = TextView(this); v.text = value; v.textSize = 14f
+        v.setTextColor(if (value == "未定義") Color.GRAY else Color.DKGRAY)
+        v.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        row.addView(lab); row.addView(v)
+        return row
+    }
+
     private fun editRow(label: String, key: String, value: String, numeric: Boolean = false): View {
         val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL; row.gravity = Gravity.CENTER_VERTICAL
         row.setPadding(0, dp(3), 0, dp(3))
@@ -2893,18 +2949,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private fun startPlan(id: String) {
-        // 項目17: カメラ予約表で二重使用を確かめる。同じカメラを別の端末が重なる時間で使う予約が
-        // あれば、開始もエッジへの送信も行わない(そのカメラを2台の端末が奪い合うのを防ぐ)。
-        reserveBlockedBy(id)?.let { who ->
+        // 項目A/17: 開始アイコンをタップした瞬間に予約表で二重使用を確かめる。同じカメラを別の計画が
+        // 重なる時間で使うなら、開始も「エッジ端末への送信」も一切行わない(1件目は可・2件目以降は不可)。
+        //  ・一度エッジに計画が入ると端末側で開始できてしまうため、送る前にここで確実に弾く。
+        //  ・カメラ名はアプリに登録した「名称」(camName)を使う。
+        reserveBlockedBy(id)?.let { _ ->
             val cam = try {
                 val arr = JSONArray(HgeNative.nativeListPlans())
                 (0 until arr.length()).asSequence().map { arr.optJSONObject(it) }
                     .firstOrNull { it?.optString("id") == id }
-                    ?.let { it.optString("camModel").ifEmpty { it.optString("camName") } } ?: "カメラ"
+                    ?.let { it.optString("camName").ifEmpty { it.optString("camModel") } } ?: "カメラ"
             } catch (_: Exception) { "カメラ" }
             AlertDialog.Builder(this)
                 .setTitle("開始できません")
-                .setMessage("$cam は $who で使用されています。この計画は開始できません。")
+                .setMessage("$cam は他の計画で使用中なので開始できません。")
                 .setPositiveButton("OK", null)
                 .show()
             return
@@ -3586,7 +3644,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 val o = arr.optJSONObject(i) ?: continue
                 if (o.optString("id") != planId) continue
                 plan = o.optString("name")
-                cam = o.optString("camModel").ifEmpty { o.optString("camName") }
+                cam = o.optString("camName").ifEmpty { o.optString("camModel") }   // 項目B/C: アプリ登録の名称
                 break
             }
             val edge = planEdgeName(planId).ifEmpty { "スマホ" }
@@ -3630,6 +3688,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun openHistory() { buildHistory(); flipper.displayedChild = 14 }
 
+    private val histDateFmt = SimpleDateFormat("yyyy.MM.dd (E)", Locale.JAPAN)
+    private val histTimeFmt = SimpleDateFormat("HH:mm", Locale.JAPAN)
+
     private fun buildHistory() {
         val box = findViewById<LinearLayout>(R.id.history_container)
         box.removeAllViews()
@@ -3638,17 +3699,35 @@ class MainActivity : AppCompatActivity(), HgeListener {
             box.addView(TextView(this).apply { text = "(履歴はありません)"; setTextColor(Color.GRAY) })
             return
         }
+        // 項目B: 日付ごとのブロックにする。日付見出しを1回だけ出し、同じ日付の行は時刻から表示する
+        //  (全行に日付を入れると横が入りきらないため)。行=時刻 / 操作内容 / 計画 / 端末 / カメラ(登録名称)。
+        var curDay = ""
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: continue
+            val d = java.util.Date(o.optLong("t"))
+            val day = histDateFmt.format(d)
+            if (day != curDay) {                       // 日付の見出し
+                curDay = day
+                box.addView(TextView(this).apply {
+                    text = day
+                    setTypeface(null, Typeface.BOLD)
+                    setTextColor(Color.WHITE)
+                    setBackgroundColor(0xFF455A64.toInt())
+                    setPadding(dp(8), dp(6), dp(8), dp(6))
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { setMargins(0, dp(10), 0, dp(2)) }
+                })
+            }
             val line = "%s  %-13s %s  %s  %s".format(
-                histFmt.format(java.util.Date(o.optLong("t"))),
+                histTimeFmt.format(d),                 // 日付ブロック内は時刻のみ
                 o.optString("op"), o.optString("plan"), o.optString("edge"), o.optString("cam"))
             box.addView(TextView(this).apply {
                 text = line
                 textSize = 12f
                 typeface = Typeface.MONOSPACE          // 桁を揃えて読みやすくする
                 setTextColor(Color.DKGRAY)
-                setPadding(dp(4), dp(5), dp(4), dp(5))
+                setPadding(dp(8), dp(5), dp(8), dp(5))
             })
         }
     }

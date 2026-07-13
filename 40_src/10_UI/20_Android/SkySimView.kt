@@ -3,7 +3,7 @@ package app.laxei.holygrail
 // 撮影シミュレーション(§7.3 画面360)。撮影計画ページャの最後のページ。
 //  ・撮影方向(方位磁石)/仰角(カメラ図)を貼り付け、期間スライダーで時刻を動かす。
 //  ・時刻・方向・仰角・レンズ(平面/魚眼)・センサー比から、画角内の恒星/惑星/太陽/月を
-//    ネイティブ(hge_simulateSky)で投影し、下部のセンサー比の領域に描画する。
+//    ネイティブ(hge_simulateSky)で投影し、上部のセンサー比の領域に描画する。
 //  ・平面レンズは端ほど間延び(ノモニック)、魚眼はそのまま(等距離)投影。縦向きは描画も縦。
 
 import android.content.Context
@@ -30,19 +30,21 @@ import kotlin.math.min
 internal data class SkyObj(val x: Float, val y: Float, val mag: Float, val color: Int, val kind: String, val name: String)
 
 // ── センサー比の領域に星空を描画するビュー ───────────────────────────
-// 項目12: 空と地面を描く。
+// 項目12/G: 空と地面を描く。
 //  ・空: 夜は「濃いグレー」(真っ黒にしない=地面と区別する)。薄明で徐々に明るくなり、日中は青空。
 //  ・地面: 草原のイメージ。夜は黒、明るくなるにつれ緑になる。
 //  ・地平線: 仰角と縦画角から画面内の位置を求める(画角外なら地面は出ない)。
-//  ・日付/時刻は画像の下辺に出す(曜日なし)。
 //  ・星の固まり(星座など)の名称も表示する。
+//  ・項目G: 画像枠は常に「横向き(ランドスケープ)のセンサー比」で固定し、縦向き時は枠内へ
+//    レターボックスして描く。これで横向きチェックを外しても枠が拡大しない(=大きくならない)。
+//    日時は画像内に描かず、ページ側の欄外テキストに出す。
 class SkyRenderView(context: Context) : View(context) {
     private var objs: List<SkyObj> = emptyList()
-    private var aspect = 1.5f          // 横/縦
+    private var aspect = 1.5f          // 現在の内容の横/縦(縦向きだと<1)
+    private var boxAspect = 1.5f       // 枠の横/縦(常に横向き=≧1に固定。高さの拡大を防ぐ)
     private var sunAlt = -90.0f        // 太陽高度[°](空/地面の色に使う)
     private var camEl = 10.0f          // 撮影仰角[°]
     private var fovV = 50.0f           // 縦画角[°]
-    private var timeText = ""          // 画像の下辺に出す日付/時刻
     private val magLimit = 6.5f
 
     private val sky = Paint()
@@ -54,26 +56,29 @@ class SkyRenderView(context: Context) : View(context) {
     private val groupLabel = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xDD9FE8FF.toInt(); textSize = sp(12f); textAlign = Paint.Align.CENTER; isFakeBoldText = true
     }
-    private val timeP = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xFFFFFFFF.toInt(); textSize = sp(13f); textAlign = Paint.Align.CENTER; isFakeBoldText = true
-    }
-    private val timeBg = Paint().apply { color = 0x88000000.toInt() }
     private val empty = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF8890A8.toInt(); textAlign = Paint.Align.CENTER; textSize = sp(12f) }
 
     private fun dp(v: Float) = v * resources.displayMetrics.density
     private fun sp(v: Float) = v * resources.displayMetrics.scaledDensity
 
-    internal fun setData(list: List<SkyObj>, asp: Float, sunAltDeg: Float, elDeg: Float, fovVDeg: Float, time: String) {
+    internal fun setData(list: List<SkyObj>, asp: Float, sunAltDeg: Float, elDeg: Float, fovVDeg: Float) {
         objs = list
-        val aspChanged = asp > 0f && kotlin.math.abs(asp - aspect) > 0.001f
-        if (asp > 0f) aspect = asp
-        sunAlt = sunAltDeg; camEl = elDeg; fovV = fovVDeg; timeText = time
-        if (aspChanged) requestLayout()   // 縦横が変わったら高さ(幅/アスペクト)を測り直す
+        var boxChanged = false
+        if (asp > 0f) {
+            aspect = asp
+            // 枠は常に横向きのセンサー比(≧1)。縦向きでも枠サイズは変えない(項目G)。
+            val nb = max(asp, 1f / asp)
+            if (kotlin.math.abs(nb - boxAspect) > 0.001f) { boxAspect = nb; boxChanged = true }
+        }
+        sunAlt = sunAltDeg; camEl = elDeg; fovV = fovVDeg
+        // 時刻/方向/仰角の変更では枠(高さ)は不変なので invalidate だけ=スライド追従が軽い。
+        // カメラ変更などで枠アスペクトが実際に変わった時だけ測り直す。
+        if (boxChanged) requestLayout()
         invalidate()
     }
 
-    // 幅いっぱいにセンサー比の画像を置く(高さは onMeasure で幅/アスペクトに合わせる)。
-    // 上詰めにして、画像の下に操作部(スライダー・方向・仰角)が来るようにする(項目12)。
+    // 枠の中に、現在の内容アスペクト(縦向きなら縦長)を収まるように配置する。
+    //  横向き=枠いっぱい / 縦向き=左右に余白を付けて中央へ(レターボックス)。
     private fun sensorRect(): RectF {
         val pad = dp(6f)
         val w = width - pad * 2; val h = height - pad * 2
@@ -81,14 +86,15 @@ class SkyRenderView(context: Context) : View(context) {
         var rw = w.toFloat(); var rh = rw / aspect
         if (rh > h) { rh = h.toFloat(); rw = rh * aspect }
         val l = pad + (w - rw) / 2f
-        return RectF(l, pad, l + rw, pad + rh)
+        val t = pad + (h - rh) / 2f
+        return RectF(l, t, l + rw, t + rh)
     }
 
-    // 高さは「幅 ÷ アスペクト」。撮影イメージが余白なく画面上部を占めるようにする(項目12)。
+    // 高さは「幅 ÷ 枠アスペクト(横向き固定)」。横向きチェックの切替では枠が変わらない(項目G)。
     override fun onMeasure(widthSpec: Int, heightSpec: Int) {
         val w = MeasureSpec.getSize(widthSpec)
         val pad = dp(6f) * 2
-        val a = if (aspect > 0.1f) aspect else 1.5f
+        val a = if (boxAspect > 0.1f) boxAspect else 1.5f
         val h = ((w - pad) / a + pad).toInt().coerceAtLeast(1)
         setMeasuredDimension(w, h)
     }
@@ -117,8 +123,6 @@ class SkyRenderView(context: Context) : View(context) {
         c.drawRect(r, sky)
 
         // 地面(草原): 夜=黒 → 明るくなると緑。地平線(高度0°)の画面内の位置を仰角と縦画角から求める。
-        //  画面の縦は fovV[°] を写し、中心の高度が仰角 camEl。上を向くほど(camEl が大きいほど)地平線は
-        //  画面の下へ行くので、正規化y(+1=上端 / -1=下端)では -camEl/(fovV/2) になる。
         val halfV = if (fovV > 1f) fovV / 2f else 25f
         val horizonNorm = -camEl / halfV
         if (horizonNorm > -1f) {                              // 地平線が画角内(または上方)なら地面が見える
@@ -164,12 +168,6 @@ class SkyRenderView(context: Context) : View(context) {
         }
         c.restore()
 
-        // 日付/時刻は画像の下辺に(曜日なし)。
-        if (timeText.isNotEmpty()) {
-            val th = sp(18f)
-            c.drawRect(r.left, r.bottom - th, r.right, r.bottom, timeBg)
-            c.drawText(timeText, r.centerX(), r.bottom - sp(5f), timeP)
-        }
         if (objs.isEmpty()) {
             c.drawText("この方向・時刻では画角内に天体がありません", r.centerX(), r.centerY(), empty)
         }
@@ -195,13 +193,15 @@ class SimPage(
     private val onLandscape: (Boolean) -> Unit
 ) : LinearLayout(context) {
 
+    private val titleView = TextView(context)
     private val compass = CompassView(context)
     private val elevationView = ElevationView(context)
     private val landscapeCheck = CheckBox(context)
-    // 時刻スライダー。他画面と同じ Material Slider(大きなつまみ)を使う。
+    // 時刻スライダー。他画面と同じ Material Slider(大きなつまみ=●)を使う。
     private val seek = com.google.android.material.slider.Slider(context)
-    // 項目12: 日付/時刻は画像の下辺に描くので、独立したラベルは廃止した。
     private val render = SkyRenderView(context)
+    // 項目G: 日時は画像内でなく欄外の下に出す(年なし)。
+    private val dateLabel = TextView(context)
 
     // 撮影計画から読んだパラメータ
     private var lat = 0.0; private var lon = 0.0; private var altM = 0.0
@@ -213,34 +213,53 @@ class SimPage(
     private var suppress = false
 
     private val fmt = SimpleDateFormat("yyyy/MM/dd HH:mm:ss", Locale.US)
-    // 項目12: 画像の下辺に出す日付/時刻。曜日は出さない。
-    private val labelFmt = SimpleDateFormat("yyyy/M/d HH:mm", Locale.JAPAN)
+    // 項目G: 欄外に出す日時。年は出さない(月/日 時:分)。
+    private val labelFmt = SimpleDateFormat("M/d HH:mm", Locale.JAPAN)
 
     private fun dp(v: Float) = (v * resources.displayMetrics.density).toInt()
 
     init {
-        // 項目12の並び: 撮影イメージ(上・大きく) → 時刻スライダー → 撮影方向/仰角 → 横向きチェック。
-        // 指で操作している間もイメージが見えるように、操作部はすべてイメージの下に置く。
+        // 項目G の並び: タイトル → 撮影イメージ → 日時(欄外) →〈下部固定〉時刻スライダー → 撮影方向/仰角 → 横向きチェック。
+        // 操作部はイメージの下に置き、イメージが拡大しない(枠固定)ので位置がずれない。
         orientation = VERTICAL
         setPadding(dp(12f), dp(8f), dp(12f), dp(8f))
 
-        // ① 撮影イメージ(画面の上。高さは幅とセンサー比から決まる=余白なく上を占める)
+        // ⓪ タイトル(項目G: 以前は無かった)
+        titleView.text = "撮影シミュレーション"
+        titleView.textSize = 16f
+        titleView.gravity = Gravity.CENTER
+        titleView.setTypeface(titleView.typeface, android.graphics.Typeface.BOLD)
+        titleView.setPadding(0, 0, 0, dp(4f))
+        addView(titleView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        // ① 撮影イメージ(高さは幅と横向きセンサー比から決まる=横向き/縦向きで枠は不変)
         addView(render, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
-        // ② 時刻スライダー(撮影イメージの直下)。他の画面と同じ Material Slider を使う
-        //    (素の SeekBar はつまみが小さく指で掴みにくいため。トラック/つまみの大きさも他画面と揃う)。
+        // ② 日時(欄外の下・年なし)
+        dateLabel.textSize = 13f
+        dateLabel.gravity = Gravity.CENTER
+        dateLabel.setPadding(0, dp(2f), 0, dp(2f))
+        addView(dateLabel, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        // ③ 余白(操作部を画面下部へ寄せる=下部固定位置)
+        addView(View(context), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        // ④ 時刻スライダー(下部固定)。他の画面と同じ Material Slider。値ラベル(数字)は出さない(項目G)。
         seek.valueFrom = 0f
         seek.valueTo = 1000f
         seek.value = (fraction * 1000f).coerceIn(0f, 1000f)
+        seek.labelBehavior = com.google.android.material.slider.LabelFormatter.LABEL_GONE
+        // 項目G: 他画面と同じ ● つまみにする(Material3 既定の縦棒つまみでなく thumb_dot)。
+        try { seek.setCustomThumbDrawable(R.drawable.thumb_dot) } catch (_: Exception) {}
         seek.setPadding(dp(16f), dp(6f), dp(16f), dp(2f))
         seek.addOnChangeListener { _, v, _ ->
             fraction = v / 1000f
-            renderSky()          // 日付/時刻の表示は画像の下辺(renderSky が渡す)
+            renderSky()
         }
         addView(seek, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
-        // ③ 撮影方向 / 仰角(タイトル文字つき)。ドラッグ中もイメージがリアルタイムに追従する。
+        // ⑤ 撮影方向 / 仰角(タイトル文字つき)。ドラッグ中もイメージがリアルタイムに追従する。
         val titles = LinearLayout(context).apply { orientation = HORIZONTAL }
         titles.addView(TextView(context).apply {
             text = "撮影方向"; textSize = 13f; gravity = Gravity.CENTER
@@ -257,13 +276,13 @@ class SimPage(
         dir.addView(elevationView, LinearLayout.LayoutParams(0, dp(140f), 1f))
         addView(dir, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
-        // 指を離した時だけでなく、動かしている最中(onChange)にも描き直す(項目12)。
+        // 指を離した時だけでなく、動かしている最中(onChange)にも描き直す。
         compass.onChange = { a -> az = a.toDouble(); renderSky() }
         compass.onCommit = { a -> az = a.toDouble(); renderSky() }
         elevationView.onChange = { e -> el = e.toDouble(); renderSky() }
         elevationView.onCommit = { e -> el = e.toDouble(); renderSky() }
 
-        // ④ 横向きで撮る(イメージの下へ移動)
+        // ⑥ 横向きで撮る(下部固定)
         landscapeCheck.text = "横向きで撮る(ランドスケープ)"
         landscapeCheck.textSize = 13f
         landscapeCheck.setOnCheckedChangeListener { _, checked ->
@@ -277,8 +296,7 @@ class SimPage(
 
     // 撮影計画(nativeGetPlanJson の JSON)を読み込み、ウィジェット初期化＆描画。
     //  masterLensesJson: マスターレンズ一覧(nativeGetMasterLenses)。起動時にアセットから再コピー
-    //  されるので、lenses_list.json の "fisheye" を編集→ビルドすれば既存計画でも即反映される
-    //  (計画に保存済みの古い値でなく、レンズ名でマスターを引いた fisheye を優先する)。
+    //  されるので、lenses_list.json の "fisheye" を編集→ビルドすれば既存計画でも即反映される。
     fun bind(rawPlanJson: String, masterLensesJson: String = "[]") {
         // マスターの レンズ名→fisheye マップ(真の情報源)。
         val masterFisheye = HashMap<String, Boolean>()
@@ -304,7 +322,6 @@ class SimPage(
                 focal = it.optDouble("focalLength", 50.0)
                 val lensName = it.optString("name", "")
                 // 魚眼判定は マスターの fisheye(ファイル由来・即反映)を最優先。
-                //  マスターに無ければ計画保存値、それも無ければレンズ名でフォールバック。
                 fisheye = masterFisheye[lensName]
                           ?: if (it.has("fisheye")) it.optBoolean("fisheye")
                              else lensName.contains("fisheye", ignoreCase = true)
@@ -324,7 +341,7 @@ class SimPage(
         elevationView.setFov(fv.toFloat())
         seek.value = (fraction * 1000f).coerceIn(seek.valueFrom, seek.valueTo)
         suppress = false
-        renderSky()   // 日付/時刻は画像の下辺に描くので、ここで一緒に更新される
+        renderSky()
     }
 
     // 撮影方向の方位磁石に日の出/日の入・月の出/月の入マーカーを反映(表示JSONから)。
@@ -355,8 +372,8 @@ class SimPage(
         }
     }
 
-    private var renderSeq = 0
-    private fun renderSky() {
+    // 現在のパラメータから、ネイティブ天球シミュレーション用の JSON を組む。
+    private fun buildParams(): String {
         val params = JSONObject()
         params.put("datetime", fmt.format(currentMillis()))
         params.put("offMin", offMin)
@@ -365,19 +382,39 @@ class SimPage(
         params.put("landscape", if (landscape) 1 else 0)
         params.put("fisheye", if (fisheye) 1 else 0)
         params.put("focal", focal); params.put("sensorW", sensorW); params.put("sensorH", sensorH)
-        val s = params.toString()
-        val timeText = labelFmt.format(currentMillis())   // 画像の下辺に出す(曜日なし)
-        val seq = ++renderSeq
+        return params.toString()
+    }
+
+    // 項目H: 単一実行の合体(single-flight coalescing)。
+    //  スライドは高頻度に onChange を撒くが、ネイティブ計算は「常に1件だけ」実行する。
+    //  実行中に来た変更は latestParams に上書き保持し、完了した瞬間に「最新だけ」を再計算する。
+    //  → 途中の計算をキュー溜めせず、指の動きに連続追従する(間引き・離してから表示はしない)。
+    //  日時ラベルは軽いのでメインスレッドで即更新し、数値フィードバックだけは常に即時。
+    private var simBusy = false          // ネイティブ計算が実行中
+    private var simDirty = false         // 実行中に新しい要求が来た(=完了後に再計算する)
+    private var latestParams = ""        // 最新の要求パラメータ
+
+    private fun renderSky() {
+        latestParams = buildParams()
+        dateLabel.text = labelFmt.format(currentMillis())   // 欄外の日時は即時更新(軽い)
+        if (simBusy) { simDirty = true; return }            // 実行中なら最新を保持するだけ
+        kickSim()
+    }
+
+    private fun kickSim() {
+        simBusy = true; simDirty = false
+        val s = latestParams
+        val elNow = el
         exec.execute {
             val res = try { HgeNative.nativeSimulateSky(s) } catch (_: Exception) { "{\"objects\":[]}" }
             val list = ArrayList<SkyObj>()
             var asp = 1.5f
-            var sunAlt = -90f; var elDeg = el.toFloat(); var fovVDeg = 50f
+            var sunAlt = -90f; var elDeg = elNow.toFloat(); var fovVDeg = 50f
             try {
                 val o = JSONObject(res)
                 asp = o.optDouble("aspect", 1.5).toFloat()
                 sunAlt = o.optDouble("sunAlt", -90.0).toFloat()      // 空/地面の色に使う
-                elDeg = o.optDouble("camEl", el).toFloat()
+                elDeg = o.optDouble("camEl", elNow).toFloat()
                 fovVDeg = o.optDouble("fovV", 50.0).toFloat()
                 val arr = o.optJSONArray("objects")
                 if (arr != null) for (i in 0 until arr.length()) {
@@ -387,7 +424,11 @@ class SimPage(
                         e.optDouble("mag", 6.0).toFloat(), col, e.optString("kind", "star"), e.optString("name", "")))
                 }
             } catch (_: Exception) {}
-            post { if (seq == renderSeq) render.setData(list, asp, sunAlt, elDeg, fovVDeg, timeText) }
+            post {
+                render.setData(list, asp, sunAlt, elDeg, fovVDeg)
+                simBusy = false
+                if (simDirty) kickSim()   // 実行中に変更あり → 最新パラメータだけを1回再計算
+            }
         }
     }
 }

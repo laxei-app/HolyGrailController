@@ -772,10 +772,13 @@ void setup(void)
 	g_cv.setPsram(true);
 	g_cv.setColorDepth(16);
 	g_cv.createSprite(320, 240);
-	// M5Canvas(M5GFX)は TFT_eSPI 互換のため swapBytes が既定ON。生のRGB565配列(edgeIcons.h の
-	// ICON_START/CAPTURING/CAMERA_NG)を pushImage するとR/Bが入れ替わり、StickS3(素のLGFX_Sprite=
-	// swapBytes OFF)やスマホと色が変わってしまう。同じ見た目にするため明示的にOFFへ揃える(項目16)。
-	g_cv.setSwapBytes(false);
+	// 項目E: 状態アイコン(edgeIcons.h の ICON_START/CAPTURING/CAMERA_NG)は uint16 のリトルエンディアン
+	// RGB565配列。CoreS3 の M5Canvas(&M5.Display)はスプライトのネイティブ格納順が StickS3 の素の
+	// LGFX_Sprite と逆になり、swapBytes=false のままだと R/B が入れ替わって青系アイコンが赤味に化ける
+	// (前回 false へ揃えたが CoreS3 だけ直らなかった)。CoreS3 は true にして LE配列を正しく展開する。
+	// ※ 影響するのは pushImage する状態アイコンのみ。計画名は1bitモノクロ(drawPixel)、他の塗りは
+	//   color565() でネイティブ生成のため swapBytes は無関係。
+	g_cv.setSwapBytes(true);
 	g_cv.setFont(&fonts::Font2);	// ASCII専用フォント(日本語フォントefontJA_16は撤去。エッジ表示は英語のみ)
 
 	renderSplash();		// 項目8: 起動画面を即表示(以降の初期化中も出したまま。終わったら計画一覧へ)

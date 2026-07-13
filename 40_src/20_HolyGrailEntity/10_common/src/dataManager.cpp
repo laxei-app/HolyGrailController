@@ -580,6 +580,10 @@ bool dataManager::addOwnedCameraFromMaster(const std::string& name)
 	oc.cam = *m;
 	if (oc.cam.model.empty()) { oc.cam.model = m->name; }	// 機種照合の基準
 	oc.cam.name = uniqueOwnedName(oc.cam.name);	// 2台目以降は名称を一意化(リストのキー)
+	// 項目D: 愛称(FriendlyName)とシリアルは勝手に入れない。カメラがオンラインになりSSDPで取得できてから
+	//  設定する(それまでは空=UIでは「未定義」と表示)。マスタに値があっても登録時は空にする。
+	oc.cam.friendly.clear();
+	oc.cam.serial.clear();
 	g_ownedCameras.push_back(std::move(oc));
 	return saveOwnedCameras();
 }
