@@ -3103,6 +3103,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun showNoCameraDialog(id: String) {
         if (stoppingPlans.contains(id)) return      // 中止操作済み(停止確定待ち)は出さない
         if (nocamDialogShown.contains(id)) return   // 既に表示中/継続中は出さない
+        // 項目8: 遠い未来の待機中(撮影窓がまだ先)は ×アイコンだけ出し、「見つかりません」ダイアログは出さない。
+        //  ダイアログは撮影窓が近い/実行中(=実際にカメラが要る局面)でのみ。閾値=窓開始の120秒前。
+        val sMs = planStartMillis(id)
+        if (sMs > 0L && sMs - System.currentTimeMillis() > 120_000L) return
         nocamDialogShown.add(id)
         val cam = planCameraLabel(id)
         val e = planEdge(id)   // null=スマホ直接
@@ -3557,6 +3561,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private val reserveFmt = SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.JAPAN)
     // 計画一覧の start/end は Entity の dtToStr 形式("yyyy-MM-ddTHH:mm:ss"。T区切り)。
     private val planDtFmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.JAPAN)
+
+    // 項目8: 計画の撮影窓開始時刻(ms)。無ければ0。ダイアログ抑止判定に使う。
+    private fun planStartMillis(id: String): Long {
+        return try {
+            val arr = JSONArray(HgeNative.nativeListPlans())
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                if (o.optString("id") == id) return planDtFmt.parse(o.optString("start"))?.time ?: 0L
+            }
+            0L
+        } catch (_: Exception) { 0L }
+    }
 
     // 計画一覧(nativeListPlans)から予約表を作る。終了が過去の計画は除外し、重なりを判定して印を付ける。
     private fun buildReservations(): List<Reservation> {

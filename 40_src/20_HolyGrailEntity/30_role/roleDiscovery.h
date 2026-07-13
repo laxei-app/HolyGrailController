@@ -51,4 +51,10 @@ void presenceStop();
 // 現在のオンラインカメラ一覧 JSON [{serial,model,ip,online}]。エッジ役は "[]"。
 std::string presenceJson();
 
+// 項目8: 計画カメラが現在オンラインか(占有せず=プレゼンス情報のみで判定。CCAPIセッションは張らない)。
+//  戻り値 1=オンライン / 0=オフライン / -1=不明(情報が無い)。
+//  スマホ役=常駐プレゼンスマップ(phonePresence)、エッジ役=既知カメラテーブル(スマホからのC_CAMERA_INFOで更新)。
+//  照合は serial 優先(cam.serial 非空)、無ければ model 一致。撮影開始前の待機区間で カメラ/×アイコンを出すのに使う。
+int cameraPresence(const hgc::camera& cam);
+
 }}  // namespace hge::role

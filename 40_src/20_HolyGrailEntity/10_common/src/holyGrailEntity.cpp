@@ -2280,8 +2280,22 @@ int32_t hge_captureStartPlan(const char* planId_)
 // 10秒後に再試行し続ける(自己修復)。呼び出しスレッドは hge の他APIと同じでよい(軽量・非ブロッキング)。
 int32_t hge_pump(void)
 {
-	if (anySeqActive()) { return ERR_HGC_OK; }	// 起動シーケンスは同時1本(直列化)。終わり次第、次のポンプで続きを起動する
 	long long now = static_cast<long long>(std::time(nullptr));
+	// 項目8: 遅延アーム待ち(=撮影開始要求済みだが窓が遠く、まだ取得スレッドを作っていない)のセッションは、
+	//  カメラの在否をプレゼンス情報で確認して WAITING(カメラ点灯)/NOCAMERA(×点灯)を切り替える。
+	//  role::cameraPresence は占有しない(CCAPIセッションを張らない)。不明(-1)は待機のまま(×を出さない)。
+	//  取得フェーズ(runner稼働)に入った後は runner が状態を管理するので、ここでは deferred のものだけ触る。
+	for (auto& up : g_sessions)
+	{
+		captureSession* s = up.get();
+		if (!s->deferred.load() || s->cancel.load()) { continue; }
+		int st = s->state.load();
+		if (st != HGE_ST_WAITING && st != HGE_ST_NOCAMERA) { continue; }
+		int pres = hge::role::cameraPresence(s->plan.camera);
+		int want = (pres == 0) ? HGE_ST_NOCAMERA : HGE_ST_WAITING;	// 0=オフライン→×, 1/-1(オンライン/不明)=待機点灯
+		if (st != want) { s->state = want; notifyStateP(s->planId, want); refreshAggregateState(); }
+	}
+	if (anySeqActive()) { return ERR_HGC_OK; }	// 起動シーケンスは同時1本(直列化)。終わり次第、次のポンプで続きを起動する
 	for (size_t i = 0; i < g_sessions.size(); ++i)
 	{
 		captureSession* s = g_sessions[i].get();

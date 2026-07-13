@@ -208,9 +208,26 @@ void loadPersisted()
 	} catch (const std::exception&) { /* 壊れていれば無視(次回の接続成功で上書き保存される) */ }
 }
 
-// スマホ役の常駐プレゼンスマップ(§5.4)はエッジには不要。no-op。
+// スマホ役の常駐プレゼンスマップ(§5.4)はエッジには不要(自前の探索は撮影干渉回避のため持たない)。no-op。
 void presenceStart(std::function<void()> /*onChange*/) {}
 void presenceStop() {}
 std::string presenceJson() { return "[]"; }
+
+// 項目8: 既知カメラテーブル(スマホからのC_CAMERA_INFOで online が更新される)から在否を判定。
+//  1=オンライン/0=オフライン/-1=不明。スマホ未接続で情報が無ければ不明(×を出さない)。
+int cameraPresence(const hgc::camera& cam)
+{
+	if (g_knownCams.empty()) { return -1; }		// スマホからの情報がまだ無い=不明(×を出さない)
+	if (!cam.serial.empty())
+	{
+		for (const auto& k : g_knownCams) { if (k.serial == cam.serial) { return k.online ? 1 : 0; } }
+		// serial 未知 → モデル照合へフォールバック。
+	}
+	for (const auto& k : g_knownCams)
+	{
+		if (k.online && knownModelMatch(k.model, cam)) { return 1; }
+	}
+	return 0;	// 情報はあるがオンライン一致が無い=オフライン(×)
+}
 
 }}	// namespace hge::role
