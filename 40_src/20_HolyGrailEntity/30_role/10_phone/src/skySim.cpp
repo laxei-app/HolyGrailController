@@ -14,6 +14,7 @@
 #include <json/nlohmann/json.hpp>
 #include <vector>
 #include <string>
+#include <map>
 #include <mutex>
 #include <cmath>
 #include <cstring>
@@ -25,7 +26,8 @@ namespace {
 	constexpr double PI  = 3.14159265358979323846;
 	constexpr double RAD = PI / 180.0;
 
-	struct SimStar { std::string name; double ra; double dec; double mag; std::string color; };
+	// group = 星の固まり(星座など)の名称。空=単独の星。撮影イメージに固まりの名前を出すのに使う。
+	struct SimStar { std::string name; double ra; double dec; double mag; std::string color; std::string group; };
 	std::vector<SimStar> g_stars;
 	std::mutex           g_starMtx;
 
@@ -76,24 +78,45 @@ namespace {
 
 extern "C" {
 
-// fixed_star.json 配列 [{name,ra,dec,mag,color_code,...}] を読み込む。戻り=星数、負=エラー。
+// fixed_star.json を読み込む。戻り=星数、負=エラー。
+// 新レイアウト(項目12):
+//   { "star_groups":[ {"group_name","description","stars":[{name,ra,dec,mag,color_code,bv_index},...]}, ... ],
+//     "individual_stars":[ {name,ra,dec,mag,color_code,bv_index}, ... ] }
+// 星の固まり(星座など)に属する星は group を持ち、撮影イメージに固まりの名称を出せるようにする。
+// 旧レイアウト(配列 [{name,ra,dec,mag,color_code}])も読めるようにしておく(将来オンラインで
+// ファイルを差し替えられる仕様のため、古いファイルが来ても落ちないようにする)。
 int32_t hge_simLoadStars(const char* starsJson) {
 	if (starsJson == nullptr) { return ERR_HGC_INVALID_ARG; }
 	try {
 		json j = json::parse(starsJson);
 		std::lock_guard<std::mutex> lk(g_starMtx);
 		g_stars.clear();
-		if (j.is_array()) {
-			g_stars.reserve(j.size());
-			for (auto& e : j) {
-				SimStar s;
-				s.name  = e.value("name", std::string());
-				s.ra    = e.value("ra", 0.0);
-				s.dec   = e.value("dec", 0.0);
-				s.mag   = e.value("mag", 99.0);
-				s.color = e.value("color_code", std::string("#FFFFFF"));
-				g_stars.push_back(std::move(s));
+
+		auto addStar = [&](const json& e, const std::string& group) {
+			SimStar s;
+			s.name  = e.value("name", std::string());
+			s.ra    = e.value("ra", 0.0);
+			s.dec   = e.value("dec", 0.0);
+			s.mag   = e.value("mag", 99.0);
+			s.color = e.value("color_code", std::string("#FFFFFF"));
+			s.group = group;
+			g_stars.push_back(std::move(s));
+		};
+
+		if (j.is_object()) {
+			if (j.contains("star_groups") && j["star_groups"].is_array()) {
+				for (const auto& g : j["star_groups"]) {
+					const std::string gname = g.value("group_name", std::string());
+					if (!g.contains("stars") || !g["stars"].is_array()) { continue; }
+					for (const auto& e : g["stars"]) { addStar(e, gname); }
+				}
 			}
+			if (j.contains("individual_stars") && j["individual_stars"].is_array()) {
+				for (const auto& e : j["individual_stars"]) { addStar(e, std::string()); }
+			}
+		} else if (j.is_array()) {			// 旧レイアウト(単純な星の配列)
+			g_stars.reserve(j.size());
+			for (const auto& e : j) { addStar(e, std::string()); }
 		}
 		return static_cast<int32_t>(g_stars.size());
 	} catch (...) { return ERR_HGC_JSON_PARSE; }
@@ -144,17 +167,32 @@ int32_t hge_simulateSky(const char* paramsJson, char* buf, int32_t* inoutLen) {
 		json objs = json::array();
 
 		// 恒星(赤経[時]/赤緯[度]をそのまま地平座標へ)
+		// 併せて、画角に入った「星の固まり」ごとに重心を取り、固まりの名称を出す(項目12)。
+		std::map<std::string, std::pair<int, std::pair<double, double>>> groupAcc;	// 群名 → (個数, (Σx, Σy))
 		{
 			std::lock_guard<std::mutex> lk(g_starMtx);
 			for (auto& st : g_stars) {
 				if (st.mag > magLimit) { continue; }
 				astro_horizon_t hz = Astronomy_Horizon(&t, obs, st.ra, st.dec, REFRACTION_NORMAL);
+				if (hz.altitude < 0.0) { continue; }	// 地平線の下(地面に隠れて見えない)
 				double nx, ny;
 				if (project(hz.azimuth, hz.altitude, camAz, camEl, fovW, fovH, fisheye, nx, ny)) {
 					objs.push_back({ {"name", st.name}, {"x", nx}, {"y", ny},
 					                 {"mag", st.mag}, {"color", st.color}, {"kind", "star"} });
+					if (!st.group.empty()) {
+						auto& a = groupAcc[st.group];
+						a.first += 1; a.second.first += nx; a.second.second += ny;
+					}
 				}
 			}
+		}
+		// 星の固まりの名称(重心に置く)。2つ以上の星が画角に入っている固まりだけを出す。
+		for (const auto& g : groupAcc) {
+			if (g.second.first < 2) { continue; }
+			double cx = g.second.second.first / g.second.first;
+			double cy = g.second.second.second / g.second.first;
+			objs.push_back({ {"name", g.first}, {"x", cx}, {"y", cy},
+			                 {"mag", 0.0}, {"color", "#9FE8FF"}, {"kind", "group"} });
 		}
 
 		// 太陽・月・惑星
@@ -172,6 +210,7 @@ int32_t hge_simulateSky(const char* paramsJson, char* buf, int32_t* inoutLen) {
 			astro_equatorial_t eq = Astronomy_Equator(bd.body, &t, obs, EQUATOR_OF_DATE, ABERRATION);
 			if (eq.status != ASTRO_SUCCESS) { continue; }
 			astro_horizon_t hz = Astronomy_Horizon(&t, obs, eq.ra, eq.dec, REFRACTION_NORMAL);
+			if (hz.altitude < 0.0) { continue; }	// 地平線の下(地面に隠れて見えない)
 			double nx, ny;
 			if (project(hz.azimuth, hz.altitude, camAz, camEl, fovW, fovH, fisheye, nx, ny)) {
 				double mag = 99.0;
@@ -182,11 +221,25 @@ int32_t hge_simulateSky(const char* paramsJson, char* buf, int32_t* inoutLen) {
 			}
 		}
 
+		// 空と地面の色を決めるための太陽高度[°](項目12)。画角の外でも必要なので別に計算する。
+		//  日中=青空 / 薄明で徐々に暗く / 夜=濃いグレー、地面は夜=黒→明るくなると草原の緑。
+		double sunAltDeg = -90.0;
+		{
+			astro_equatorial_t eq = Astronomy_Equator(BODY_SUN, &t, obs, EQUATOR_OF_DATE, ABERRATION);
+			if (eq.status == ASTRO_SUCCESS) {
+				astro_horizon_t hz = Astronomy_Horizon(&t, obs, eq.ra, eq.dec, REFRACTION_NORMAL);
+				sunAltDeg = hz.altitude;
+			}
+		}
+
 		json out;
 		out["objects"]   = objs;
 		out["aspect"]    = fw / (fh > 0.0 ? fh : 1.0);
 		out["landscape"] = landscape ? 1 : 0;
 		out["fisheye"]   = fisheye ? 1 : 0;
+		out["sunAlt"]    = sunAltDeg;	// 空/地面の色に使う
+		out["camEl"]     = camEl;		// 地平線の位置(仰角と縦画角から求める)
+		out["fovV"]      = fovH * 180.0 / PI;	// 縦画角[°]
 		outStr = out.dump();
 	} catch (...) { outStr = "{\"objects\":[]}"; }
 

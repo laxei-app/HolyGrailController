@@ -30,6 +30,8 @@ class CompassView @JvmOverloads constructor(context: Context, attrs: AttributeSe
     private var moonriseAz = Float.NaN
     private var moonsetAz = Float.NaN
     var onCommit: ((Float) -> Unit)? = null
+    // 項目12: ドラッグ中(指を離す前)も呼ばれる。撮影シミュレーションのリアルタイム追従に使う。
+    var onChange: ((Float) -> Unit)? = null
 
     private var cx = 0f; private var cy = 0f; private var rad = 0f
 
@@ -111,7 +113,9 @@ class CompassView @JvmOverloads constructor(context: Context, attrs: AttributeSe
                 parent?.requestDisallowInterceptTouchEvent(true)
                 val dx = e.x - cx; val dy = e.y - cy
                 azimuth = norm(Math.toDegrees(atan2(dx.toDouble(), -dy.toDouble())).toFloat())
-                invalidate(); return true
+                invalidate()
+                onChange?.invoke(azimuth)   // 項目12: ドラッグ中もリアルタイムに反映する
+                return true
             }
             MotionEvent.ACTION_UP -> { onCommit?.invoke(azimuth); return true }
         }
@@ -127,6 +131,8 @@ class ElevationView @JvmOverloads constructor(context: Context, attrs: Attribute
         private set
     private var fovV = 50f
     var onCommit: ((Float) -> Unit)? = null
+    // 項目12: ドラッグ中(指を離す前)も呼ばれる。撮影シミュレーションのリアルタイム追従に使う。
+    var onChange: ((Float) -> Unit)? = null
 
     private var cx = 0f; private var cy = 0f; private var rad = 0f
 
@@ -195,6 +201,7 @@ class ElevationView @JvmOverloads constructor(context: Context, attrs: Attribute
                     while (d < -180f) d += 360f
                     angle = clamp(angle - d)   // 仰角 = -(画面ポインティング角)
                     invalidate()
+                    onChange?.invoke(angle)    // 項目12: ドラッグ中もリアルタイムに反映する
                 }
                 prevAng = cur
                 return true
