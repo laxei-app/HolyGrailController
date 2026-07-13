@@ -2186,6 +2186,30 @@ int32_t hge_getSessionsJson(char* buf, int32_t* inoutLen)
 	return ERR_HGC_OK;
 }
 
+// 項目6: エッジが保有する全撮影計画の id 一覧(=保有ロスター)を返す。スマホはこれを見て
+//  「スマホ側でエッジ担当にしたのにエッジに無い計画」=エッジ側で削除された、と検知しロック解除する。
+//  走行中に限らずファイルとして保持する全計画が対象(hge_getSessionsJson は走行中のみ)。
+int32_t hge_getHeldPlansJson(char* buf, int32_t* inoutLen)
+{
+	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
+	constexpr size_t kMaxIds = 32;	// UDP応答に収める上限。id~15B×32 で ~600B。エッジ保有数は通常数件。
+	std::string s = "[";
+	size_t n = 0;
+	for (const std::string& id : dataManager::listPlanIds())
+	{
+		if (n >= kMaxIds) { break; }
+		if (n > 0) { s += ","; }
+		s += "\"" + jesc(id) + "\"";
+		++n;
+	}
+	s += "]";
+	int32_t need = static_cast<int32_t>(s.size()) + 1;
+	if (buf == nullptr || *inoutLen < need) { *inoutLen = need; return ERR_HGC_BUF_SHORT; }
+	std::memcpy(buf, s.c_str(), need);
+	*inoutLen = need;
+	return ERR_HGC_OK;
+}
+
 // 計画id指定で撮影開始(並行撮影。planId 空=編集対象 g_editId)。
 int32_t hge_captureStartPlan(const char* planId_)
 {

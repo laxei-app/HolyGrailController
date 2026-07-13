@@ -31,7 +31,8 @@ namespace etp
 		C_RESEARCH = 9,	// 継続(カメラ未検出時の即再探索)。data=計画id(空=全取得フェーズ)。スマホ→エッジ
 		C_CAMERA_INFO = 10,	// オンラインカメラ情報の通知。data=JSON配列[{serial,model,ip,online}]。既知IPテーブル更新。スマホ→エッジ
 		C_LOG_LIST = 11,	// ログファイル名一覧の取得。応答 data=JSON配列["hg_YYYY-MM-DD.log",...]。スマホ→エッジ(M_GET)
-		C_LOG_READ = 12	// ログファイルの部分読み出し。data="name\t<offset>"。応答 data=生バイト(<要求長で末尾)。スマホ→エッジ(M_GET)
+		C_LOG_READ = 12,	// ログファイルの部分読み出し。data="name\t<offset>"。応答 data=生バイト(<要求長で末尾)。スマホ→エッジ(M_GET)
+		C_DELETE_PLAN = 13	// 項目6: 計画の削除(撮影中なら停止してから)。data=計画id。スマホ→エッジ。スマホで停止した計画をエッジからも消す用
 
 	};
 

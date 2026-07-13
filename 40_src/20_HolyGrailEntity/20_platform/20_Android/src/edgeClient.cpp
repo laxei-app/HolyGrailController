@@ -311,6 +311,24 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeStop(JNIEnv* env, jobject, jstring 
 	return (m == etp::M_ACK) ? 0 : -2;
 }
 
+// 項目6: エッジ端末から計画を削除する(C_DELETE_PLAN)。スマホで停止した計画をエッジからも消す用。
+//  エッジは撮影中なら停止してから削除する(項目9)。
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeEdgeDeletePlan(JNIEnv* env, jobject, jstring host_, jint port, jstring planId_)
+{
+	const char* host = env->GetStringUTFChars(host_, nullptr);
+	const char* pid  = planId_ ? env->GetStringUTFChars(planId_, nullptr) : nullptr;
+	std::string hostS = host ? host : "";
+	std::string pidS  = pid ? pid : "";
+	env->ReleaseStringUTFChars(host_, host);
+	if (pid) { env->ReleaseStringUTFChars(planId_, pid); }
+
+	std::lock_guard<std::mutex> lk(g_connMtx);
+	std::string rd;
+	int m = firstReq(hostS, port, etp::C_DELETE_PLAN, etp::M_POST, pidS, rd);
+	return (m == etp::M_ACK) ? 0 : -2;
+}
+
 // エッジ端末へ時刻同期(C_TIME)だけを能動的に送る。撮影開始と無関係に定期同期する用
 // (RTC無し機=StickS3が電波悪い所でもスマホが近くにあれば時計を保てるように)。
 JNIEXPORT jint JNICALL

@@ -265,6 +265,11 @@ int32_t hge_getProgressJsonFor(const char* planId, char* buf, int32_t* inoutLen)
 // エッジ側ローカル開始/自動再開を検出して表示へ反映するために使う。
 int32_t hge_getSessionsJson(char* buf, int32_t* inoutLen);
 
+// 項目6: エッジが保有する全撮影計画の id 一覧 JSON 配列 ["id1","id2",...](最大32件)。
+// エッジ端末が C_SEARCH 応答(edgeInfo)の "heldPlans" に載せる。スマホはこれと自分の
+// エッジ担当割り当てを突き合わせ、エッジ側で削除された計画のロックを解除する。
+int32_t hge_getHeldPlansJson(char* buf, int32_t* inoutLen);
+
 // --- 撮影実行 ---
 int32_t hge_captureStart(void);		// 撮影開始(非同期。編集対象計画)。進捗は HGE_EV_PROGRESS
 int32_t hge_captureStop(void);		// 撮影停止(編集対象計画)

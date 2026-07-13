@@ -23,6 +23,7 @@ using json = nlohmann::json;
 extern void edgeSetNameBitmap(const std::string& id, const uint8_t* data, int len);
 // スマホから受信した計画 id を登録する(これだけリスト表示する。実体は main.cpp)。
 extern void edgeAddReceivedPlan(const std::string& id);
+extern void edgeRemoveReceivedPlan(const std::string& id);	// 項目6: C_DELETE_PLAN で計画をエッジから削除(撮影中は停止してから)
 
 namespace
 {
@@ -129,6 +130,17 @@ namespace
 				if (!s.is_discarded()) { j["sessions"] = s; }
 			}
 		}
+		// 項目6: 保有計画ロスター(走行中に限らずエッジが持つ全計画id)。スマホは自分のエッジ担当割り当てと
+		//  突き合わせ、ここに無い=エッジ側で削除された計画のロックを解除する。
+		{
+			char hb[768];
+			int32_t hl = sizeof(hb);
+			if (hge_getHeldPlansJson(hb, &hl) == ERR_HGC_OK)
+			{
+				json h = json::parse(hb, nullptr, false);
+				if (!h.is_discarded()) { j["heldPlans"] = h; }
+			}
+		}
 		return j.dump();
 	}
 
@@ -180,6 +192,13 @@ namespace
 		case etp::C_STOP:
 			if (!pk.data.empty()) { hge_captureStopPlan(pk.data.c_str()); }
 			else                  { hge_captureStop(); }
+			break;
+		case etp::C_DELETE_PLAN:	// 項目6: スマホで停止した計画をエッジからも削除(撮影中なら停止してから消す=項目9)
+			if (!pk.data.empty())
+			{
+				DBGLN(col::YEL, "etpEdge: DELETE_PLAN planId='%s'", pk.data.c_str());
+				edgeRemoveReceivedPlan(pk.data);	// g_recvPlans/計画ファイル/名前ビットマップ削除 + hge_deletePlan で走行中セッション停止
+			}
 			break;
 		case etp::C_RESEARCH:	// 継続: カメラ未検出時の即再探索(取得フェーズの60秒待ちを前倒し)
 			hge_pokeAcquire(pk.data.empty() ? nullptr : pk.data.c_str());

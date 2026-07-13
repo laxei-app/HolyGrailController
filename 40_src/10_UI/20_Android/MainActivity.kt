@@ -114,6 +114,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private val stoppingPlans = mutableSetOf<String>()   // 「中止」操作済みで停止(IDLE)確定待ちの計画 id。確定までNOCAMERAダイアログを抑止し無限再表示を防ぐ
     private val startingPlans = mutableSetOf<String>()   // 開始操作中(タップ〜開始要求の結果確定まで)の計画 id。この間のポーリングIDLE(=まだ届いていないだけ)で
                                                           // 集合から外して“開始前アイコン+ポーリング対象外”に落ちるレースを防ぐ(2台順次開始は直列化で到達が遅れる)
+    // 項目6: エッジが実際に保有(ロスターに存在)する計画。エッジ名→保有計画id集合。応答したエッジの分だけ
+    //  更新し、未応答/オフラインのエッジ分は前回値を保持(スイープ取りこぼしでロックが揺れないように)。
+    //  ロック判定はこれ(=エッジが持っている)＋開始操作の過渡(下 isPlanOnEdge)で行う。エッジ選択(スピナー=
+    //  pe_ 割り当て)だけでは「保有」にはならないので、選んだだけの未開始計画はロックしない。
+    private val edgeHeldByEdge = HashMap<String, MutableSet<String>>()
+    // この計画は「エッジに送信済み(=どこかのエッジが保有)」か。ロック(編集/削除不可)の判定に使う。
+    //  開始操作の過渡(startingPlans)や実行中集合も、ロスター反映前の一瞬をロックするため含める。
+    private fun isPlanOnEdge(id: String): Boolean =
+        edgeHeldByEdge.values.any { it.contains(id) } ||
+        startingPlans.contains(id) || capturingPlans.contains(id) ||
+        waitingPlans.contains(id) || disconnectedPlans.contains(id)
     private val schedulePages = mutableListOf<ScheduleView>()   // §7.3.2 薄明ページの ScheduleView(読取専用切替に使う)
     private val twilightPages = mutableListOf<View>()           // 薄明ページのラッパ(計画名ヘッダ+ScheduleView)。ページャ追加/削除用
     private var simPage: SimPage? = null                        // 撮影シミュレーション(§7.3 画面360)。ページャ最終ページ(永続1インスタンス)
@@ -448,13 +459,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 他計画の選択でも保存される(他画面と同じ自動保存)。
         handler.postDelayed(planDirtyWatch, 800)                     // 「変更の取り消し」ボタンの dirty 監視開始
         capStopButton.setOnClickListener {
-            val e = selectedEdge()
-            if (e == null) {
-                HgeNative.nativeCaptureStop()
-                flipper.displayedChild = 0
-            } else {
-                stopOnEdge(e, currentPlanId)
-            }
+            // 項目6c: スマホからの停止は、エッジ担当なら停止に加えてエッジからも削除しロック解除する。
+            stopPlanFromPhone(currentPlanId)
+            flipper.displayedChild = 0
         }
         edgeSearchButton.setOnClickListener {
             Thread {
@@ -2951,10 +2958,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         row.addView(tv)
         // ⋮ コンテキストメニュー(他画面=撮影場所/撮影制御方法リストと同じ緑ピル。項目5)
-        row.addView(ctxMenuButton(listOf(
-            "コピーを追加" to { copyPlanRow(id) },
-            "削除" to { confirmDeletePlan(id, name) },
-            "過去の計画削除" to { confirmDeletePastPlans() })))   // 項目6: 終了日が過去の計画を一括削除
+        //  項目6: エッジ端末に送信済み(=どこかのエッジが保有)の計画は削除できない → 「削除」項目を出さない。
+        //  スマホで停止すればエッジからも消え、ロックが解けて再び削除可能になる。
+        val onEdge = isPlanOnEdge(id)
+        val menu = mutableListOf<Pair<String, () -> Unit>>("コピーを追加" to { copyPlanRow(id) })
+        if (!onEdge) menu.add("削除" to { confirmDeletePlan(id, name) })
+        menu.add("過去の計画削除" to { confirmDeletePastPlans() })   // 終了日が過去の計画を一括削除(エッジ保有分は対象外)
+        row.addView(ctxMenuButton(menu))
         return row
     }
 
@@ -3111,12 +3121,32 @@ class MainActivity : AppCompatActivity(), HgeListener {
             }
             .setNegativeButton("中止") { d, _ ->
                 d.dismiss(); nocamDialogs.remove(id)
-                val e2 = planEdge(id)
-                beginStop(id) { if (e2 == null) HgeNative.nativeCaptureStopPlan(id) else HgeNative.nativeEdgeStop(e2.ip, e2.port, id) }
+                stopPlanFromPhone(id)   // 項目6c: 停止+エッジ削除+ロック解除
             }
             .create()
         nocamDialogs[id] = dlg
         dlg.show()
+    }
+
+    // 項目6c: スマホから撮影を停止する。エッジ担当の計画は停止に加えてエッジからも削除し(=C_DELETE_PLAN)、
+    //  エッジ担当(ロック)を解除する。これでスマホ側は再び編集/削除できる(計画はスマホに残る)。
+    //  ※エッジ本体で停止した場合はエッジが計画を保持し続ける(再開可能)ので、この経路は通らない。
+    private fun stopPlanFromPhone(id: String) {
+        val e = planEdge(id)   // この計画のエッジ(無ければスマホ直接)
+        beginStop(id) {
+            if (e == null) {
+                HgeNative.nativeCaptureStopPlan(id)
+            } else {
+                HgeNative.nativeEdgeStop(e.ip, e.port, id)          // まず停止
+                HgeNative.nativeEdgeDeletePlan(e.ip, e.port, id)    // エッジからも削除(撮影中なら停止してから)
+            }
+        }
+        if (e != null) {
+            // エッジから消えたので保有台帳からも即座に外す=即時ロック解除(スマホの計画は残る)。担当割り当ても外す。
+            // 削除失敗で実際にはまだ走行中なら、次スイープでロスター/実行中集合に再出現し再ロックされる(自己修復)。
+            edgeHeldByEdge[e.name]?.remove(id)
+            setPlanEdgeName(id, ""); refreshPlanList(); updateReadOnly()
+        }
     }
 
     private fun confirmStop(id: String) {
@@ -3126,9 +3156,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .setMessage("撮影を中止しますか？")
             .setPositiveButton("中止する") { dlg, _ ->
                 dlg.dismiss()   // 中止選択で即ダイアログを閉じる(停止処理の完了は待たない。指示4)
-                val e = planEdge(id)   // この計画のエッジ(無ければスマホ)
-                // 停止確定(IDLE)まで抑止しつつ非同期停止(NOCAMERAダイアログの無限再表示も防ぐ)。
-                beginStop(id) { if (e == null) HgeNative.nativeCaptureStopPlan(id) else HgeNative.nativeEdgeStop(e.ip, e.port, id) }
+                stopPlanFromPhone(id)   // 項目6c: 停止+エッジ削除+ロック解除
             }
             .setNegativeButton("続ける", null)
             .show()
@@ -3157,6 +3185,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 if (o.optBoolean("capturable", true)) continue   // 終了が未来の計画は残す
                 if (capturingPlans.contains(id) || waitingPlans.contains(id) || disconnectedPlans.contains(id) ||
                     startingPlans.contains(id) || stoppingPlans.contains(id)) continue   // 念のため動作中は残す
+                if (isPlanOnEdge(id)) continue   // 項目6: エッジ保有(送信済み)の計画は一括削除の対象外
                 past.add(id to o.optString("name"))
             }
         } catch (_: Exception) {}
@@ -4403,7 +4432,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // 撮影要求済(撮影中/待機/未検出)の計画を表示しているときは一切編集できない(item7)。各操作部の有効/無効を切替。
     private fun updateReadOnly() {
-        planReadOnly = capturingPlans.contains(currentPlanId) || waitingPlans.contains(currentPlanId) || disconnectedPlans.contains(currentPlanId)
+        // 項目6: 撮影中/待機/未検出に加え、エッジ端末に送信済み(=どこかのエッジがロスターに保有)の計画も
+        //  編集不可。エッジで停止して保持中(再開可能)の間もエッジが持ち主なので変更させない。スマホで停止すれば
+        //  エッジから消え、ロックが解けて再び編集できる。※エッジ選択(スピナー)しただけの未開始計画はロックしない。
+        planReadOnly = isPlanOnEdge(currentPlanId)
         val ed = !planReadOnly
         // plan_resetButton(=変更の取り消し)は planDirtyWatch が有効/無効を管理(撮影中は自動で無効)。
         intArrayOf(R.id.plan_startDate, R.id.plan_startTime, R.id.plan_endDate, R.id.plan_endTime,
@@ -4816,8 +4848,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
             updateEdgeApBinding()   // エッジSoftAP接続中はそのNICへバインド維持(Androidの自動離脱を防ぐ)
             Thread {
                 val js = try { HgeNative.nativeEdgeSearch(2000) } catch (_: Exception) { "[]" }
-                // name → (edge, sessionsフィールド有無, sessions{planId→state})
-                data class Found(val edge: Edge, val hasSessions: Boolean, val sessions: Map<String, Int>)
+                // name → (edge, sessionsフィールド有無, sessions{planId→state}, heldPlansフィールド有無, 保有ロスター)
+                data class Found(val edge: Edge, val hasSessions: Boolean, val sessions: Map<String, Int>,
+                                 val hasHeld: Boolean, val heldPlans: Set<String>)
                 val found = HashMap<String, Found>()
                 try {
                     val arr = JSONArray(js)
@@ -4833,7 +4866,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
                                 val id = so.optString("id"); if (id.isNotEmpty()) sess[id] = so.optInt("state")
                             }
                         }
-                        found[nm] = Found(Edge(nm, o.optString("ip"), o.optInt("port", 50506)), has, sess)
+                        // 項目6: 保有計画ロスター(新FW)。エッジが持つ全計画id。無い=旧FW→ロック解除同期はしない。
+                        val held = HashSet<String>()
+                        val hasHeld = o.has("heldPlans")
+                        if (hasHeld) {
+                            val ha = o.optJSONArray("heldPlans") ?: JSONArray()
+                            for (k in 0 until ha.length()) { ha.optString(k)?.takeIf { it.isNotEmpty() }?.let { held.add(it) } }
+                        }
+                        found[nm] = Found(Edge(nm, o.optString("ip"), o.optInt("port", 50506)), has, sess, hasHeld, held)
                     }
                 } catch (_: Exception) {}
                 // UDP無応答の登録エッジ: 連続2回でTCP生存確認(取りこぼし救済)→それも不応答ならオフライン。
@@ -4854,6 +4894,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         if (edgeOnline[nm] != true) { edgeOnline[nm] = true; uiDirty = true }
                         updateEdgeIp(nm, f.edge.ip, f.edge.port)   // DHCPのIP変動を常時追従
                         if (f.hasSessions) reconcileEdgeSessions(f.edge, f.sessions)
+                        if (f.hasHeld) reconcileEdgeRoster(f.edge, f.heldPlans)   // 項目6: エッジ側削除の検知→ロック解除
                     }
                     for (nm in tcpOnline) { edgeMiss[nm] = 0; if (edgeOnline[nm] != true) { edgeOnline[nm] = true; uiDirty = true } }
                     for (nm in offline)   { if (edgeOnline[nm] != false) { edgeOnline[nm] = false; uiDirty = true } }
@@ -4861,6 +4902,23 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 }
             }.start()
             handler.postDelayed(this, 30000)   // 30秒ごと(常時)
+        }
+    }
+
+    // 項目6: エッジが応答したロスター(保有計画id)を、そのエッジの保有集合として記録する。UIスレッドから呼ぶ。
+    //  ・ロック判定(isPlanOnEdge)はこの保有集合を見る。エッジがある計画を保有=編集/削除不可。
+    //  ・エッジ側で計画を削除すると次スイープのロスターから消える→保有集合から外れ→自動でロック解除。
+    //  ・応答したエッジの分だけ更新(オフライン/未応答のエッジ分は前回値を保持=取りこぼしでロックを揺らさない)。
+    //  ・スマホのローカルに無い計画id(=孤児)は保有集合に入れない(表示できないため)。
+    private fun reconcileEdgeRoster(ed: Edge, heldPlans: Set<String>) {
+        val localIds = try {
+            val pa = JSONArray(HgeNative.nativeListPlans())
+            (0 until pa.length()).mapNotNull { pa.optJSONObject(it)?.optString("id")?.ifEmpty { null } }.toHashSet()
+        } catch (_: Exception) { HashSet<String>() }
+        val newHeld = heldPlans.filterTo(HashSet()) { localIds.contains(it) }
+        if (edgeHeldByEdge[ed.name] != newHeld) {
+            edgeHeldByEdge[ed.name] = newHeld
+            refreshPlanList(); updateReadOnly()   // 保有の増減(=ロック状態)を表示へ反映
         }
     }
 
