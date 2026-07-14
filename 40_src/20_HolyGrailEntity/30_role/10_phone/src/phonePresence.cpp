@@ -18,11 +18,11 @@
 //  ・受動NOTIFY(cameraController::watchStart)で新カメラ出現を検知したら即フル探索へ前倒しする。
 //  ・マップが変化(オンライン/オフライン/IP変更)した時だけ onChange を呼ぶ(UIが最新IPをエッジへpush)。
 //  ・presence(見えているか)のみ保持し CCAPIセッションは張らない(占有しない)。
-//  注: detectTarget は apiBase を都度確保しdevice解放時に解放しない設計(既知のリーク許容)。フル探索の
-//      頻度を抑え、間欠は疎通確認のみにしてリーク速度を最小化している。恒久策は apiBase の shared_ptr 化。
+//  注: detectTarget が確保する device.apiBase は shared_ptr 所有(commit a57d09b)。フル探索結果 found は
+//      merge 後に破棄され最後の参照が消えて解放されるため、常駐フル探索でもリークしない。
 namespace {
 
-	struct pcam { std::string serial; std::string model; std::string ip; bool online = false; long long lastSeen = 0; };
+	struct pcam { std::string serial; std::string model; std::string friendly; std::string ip; bool online = false; long long lastSeen = 0; };
 	std::vector<pcam>       g_map;
 	std::mutex              g_mapMutex;
 	std::function<void()>   g_onChange;
@@ -67,8 +67,8 @@ namespace {
 			std::string ip = hostOf(d.urlAccess);
 			if (d.serialno.empty() || ip.empty()) { continue; }
 			bool merged = false;
-			for (auto& c : g_map) { if (c.serial == d.serialno) { c.model = d.model; c.ip = ip; c.online = true; c.lastSeen = now; merged = true; break; } }
-			if (!merged) { g_map.push_back(pcam{ d.serialno, d.model, ip, true, now }); }
+			for (auto& c : g_map) { if (c.serial == d.serialno) { c.model = d.model; c.friendly = d.friendName; c.ip = ip; c.online = true; c.lastSeen = now; merged = true; break; } }
+			if (!merged) { g_map.push_back(pcam{ d.serialno, d.model, d.friendName, ip, true, now }); }
 		}
 	}
 
@@ -137,7 +137,7 @@ std::string presenceJson()
 	for (const auto& c : g_map)
 	{
 		if (c.serial.empty() || c.ip.empty()) { continue; }
-		arr.push_back({ {"serial", c.serial}, {"model", c.model}, {"ip", c.ip}, {"online", c.online} });
+		arr.push_back({ {"serial", c.serial}, {"model", c.model}, {"friendly", c.friendly}, {"ip", c.ip}, {"online", c.online} });
 	}
 	return arr.dump();
 }

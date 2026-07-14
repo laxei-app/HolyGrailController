@@ -20,7 +20,7 @@ object HgeNative {
     const val EV_DEVICE = 4
     const val EV_SCHEDULE = 5
     const val EV_ERROR = 6
-    const val EV_PRESENCE = 7    // スマホ常駐プレゼンスマップの変化 [{serial,model,ip,online}]
+    const val EV_PRESENCE = 7    // スマホ常駐プレゼンスマップの変化 [{serial,model,friendly,ip,online}]
 
     // 撮影状態 (47 §2.3)
     const val ST_IDLE = 0
@@ -114,6 +114,9 @@ object HgeNative {
     external fun nativePresenceStop(): Int
     external fun nativePresenceJson(): String              // [{"serial","model","ip","online"}]
     external fun nativeAddOwnedDetected(index: Int): Int   // 検出カメラを所持へ追加
+    // 発見/接続カメラ識別情報を所持へ反映。allowAdd=true:未一致は自動追加 / false:追加せず区分のみ返す(裏の発見→登録可否UI)。
+    // 返り値: 0=既存にfriendly反映, 1=未定義枠へserial確定, 2=新規(allowAdd時は追加済/非allowAdd時は未追加), <0=エラー。
+    external fun nativeRecordCameraIdentity(model: String, serial: String, friendly: String, allowAdd: Boolean): Int
     external fun nativeGetColors(): String                 // システム共通の色 {"night":{"text","bg"},...}
     external fun nativeSetColors(json: String): Int
     external fun nativeGetSmoothing(): String              // 露出平滑化 {"hysteresis":double,"movingAverage":int}

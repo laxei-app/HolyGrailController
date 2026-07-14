@@ -1122,6 +1122,11 @@ bool dataManager::findOwnedLens(const std::string& name, hgc::lens& out)
 
 bool dataManager::recordConnectedCamera(const device& dev)
 {
+	return recordConnectedCameraStatus(dev, true) >= 0;	// 従来互換: 新規は自動追加
+}
+
+int dataManager::recordConnectedCameraStatus(const device& dev, bool allowAdd)
+{
 	ensureOwned();
 	// device.model 例 "Canon EOS R10"。所持/マスタは型番のみ("EOS R10")なのでメーカー名を除いて照合。
 	std::string key = stripMaker(dev.model, dev.manufacturer);
@@ -1133,9 +1138,8 @@ bool dataManager::recordConnectedCamera(const device& dev)
 		{
 			if (!oc.cam.serial.empty() && oc.cam.serial == dev.serialno)
 			{
-				bool changed = false;
-				if (!dev.friendName.empty() && oc.cam.friendly != dev.friendName) { oc.cam.friendly = dev.friendName; changed = true; }
-				return changed ? saveOwnedCameras() : true;
+				if (!dev.friendName.empty() && oc.cam.friendly != dev.friendName) { oc.cam.friendly = dev.friendName; saveOwnedCameras(); }
+				return static_cast<int>(camApply::updated);
 			}
 		}
 	}
@@ -1148,11 +1152,15 @@ bool dataManager::recordConnectedCamera(const device& dev)
 		{
 			oc.cam.serial = dev.serialno;
 			if (!dev.friendName.empty()) { oc.cam.friendly = dev.friendName; }
-			return saveOwnedCameras();
+			saveOwnedCameras();
+			return static_cast<int>(camApply::filled);
 		}
 	}
 
-	// 3) 同機種は全て別シリアルで確定済み(またはモデル不一致) → 新規の別個体として追加。
+	// 3) 同機種は全て別シリアルで確定済み(またはモデル不一致) → 新規の別個体。
+	//    allowAdd=false(裏の発見)なら追加せず「新規」だけ返し、登録可否を呼び手(UI)に委ねる。
+	if (!allowAdd) { return static_cast<int>(camApply::isNew); }
+
 	//    §4a: 既存が識別済みなら2台目の登録は可。device は実機なのでシリアルを持ち、未識別の重複は作らない。
 	hgc::ownedCamera oc;
 	const hgc::camera* m = matchMasterCamera(dev);
@@ -1169,7 +1177,8 @@ bool dataManager::recordConnectedCamera(const device& dev)
 	oc.cam.serial   = dev.serialno;
 	oc.cam.friendly = dev.friendName;
 	g_ownedCameras.push_back(std::move(oc));
-	return saveOwnedCameras();
+	saveOwnedCameras();
+	return static_cast<int>(camApply::isNew);
 }
 
 // §4b: 計画カメラの friendly から所持リストを引き、実シリアルを解決する(接続済みなら serial が入っている)。

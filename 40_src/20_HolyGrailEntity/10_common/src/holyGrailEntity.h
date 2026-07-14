@@ -250,6 +250,11 @@ int32_t hge_searchDevicesListJson(char* buf, int32_t* inoutLen);
 // 直近の検索で見つかったカメラ(index)を所持カメラへ追加/更新する。
 int32_t hge_addOwnedDetected(int32_t index);
 
+// 発見/接続したカメラ識別情報(model/serial/friendly)を所持カメラへ反映する。
+//  allowAdd=1: 未一致(新規)は自動追加(撮影接続/明示登録)。allowAdd=0: 追加せず ISNEW を返す(裏の発見→UIが登録可否を問う)。
+//  返り値: >=0 は区分(0=既存にfriendly反映/1=未定義枠へserial確定/2=新規)、<0 はエラー。
+int32_t hge_recordCameraIdentity(const char* model, const char* serial, const char* friendly, int32_t allowAdd);
+
 // 現在の進捗スナップショットを JSON で取得(バッファ規約)。
 //  {"state","frame","total","remainSec","elapsedSec","ccm","iso","ss","fn"}
 //  エッジ端末が progress(get) 応答に使う。

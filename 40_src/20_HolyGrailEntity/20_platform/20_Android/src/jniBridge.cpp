@@ -663,6 +663,20 @@ JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeAddOwnedDetected(JNIEnv* /*env*/, jobject /*thiz*/, jint index)
 { return hge_addOwnedDetected(index); }
 
+// 発見/接続したカメラ識別情報を所持カメラへ反映する。allowAdd=1で未一致は自動追加、0なら追加せず区分のみ返す。
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeRecordCameraIdentity(JNIEnv* env, jobject /*thiz*/, jstring model, jstring serial, jstring friendly, jboolean allowAdd)
+{
+	const char* m = model    ? env->GetStringUTFChars(model,    nullptr) : nullptr;
+	const char* s = serial   ? env->GetStringUTFChars(serial,   nullptr) : nullptr;
+	const char* f = friendly ? env->GetStringUTFChars(friendly, nullptr) : nullptr;
+	jint r = hge_recordCameraIdentity(m ? m : "", s ? s : "", f ? f : "", allowAdd ? 1 : 0);
+	if (m) { env->ReleaseStringUTFChars(model,    m); }
+	if (s) { env->ReleaseStringUTFChars(serial,   s); }
+	if (f) { env->ReleaseStringUTFChars(friendly, f); }
+	return r;
+}
+
 // listener(HgeListener) を登録/解除する。
 JNIEXPORT void JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeSetListener(JNIEnv* env, jobject /*thiz*/, jobject listener)

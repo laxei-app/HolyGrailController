@@ -122,6 +122,14 @@ public:
 	// master(model)＋device から所持カメラを自動作成して保存(1台運用で無設定OK)。
 	static bool recordConnectedCamera(const device& dev);
 
+	// 発見/接続したカメラ識別情報を所持リストへ反映する共通コア。返り値=処理区分。
+	//  UPDATED(0): serial一致の所持へ friendly を反映(§1)。
+	//  FILLED (1): serial未定義の同機種プレースホルダへ serial+friendly を確定(§2)。
+	//  ISNEW  (2): 一致する所持が無い(新規個体)。allowAdd なら新規追加済み、非 allowAdd なら未追加(呼び手が登録可否を問う)。
+	// allowAdd=false は「裏の発見」用(登録するか UI で聞く)。true は撮影接続/明示登録用(自動追加)。
+	enum class camApply { updated = 0, filled = 1, isNew = 2 };
+	static int recordConnectedCameraStatus(const device& dev, bool allowAdd);
+
 	// --- §4b 撮影開始時の特定カメラ照合(同機種が複数あっても serial/friendly で1台を選ぶ) ---
 	// 計画カメラの friendly から所持リストを引き実シリアルを解決(接続済みなら serial が入る)。true=解決。
 	static bool serialForFriendly(const std::string& friendly, std::string& outSerial);

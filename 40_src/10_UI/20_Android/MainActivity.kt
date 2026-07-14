@@ -111,6 +111,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private val waitingPlans = mutableSetOf<String>()    // 撮影要求済・撮影窓前で待機中(カメラOK)の計画 id 群=カメラ点灯
     private val nocamDialogShown = mutableSetOf<String>() // カメラ未検出ポップアップを表示済みの計画 id(多重表示抑止。Phase3)
     private val nocamDialogs = mutableMapOf<String, androidx.appcompat.app.AlertDialog>() // 表示中のNOCAMERAダイアログ(状態が復帰/停止したら閉じるための参照)
+    private val edgeAppliedSerials = mutableSetOf<String>() // ①エッジ書き戻し済みのカメラserial(重複適用の抑止。1serial=1回)
+    private val promptingCamSerials = mutableSetOf<String>() // ②登録プロンプト表示中のカメラserial(重複ダイアログ抑止)
+    private val declinedCamSerials by lazy { loadDeclinedCamSerials() } // ②「いいえ」で自動プロンプトを抑止するserial(永続。手動登録は別途可能)
     private val stoppingPlans = mutableSetOf<String>()   // 「中止」操作済みで停止(IDLE)確定待ちの計画 id。確定までNOCAMERAダイアログを抑止し無限再表示を防ぐ
     private val startingPlans = mutableSetOf<String>()   // 開始操作中(タップ〜開始要求の結果確定まで)の計画 id。この間のポーリングIDLE(=まだ届いていないだけ)で
                                                           // 集合から外して“開始前アイコン+ポーリング対象外”に落ちるレースを防ぐ(2台順次開始は直列化で到達が遅れる)
@@ -3266,6 +3269,55 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }.start()
     }
 
+    // ② 未登録カメラの発見 → 所持カメラへ反映。既存(serial一致)は friendly 更新、未定義の同機種枠は serial+friendly を確定
+    //  (どちらも自動)。いずれにも該当しない新規個体は「登録しますか？」を出す(拒否済みserialは自動プロンプトしない)。
+    private fun reconcileDiscoveredCameras(presenceJson: String) {
+        val arr = try { JSONArray(presenceJson) } catch (_: Exception) { return }
+        Thread {
+            val toPrompt = ArrayList<Triple<String, String, String>>()   // model, serial, friendly
+            for (i in 0 until arr.length()) {
+                val c = arr.optJSONObject(i) ?: continue
+                if (!c.optBoolean("online")) continue
+                val serial = c.optString("serial"); if (serial.isEmpty()) continue
+                if (declinedCamSerials.contains(serial)) continue        // 「いいえ」済みは自動では聞かない(手動登録は可)
+                val model = c.optString("model"); val friendly = c.optString("friendly")
+                val r = try { HgeNative.nativeRecordCameraIdentity(model, serial, friendly, false) } catch (_: Exception) { -1 }
+                if (r == 2) { toPrompt.add(Triple(model, serial, friendly)) }   // 2=新規個体(未追加) → 登録可否を問う
+            }
+            if (toPrompt.isNotEmpty()) runOnUiThread { promptRegisterCameras(toPrompt) }
+        }.start()
+    }
+
+    // 新規個体ごとに「登録しますか？」ダイアログを出す(どの画面でも表示)。登録=所持へ追加、いいえ=以後自動プロンプト抑止。
+    private fun promptRegisterCameras(list: List<Triple<String, String, String>>) {
+        for ((model, serial, friendly) in list) {
+            if (!promptingCamSerials.add(serial)) continue               // 既に表示中のserialは二重に出さない
+            val label = if (friendly.isNotEmpty()) friendly else if (model.isNotEmpty()) model else serial
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("カメラの登録")
+                .setMessage("未登録のカメラ「$label」が見つかりました。所持カメラに登録しますか？")
+                .setCancelable(false)
+                .setPositiveButton("登録") { _, _ ->
+                    promptingCamSerials.remove(serial)
+                    Thread {
+                        try { HgeNative.nativeRecordCameraIdentity(model, serial, friendly, true) } catch (_: Exception) {}
+                        runOnUiThread { if (flipper.displayedChild == 6) buildCameraList() }   // 6=所持カメラ一覧(openCameraList)
+                    }.start()
+                }
+                .setNegativeButton("いいえ") { _, _ ->
+                    promptingCamSerials.remove(serial)
+                    declinedCamSerials.add(serial); saveDeclinedCamSerials()
+                }
+                .show()
+        }
+    }
+
+    private fun loadDeclinedCamSerials(): MutableSet<String> =
+        (hgcPrefs().getStringSet("declinedCamSerials", emptySet()) ?: emptySet()).toMutableSet()
+    private fun saveDeclinedCamSerials() {
+        hgcPrefs().edit().putStringSet("declinedCamSerials", declinedCamSerials).apply()
+    }
+
     // 3b: SSDP受動待ち受け用の MulticastLock。Wi-Fi ドライバの受信フィルタを緩め、239.255.255.250:1900
     // への NOTIFY をネイティブ(ssdpListen*)が受信できるようにする。権限 CHANGE_WIFI_MULTICAST_STATE 必須。
     private var multicastLock: android.net.wifi.WifiManager.MulticastLock? = null
@@ -3346,7 +3398,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 }
                 HgeNative.EV_SCHEDULE -> { latestSchedule = json; updatePlanDisplay(json) }
                 HgeNative.EV_DEVICE -> {}
-                HgeNative.EV_PRESENCE -> { pushPresenceToActiveEdges(json) }   // P4: マップ変化→アクティブエッジへ最新IPをpush
+                HgeNative.EV_PRESENCE -> { pushPresenceToActiveEdges(json); reconcileDiscoveredCameras(json) }   // P4: エッジへ最新IP push + ②未登録カメラの反映/登録プロンプト
                 HgeNative.EV_ERROR -> {
                     val o = JSONObject(json)
                     val msg = o.optString("msg")
@@ -4706,6 +4758,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (pj.isEmpty()) return
         try {
             val o = JSONObject(pj)
+            // ① エッジ書き戻し: エッジが接続確定したカメラの serial/friendly を所持カメラへ反映する
+            //  (エッジ撮影ではスマホがカメラに接続しないため、この経路が唯一の識別情報伝播)。serial単位で1回だけ適用。
+            val cSerial = o.optString("serial")
+            if (cSerial.isNotEmpty() && edgeAppliedSerials.add(cSerial)) {
+                val cModel = o.optString("model"); val cFriendly = o.optString("friendly")
+                Thread { try { HgeNative.nativeRecordCameraIdentity(cModel, cSerial, cFriendly, true) } catch (_: Exception) {} }.start()
+            }
             val st = o.optInt("state")
             histOnState(pid, st)   // 項目9: エッジ側で起きたこと(開始/終了/カメラ断/復帰)を履歴に残す
             var changed = false
