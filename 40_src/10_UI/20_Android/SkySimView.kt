@@ -190,10 +190,12 @@ class SkyRenderView(context: Context) : View(context) {
 // ── シミュレーションページ本体 ───────────────────────────────────────
 //  bind(rawPlanJson) で撮影計画(nativeGetPlanJson の JSON)を読み込み初期化する。
 //  onLandscape: 横向きチェックボックスの変更を撮影計画へ反映(先頭ページと同じ設定)。
+//  onDirection: 撮影方向/仰角(コンパス/仰角)の確定を撮影計画へ保存(再表示・時刻変更でも保持)。
 class SimPage(
     context: Context,
     private val exec: Executor,
-    private val onLandscape: (Boolean) -> Unit
+    private val onLandscape: (Boolean) -> Unit,
+    private val onDirection: (Float, Float) -> Unit
 ) : LinearLayout(context) {
 
     private val titleView = TextView(context)
@@ -280,10 +282,12 @@ class SimPage(
         addView(dir, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         // 指を離した時だけでなく、動かしている最中(onChange)にも描き直す。
+        // 確定(onCommit=指を離した時)にだけ撮影計画へ保存する(ドラッグ中の毎フレーム保存は避ける)。
+        // これで再表示や開始/終了時刻の変更で戻ってきても向きが保持される。
         compass.onChange = { a -> az = a.toDouble(); renderSky() }
-        compass.onCommit = { a -> az = a.toDouble(); renderSky() }
+        compass.onCommit = { a -> az = a.toDouble(); renderSky(); onDirection(az.toFloat(), el.toFloat()) }
         elevationView.onChange = { e -> el = e.toDouble(); renderSky() }
-        elevationView.onCommit = { e -> el = e.toDouble(); renderSky() }
+        elevationView.onCommit = { e -> el = e.toDouble(); renderSky(); onDirection(az.toFloat(), el.toFloat()) }
 
         // ⑥ 横向きで撮る(下部固定)
         landscapeCheck.text = "横向きで撮る(ランドスケープ)"

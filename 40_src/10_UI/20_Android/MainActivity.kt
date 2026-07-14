@@ -4484,10 +4484,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
             }
         }
         if (simPage == null) {
-            simPage = SimPage(this, simExec) { checked ->
-                // 横向きチェックは撮影計画へ反映(先頭ページと同じ)。再生成→EV_SCHEDULEで再bind。
-                planExec.execute { HgeNative.nativeSetPlanLandscape(if (checked) 1 else 0) }
-            }
+            simPage = SimPage(this, simExec,
+                onLandscape = { checked ->
+                    // 横向きチェックは撮影計画へ反映(先頭ページと同じ)。再生成→EV_SCHEDULEで再bind。
+                    planExec.execute { HgeNative.nativeSetPlanLandscape(if (checked) 1 else 0) }
+                },
+                onDirection = { az, el ->
+                    // 撮影方向/仰角の確定を撮影計画へ保存(cs の azimuth/elevation を永続化)。
+                    // これで再表示や時刻変更で戻っても向きが保持される。再生成→EV_SCHEDULEで再bind。
+                    pushDirectionToEntity(az, el)
+                })
         }
     }
 
