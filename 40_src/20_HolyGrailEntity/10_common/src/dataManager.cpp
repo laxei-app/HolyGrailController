@@ -1297,7 +1297,8 @@ std::string dataManager::writeCaptureReport(const captureReport& r, const hgc::c
 		"  シャッター失敗    : %d (%.1f%%)\n"
 		"\n"
 		"[露出]\n"
-		"  測光できなかった  : %d (%.1f%%)   ← 露出は据え置き\n"
+		"  測光したコマ      : %d (夜間の固定露出は測光しないので含まない)\n"
+		"  測光できなかった  : %d (%.1f%%)   ← 測光したコマ中。露出は据え置き\n"
 		"  露出設定できず    : %d (%.1f%%)   ← 0%%でないとアプリとカメラの露出がズレる\n"
 		"  測光リトライ      : %d コマ\n"
 		"  露出設定リトライ  : %d コマ\n"
@@ -1317,7 +1318,8 @@ std::string dataManager::writeCaptureReport(const captureReport& r, const hgc::c
 		timeStr,
 		r.frames,
 		r.shootFail, pct(r.shootFail, r.frames),
-		r.meterFail, pct(r.meterFail, r.frames),
+		r.meterTried,
+		r.meterFail, pct(r.meterFail, r.meterTried),
 		r.setFail,   pct(r.setFail, r.frames),
 		r.meterRetryFrames, r.applyRetryFrames,
 		plan.interval, actual,
@@ -1337,7 +1339,7 @@ std::string dataManager::writeCaptureReport(const captureReport& r, const hgc::c
 		{ note += "  ・ライブビューの更新が撮影周期に追いついていません。撮影周期を長くすると安定します。\n"; }
 		if (r.lateCnt > 0 && pct(r.lateOk, r.lateCnt) < 90.0)
 		{ note += "  ・撮影周期を守れないコマが多いです。シャッター速度に対して周期が短い可能性があります。\n"; }
-		if (r.meterFail > 0 && pct(r.meterFail, r.frames) > 5.0)
+		if (r.meterFail > 0 && pct(r.meterFail, r.meterTried) > 5.0)
 		{ note += "  ・測光できないコマが多いです。露出が据え置かれるため明るさが追従しません。\n"; }
 		if (!note.empty()) { n += std::snprintf(b + n, sizeof(b) - n, "\n[所見]\n%s", note.c_str()); }
 	}
@@ -1364,7 +1366,9 @@ void dataManager::logShot(int frame, const hgc::exposure& e, double lumStops, co
 	std::snprintf(lumStr, sizeof(lumStr), "%+.3f", lumStops);
 	// detail = ccm名 + 測光輝度(自動補正時のみ)。Y=リニア輝度, ev=中庸グレー(0.18)基準の段差。
 	const char* nm = ccmName ? ccmName : "";
-	char detail[128];
+	// hs=/lv=/stale= の追加でdetailが伸びた。128では末尾の sh=(ミリ秒)が切れる実害が出た
+	// (2026-07-18: 通し5993行中256行=遅延が大きい行ほど溢れて切れ、解析で遅延を過小評価した)。
+	char detail[192];
 	int  dn = 0;
 	if (meteredLinear > 0.0)
 	{
@@ -1421,7 +1425,7 @@ void dataManager::logShot(int frame, const hgc::exposure& e, double lumStops, co
 		}
 	}
 	// SHOT のみ frame〜lum を使う。body を列整形(frame|iso|ss|fn|lum|detail)。露出はカメラ設定値の文字列。
-	char body[208];
+	char body[272];	// 先頭列(約40字) + detail(最大192)
 	std::snprintf(body, sizeof(body), "%5d|%5s|%-11s|%-6s|%8s|%s",
 	              frame, e.iso.c_str(), e.ss.c_str(), e.fn.c_str(), lumStr, detail);
 	writeRecord("INF", "SHOT", body);

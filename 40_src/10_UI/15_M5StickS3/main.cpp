@@ -839,9 +839,15 @@ void setup(void)
 {
 	m5pm1LcdPowerOn();	// ★ちらつき対策: LCD電源(M5PM1 G2)を安定ONにする(M5.begin より前・自前I2C)
 	auto cfg = M5.config();
-	M5.begin(cfg);		// board 認識は既定のまま(CoreS3誤検出=無害)。StickS3電源管理はさせない(ブートループ回避)
+	// StickS3 に内蔵RTCは無い。外付けRTCユニット(Port A の I2C)を接続したときだけ使う。
+	// M5Unified は external_rtc=true のとき Ex_I2C を走査し、居れば M5.Rtc を有効化して
+	// システム時計を RTC から復元する(居なければ isEnabled()==false のままで無害)。
+	// これにより電源断→復帰でもスマホ無しで時刻が戻り、単独運用ができる。
+	cfg.external_rtc = true;
+	M5.begin(cfg);		// board 認識は既定のまま。StickS3電源管理はさせない(ブートループ回避)
 	dbg::init();
-	Serial.printf("[M5] board=%d\n", (int)M5.getBoard());
+	Serial.printf("[M5] board=%d rtc=%d ex_i2c=%d\n",
+	              (int)M5.getBoard(), (int)M5.Rtc.isEnabled(), (int)M5.Ex_I2C.isEnabled());
 
 	g_lcd.init();			// 自前パネル(SPI2)を初期化
 	g_lcd.setRotation(3);	// 横向き(240x135)。上下逆なら 1 に。

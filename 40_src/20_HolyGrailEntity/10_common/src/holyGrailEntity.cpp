@@ -1044,7 +1044,13 @@ namespace
 				{
 					dataManager::captureReport& R = S->report;
 					++R.frames;
-					if (c.metered < 0.0) { ++R.meterFail; }		// 測光できず(露出据え置き)
+					// 測光は自動露出区間だけ試みる(夜間の固定露出は測光しない=meterTry==0)。
+					// 分母を「測光を試みたコマ」にしないと、夜間が混じって測光失敗率が過大に見える。
+					if (c.meterTry >= 1)
+					{
+						++R.meterTried;
+						if (c.metered < 0.0) { ++R.meterFail; }	// 試みたが取得できなかった(露出据え置き)
+					}
 					if (!c.setOk)        { ++R.setFail; }		// リトライしても露出設定できず
 					if (c.meterTry > 1)  { ++R.meterRetryFrames; }
 					if (c.applyTry > 1)  { ++R.applyRetryFrames; }

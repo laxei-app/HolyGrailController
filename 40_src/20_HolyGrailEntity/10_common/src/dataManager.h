@@ -204,7 +204,8 @@ public:
 	struct captureReport
 	{
 		int      frames    = 0;		// 撮影したコマ数
-		int      meterFail = 0;		// 測光できなかったコマ(露出は据え置き)
+		int      meterTried = 0;	// 測光を試みたコマ数(自動露出区間のみ。夜間の固定露出は測光しないので含まない)
+		int      meterFail = 0;		// 測光を試みたが取得できなかったコマ(露出は据え置き)
 		int      setFail   = 0;		// リトライしても露出設定できなかったコマ(実機とアプリの露出がズレる)
 		int      shootFail = 0;		// シャッターに失敗したコマ
 		int      staleFrames = 0;	// 古いライブビューを捨てたコマ数

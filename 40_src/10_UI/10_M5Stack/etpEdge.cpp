@@ -1,6 +1,9 @@
 ﻿// エッジ端末(M5Stack)側の ETP サーバ実装(データ構造仕様書43 §6)。
 #include "etpEdge.h"
 #include <M5Unified.h>
+// 外付けRTC(Port A の PCF8563/BM8563)を自前で扱うため。M5Unified の RTC_Class は
+// PCF8563 を生成するとき外部I2Cを渡さない実装のため、M5.Rtc 経由では外付けを拾えない。
+#include <utility/rtc/PCF8563_Class.hpp>
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <json/nlohmann/json.hpp>
@@ -42,6 +45,65 @@ namespace
 	constexpr uint32_t    TCP_IDLE_MS = 30000;
 
 	// --- RTC(UTC保持運用) ---
+	// 使用する RTC を決める。CoreS3 は内蔵RTC(M5.Rtc)、StickS3 は内蔵を持たないため
+	// 外付けRTCユニット(Port A / Ex_I2C の PCF8563・BM8563 = I2C 0x51)を使う。
+	//  ・M5Unified の M5.Rtc.begin(&Ex_I2C) は PCF8563 を生成するとき i2c を渡さず
+	//    内部バス既定のままになるため、外付けを拾えない。そこで外付けは自前に持つ。
+	//  ・RTC が無い構成もある(その場合は今までどおりスマホから受けた時刻のみで動く)。
+	//  ・撮影中に外れた場合も、読み書きの失敗を検出して以後は無効として扱う(下の rtcOk)。
+	m5::PCF8563_Class g_extRtc;		// 外付けRTC(Ex_I2C)。使えるときだけ有効化する
+	bool              g_extRtcOk = false;
+
+	// 起動時に一度だけ呼ぶ。外付けRTCが居れば有効化する。
+	void initExternalRtc(void)
+	{
+		if (M5.Rtc.isEnabled()) { return; }		// 内蔵RTCがあるならそれを使う(CoreS3)
+		M5.Ex_I2C.begin();
+		// begin(&Ex_I2C) で内部の I2C 参照を外部バスへ差し替えたうえで初期化する。
+		g_extRtcOk = g_extRtc.begin(&M5.Ex_I2C);
+		DBGLN(g_extRtcOk ? col::GRN : col::YEL, "etpEdge: external RTC %s",
+		      g_extRtcOk ? "detected (Ex_I2C 0x51)" : "not found");
+	}
+
+	// RTC が使える状態か(内蔵 or 外付け)。
+	bool rtcOk(void) { return M5.Rtc.isEnabled() || g_extRtcOk; }
+
+	bool rtcGet(m5::rtc_datetime_t& out)
+	{
+		if (M5.Rtc.isEnabled())
+		{
+			if (M5.Rtc.getVoltLow()) { return false; }	// 電池切れ等で保持できていない
+			out = M5.Rtc.getDateTime();
+			return true;
+		}
+		if (!g_extRtcOk) { return false; }
+		// 電圧低下フラグ(VL)が立っていたら保持できていない=値は信用できない。
+		// これを見ないと、初期値のままの日時(例 2021-10-07)でシステム時計を壊してしまう。
+		if (g_extRtc.getVoltLow())
+		{
+			DBGLN(col::YEL, "etpEdge: external RTC volt-low (not kept) -> wait time cmd");
+			return false;
+		}
+		if (!g_extRtc.getDateTime(&out.date, &out.time))
+		{	// 撮影中に外れた/通信できなくなった → 以後は無い物として扱う(時刻はシステム時計で継続)。
+			g_extRtcOk = false;
+			DBGLN(col::YEL, "etpEdge: external RTC lost (read failed)");
+			return false;
+		}
+		return true;
+	}
+
+	void rtcSet(const m5::rtc_datetime_t& dt)
+	{
+		if (M5.Rtc.isEnabled()) { M5.Rtc.setDateTime(dt); return; }
+		if (!g_extRtcOk) { return; }
+		if (!g_extRtc.setDateTime(&dt.date, &dt.time))
+		{	// 書けない=外れた可能性。以後は無い物として扱う。
+			g_extRtcOk = false;
+			DBGLN(col::YEL, "etpEdge: external RTC lost (write failed)");
+		}
+	}
+
 	void setRtcFromUtc(long long utc)
 	{
 		time_t t = static_cast<time_t>(utc);
@@ -55,7 +117,7 @@ namespace
 		dt.time.hours   = static_cast<int8_t>(g.tm_hour);
 		dt.time.minutes = static_cast<int8_t>(g.tm_min);
 		dt.time.seconds = static_cast<int8_t>(g.tm_sec);
-		M5.Rtc.setDateTime(dt);
+		rtcSet(dt);		// 内蔵(CoreS3) or 外付け(StickS3)。無ければ何もしない
 	}
 
 	void setSystemClock(long long utc)
@@ -67,10 +129,11 @@ namespace
 	}
 
 	// 起動時: RTC(UTC) からシステム時計を復元する。
+	// RTC が無い/読めない構成では何もしない(従来どおりスマホからの time コマンドを待つ)。
 	void restoreClockFromRtc(void)
 	{
-		if (!M5.Rtc.isEnabled()) { return; }
-		auto dt = M5.Rtc.getDateTime();
+		m5::rtc_datetime_t dt;
+		if (!rtcGet(dt)) { return; }
 		hgc::dateTime d;
 		d.year  = static_cast<uint16_t>(dt.date.year);
 		d.month = static_cast<uint16_t>(dt.date.month);
@@ -79,9 +142,15 @@ namespace
 		d.min   = static_cast<uint16_t>(dt.time.minutes);
 		d.sec   = static_cast<uint16_t>(dt.time.seconds);
 		long long utc = hgc::toUnixUtc(d, 0);	// RTC は UTC
-		if (utc < 1577836800LL) { return; }		// 2020-01-01 より前は未設定とみなす
+		if (utc < 1577836800LL)
+		{	// 2020-01-01 より前は未設定(電池切れ/初回)とみなす。スマホからの time を待つ。
+			DBGLN(col::YEL, "etpEdge: RTC not set (%04u-%02u-%02u %02u:%02u:%02u UTC) -> wait time cmd",
+			      d.year, d.month, d.day, d.hour, d.min, d.sec);
+			return;
+		}
 		setSystemClock(utc);
-		DBGLN(col::GRN, "etpEdge: clock restored from RTC");
+		DBGLN(col::GRN, "etpEdge: clock restored from RTC %04u-%02u-%02u %02u:%02u:%02u UTC",
+		      d.year, d.month, d.day, d.hour, d.min, d.sec);
 	}
 
 	// time コマンド(RTC/時計同期)を適用する。return: 成功
@@ -332,7 +401,8 @@ namespace etpEdge
 	void setup(const std::string& edgeName)
 	{
 		if (!edgeName.empty()) { g_name = edgeName; }
-		restoreClockFromRtc();
+		initExternalRtc();			// 内蔵RTCが無い機種(StickS3)で外付けRTCを探す
+		restoreClockFromRtc();		// RTC(内蔵/外付け)があればシステム時計を復元する
 		g_udp.begin(PORT_DISCOVERY);
 		g_server.begin();
 		g_server.setNoDelay(true);
