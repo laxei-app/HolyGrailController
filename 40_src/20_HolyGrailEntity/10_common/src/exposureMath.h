@@ -57,9 +57,24 @@ namespace expo
 	{
 		double linearHi = 0.18;   // 上限(昼間 18%)
 		double linearLo = 0.025;  // 下限(2.5%)
-		double bm       = -3.7;   // 環境光の中心位置
+		double bm       = -3.7;   // 環境光の中心位置(実行時に太陽高度から算出し上書き。これは既定/フォールバック)
 		double k        = 1.0;    // カーブの急峻さ
+		// ② 中心 bm を太陽高度[°]から求める係数(暫定値。通しテスト+夕暮れで調整)。
+		//   bm = clamp(bmHorizon - bmSlope*高度, bmDayClamp, bmTwilightClamp)。太陽が低いほど bm 大=薄明を暗く保つ。
+		double bmHorizon       = 0.0;   // 高度0°(日の出/日の入)での中心
+		double bmSlope         = 0.5;   // 高度1°あたりの bm 変化(高度↑で bm↓)
+		double bmDayClamp      = -2.0;  // 太陽が高いときの下限
+		double bmTwilightClamp = 3.0;   // 薄明/夜のときの上限
 	};
+
+	// 太陽高度[°] → ev0 シグモイド中心 bm(② 薄明ほど暗く保つ)。
+	inline double ev0BmFromAltitude(double sunAltDeg, const ev0Sigmoid& s)
+	{
+		double bm = s.bmHorizon - s.bmSlope * sunAltDeg;
+		if (bm < s.bmDayClamp)      { bm = s.bmDayClamp; }
+		if (bm > s.bmTwilightClamp) { bm = s.bmTwilightClamp; }
+		return bm;
+	}
 	// プロセス共通の調整可能インスタンス(将来 設定/アセットから上書きできるよう参照を返す)。
 	inline ev0Sigmoid& ev0Cfg() { static ev0Sigmoid c; return c; }
 

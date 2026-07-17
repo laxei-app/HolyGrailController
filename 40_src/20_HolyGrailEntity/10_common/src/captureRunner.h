@@ -24,13 +24,18 @@ public:
 	// 進捗・撮影完了の通知情報
 	struct progressInfo { int frame; int total; int remainSec; int elapsedSec; };
 	// luminance=露出の明るさ[段](Sv-Av-Tv)。metered=測光したリニア輝度(自動補正時のみ。<0=測光なし)。
-	// rdyMeteringMs=ライブビュー取得(rdyMetering)実測ms、rdyShutterMs=露出設定適用(rdyShutter)実測ms。
-	// いずれも計測点では変数に退避するだけで、ログ出力はこのコマ確定後(シャッター後)に行う(-1=計測なし)。
-	// tm0Ms=tm0処理時間(境界での 露出適用+測光 の合計ms)。offMs=そのコマの offset[ms]。
-	// rdyOk/setOk=tm0で行った rdyMetering / 露出設定 の成否(tm0内ではログせず tm1 でまとめて出す)。
+	// rdyMeteringMs=測光(ライブビュー取得)実測ms、rdyShutterMs=露出設定の実測ms。いずれも -1=計測なし。
+	// meterTry/applyTry=それぞれの試行回数(1=一発成功。>1 はリトライした)。
+	// prepMs=準備(測光→露出計算→露出設定)の合計ms。リード(kPrepLeadMs)に収まったかの判定に使う。
+	// lateMs=このコマのシャッターが「前コマ+撮影周期」からどれだけ遅れたか[ms](0=周期ぴったり。-1=計測なし)。
+	//   準備がリードに収まらなかったコマだけ >0 になる=周期を守れたかが1数値で分かる(計測の主指標)。
 	struct capturedInfo { int frame; hgc::exposure exp; double luminance; std::string ccm; double metered = -1.0;
-	                      int rdyMeteringMs = -1; int rdyShutterMs = -1; int tm0Ms = -1; int offMs = -1;
+	                      int rdyMeteringMs = -1; int rdyShutterMs = -1; int prepMs = -1; int lateMs = -1;
 	                      bool rdyOk = true; bool setOk = true;
+	                      int meterTry = 0; int applyTry = 0;
+	                      uint32_t histSum = 0;	// 測光ヒストグラムの内容チェックサム(0=測光なし)。前コマと同値=古いフレームを掴んだ疑い
+	                      uint64_t lvTimeMs = 0;	// 測光フレームのカメラ側取得時刻[ms]。0=不明
+	                      int staleSkip = 0;	// 古いフレームと判定して捨てた回数(0=無し)
 	                      uint64_t shutterMs = 0; };	// actShutter直前の壁時計(UTCエポックms)。0=未記録
 
 	using stateCb    = std::function<void(int)>;					// hgeState 値
@@ -86,16 +91,36 @@ public:
 	static constexpr long kReconnectWaitMs     = 2000;	// 再接続試行間の待ち[ms]
 
 	// --- 周期正確化(タイマ方式) ---
-	// tm0(露出適用+測光)→ tm1(シャッター)の差 offset = (周期 - 最大ss) × kShutterOffsetFactor。
-	// 最大ss=夜間ss。固定にせず周期と最大ssの余裕から算出し、なるべく短くする。係数は今後の検証で調整する。
-	static constexpr double kShutterOffsetFactor = 0.7;	// offset 算出係数(調整対象)
+	// シャッターは常に「前コマのシャッター([A]) + 撮影周期」で切る(相対アンカー)。
+	// 準備(測光→露出計算→露出設定)は、その kPrepLeadMs だけ手前から連続で行う。
+	//  ・SSに依存して測光時刻が前後しないので、周期のどこで何が起きるかが固定される。
+	//  ・カメラは撮影/記録中(露光+記録)の間、設定変更を 503 "During shooting or recording" で即拒否する。
+	//    露光直後に設定するとこれに必ず当たる(実測: 露光終了直後=503 / 0.4秒後=OK)。リード手前まで待てば
+	//    カメラは暇なので設定は数十msで通る(実測: R10=52ms, R100=63ms いずれも8/8成功)。
+	//  ・準備がリードに収まらなければ、終わり次第すぐシャッターを切り(遅れ許容)、次コマからは正確な周期へ戻る。
+	// 制約: 測光開始時に露光が終わっている必要があるため 周期 - kPrepLeadMs > 最大ss。
+	//   さらにライブビュー復帰(実測 R100=長秒露光後3.3秒)を待つには 周期 - 最大ss >= リード + 復帰時間 ≒ 5.3秒。
+	//   これを満たさない設定(例 周期10秒/夜間ss8秒)も許可する(カメラ単体のインターバル撮影と同じく周期が伸びる)。
+	static constexpr int    kPrepLeadMs          = 2000;	// 周期の何ms前に準備(測光→計算→設定)を始めるか
 	static constexpr int    kPreConvergeSec      = 30;	// 撮影窓の何秒前から初期収束(測光のみ・シャッター無し)を始めるか
+	// ③ ヒスト取得リトライ: 失敗なら kMeterRetryMs 間隔で kMeterMaxMs まで繰り返す。
+	static constexpr int    kMeterRetryMs        = 100;	// ヒスト取得リトライ間隔[ms]
+	static constexpr int    kMeterMaxMs          = 5000;	// ヒスト取得リトライ上限[ms]
+	// 露出設定リトライ: 503(busy)等で弾かれても諦めず繰り返す。設定できないまま撮り続けると
+	// アプリの露出モデルとカメラ実機がズレ、白飛び/黒潰れのまま復帰できなくなる(2026-07-16 実機で発生)。
+	static constexpr int    kApplyRetryMs        = 100;	// 露出設定リトライ間隔[ms]
+	static constexpr int    kApplyMaxMs          = 2000;	// 露出設定リトライ上限[ms]
 
 private:
 	errCode loop(void);								// 撮影ループ本体(別スレッド)
 	bool    establishSession(void);					// startShooting+M設定+設定値テーブル構築(開始/再接続で使用)
 	errCode rdyMeterTimed(void);					// rdyMetering を実測付きで呼ぶ(所要msは meterMs_ に退避)
-	errCode applyExposureChanged(const hgc::exposure& exp);	// 変更のあった ss/iso/fn だけを適用(タイマ方式tm0)
+	// ③ ヒスト取得(rdyMetering+alzMetering)を最大 kMeterMaxMs まで kMeterRetryMs 間隔でリトライ。成功で hist を埋め true。
+	//    露光中は取得できないので、露光終了までの待ちは呼び出し側(ループ)の責務。tries=試行回数を返す。
+	bool    meterWithRetry(cmdt::HISTOGRAM& hist, int& tries);
+	errCode applyExposureChanged(const hgc::exposure& exp);	// 変更のあった ss/iso/fn だけを適用
+	// 露出設定を最大 kApplyMaxMs まで kApplyRetryMs 間隔でリトライ。tries=試行回数を返す。
+	errCode applyWithRetry(const hgc::exposure& exp, int& tries);
 	void    sleepUntilElapse(void* mono, long targetMs);	// monotonic基準(mono)で targetMs 経過まで待つ(中断可)
 	const hgc::ccmWindow* activeWindow(long long nowSec) const;
 	hgc::exposure nightGoalAfter(long long nowSec) const;	// 次の夜間固定露出
@@ -116,8 +141,17 @@ private:
 	// カメラの設定可能値テーブル(開始時に取得して構築。仕様 4.2)
 	expo::expoTables tables_;
 
-	int  meterMs_ = -1;	// 直近 rdyMetering(ライブビュー取得)の実測ms。コマ毎にリセットしログへ出す(計測用)
-	bool meterOk_ = true;	// 直近 rdyMetering の成否(rdyMeterTimed が設定)。tm1でログ
+	// ② ev0シグモイド設定(コマ毎に太陽高度から中心bmを算出して更新)。露出計算/初期収束で共用。
+	expo::ev0Sigmoid ev0cfg_{};
+
+	int  meterMs_  = -1;	// 直近 rdyMetering(ライブビュー取得)の実測ms。コマ毎にリセットしログへ出す(計測用)
+	bool meterOk_  = true;	// 直近 rdyMetering の成否(rdyMeterTimed が設定)。シャッター後にまとめてログ
+	int  meterTry_ = 0;	// 直近の測光試行回数(1=一発成功。>1=リトライした)。コマ毎にリセットしログへ出す
+	uint64_t lvTimeMs_ = 0;	// 直近の測光フレームのカメラ側取得時刻[ms](0=不明)
+	uint64_t lvPrev_   = 0;	// 前回「採用した」測光フレームの取得時刻[ms]。古いフレーム判定の基準
+	int      staleSkip_ = 0;	// このコマで「古い」と判定して捨てた回数(0=無し)。ログで頻度を追う
+	uint32_t histSum_ = 0;	// 直近の測光ヒストグラムの内容チェックサム(0=測光なし)。
+							// 前コマと一致=カメラが古いフレームを返した疑い(測光値が1コマ古い)の検出用
 	// 変更分のみ適用(タイマ方式tm0)の直近適用値。establishSession でクリアし次回フル適用させる。
 	std::string lastFnApplied_, lastSsApplied_, lastIsoApplied_;
 

@@ -1263,6 +1263,89 @@ void dataManager::logEvent(const char* event, const char* detail, bool error)
 	writeRecord(error ? "ERR" : "INF", event ? event : "", detail ? detail : "");
 }
 
+// 撮影結果レポートをログと同じディレクトリへ書く(1撮影=1ファイル。UIには出さない=ファイルのみ)。
+// 人が読んで「この機材/設定で無理が無かったか」を判断できることを狙う。数値の意味は本文に併記する。
+std::string dataManager::writeCaptureReport(const captureReport& r, const hgc::cs& plan, const char* planId)
+{
+	std::string dir = osfile::logDir();
+	if (dir.empty()) { return ""; }
+	char timeStr[20], dateStr[11];
+	nowLocal(timeStr, dateStr);	// timeStr は "YYYY-MM-DD HH:MM:SS"(日付込み19文字)、dateStr は "YYYY-MM-DD"
+	// report_<planId>_<日付>_<HHMMSS>.txt。同じ計画を撮り直しても上書きしないよう時刻まで入れる。
+	// ファイル名に空白や ':' を入れない(取り出し・スクリプトでの扱いを楽にする)。
+	char hhmmss[7] = {0};
+	std::snprintf(hhmmss, sizeof(hhmmss), "%c%c%c%c%c%c",
+	              timeStr[11], timeStr[12], timeStr[14], timeStr[15], timeStr[17], timeStr[18]);
+	std::string path = dir + "/report_" + (planId ? planId : "plan") + "_" + dateStr + "_" + hhmmss + ".txt";
+
+	auto pct = [](long n, long d) { return (d > 0) ? (100.0 * static_cast<double>(n) / static_cast<double>(d)) : 0.0; };
+	// 実周期 = 最初〜最後のシャッター間隔 ÷ (コマ数-1)。設定周期と比べれば伸びたかが分かる。
+	double actual = 0.0;
+	if (r.frames > 1 && r.lastShutterMs > r.firstShutterMs)
+	{ actual = static_cast<double>(r.lastShutterMs - r.firstShutterMs) / 1000.0 / static_cast<double>(r.frames - 1); }
+
+	char b[2048];
+	int n = std::snprintf(b, sizeof(b),
+		"=== 撮影結果レポート ===\n"
+		"計画      : %s (id=%s)\n"
+		"カメラ    : %s %s / %s\n"
+		"撮影窓    : %04d-%02d-%02d %02d:%02d ~ %04d-%02d-%02d %02d:%02d\n"
+		"出力日時  : %s\n"
+		"\n"
+		"[撮影]\n"
+		"  コマ数            : %d\n"
+		"  シャッター失敗    : %d (%.1f%%)\n"
+		"\n"
+		"[露出]\n"
+		"  測光できなかった  : %d (%.1f%%)   ← 露出は据え置き\n"
+		"  露出設定できず    : %d (%.1f%%)   ← 0%%でないとアプリとカメラの露出がズレる\n"
+		"  測光リトライ      : %d コマ\n"
+		"  露出設定リトライ  : %d コマ\n"
+		"\n"
+		"[撮影周期]  設定 %.1f 秒 / 実測 %.2f 秒\n"
+		"  周期どおり        : %d / %d (%.1f%%)   ← 遅れ100ms以内\n"
+		"  遅れ 平均/最大    : %.0f / %d ms\n"
+		"  準備 平均/最大    : %.0f / %d ms      ← 測光→露出計算→露出設定\n"
+		"  準備が間に合わず  : %d コマ\n"
+		"\n"
+		"[ライブビュー]\n"
+		"  古い映像を破棄    : %d コマ (延べ %ld 回)\n",
+		plan.name.c_str(), (planId ? planId : ""),
+		plan.camera.maker.c_str(), plan.camera.model.c_str(), plan.lens.name.c_str(),
+		plan.start.year, plan.start.month, plan.start.day, plan.start.hour, plan.start.min,
+		plan.end.year, plan.end.month, plan.end.day, plan.end.hour, plan.end.min,
+		timeStr,
+		r.frames,
+		r.shootFail, pct(r.shootFail, r.frames),
+		r.meterFail, pct(r.meterFail, r.frames),
+		r.setFail,   pct(r.setFail, r.frames),
+		r.meterRetryFrames, r.applyRetryFrames,
+		plan.interval, actual,
+		r.lateOk, r.lateCnt, pct(r.lateOk, r.lateCnt),
+		(r.lateCnt > 0 ? static_cast<double>(r.lateSum) / r.lateCnt : 0.0), r.lateMax,
+		(r.frames > 0 ? static_cast<double>(r.prepSum) / r.frames : 0.0), r.prepMax,
+		r.prepOver,
+		r.staleFrames, r.staleTotal);
+
+	// 所見: 数字だけでは判断しにくいので、閾値を超えたものだけ日本語で添える。
+	if (n > 0 && n < static_cast<int>(sizeof(b)))
+	{
+		std::string note;
+		if (r.setFail > 0)
+		{ note += "  ・露出設定に失敗したコマがあります。カメラの露出がアプリの意図とズレている可能性があります。\n"; }
+		if (r.staleFrames > 0 && pct(r.staleFrames, r.frames) > 10.0)
+		{ note += "  ・ライブビューの更新が撮影周期に追いついていません。撮影周期を長くすると安定します。\n"; }
+		if (r.lateCnt > 0 && pct(r.lateOk, r.lateCnt) < 90.0)
+		{ note += "  ・撮影周期を守れないコマが多いです。シャッター速度に対して周期が短い可能性があります。\n"; }
+		if (r.meterFail > 0 && pct(r.meterFail, r.frames) > 5.0)
+		{ note += "  ・測光できないコマが多いです。露出が据え置かれるため明るさが追従しません。\n"; }
+		if (!note.empty()) { n += std::snprintf(b + n, sizeof(b) - n, "\n[所見]\n%s", note.c_str()); }
+	}
+	if (n <= 0) { return ""; }
+	if (!osfile::writeAll(path, b, static_cast<size_t>(n))) { return ""; }
+	return path;
+}
+
 std::string dataManager::currentLogPath(void)
 {
 	char timeStr[20], dateStr[11];
@@ -1273,8 +1356,9 @@ std::string dataManager::currentLogPath(void)
 }
 
 void dataManager::logShot(int frame, const hgc::exposure& e, double lumStops, const char* ccmName,
-                          double meteredLinear, int rdyMeteringMs, int rdyShutterMs, int tm0Ms,
-                          int offMs, bool rdyOk, bool setOk, uint64_t shutterEpochMs)
+                          double meteredLinear, int rdyMeteringMs, int rdyShutterMs, int prepMs,
+                          int lateMs, bool rdyOk, bool setOk, int meterTry, int applyTry,
+                          uint32_t histSum, uint64_t lvTimeMs, int staleSkip, uint64_t shutterEpochMs)
 {
 	char lumStr[12];
 	std::snprintf(lumStr, sizeof(lumStr), "%+.3f", lumStops);
@@ -1291,14 +1375,37 @@ void dataManager::logShot(int frame, const hgc::exposure& e, double lumStops, co
 	{
 		dn = std::snprintf(detail, sizeof(detail), "%s", nm);
 	}
-	// タイマ方式の計測(offset調整・カメラ性能判断用)。>=0 のときだけ付与。
-	//  tm0=tm0処理時間, off=そのコマのoffset, rdy=測光時間(OK/NG), set=露出設定時間(OK/NG)。
+	// タイマ方式の計測(リード調整・カメラ性能判断用)。>=0 のときだけ付与。
+	//  rdy=測光時間(OK/NG,試行回数), set=露出設定時間(OK/NG,試行回数),
+	//  prep=準備(測光→計算→設定)の合計, late=シャッターの周期からの遅れ(0=ぴったり)。
 	if (dn > 0 && dn < static_cast<int>(sizeof(detail)))
 	{
-		if (tm0Ms >= 0)                                                 { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " tm0=%dms", tm0Ms); }
-		if (offMs >= 0 && dn < static_cast<int>(sizeof(detail)))        { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " off=%dms", offMs); }
-		if (rdyMeteringMs >= 0 && dn < static_cast<int>(sizeof(detail))) { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " rdy=%dms(%s)", rdyMeteringMs, rdyOk ? "OK" : "NG"); }
-		if (rdyShutterMs  >= 0 && dn < static_cast<int>(sizeof(detail))) { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " set=%dms(%s)", rdyShutterMs, setOk ? "OK" : "NG"); }
+		if (rdyMeteringMs >= 0 && dn < static_cast<int>(sizeof(detail)))
+		{	dn += std::snprintf(detail + dn, sizeof(detail) - dn, " rdy=%dms(%s,try%d)", rdyMeteringMs, rdyOk ? "OK" : "NG", meterTry); }
+		if (rdyShutterMs  >= 0 && dn < static_cast<int>(sizeof(detail)))
+		{	dn += std::snprintf(detail + dn, sizeof(detail) - dn, " set=%dms(%s,try%d)", rdyShutterMs, setOk ? "OK" : "NG", applyTry); }
+		if (prepMs >= 0 && dn < static_cast<int>(sizeof(detail)))  { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " prep=%dms", prepMs); }
+		if (lateMs >= 0 && dn < static_cast<int>(sizeof(detail)))  { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " late=%dms", lateMs); }
+		// hs=測光ヒストグラムの内容チェックサム。前コマと同値なら「カメラが古いフレームを返した
+		// (=測光値が1コマ古い)」疑い。alzMetering は中身の鮮度を判別できないのでログで突き合わせる。
+		if (histSum != 0 && dn < static_cast<int>(sizeof(detail))) { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " hs=%08x", histSum); }
+		// lv=測光したライブビューフレームを「カメラが取得した時刻」(カメラ内蔵時計。sh= とは一定のTZ差)。
+		// sh= と突き合わせれば、露光後に撮られた新鮮なフレームか、露光前の古いフレームかが一意に分かる。
+		if (lvTimeMs > 0 && dn < static_cast<int>(sizeof(detail)))
+		{
+			std::time_t lt = static_cast<std::time_t>(lvTimeMs / 1000ULL);
+			unsigned    lms = static_cast<unsigned>(lvTimeMs % 1000ULL);
+			std::tm     lg{};
+#if defined(_WIN32)
+			gmtime_s(&lg, &lt);
+#else
+			gmtime_r(&lt, &lg);
+#endif
+			dn += std::snprintf(detail + dn, sizeof(detail) - dn, " lv=%02d:%02d:%02d.%03u", lg.tm_hour, lg.tm_min, lg.tm_sec, lms);
+		}
+		// stale=このコマで「ライブビューが前回の測光から更新されていない(=古い映像)」として捨てた回数。
+		// >0 が続く=撮影周期がカメラのライブビュー更新周期に対して短すぎる(周期を伸ばすべき)。
+		if (staleSkip > 0 && dn < static_cast<int>(sizeof(detail))) { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " stale=%d", staleSkip); }
 		// シャッター投下の実時刻(ms精度)。ログのタイムスタンプ用オフセットでローカル化して sh=HH:MM:SS.mmm。
 		if (shutterEpochMs > 0 && dn < static_cast<int>(sizeof(detail)))
 		{

@@ -184,14 +184,46 @@ public:
 
 	// 1枚撮影(SHOT)を記録する。frame/iso/ss/fn/lum と適用中ccm名。
 	// meteredLinear: 測光したリニア輝度(自動補正時のみ。<0=測光なしで detail に出力しない)。
-	// rdyMeteringMs/rdyShutterMs: ライブビュー取得/露出設定の実測ms(>=0で detail 末尾に rdy=/set= を付与。計測用)。
+	// rdyMeteringMs/rdyShutterMs: 測光/露出設定の実測ms(>=0で detail 末尾に rdy=/set= を付与。計測用)。
+	// meterTry/applyTry: それぞれの試行回数(1=一発成功。>1=リトライした)。rdy=/set= に try として付与。
+	// prepMs: 準備(測光→露出計算→露出設定)の合計ms。リードに収まったかの判定用。
+	// lateMs: シャッターが「前コマ+撮影周期」からどれだけ遅れたか[ms](0=周期ぴったり)。周期維持の主指標。
 	// shutterEpochMs: actShutter直前の壁時計(UTCエポックms)。>0 で detail 末尾に sh=HH:MM:SS.mmm を付与(発光時刻の精密検証用)。
 	static void logShot(int frame, const hgc::exposure& e, double lumStops, const char* ccmName,
-	                    double meteredLinear = -1.0, int rdyMeteringMs = -1, int rdyShutterMs = -1, int tm0Ms = -1,
-	                    int offMs = -1, bool rdyOk = true, bool setOk = true, uint64_t shutterEpochMs = 0);
+	                    double meteredLinear = -1.0, int rdyMeteringMs = -1, int rdyShutterMs = -1, int prepMs = -1,
+	                    int lateMs = -1, bool rdyOk = true, bool setOk = true, int meterTry = 0, int applyTry = 0,
+	                    uint32_t histSum = 0, uint64_t lvTimeMs = 0, int staleSkip = 0, uint64_t shutterEpochMs = 0);
 
 	// 現在の(本日の)ログファイルのフルパスを返す(検証・ログ転送用)。
 	static std::string currentLogPath(void);
+
+	// --- 撮影結果レポート(1撮影=1ファイル。ログと同じディレクトリへ出す) ---
+	// 撮影中に1コマずつ積算し、撮影終了時に人が読める要約をファイルへ書く。
+	// 目的: 「この機材/設定で無理が無かったか」をユーザーが自分で判断できる材料を残す。
+	//  例) stale が多い=撮影周期がカメラのライブビュー更新に追いつかれていない → 周期を伸ばす判断ができる。
+	struct captureReport
+	{
+		int      frames    = 0;		// 撮影したコマ数
+		int      meterFail = 0;		// 測光できなかったコマ(露出は据え置き)
+		int      setFail   = 0;		// リトライしても露出設定できなかったコマ(実機とアプリの露出がズレる)
+		int      shootFail = 0;		// シャッターに失敗したコマ
+		int      staleFrames = 0;	// 古いライブビューを捨てたコマ数
+		long     staleTotal  = 0;	// 捨てた延べ回数
+		int      meterRetryFrames = 0;	// 測光をリトライしたコマ数
+		int      applyRetryFrames = 0;	// 露出設定をリトライしたコマ数
+		int      lateOk    = 0;		// 撮影周期を守れたコマ(遅れ<=100ms)
+		int      lateCnt   = 0;		// 遅れを計測できたコマ(1枚目を除く)
+		long     lateSum   = 0;		// 遅れの合計[ms]
+		int      lateMax   = 0;		// 最大の遅れ[ms]
+		long     prepSum   = 0;		// 準備(測光→計算→設定)の合計[ms]
+		int      prepMax   = 0;		// 準備の最大[ms]
+		int      prepOver  = 0;		// 準備がリードに収まらなかったコマ数
+		uint64_t firstShutterMs = 0;	// 最初/最後のシャッター(実周期の算出用)
+		uint64_t lastShutterMs  = 0;
+	};
+	// レポートをファイルへ書く。planName/planId/カメラ名と窓・周期は呼び出し側から渡す。
+	// return: 書けたファイルのパス(空=失敗)。
+	static std::string writeCaptureReport(const captureReport& r, const hgc::cs& plan, const char* planId);
 };
 
 #endif // _DATA_MANAGER_H_

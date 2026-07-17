@@ -133,6 +133,7 @@ public:
 	errCode getSettings(cmdt::shotRange& settings);		// 設定値を取得する
 	errCode rdyMetering(void);							// 測光準備
 	errCode alzMetering(cmdt::HISTOGRAM& histoOut);		    // 測光解析
+	uint64_t lastLvTimeMs(void) override { return lvSysTimeMs_; }	// 直近フレームのカメラ側取得時刻[ms]
 
 	// 露出を1項目ずつ設定する(送信用テーブルで real に最も近いカメラ広告値を選んで送る)。
 	// 周期正確化リアーキ(タイマ方式)では rdyShutter を使わず、変更のあった項目だけを個別に呼ぶ。
@@ -186,6 +187,7 @@ protected:
 	};
 	
     std::string liveViewInfo;                       // rdyMetering() から alzMetering() に引き継ぐデータ
+    uint64_t    lvSysTimeMs_ = 0;                   // 直近 alzMetering が解析したフレームの liveviewdata.systemtime [ms]
 
 	// useFunction に登録された機能を削除する
 	void useFunctionClear(void);

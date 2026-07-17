@@ -114,6 +114,33 @@ namespace hgc
 		long long localSec = days * 86400LL + t.hour * 3600LL + t.min * 60LL + t.sec;
 		return localSec - static_cast<long long>(utcOffsetMin) * 60LL;
 	}
+
+	// Unix時刻(UTC秒) + UTCオフセット[分] → ローカル日時(toUnixUtc の逆。Hinnant civil_from_days)。
+	inline dateTime fromUnixUtc(long long unixSec, int utcOffsetMin)
+	{
+		long long localSec = unixSec + static_cast<long long>(utcOffsetMin) * 60LL;
+		long long days = localSec / 86400LL;
+		long long rem  = localSec - days * 86400LL;
+		if (rem < 0) { rem += 86400LL; days -= 1; }
+		long long z = days + 719468;
+		long long era = (z >= 0 ? z : z - 146096) / 146097;
+		unsigned  doe = static_cast<unsigned>(z - era * 146097);
+		unsigned  yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+		long long y   = static_cast<long long>(yoe) + era * 400;
+		unsigned  doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+		unsigned  mp  = (5 * doy + 2) / 153;
+		unsigned  d   = doy - (153 * mp + 2) / 5 + 1;
+		unsigned  m   = mp < 10 ? mp + 3 : mp - 9;
+		y += (m <= 2);
+		dateTime t{};
+		t.year  = static_cast<uint16_t>(y);
+		t.month = static_cast<uint16_t>(m);
+		t.day   = static_cast<uint16_t>(d);
+		t.hour  = static_cast<uint16_t>(rem / 3600);
+		t.min   = static_cast<uint16_t>((rem % 3600) / 60);
+		t.sec   = static_cast<uint16_t>(rem % 60);
+		return t;
+	}
 }
 
 #endif // _HGC_COMMON_H_

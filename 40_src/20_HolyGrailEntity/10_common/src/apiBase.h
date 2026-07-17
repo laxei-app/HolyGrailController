@@ -22,6 +22,9 @@ public:
 	virtual errCode getSettings(cmdt::shotRange& settings)	{ return ERR_HGC_NOT_SUPPORTED; }
 	virtual errCode rdyMetering(void)						{ return ERR_HGC_NOT_SUPPORTED; };
 	virtual errCode alzMetering(cmdt::HISTOGRAM& hist)		{ return ERR_HGC_NOT_SUPPORTED; };
+	// 直近 alzMetering が解析したライブビューフレームの「カメラ側取得時刻」[ms]。0=不明。
+	// 露光後に撮られた新鮮なフレームか、露光前の古いフレームかの判定に使う。
+	virtual uint64_t lastLvTimeMs(void)						{ return 0; };
 	// 撮影開始時にカメラを当アプリ都合(マニュアル露出)に設定し、終了時に元へ戻す(仕様8/CCAPI)。
 	virtual errCode setupShootingModeManual(void)			{ return ERR_HGC_NOT_SUPPORTED; };
 	virtual errCode restoreShootingMode(void)				{ return ERR_HGC_NOT_SUPPORTED; };

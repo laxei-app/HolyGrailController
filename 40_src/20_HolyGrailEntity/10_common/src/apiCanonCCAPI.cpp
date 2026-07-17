@@ -847,13 +847,24 @@ namespace
 		std::string curKey;
 		bool inLiveview = false;
 		bool inHisto    = false;
+		bool inSysTime  = false;
 		int  depth      = 0;
+		// liveviewdata.systemtime = このライブビューフレームをカメラが取得した時刻。
+		// これを見れば「露光後に撮られた新鮮なフレームか / 露光前の古いフレームか」が
+		// 推測なしに一意に分かる(sec=Unix時刻相当・subsec=ミリ秒。実測で確認済み)。
+		uint32_t sysSec = 0, sysSubsec = 0;
 
 		explicit HistoSax(std::vector<std::vector<uint32_t>>& o) : out(o) {}
 
 		bool key(string_t& v)          { curKey = v; return true; }
-		bool start_object(std::size_t) { if (curKey == "liveviewdata") { inLiveview = true; } curKey.clear(); return true; }
-		bool end_object()              { return true; }
+		bool start_object(std::size_t)
+		{
+			if (curKey == "liveviewdata")            { inLiveview = true; }
+			else if (inLiveview && curKey == "systemtime") { inSysTime = true; }
+			curKey.clear();
+			return true;
+		}
+		bool end_object()              { if (inSysTime) { inSysTime = false; } return true; }
 		bool start_array(std::size_t)
 		{
 			if (inHisto)                                       { ++depth; if (depth == 2) { out.emplace_back(); } }
@@ -862,8 +873,17 @@ namespace
 			return true;
 		}
 		bool end_array()               { if (inHisto) { --depth; if (depth == 0) { inHisto = false; } } return true; }
-		bool number_unsigned(number_unsigned_t v) { if (inHisto && depth == 2) { out.back().push_back(static_cast<uint32_t>(v)); } return true; }
-		bool number_integer(number_integer_t v)   { if (inHisto && depth == 2) { out.back().push_back(static_cast<uint32_t>(v)); } return true; }
+		void takeNum(uint64_t v)
+		{
+			if (inHisto && depth == 2)  { out.back().push_back(static_cast<uint32_t>(v)); }
+			else if (inSysTime)
+			{
+				if      (curKey == "sec")    { sysSec    = static_cast<uint32_t>(v); }
+				else if (curKey == "subsec") { sysSubsec = static_cast<uint32_t>(v); }
+			}
+		}
+		bool number_unsigned(number_unsigned_t v) { takeNum(static_cast<uint64_t>(v)); return true; }
+		bool number_integer(number_integer_t v)   { takeNum(static_cast<uint64_t>(v)); return true; }
 		bool number_float(number_float_t, const string_t&) { return true; }
 		bool boolean(bool)             { return true; }
 		bool null()                    { return true; }
@@ -914,6 +934,9 @@ errCode apiCanonCCAPI::alzMetering(cmdt::HISTOGRAM& histoOut)
             DBGLN(col::RED, "parse error(sax)");
             return ERR_HGC_API_ANALIZE;
         }
+        // このフレームをカメラが取得した時刻(ミリ秒)。呼び出し側が「露光後の新鮮なフレームか」を
+        // 判定するのに使う。sec はカメラのローカル時刻をUnix時刻として持つ(スマホとは一定のTZ差)。
+        lvSysTimeMs_ = static_cast<uint64_t>(sax.sysSec) * 1000ULL + sax.sysSubsec;
         DBGLN(col::CYN,"%s:elapse(%ums) sax parse.", __func__, tool::getElapse(ela));
 
         // yrgb の要素があること

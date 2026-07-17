@@ -379,8 +379,12 @@ namespace net
 
 	bool httpGet(const std::string& url, std::string& response)
 	{
-		httpRequest("GET", url, std::string(), false, response);
-		return true;	// Windows版に倣い、取得有無に関わらず true
+		// 以前は取得の成否に関わらず true を返していた(ステータスを捨てていた)。
+		// そのため CCAPI が 503("Device busy"/"Live view not started") を返しても呼び出し側は
+		// 成功と誤認し、rdyMetering が常に OK に見えていた(実害は alzMetering の中身検査で
+		// 辛うじて止まっていただけ)。httpPost/httpPut と同じくステータスで判定する。
+		int code = httpRequest("GET", url, std::string(), false, response);
+		return (code >= 200 && code <= 204);
 	}
 
 	bool httpPost(const std::string& url, const std::string& body, std::string& response)

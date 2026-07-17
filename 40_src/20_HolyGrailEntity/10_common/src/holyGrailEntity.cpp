@@ -71,6 +71,7 @@ namespace
 		std::atomic<int>              state{ HGE_ST_IDLE };
 		int                           slot = 0;				// Phase4: 同時撮影のずらしスロット(周期内位置=slot/MAX_CONCURRENT)
 		bool                          logCapturing = false;	// START/STOP検出
+		dataManager::captureReport    report;				// 撮影結果レポートの積算(STOP時にファイルへ出す)
 		std::string                   lastCcm;				// CCMSW検出
 		void*                         startThread = nullptr;
 		std::atomic<bool>             cancel{ false };		// 停止要求(予約待ちの開始スレッドを中断する)
@@ -424,7 +425,10 @@ namespace
 	{
 		char num[64];
 		std::string j = "{\"name\":\"" + jesc(g_plan.name) + "\"";
-		j += ",\"interval\":" + std::to_string(static_cast<int>(g_plan.interval));
+		// 撮影周期は小数第1位まで扱う(長秒ss時に ss+2.0/+2.5/+3.0 のような細かい設定を可能にするため)。
+		// int へ切り捨てると 15.5 が 15 に化けて UI と実体がズレるので小数で出す。
+		std::snprintf(num, sizeof(num), "%.1f", g_plan.interval);
+		j += ",\"interval\":" + std::string(num);
 		j += ",\"start\":\"" + dtToStr(g_plan.start) + "\"";
 		j += ",\"end\":\""   + dtToStr(g_plan.end)   + "\"";
 		// 表示用の静的フィールド(場所/機材/方向/仰角/向き)
@@ -1004,6 +1008,13 @@ namespace
 				else if ((s == HGE_ST_IDLE || s == HGE_ST_ERROR) && S->logCapturing)
 				{
 					S->logCapturing = false; dataManager::logEvent("STOP", "");
+					// 撮影結果レポートをファイルへ出す(UIには出さない)。1コマも撮っていなければ出さない。
+					if (S->report.frames > 0)
+					{
+						std::string rp = dataManager::writeCaptureReport(S->report, S->plan, S->planId.c_str());
+						if (!rp.empty()) { dataManager::logEvent("INFO", ("report: " + rp).c_str()); }
+						S->report = dataManager::captureReport{};	// 次の撮影に持ち越さない
+					}
 				}
 				S->state = s; notifyStateP(S->planId, s); refreshAggregateState();
 				// 実行状況: 撮影窓を終えてのIDLE(=完了)のみ意図を消す。失敗(ERROR/接続断)や
@@ -1028,9 +1039,40 @@ namespace
 				              S->planId.c_str(), c.frame, c.exp.iso.c_str(), c.exp.ss.c_str(), c.exp.fn.c_str(), c.luminance);
 				notify(HGE_EV_CAPTURED, b);
 				if (c.ccm != S->lastCcm) { std::string d = (S->lastCcm.empty() ? "" : S->lastCcm + " -> ") + c.ccm; dataManager::logEvent("CCMSW", d.c_str()); S->lastCcm = c.ccm; }
-				dataManager::logShot(c.frame, c.exp, c.luminance, c.ccm.c_str(), c.metered, c.rdyMeteringMs, c.rdyShutterMs, c.tm0Ms, c.offMs, c.rdyOk, c.setOk, c.shutterMs);
+				dataManager::logShot(c.frame, c.exp, c.luminance, c.ccm.c_str(), c.metered, c.rdyMeteringMs, c.rdyShutterMs, c.prepMs, c.lateMs, c.rdyOk, c.setOk, c.meterTry, c.applyTry, c.histSum, c.lvTimeMs, c.staleSkip, c.shutterMs);
+				// 撮影結果レポートの積算(1コマ=1回)。撮影終了時にまとめてファイルへ出す。
+				{
+					dataManager::captureReport& R = S->report;
+					++R.frames;
+					if (c.metered < 0.0) { ++R.meterFail; }		// 測光できず(露出据え置き)
+					if (!c.setOk)        { ++R.setFail; }		// リトライしても露出設定できず
+					if (c.meterTry > 1)  { ++R.meterRetryFrames; }
+					if (c.applyTry > 1)  { ++R.applyRetryFrames; }
+					if (c.staleSkip > 0) { ++R.staleFrames; R.staleTotal += c.staleSkip; }
+					if (c.lateMs >= 0)
+					{
+						++R.lateCnt; R.lateSum += c.lateMs;
+						if (c.lateMs <= 100) { ++R.lateOk; }
+						if (c.lateMs > R.lateMax) { R.lateMax = c.lateMs; }
+					}
+					if (c.prepMs >= 0)
+					{
+						R.prepSum += c.prepMs;
+						if (c.prepMs > R.prepMax) { R.prepMax = c.prepMs; }
+						if (c.prepMs > captureRunner::kPrepLeadMs) { ++R.prepOver; }
+					}
+					if (c.shutterMs > 0)
+					{
+						if (R.firstShutterMs == 0) { R.firstShutterMs = c.shutterMs; }
+						R.lastShutterMs = c.shutterMs;
+					}
+				}
 			},
-			[S](errCode e, const std::string& m) { notifyError(e, m.c_str()); });
+			[S](errCode e, const std::string& m) {
+				// レポート用: シャッター失敗を数える(runner が "actShutter" で通知する)。
+				if (m.find("actShutter") != std::string::npos) { ++S->report.shootFail; }
+				notifyError(e, m.c_str());
+			});
 
 		// カメラの取得/再接続を1回試みる(3a: 初回取得も撮影中再接続もこの1本に集約)。
 		//  ・撮影要求時にカメラ未検出でも中断しないため、runner の取得フェーズがこれを繰り返し呼ぶ。
@@ -1586,7 +1628,10 @@ int32_t hge_setPlanCcmJson(const char* json, int32_t len)
 	if (g_plan.interval < static_cast<double>(mn)) { g_plan.interval = mn; }
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
-	return ERR_HGC_OK;
+	// 他の setter と同様に即永続化する。これが無いと編集がメモリ上の g_plan/g_planCcm だけに残り、
+	// 計画を選び直す(loadPlanById がファイルから読み直す)と黙って元へ戻る
+	// (2026-07-17 実機: 日中撮影の露出補正を +2.0ev にしても保存されず、選び直すと +0.0ev に戻った)。
+	return saveCurrentPlan();
 }
 
 int32_t hge_setPlanInterval(double seconds)
@@ -1597,7 +1642,10 @@ int32_t hge_setPlanInterval(double seconds)
 	g_plan.interval = seconds;
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
-	return ERR_HGC_OK;
+	// 他の setter と同様に即永続化する。これが無いと g_plan(メモリ)だけが変わり、計画を
+	// 選び直す(loadPlanById がファイルから読み直す)と編集が消えて元の周期で撮影してしまう
+	// (2026-07-17: UIは15.5秒と表示するのに撮影は15.0秒で走る、として発覚)。
+	return saveCurrentPlan();
 }
 
 // 編集中の撮影計画の名称を変更する(離脱/保存で永続化。リストへは即反映)。
@@ -1669,7 +1717,7 @@ int32_t hge_setBandMode(int32_t sunriseMode, int32_t sunsetMode)
 	if (e != ERR_HGC_OK) { return e; }
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
-	return ERR_HGC_OK;
+	return saveCurrentPlan();	// 編集を即永続化(他の setter と同様。選び直しで消えるのを防ぐ)
 }
 
 int32_t hge_setBoundary(int32_t beforeType, int32_t afterType, int32_t occ, const char* whenIso)
@@ -1694,7 +1742,7 @@ int32_t hge_setBoundary(int32_t beforeType, int32_t afterType, int32_t occ, cons
 	if (e != ERR_HGC_OK) { return e; }
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
-	return ERR_HGC_OK;
+	return saveCurrentPlan();	// 編集を即永続化(設計方針「編集は各操作でその場保存」)
 }
 
 int32_t hge_setBoundaryByAlt(int32_t beforeType, int32_t afterType, int32_t occ, double altDeg, int32_t rising)
@@ -1749,7 +1797,7 @@ int32_t hge_setBoundaryByAlt(int32_t beforeType, int32_t afterType, int32_t occ,
 	if (e != ERR_HGC_OK) { return e; }
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
-	return ERR_HGC_OK;
+	return saveCurrentPlan();	// 編集を即永続化(設計方針「編集は各操作でその場保存」)
 }
 
 int32_t hge_clearScheduleEdits(void)
@@ -1762,7 +1810,7 @@ int32_t hge_clearScheduleEdits(void)
 	if (e != ERR_HGC_OK) { return e; }
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
-	return ERR_HGC_OK;
+	return saveCurrentPlan();	// 編集を即永続化(設計方針「編集は各操作でその場保存」)
 }
 
 int32_t hge_getCcmDefaultsJson(char* buf, int32_t* inoutLen)

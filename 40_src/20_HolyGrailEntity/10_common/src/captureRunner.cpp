@@ -2,6 +2,7 @@
 #include "captureRunner.h"
 #include "osSystemCall.h"
 #include "debugOut.h"
+#include "astroSched.h"		// ② 太陽高度(sunHoriz)から ev0 中心bmを算出
 #include <algorithm>
 #include <cmath>
 #include <ctime>
@@ -134,6 +135,78 @@ errCode captureRunner::rdyMeterTimed(void)
 	return e;
 }
 
+// ③ ヒスト取得(rdyMetering→alzMetering)を最大 kMeterMaxMs まで kMeterRetryMs 間隔でリトライ。
+//   機種(R100等)では長秒露光の後、ライブビュー(ヒスト)が使えるまで時間がかかる(実測3.3秒)。
+//   1回で諦めず取得できるまで待つ。露光中は取れないので、露光終了までの待ちは呼び出し側の責務。
+bool captureRunner::meterWithRetry(cmdt::HISTOGRAM& hist, int& tries)
+{
+	void* t0 = tool::startElapse();
+	tries = 0;
+	histSum_ = 0;
+	lvTimeMs_ = 0;
+	staleSkip_ = 0;
+	// 古いフレーム判定のしきい値[ms]。前回の測光からこれだけ進んでいなければ「ライブビューが
+	// 更新されていない=前回と同じ映像」とみなして採用しない。
+	//  カメラは要求した周期に間に合わないと更新を1回飛ばす(実測: R100は13秒露光だと約15.7秒必要。
+	//  周期15.2秒では2コマに1回しか更新されず、間のコマは31秒前の映像が返ってきた)。
+	//  古い測光値で露出を決めると、①で消したはずの測光遅れが復活し夜明けで露出を誤る。
+	//  設定できる撮影周期の下限が「最長ss+2秒」なので、しきい値の下限は2秒。
+	const long freshMs = std::max(2000L, static_cast<long>(plan_.interval * 1000.0) - 5000L);
+	for (;;)
+	{
+		++tries;
+		if (this->rdyMeterTimed() == ERR_HGC_OK && cameraController::alzMetering(*dev_, hist) == ERR_HGC_OK)
+		{
+			// このフレームをカメラが取得した時刻(0=機種が systemtime を返さない → 判定不能なので素通し)。
+			const uint64_t lv = cameraController::lastLvTimeMs(*dev_);
+			if (lv != 0 && lvPrev_ != 0 && lv > lvPrev_ &&
+			    static_cast<long long>(lv - lvPrev_) < static_cast<long long>(freshMs))
+			{	// 前回の測光から更新されていない=古いフレーム。採用せずリトライへ(上限で諦め→露出据え置き)。
+				++staleSkip_;
+				if (!running_.load()) { return false; }
+				if (static_cast<int>(tool::getElapse(t0)) >= kMeterMaxMs) { return false; }
+				interruptibleSleep(kMeterRetryMs);
+				continue;
+			}
+			if (lv != 0) { lvPrev_ = lv; }
+			// 取得したヒストグラムの内容チェックサム。前コマと完全一致するなら「カメラが古い
+			// フレームを返している(=測光値が1コマ古い)」ことになる。alzMetering は先頭バイトの
+			// 形しか見ておらず中身の鮮度を判別できないため、ログで突き合わせられるようにする。
+			uint32_t s = 0;
+			for (int i = 0; i < cmdt::hist_bin; ++i) { s = s * 31u + hist.y[i]; }
+			histSum_ = s;
+			// このフレームをカメラが取得した時刻。シャッター時刻と突き合わせれば
+			// 「露光後の新鮮なフレームか / 露光前の古いフレームか」が推測なしに判る。
+			lvTimeMs_ = cameraController::lastLvTimeMs(*dev_);
+			return true;
+		}
+		if (!running_.load()) { return false; }						// 中止
+		if (static_cast<int>(tool::getElapse(t0)) >= kMeterMaxMs) { return false; }	// 上限で諦め
+		interruptibleSleep(kMeterRetryMs);
+	}
+}
+
+// 露出設定を最大 kApplyMaxMs まで kApplyRetryMs 間隔でリトライする。
+//  カメラは撮影/記録中に設定PUTを 503 "During shooting or recording"/"Device busy" で即拒否する。
+//  ここで諦めるとカメラは古い露出のまま撮り続け、アプリの露出モデルと実機がズレたまま復帰できない
+//  (2026-07-16 の通し撮影で露出設定の90%が失敗し夜明けが白飛びした)。通るまで粘る。
+//  applyExposureChanged は失敗した項目の lastXxxApplied_ を更新しないので、リトライは自然に未適用分だけを再送する。
+errCode captureRunner::applyWithRetry(const hgc::exposure& exp, int& tries)
+{
+	void*   t0 = tool::startElapse();
+	tries = 0;
+	errCode e  = ERR_HGC_OK;
+	for (;;)
+	{
+		++tries;
+		e = this->applyExposureChanged(exp);
+		if (e == ERR_HGC_OK) { return ERR_HGC_OK; }
+		if (!running_.load()) { return e; }							// 中止
+		if (static_cast<int>(tool::getElapse(t0)) >= kApplyMaxMs) { return e; }		// 上限で諦め
+		interruptibleSleep(kApplyRetryMs);
+	}
+}
+
 // 露出を「変更のあった項目だけ」適用する(タイマ方式tm0)。通常は ss/iso/fn の1つだけ、
 // ccm切替の瞬間のみ複数、暗限界張り付き等で変化なしなら0本になる。直近適用値と比較して差分のみ送る。
 // establishSession でキャッシュをクリアするので、接続/再接続直後の初回はフル適用になる。
@@ -218,8 +291,8 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 
 		double x = -1.0, linear = -1.0;
 		cmdt::HISTOGRAM hist;
-		if (this->rdyMeterTimed() == ERR_HGC_OK &&
-		    cameraController::alzMetering(*dev_, hist) == ERR_HGC_OK)
+		int mtry = 0;
+		if (this->meterWithRetry(hist, mtry))	// ③ 取得できるまで最大5秒リトライ
 		{
 			x = expo::histMedian(hist.y, cmdt::hist_bin);
 			linear = expo::srgbToLinear(x);
@@ -234,7 +307,7 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 		}
 
 		// ev0 のリニア輝度は環境光依存(§4.3.3/4.3.4)。測光値と測光時の露出から都度求める。
-		const double lin0 = expo::ev0LinearForMeasure(linear, cur, expo::ev0Cfg());
+		const double lin0 = expo::ev0LinearForMeasure(linear, cur, ev0cfg_);
 		const double linT = expo::linearFromEvBase(evT, lin0);	// 目標リニア輝度
 		const double err  = expo::evFromLinear(linT, linear);	// log2(linear/linT): + 明るすぎ / - 暗すぎ
 		if (std::fabs(err) < bestAbsErr) { bestAbsErr = std::fabs(err); best = cur; }
@@ -267,6 +340,9 @@ bool captureRunner::establishSession(void)
 {
 	// カメラ未取得(apiBase==nullptr)ならセッションは張れない(3a: 未検出許容)。
 	if (dev_ == nullptr || dev_->apiBase == nullptr) { return false; }
+	// 再接続でライブビューのセッションが作り直されるので、古いフレーム判定の基準を捨てる。
+	// 前セッションの時刻と比べると、復帰後の正常なフレームまで「古い」と誤判定してしまう。
+	lvPrev_ = 0;
 
 	// 変更分のみ適用のキャッシュをクリア(再接続直後はカメラ状態が不定なので次回フル適用させる)。
 	lastFnApplied_.clear(); lastSsApplied_.clear(); lastIsoApplied_.clear();
@@ -356,16 +432,11 @@ errCode captureRunner::loop(void)
 
 	// 最長ss上限(仕様7.4.2/今回の指示3): ss は「夜間ssを超えない」かつ「撮影周期-2秒以内」。
 	// 夜間がスケジュール窓に無くても周期決定パラメータとして守る。各 ctl.init 後に capLongestSs で適用。
-	// 最大ss=夜間ss(未設定/過大は安全値へ)。tm1オフセット=(周期-最大ss)×係数(固定にせず余裕から算出・調整対象)。
+	// 最大ss=夜間ss(未設定/過大は安全値へ)。
 	const double nightSsSec = expo::parseValue(plan_.nightFixedExposure.ss, expo::expoKind::ss);
 	double       maxSs      = (nightSsSec > 0.0) ? nightSsSec : (interval * 0.5);
 	if (maxSs >= interval) { maxSs = interval * 0.9; }
-	const double offsetSec  = std::max(0.1, (interval - maxSs) * kShutterOffsetFactor);	// tm0→tm1 の差[秒]
-	const double maxSsCap   = maxSs;	// 露出の ss 上限=最大ss(offset+maxSs<周期 が保証される)
-	const int    offMs      = static_cast<int>(offsetSec * 1000.0);	// ログ用
-	// Phase4(1エッジ複数カメラ同時): このセッションの tm0/tm1 を周期内で staggerMs だけ後ろへずらす。
-	// 2台なら 0.5 → 半周期ずれ、各カメラのHTTPが単一 netThread へ同時集中して衝突するのを避ける(単独時=0)。
-	const long   staggerMs  = static_cast<long>(staggerFrac_ * interval * 1000.0);
+	const double maxSsCap   = maxSs;	// 露出の ss 上限=最大ss
 
 	const hgc::ccmWindow* curWin = nullptr;
 	expo::exposureCtl autoCtl;		// 自動露出用
@@ -426,13 +497,18 @@ errCode captureRunner::loop(void)
 	//  常に実時刻(std::time)を使う → 開始が過去でも計画を過去から再生せず、再接続の再アンカーでも ccm が巻き戻らない。
 	hgc::exposure pending{};			// 各境界(tm0)で適用し tm1 で撮る露出。前フェーズの初期収束で確定
 	bool          warmedUp   = false;	// 初期収束が済み pending が確定したか
-	void*         mono       = nullptr;	// 撮影窓開始を0とする monotonic アンカー
-	long long     boundaryIdx = 0;		// 何コマ目か(境界時刻 = mono + boundaryIdx*interval)
+	void*         lastAnchor = nullptr;	// 直近シャッターの[A](最後の1枚保護用)。①④で絶対アンカー mono/boundaryIdx は廃止
 
 	while (running_)
 	{
 		long long now = static_cast<long long>(std::time(nullptr));
 		if (now >= endSec) { break; }				// 計画終了
+
+		// ①④ 相対アンカー: 各コマは[A](このコマのシャッター起点)から周期後を狙う。撮ったコマの露出=shotExp。
+		hgc::exposure shotExp{};				// このコマで撮った露出(=前コマで適用済みの pending)。ログ用
+		void*         anchorA   = nullptr;		// [A] このコマの周期基準(準備開始/次シャッター算出に使用)
+		uint64_t      shutterMs = 0;
+		long          lateMs    = -1;			// このコマのシャッターの周期からの遅れ[ms](0=ぴったり。-1=計測なし)
 
 		if (!warmedUp)
 		{
@@ -477,30 +553,65 @@ errCode captureRunner::loop(void)
 		}
 		else
 		{
-			// tm0: 次の境界(絶対アンカー)まで待つ。累積ドリフトが出ない。staggerMs=同時撮影のずらし(単独時0)。
-			sleepUntilElapse(mono, static_cast<long>(boundaryIdx * interval * 1000.0) + staggerMs);
+			// ①④ 通常コマ: [A]起点 → シャッター(前コマで適用済みの pending を撮る) → 周期-リードまで待つ。
+			//   準備(測光→計算→設定)はリード手前から連続で行う(ヘッダ kPrepLeadMs の説明を参照)。
+			//   露光直後に設定すると 503 "During shooting or recording" で必ず弾かれるため、ここでは何もしない。
+			// このコマのシャッターが「前コマ+周期」からどれだけ遅れたか(0=ぴったり)。準備が
+			// リードに収まらなかったコマだけ >0 になる。計測の主指標なのでシャッター直前に採る。
+			if (lastAnchor != nullptr)
+			{
+				const long ach = static_cast<long>(tool::getElapse(lastAnchor));	// 実際に空いた間隔[ms]
+				lateMs = ach - static_cast<long>(interval * 1000.0);
+				if (lateMs < 0) { lateMs = 0; }
+			}
+			anchorA = tool::startElapse();
+			now = static_cast<long long>(std::time(nullptr));
+			if (now >= endSec) { break; }
+			{
+				const hgc::ccmWindow* wS = activeWindow(now);
+				if (wS == nullptr || !wS->ccm) { interruptibleSleep(500); continue; }	// 隙間は撮らない
+			}
+			shotExp = pending;
+			shutterMs = tool::epochMs();	// シャッター投下直前の壁時計(ms精度)
+			err = cameraController::actShutter(*dev_);
+			if (err != ERR_HGC_OK) { err = cameraController::actShutter(*dev_); }	// シャッター失敗は1回だけリトライ
+			if (err != ERR_HGC_OK) { if (onError_) { onError_(err, "actShutter"); } ++shootFailStreak; }
+			else { shootFailStreak = 0; }
+			++frame;
+			if (onProgress_) { onProgress_(progressInfo{ frame, total, static_cast<int>(endSec - now), static_cast<int>(now - startSec) }); }
+			// 周期-リードまで待つ。ここまで待てば露光は終わりカメラは記録も終えている(=設定が通る)。
+			//  周期 <= リード や 周期-リード < SS のような厳しい設定でも、遅れて実行されるだけで破綻はしない
+			//  (許可する仕様。カメラ単体のインターバル撮影と同様に周期が伸びる)。
+			{
+				long prepAt = static_cast<long>(interval * 1000.0) - kPrepLeadMs;
+				if (prepAt < 0) { prepAt = 0; }
+				sleepUntilElapse(anchorA, prepAt);
+			}
 			if (!running_) { break; }
 			if (static_cast<long long>(std::time(nullptr)) >= endSec) { break; }
-			// 窓コンテキスト(ccm選択/露出スケジュール/進捗)は実時刻を使う。周期の刻み(mono+boundaryIdx)はペーシング専用。
-			// こうすると開始が過去でも計画時刻を過去から再生せず、再接続で boundaryIdx=0 に戻しても ccm が計画先頭へ巻き戻らない。
-			now = static_cast<long long>(std::time(nullptr));
+			now = static_cast<long long>(std::time(nullptr));	// 準備開始時点の文脈時刻
 		}
 
 		const hgc::ccmWindow* w = activeWindow(now);
-		if (w == nullptr || !w->ccm) { if (warmedUp) { ++boundaryIdx; } interruptibleSleep(500); continue; }	// 隙間
-
-		// tm0: 変更のあった露出項目だけ適用(通常コマのみ。ウォームアップは pending 未確定なので適用しない)。
-		// tm0内ではログ出力せず成否/所要を変数に退避する(tm0を極力短く)。失敗してもここではリトライしない。
-		void*   tm0     = warmedUp ? tool::startElapse() : nullptr;	// tm0処理時間(適用+測光)の計測開始
-		int     applyMs = -1;
-		errCode applyErr = ERR_HGC_OK;
-		if (warmedUp)
-		{
-			lastExp = pending;	// ブロックの ev0 は「測光時の露出」= これから測る pending を使う
-			void* ta = tool::startElapse();
-			applyErr = applyExposureChanged(pending);	// 変更分のみ。失敗はリトライせず記録のみ
-			applyMs = static_cast<int>(tool::getElapse(ta));
+		if (w == nullptr || !w->ccm)
+		{	// 隙間: warmup中は待つだけ。通常コマは既に撮ったので周期まで待って次へ。
+			if (warmedUp && anchorA != nullptr)
+			{
+				const long im = static_cast<long>(interval * 1000.0);
+				if (static_cast<long>(tool::getElapse(anchorA)) < im) { sleepUntilElapse(anchorA, im); }
+			}
+			else { interruptibleSleep(500); }
+			continue;
 		}
+
+		// ここからが準備(測光→露出計算→露出設定)。カメラはこの時点で暇=設定が通る。
+		//  測光は「撮ったコマ(=shotExp)の露出」の下で行う(まだ次の露出を適用していないため)。
+		//  prep = 準備の合計所要。リード(kPrepLeadMs)に収まったかの判定に使う。
+		int     applyMs  = -1;
+		int     applyTry = 0;
+		errCode applyErr = ERR_HGC_OK;
+		void*   prep = warmedUp ? tool::startElapse() : nullptr;
+		if (warmedUp) { lastExp = shotExp; }	// ev0 は「測光時の露出」= 撮ったコマの露出
 
 		const hgc::ccmWindow* prevWin = curWin;
 		const bool windowChanged = (w != curWin);
@@ -511,8 +622,18 @@ errCode captureRunner::loop(void)
 
 		hgc::exposure target{};
 		double meteredLinear = -1.0;	// 測光したリニア輝度(自動補正時のみ。<0=測光なし)
-		meterMs_ = -1;	// このコマの rdyMetering 実測msをリセット(測光しないコマは -1 のまま)
-		meterOk_ = true;	// 測光成否をリセット(測光しないコマは「成功扱い」でログ非表示)
+		meterMs_  = -1;	// このコマの rdyMetering 実測msをリセット(測光しないコマは -1 のまま)
+		meterOk_  = true;	// 測光成否をリセット(測光しないコマは「成功扱い」でログ非表示)
+		meterTry_ = 0;	// 測光試行回数をリセット(測光しないコマは 0)
+
+		// ② このコマの ev0 中心bmを太陽高度から決める(薄明ほど暗く保つ)。測光を使う制御方法(preNight/postNight/auto)で効く。
+		//    now=文脈時刻(実時刻)、plan_.place=撮影地。夜間(固定露出)では ev0 を使わないので影響しない。
+		ev0cfg_ = expo::ev0Cfg();
+		{
+			const hgc::dateTime lt = hgc::fromUnixUtc(now, off_);
+			const double sunAltDeg = astro::sunHoriz(lt, off_, plan_.place).altitude;
+			ev0cfg_.bm = expo::ev0BmFromAltitude(sunAltDeg, ev0cfg_);
+		}
 
 		if (ccm->type == hgc::ccmType::night)
 		{
@@ -572,8 +693,7 @@ errCode captureRunner::loop(void)
 				const double homeB    = haveHome ? nightB : 0.0;
 				double linear = -1.0;
 				cmdt::HISTOGRAM hist;
-				if (this->rdyMeterTimed() == ERR_HGC_OK &&
-				    cameraController::alzMetering(*dev_, hist) == ERR_HGC_OK)
+				if (this->meterWithRetry(hist, meterTry_))	// ③ 取得できるまで最大5秒リトライ
 				{
 					double x = expo::histMedian(hist.y, cmdt::hist_bin);
 					linear = expo::srgbToLinear(x);
@@ -587,7 +707,7 @@ errCode captureRunner::loop(void)
 					double avg = 0.0;
 					for (double v : avgBuf) { avg += v; }
 					avg /= static_cast<double>(avgBuf.size());
-					double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : preCtl.current(), expo::ev0Cfg());
+					double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : preCtl.current(), ev0cfg_);
 					double linU = expo::linearFromEvBase(preEv + smooth_.hysteresis / 2.0, lin0);
 					double linD = expo::linearFromEvBase(preEv - smooth_.hysteresis / 2.0, lin0);
 					double cB   = expo::brightnessStops(preCtl.current(), tables_);
@@ -647,8 +767,7 @@ errCode captureRunner::loop(void)
 			const double homeB    = haveHome ? expo::brightnessStops(goal, tables_) : 0.0;
 			double linear = -1.0;
 			cmdt::HISTOGRAM hist;
-			if (this->rdyMeterTimed() == ERR_HGC_OK &&
-			    cameraController::alzMetering(*dev_, hist) == ERR_HGC_OK)
+			if (this->meterWithRetry(hist, meterTry_))	// ③ 取得できるまで最大5秒リトライ
 			{
 				double x = expo::histMedian(hist.y, cmdt::hist_bin);
 				linear = expo::srgbToLinear(x);
@@ -663,7 +782,7 @@ errCode captureRunner::loop(void)
 				double avg = 0.0;
 				for (double v : avgBuf) { avg += v; }
 				avg /= static_cast<double>(avgBuf.size());
-				double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : postCtl.current(), expo::ev0Cfg());
+				double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : postCtl.current(), ev0cfg_);
 				double linU = expo::linearFromEvBase(postEv + smooth_.hysteresis / 2.0, lin0);
 				double linD = expo::linearFromEvBase(postEv - smooth_.hysteresis / 2.0, lin0);
 				double curB = expo::brightnessStops(postCtl.current(), tables_);
@@ -730,8 +849,7 @@ errCode captureRunner::loop(void)
 				// 測光(ライブビューのヒストグラム)→ リニア輝度(仕様 4.3)
 				double linear = -1.0;
 				cmdt::HISTOGRAM hist;
-				if (this->rdyMeterTimed() == ERR_HGC_OK &&
-				    cameraController::alzMetering(*dev_, hist) == ERR_HGC_OK)
+				if (this->meterWithRetry(hist, meterTry_))	// ③ 取得できるまで最大5秒リトライ
 				{
 					double x = expo::histMedian(hist.y, cmdt::hist_bin);
 					linear = expo::srgbToLinear(x);
@@ -748,7 +866,7 @@ errCode captureRunner::loop(void)
 					for (double v : avgBuf) { avg += v; }
 					avg /= static_cast<double>(avgBuf.size());
 
-					double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : autoCtl.current(), expo::ev0Cfg());
+					double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : autoCtl.current(), ev0cfg_);
 					double linU = expo::linearFromEvBase(evT + effHyst / 2.0, lin0);
 					double linD = expo::linearFromEvBase(evT - effHyst / 2.0, lin0);
 						double curB = expo::brightnessStops(autoCtl.current(), tables_);
@@ -783,7 +901,15 @@ errCode captureRunner::loop(void)
 			else if (validExposure(lastExp)) { pending = lastExp; }
 			else                             { pending = ccm->limitBright; }
 			warmedUp = true;
-			// 収束が撮影窓より早く終わった余り時間は keepAlive で待つ。窓開始で CAPTURING + アンカー設定。
+			// 1枚目だけは「前コマの準備」が存在しないので、ここでカメラへ適用しておく。
+			// これを省くと1枚目が pending と違う露出(初期収束の最後の試行値)で撮れてしまう。
+			// まだ一度もシャッターを切っていない=カメラは暇なので設定は通る。
+			{
+				int t1 = 0;
+				const errCode ae = applyWithRetry(pending, t1);
+				if (ae != ERR_HGC_OK && onError_) { onError_(ae, "setExposure failed after retry (1st frame)"); }
+			}
+			// 収束が撮影窓より早く終わった余り時間は keepAlive で待つ。窓開始で CAPTURING。
 			while (running_ && static_cast<long long>(std::time(nullptr)) < startSec)
 			{
 				cameraController::keepAlive(*dev_);
@@ -791,77 +917,80 @@ errCode captureRunner::loop(void)
 			}
 			if (!running_) { break; }
 			if (onState_) { onState_(ST_CAPTURING); }
-			mono = tool::startElapse();	// 撮影窓開始を0とする monotonic アンカー
-			boundaryIdx = 0;
-			continue;
+			continue;	// 次反復が最初の実コマ([A]起点)
 		}
 
-		// --- 通常コマ: tm0処理時間(適用+測光+計算)を確定してログ用に退避し、tm1で撮る ---
-		const int tm0Ms = (tm0 != nullptr) ? static_cast<int>(tool::getElapse(tm0)) : -1;
-		if (!validExposure(target)) { target = validExposure(pending) ? pending : ccm->limitBright; }	// 無効はフォールバック
-
-		// tm1: 境界+offset まで待ってシャッター(=周期ピッタリで発光)。tm0がoffsetを超えたカメラでは即発光。
-		sleepUntilElapse(mono, static_cast<long>(boundaryIdx * interval * 1000.0 + offsetSec * 1000.0) + staggerMs);	// offset=(周期-最大ss)×係数、staggerMs=同時撮影ずらし
-		const uint64_t shutterMs = tool::epochMs();	// シャッター投下直前の壁時計(ms精度)。実際の発光時刻の検証用
-		err = cameraController::actShutter(*dev_);
-		if (err != ERR_HGC_OK) { err = cameraController::actShutter(*dev_); }	// tm1(シャッター)失敗は1回だけリトライ
-		if (err != ERR_HGC_OK) { if (onError_) { onError_(err, "actShutter"); } ++shootFailStreak; }
-		else { shootFailStreak = 0; }
-		++frame;
+		// --- 通常コマ(①): 測光→算出した target を、次シャッターの手前(=カメラが暇なリード区間)で適用する。
+		//   ①の主旨「測光遅れ1コマ削減」は『今回の測光で決めた露出を次のシャッターで撮る』ことで既に果たしており、
+		//   適用を露光直後に置く必要はない。むしろ露光直後は 503 で必ず弾かれる(2026-07-16 の事故)。
+		//   撮ったコマ(shotExp)を、その露出下で行った今回の測光(meteredLinear)と対応付けてログ。 ---
+		if (!validExposure(target)) { target = validExposure(shotExp) ? shotExp : ccm->limitBright; }	// 無効はフォールバック
+		if (warmedUp)
+		{
+			void* ta = tool::startElapse();
+			applyErr = applyWithRetry(target, applyTry);	// 通るまでリトライ(最大 kApplyMaxMs)
+			applyMs  = static_cast<int>(tool::getElapse(ta));
+			if (applyErr != ERR_HGC_OK && onError_)
+			{	// リトライしても設定できなかった。放置するとカメラは古い露出のまま撮り続け、
+				// アプリの露出モデルと実機がズレる(白飛び/黒潰れの原因)。必ずログへ出して気付けるようにする。
+				onError_(applyErr, "setExposure failed after retry");
+			}
+		}
+		const int prepMs = (prep != nullptr) ? static_cast<int>(tool::getElapse(prep)) : -1;
+		pending = target;	// 次シャッターはこの target で撮る(既にカメラへ適用済み)
 
 		if (onCaptured_)
 		{
-			double lum = expo::brightnessStops(pending, tables_);	// 撮ったのは pending(適用済み)
-			// tm0で退避した成否/所要をここ(tm1)でまとめてログへ渡す(tm0内ではログしない)。
-			onCaptured_(capturedInfo{ frame, pending, lum, ccm->name, meteredLinear, meterMs_, applyMs, tm0Ms,
-			                          offMs, meterOk_, (applyErr == ERR_HGC_OK), shutterMs });
-		}
-		if (onProgress_)
-		{
-			onProgress_(progressInfo{ frame, total,
-			            static_cast<int>(endSec - now), static_cast<int>(now - startSec) });
+			double lum = expo::brightnessStops(shotExp, tables_);	// 撮ったのは shotExp
+			onCaptured_(capturedInfo{ frame, shotExp, lum, ccm->name, meteredLinear, meterMs_, applyMs, prepMs,
+			                          static_cast<int>(lateMs), meterOk_, (applyErr == ERR_HGC_OK),
+			                          meterTry_, applyTry, histSum_, lvTimeMs_, staleSkip_, shutterMs });
 		}
 
-		// 撮影(シャッター)またはライブビュー(測光)が連続失敗 → カメラ接続/セッションが壊れたとみなし再接続。
-		//   シャッターは通るが測光だけ連続失敗する状態(ライブビューセッション消失等)でも、露出が固定のまま
-		//   復帰しない不具合を防ぐため meterFailStreak でも再establishを起動する(A-1と同じ静かな復帰を試みる)。
+		// 撮影/測光が連続失敗 → 再接続。相対アンカーなので再アンカー不要(次コマが即[A]起点=overrun許容)。
 		if (shootFailStreak >= kMaxConsecutiveFail || meterFailStreak >= kMaxMeterFail)
 		{
-			// A-1: まず1回だけ静かに再接続を試みる。一過性のブリップ(混雑WiFi等)ならここで復帰し、
-			//      NOCAMERA(✖点灯・スマホの「カメラが見つかりません」ポップ)を出さずに撮影を継続する。
 			bool recovered = (onReconnect_ && onReconnect_() && establishSession());
 			if (!recovered)
-			{	// 静かな復帰に失敗 → ここで初めて NOCAMERA を提示し、中止まで再接続を続ける。
-				if (onState_) { onState_(ST_NOCAMERA); }	// 撮影中のカメラ未検出(✖点灯)
+			{	// 静かな復帰に失敗 → NOCAMERA を提示し、中止まで再接続を続ける。
+				if (onState_) { onState_(ST_NOCAMERA); }
 				if (onError_) { onError_(ERR_HGC_NOT_FOUND, "撮影中にカメラ接続が切れました。再接続を試行します(中止するまで継続)"); }
 				while (running_)
 				{
 					if (onReconnect_ && onReconnect_() && establishSession()) { recovered = true; break; }
-					interruptibleSleep(kReconnectWaitMs);	// 再試行間隔(中止でsleep中断)
+					interruptibleSleep(kReconnectWaitMs);
 				}
-				if (!recovered) { break; }	// 中止された(running_=false)→ 終了処理へ
-				if (onState_) { onState_(ST_CAPTURING); }	// 緑へ戻す(NOCAMERAを出していた場合のみ意味を持つ)
+				if (!recovered) { break; }	// 中止された → 終了処理へ
+				if (onState_) { onState_(ST_CAPTURING); }
 			}
 			shootFailStreak = 0;
-			meterFailStreak = 0;						// 再establishでライブビューが張り直る=測光失敗もリセット
-			avgBuf.clear();								// 測光移動平均をリセット
-			mono = tool::startElapse(); boundaryIdx = 0;	// 再接続後は現在時刻から周期をアンカーし直す
-			pending = target;
-			continue;	// 次コマから再開(establishSession でキャッシュclear済=フル適用)
+			meterFailStreak = 0;
+			avgBuf.clear();
+			{	// establishでキャッシュclear済 → 次シャッター前に露出を再適用しカメラ状態を合わせる。
+				int t2 = 0;
+				const errCode ae = applyWithRetry(pending, t2);
+				if (ae != ERR_HGC_OK && onError_) { onError_(ae, "setExposure failed after retry (reconnect)"); }
+			}
+			continue;	// 次コマは即[A]起点(再接続で時間を食った=周期超過扱い)
 		}
 
-		pending = target;	// 次コマの露出(パイプライン: 測光→計算した露出は 1コマ後に適用/撮影)
-		++boundaryIdx;
+		// --- 次シャッター時刻(④c): [A]から周期後を狙う。超過なら即・未満なら残りを待つ(周期は縮めない/フレーム落とさない)。 ---
+		lastAnchor = anchorA;	// 最後の1枚保護用に直近シャッター基準を退避
+		{
+			const long im = static_cast<long>(interval * 1000.0);
+			if (static_cast<long>(tool::getElapse(anchorA)) < im) { sleepUntilElapse(anchorA, im); }
+			// else: SS+ヒスト取得が周期を超過 → 即次コマへ(overrun許容)
+		}
 	}
 
 	// 最後の1枚を守る: 直前に切ったコマはカメラ側でまだ露光・保存中のことがある。ここで即
 	// restoreShootingMode(設定変更POST)を送ると busy なカメラで最後の1枚が壊れる/復元失敗する。
 	// 次の撮影周期境界(=露光+保存が済む時刻)まで「中断しない待ち」を入れてから終了処理へ入る。
-	if (mono != nullptr && frame > 0)
+	if (lastAnchor != nullptr && frame > 0)
 	{
-		const long targetMs = static_cast<long>(boundaryIdx * interval * 1000.0) + staggerMs;
-		for (long left = targetMs - static_cast<long>(tool::getElapse(mono)); left > 0;
-		     left = targetMs - static_cast<long>(tool::getElapse(mono)))
+		const long targetMs = static_cast<long>(interval * 1000.0);	// 直近シャッター([A])から周期分待つ
+		for (long left = targetMs - static_cast<long>(tool::getElapse(lastAnchor)); left > 0;
+		     left = targetMs - static_cast<long>(tool::getElapse(lastAnchor)))
 		{
 			uint32_t c = (left > 200) ? 200u : static_cast<uint32_t>(left);
 			tool::sleep(c);

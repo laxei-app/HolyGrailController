@@ -37,6 +37,8 @@ public:
 	static errCode getSettings(const class device& device, cmdt::shotRange& settings);
 	static errCode rdyMetering(const class device& device);
 	static errCode alzMetering(const class device& device, cmdt::HISTOGRAM& hist);
+	// 直近 alzMetering が解析したライブビューフレームのカメラ側取得時刻[ms]。0=不明。
+	static uint64_t lastLvTimeMs(const class device& device);
 	// 撮影開始時にカメラをM(ダイアル無視)に設定し、終了時に元へ戻す(仕様8/CCAPI)。
 	static errCode setupShootingModeManual(const class device& device);
 	static errCode restoreShootingMode(const class device& device);

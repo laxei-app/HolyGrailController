@@ -3428,7 +3428,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             sensorText.text = "センサー %.1f×%.1fmm  焦点距離 %d mm  画角 %.0f×%.0f°".format(
                 o.optDouble("sensorW"), o.optDouble("sensorH"), o.optInt("focalLength"),
                 o.optDouble("fovH"), o.optDouble("fovV"))
-            intervalText.text = "${o.optInt("interval")}秒"
+            intervalText.text = fmtInterval(o.optDouble("interval", 15.0)) + "秒"
             suppressLandscape = true
             landscapeCheck.isChecked = o.optBoolean("landscape")
             suppressLandscape = false
@@ -4531,21 +4531,34 @@ class MainActivity : AppCompatActivity(), HgeListener {
         Thread { HgeNative.nativeSetBandMode(sr, ss) }.start()
     }
 
-    // 撮影周期をキーボード入力(秒)。最小周期(最長ss+2)未満は警告して反映しない。
+    // 撮影周期の表示(小数第1位まで。整数なら小数点を出さない)。15.0 -> "15" / 15.5 -> "15.5"
+    private fun fmtInterval(v: Double): String =
+        if (kotlin.math.abs(v - Math.round(v)) < 0.05) Math.round(v).toString() else String.format("%.1f", v)
+
+    // 撮影周期をキーボード入力(秒・小数第1位まで)。最小周期(最長ss+2)未満は警告して反映しない。
     private fun editInterval() {
-        val cur = try { JSONObject(latestSchedule).optInt("interval", 15) } catch (_: Exception) { 15 }
+        val cur = try { JSONObject(latestSchedule).optDouble("interval", 15.0) } catch (_: Exception) { 15.0 }
         val et = EditText(this)
-        et.inputType = InputType.TYPE_CLASS_NUMBER
-        et.setText(cur.toString())
+        // 小数を入力できるようにする(長秒ss時に ss+2.0/+2.5/+3.0 のような細かい設定を行うため)。
+        et.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+        et.setText(fmtInterval(cur))
+        et.setSelection(et.text.length)
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle("撮影周期(秒)")
             .setView(et)
             .setPositiveButton("OK") { _, _ ->
-                val sec = et.text.toString().toDoubleOrNull() ?: return@setPositiveButton
+                val sec = et.text.toString().trim().toDoubleOrNull()
+                if (sec == null) {
+                    Toast.makeText(this, "数値で入力してください", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
                 planExec.execute {
                     val r = HgeNative.nativeSetPlanInterval(sec)
                     runOnUiThread {
-                        if (r != 0) Toast.makeText(this, "先にシャッター速度を変更してください(最小周期未満)", Toast.LENGTH_LONG).show()
+                        // 拒否されたときに何が起きたか分かるよう、入力値と最小周期を出す(黙って元へ戻ると原因が分からない)。
+                        if (r != 0) Toast.makeText(this,
+                            "撮影周期 ${fmtInterval(sec)}秒 は設定できません(最小周期未満)。先にシャッター速度を短くしてください",
+                            Toast.LENGTH_LONG).show()
                     }
                 }
             }
