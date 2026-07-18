@@ -145,13 +145,12 @@ bool captureRunner::meterWithRetry(cmdt::HISTOGRAM& hist, int& tries)
 	histSum_ = 0;
 	lvTimeMs_ = 0;
 	staleSkip_ = 0;
-	// 古いフレーム判定のしきい値[ms]。前回の測光からこれだけ進んでいなければ「ライブビューが
-	// 更新されていない=前回と同じ映像」とみなして採用しない。
-	//  カメラは要求した周期に間に合わないと更新を1回飛ばす(実測: R100は13秒露光だと約15.7秒必要。
-	//  周期15.2秒では2コマに1回しか更新されず、間のコマは31秒前の映像が返ってきた)。
-	//  古い測光値で露出を決めると、①で消したはずの測光遅れが復活し夜明けで露出を誤る。
-	//  設定できる撮影周期の下限が「最長ss+2秒」なので、しきい値の下限は2秒。
-	const long freshMs = std::max(2000L, static_cast<long>(plan_.interval * 1000.0) - 5000L);
+	// 古いフレーム判定: LVフレームの取得時刻(カメラ時計)の「進み」を、前回採用時からの「実経過時間」と比べる。
+	//  カメラは撮影周期に間に合わないとLV更新を飛ばし、更新前の古い映像を返す(実測: R100/13秒露光/周期15.2秒
+	//  で2コマに1回、31秒前の映像が返った)。古い測光で露出を決めると測光遅れが復活し夜明けで露出を誤る。
+	//  実際に時間が経った分だけLVの時刻も進んでいるはず、が判定の根拠。許容(kLvFreshMarginMs)は
+	//  LVフレーム生成周期+取得パイプラインの揺らぎぶん。実経過基準なので測光間隔に依存せず、
+	//  本撮影(15秒間隔)でも撮影前の初期収束(1〜2秒間隔)でも正しく働く(固定しきい値は初期収束を壊した)。
 	for (;;)
 	{
 		++tries;
@@ -159,16 +158,20 @@ bool captureRunner::meterWithRetry(cmdt::HISTOGRAM& hist, int& tries)
 		{
 			// このフレームをカメラが取得した時刻(0=機種が systemtime を返さない → 判定不能なので素通し)。
 			const uint64_t lv = cameraController::lastLvTimeMs(*dev_);
-			if (lv != 0 && lvPrev_ != 0 && lv > lvPrev_ &&
-			    static_cast<long long>(lv - lvPrev_) < static_cast<long long>(freshMs))
-			{	// 前回の測光から更新されていない=古いフレーム。採用せずリトライへ(上限で諦め→露出据え置き)。
-				++staleSkip_;
-				if (!running_.load()) { return false; }
-				if (static_cast<int>(tool::getElapse(t0)) >= kMeterMaxMs) { return false; }
-				interruptibleSleep(kMeterRetryMs);
-				continue;
+			if (lv != 0 && lvPrev_ != 0 && lvPrevAt_ != nullptr && lv > lvPrev_)
+			{
+				const long long adv  = static_cast<long long>(lv - lvPrev_);				// LVの進み[ms]
+				const long long wall = static_cast<long long>(tool::getElapse(lvPrevAt_));	// 実経過[ms]
+				if (adv < wall - static_cast<long long>(kLvFreshMarginMs))
+				{	// 実経過に対してLVが進んでいない=更新されていない古い映像。採用せずリトライへ(上限で諦め→露出据え置き)。
+					++staleSkip_;
+					if (!running_.load()) { return false; }
+					if (static_cast<int>(tool::getElapse(t0)) >= kMeterMaxMs) { return false; }
+					interruptibleSleep(kMeterRetryMs);
+					continue;
+				}
 			}
-			if (lv != 0) { lvPrev_ = lv; }
+			if (lv != 0) { lvPrev_ = lv; lvPrevAt_ = tool::startElapse(); }
 			// 取得したヒストグラムの内容チェックサム。前コマと完全一致するなら「カメラが古い
 			// フレームを返している(=測光値が1コマ古い)」ことになる。alzMetering は先頭バイトの
 			// 形しか見ておらず中身の鮮度を判別できないため、ログで突き合わせられるようにする。
@@ -343,6 +346,7 @@ bool captureRunner::establishSession(void)
 	// 再接続でライブビューのセッションが作り直されるので、古いフレーム判定の基準を捨てる。
 	// 前セッションの時刻と比べると、復帰後の正常なフレームまで「古い」と誤判定してしまう。
 	lvPrev_ = 0;
+	lvPrevAt_ = nullptr;
 
 	// 変更分のみ適用のキャッシュをクリア(再接続直後はカメラ状態が不定なので次回フル適用させる)。
 	lastFnApplied_.clear(); lastSsApplied_.clear(); lastIsoApplied_.clear();
