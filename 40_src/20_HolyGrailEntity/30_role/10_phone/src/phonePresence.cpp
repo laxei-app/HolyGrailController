@@ -1,4 +1,4 @@
-#include "common.h"
+﻿#include "common.h"
 #include "roleDiscovery.h"
 #include "presenceMonitor.h"
 
@@ -16,5 +16,6 @@ void presenceStop() { presenceMon::stop(); }
 std::string presenceJson() { return presenceMon::json(); }
 
 int cameraPresence(const hgc::camera& cam) { return presenceMon::presence(cam); }
+void cameraPresenceVerify(const hgc::camera& cam) { presenceMon::verifyNow(cam); }
 
 }}	// namespace hge::role

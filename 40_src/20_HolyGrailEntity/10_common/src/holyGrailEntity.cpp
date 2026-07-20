@@ -2346,6 +2346,10 @@ int32_t hge_captureStartPlan(const char* planId_)
 	// 期日が近い/過去なら即生成し、失敗(内部RAM断片化)しても deferred に落として hge_pump が再試行する。
 	raw->armAtEpoch = hgc::toUnixUtc(raw->plan.start, g_offMin) - PRE_MARGIN_SEC;
 	long long now = static_cast<long long>(std::time(nullptr));
+	// #1: 撮影開始要求を受けた「今」カメラを確かめる。定期監視のオフライン化は TTL(150秒)待ちで、
+	//  電源が入っていないカメラでも ×アイコンが出るまで最大2分半かかっていた(エッジで顕著)。
+	//  非ブロッキングで即確認を促し、次の hge_pump で WAITING/NOCAMERA が正しく切り替わるようにする。
+	hge::role::cameraPresenceVerify(raw->plan.camera);
 	if (now < raw->armAtEpoch - ARM_LEAD_SEC)
 	{
 		raw->deferred = true;

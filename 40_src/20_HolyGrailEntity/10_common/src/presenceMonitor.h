@@ -26,6 +26,11 @@ namespace presenceMon
 	std::string json(void);
 	// 計画カメラの在否。1=オンライン / 0=オフライン / -1=不明(まだ一度も探索していない)。
 	int presence(const hgc::camera& cam);
+	// このカメラを「今すぐ」確かめる(#1: 撮影開始要求を受けた瞬間に×を出すため)。
+	//  定期ループのオフライン化は TTL(150秒)待ちで遅いので、次のtick(<=1秒)で疎通を即確認し、
+	//  失敗したら TTL を待たずにオフラインへ落とす。あわせてフル探索も前倒しする
+	//  (IPが変わっただけの個体を取り逃がさない)。非ブロッキング=呼び出し側は待たない。
+	void verifyNow(const hgc::camera& cam);
 }
 
 #endif // _PRESENCE_MONITOR_H_

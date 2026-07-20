@@ -486,14 +486,45 @@ static void drawKeyBlockV(int left, int cy, const char* label, uint16_t bg)
 
 // 現在時刻 "HH:MM"(: は g_colonOn で点滅)。時計未設定(RTC無し未受信/RTC未初期化)は "--:--"。
 //  システム時計は phone の time コマンド or 起動時のRTC復元でUTCがセットされる。未設定なら1970年付近。
-static std::string clockStr(void)
+// 時計は「桁位置を固定」して描く(#8 再修正)。
+//  内蔵フォントはプロポーショナルで数字ごとに幅が違い、さらに ":" を空白へ置き換えると
+//  幅が変わるため、点滅のたび・分が変わるたびに表示位置がずれていた。
+//  各文字を「最も広い数字の幅」のセルへ中央寄せで描き、点滅はコロンを描くか描かないかで行う。
+static int clockCellW(void)	// 数字1桁ぶんのセル幅。事前に setFont しておくこと。
 {
-	time_t now = time(nullptr);
-	if (static_cast<long long>(now) < 1577836800LL) { return std::string("--:--"); }	// 2020-01-01前=未設定
-	hgc::dateTime d = hgc::fromUnixUtc(static_cast<long long>(now), osclock::utcOffsetMin());
-	char b[8];
-	std::snprintf(b, sizeof(b), "%02u%c%02u", (unsigned)d.hour, g_colonOn ? ':' : ' ', (unsigned)d.min);
-	return std::string(b);
+	int dw = g_cv.textWidth("-");
+	for (char c = '0'; c <= '9'; ++c) { char s[2] = { c, 0 }; int w = g_cv.textWidth(s); if (w > dw) { dw = w; } }
+	return dw;
+}
+static int clockWidth(void) { return clockCellW() * 4 + g_cv.textWidth(":"); }
+
+// (x,y) を左上として "HH:MM" を桁位置固定で描く。時計未設定は "--:--"(点滅させない)。
+static void drawClockFixed(int x, int y)
+{
+	const time_t now   = time(nullptr);
+	const bool   unset = (static_cast<long long>(now) < 1577836800LL);	// 2020-01-01前=未設定
+	char hh[3] = { '-', '-', 0 }, mm[3] = { '-', '-', 0 };
+	if (!unset)
+	{
+		hgc::dateTime d = hgc::fromUnixUtc(static_cast<long long>(now), osclock::utcOffsetMin());
+		std::snprintf(hh, sizeof(hh), "%02u", (unsigned)d.hour);
+		std::snprintf(mm, sizeof(mm), "%02u", (unsigned)d.min);
+	}
+	const int dw   = clockCellW();
+	const int colw = g_cv.textWidth(":");
+	int cx = x;
+	for (int i = 0; i < 2; ++i)
+	{
+		char s[2] = { hh[i], 0 };
+		g_cv.setCursor(cx + (dw - g_cv.textWidth(s)) / 2, y); g_cv.print(s); cx += dw;
+	}
+	if (unset || g_colonOn) { g_cv.setCursor(cx, y); g_cv.print(":"); }
+	cx += colw;
+	for (int i = 0; i < 2; ++i)
+	{
+		char s[2] = { mm[i], 0 };
+		g_cv.setCursor(cx + (dw - g_cv.textWidth(s)) / 2, y); g_cv.print(s); cx += dw;
+	}
 }
 
 // 最下段・右下に現在時刻を描く(#8)。band(下部)更新で毎回描かれる位置に置く。
@@ -501,10 +532,10 @@ static void drawClock(void)
 {
 	g_cv.setFont(&fonts::Font2);
 	g_cv.setTextColor(TFT_LIGHTGREY);
-	const int cw = g_cv.textWidth("00:00");	// 幅を固定し点滅で右端がずれないようにする
+	const int cw = clockWidth();	// 桁位置固定の描画幅
 	const int cx = g_scrW - cw - 4;
 	g_cv.fillRect(cx, g_scrH - 17, cw + 4, 17, TFT_BLACK);	// 前回描画を消す
-	g_cv.setCursor(cx, g_scrH - 16); g_cv.print(clockStr().c_str());
+	drawClockFixed(cx, g_scrH - 16);
 	g_cv.setTextColor(TFT_WHITE);
 }
 

@@ -56,5 +56,8 @@ std::string presenceJson();
 //  スマホ役=常駐プレゼンスマップ(phonePresence)、エッジ役=既知カメラテーブル(スマホからのC_CAMERA_INFOで更新)。
 //  照合は serial 優先(cam.serial 非空)、無ければ model 一致。撮影開始前の待機区間で カメラ/×アイコンを出すのに使う。
 int cameraPresence(const hgc::camera& cam);
+// #1: このカメラを今すぐ確かめる(撮影開始要求を受けた瞬間に×を出すため)。
+//  定期監視のオフライン化はTTL待ちで遅い。非ブロッキングで即確認を促す。
+void cameraPresenceVerify(const hgc::camera& cam);
 
 }}  // namespace hge::role

@@ -226,5 +226,6 @@ std::string presenceJson() { return presenceMon::json(); }
 
 // 計画カメラの在否。エッジ自身の在否モニタ(共通)から判定する。1=オンライン/0=オフライン/-1=不明。
 int cameraPresence(const hgc::camera& cam) { return presenceMon::presence(cam); }
+void cameraPresenceVerify(const hgc::camera& cam) { presenceMon::verifyNow(cam); }
 
 }}	// namespace hge::role

@@ -16,7 +16,8 @@
 //      最後の参照が消えて解放されるため、常駐フル探索でもリークしない。
 namespace {
 
-	struct pcam { std::string serial; std::string model; std::string friendly; std::string ip; bool online = false; long long lastSeen = 0; };
+	struct pcam { std::string serial; std::string model; std::string friendly; std::string ip; bool online = false; long long lastSeen = 0;
+	              bool verify = false; };	// #1: 次tickで即疎通確認し、失敗ならTTLを待たずオフラインへ
 	std::vector<pcam>       g_map;
 	std::mutex              g_mapMutex;
 	std::function<void()>   g_onChange;
@@ -69,11 +70,20 @@ namespace {
 	{
 		for (auto& c : g_map)
 		{
-			if (!c.online) { continue; }
+			if (!c.online) { c.verify = false; continue; }
 			std::string resp;
-			if (netThread::httpGet("http://" + c.ip + ":8080/ccapi", resp) && !resp.empty()) { c.lastSeen = now; }
+			const bool alive = netThread::httpGet("http://" + c.ip + ":8080/ccapi", resp) && !resp.empty();
+			if (alive) { c.lastSeen = now; c.verify = false; }
+			else if (c.verify)  { c.online = false; c.verify = false; }	// #1: 即確認の要求 → TTLを待たずオフライン
 			else if (now - c.lastSeen > kTtlSec) { c.online = false; }
 		}
+	}
+
+	// #1: verify 要求のある個体だけを先に疎通確認する(フル探索の周期を待たない)。
+	bool anyVerifyPendingLocked()
+	{
+		for (const auto& c : g_map) { if (c.online && c.verify) { return true; } }
+		return false;
 	}
 
 	bool canScanNow() { return !g_canScan || g_canScan(); }
@@ -88,7 +98,11 @@ namespace {
 			if (canScanNow())	// エッジ: 撮影中はネットワークを触らずマップを保持(前回値のまま)
 			{
 				std::lock_guard<std::mutex> lk(g_mapMutex);
-				const bool doFull = g_wake.exchange(false) || (now - lastFull >= kFullEverySec) || lastFull == 0;
+				// #1: 即確認の要求がある間は、まず疎通確認を優先する(オフラインを最短で確定させる)。
+				//  その後のフル探索で、IPが変わっただけの個体は拾い直される。
+				const bool verifyFirst = anyVerifyPendingLocked();
+				const bool doFull = !verifyFirst &&
+				                    (g_wake.exchange(false) || (now - lastFull >= kFullEverySec) || lastFull == 0);
 				if (doFull) { mergeFullLocked(now); lastFull = now; g_scanned.store(true); }
 				else        { refreshLivenessLocked(now); }
 				std::string sig = signatureLocked();
@@ -137,6 +151,25 @@ std::string json(void)
 		arr.push_back({ {"serial", c.serial}, {"model", c.model}, {"friendly", c.friendly}, {"ip", c.ip}, {"online", c.online} });
 	}
 	return arr.dump();
+}
+
+void verifyNow(const hgc::camera& cam)
+{
+	{
+		std::lock_guard<std::mutex> lk(g_mapMutex);
+		const std::string& m = cam.model.empty() ? cam.name : cam.model;
+		for (auto& c : g_map)
+		{
+			if (!c.online) { continue; }
+			const bool hit = (!cam.serial.empty() && c.serial == cam.serial) ||
+			                 (cam.serial.empty() && !m.empty() &&
+			                  (c.model.find(m) != std::string::npos ||
+			                   (!c.model.empty() && m.find(c.model) != std::string::npos)));
+			if (hit) { c.verify = true; }
+		}
+	}
+	// ループの待ちを打ち切って即座に処理させる(疎通確認→必要ならフル探索の順で回る)。
+	g_wake.store(true);
 }
 
 int presence(const hgc::camera& cam)
