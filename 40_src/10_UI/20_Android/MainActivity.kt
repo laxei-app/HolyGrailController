@@ -3247,29 +3247,67 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  エッジ担当(ロック)を解除する。これでスマホ側は再び編集/削除できる(計画はスマホに残る)。
     //  ※エッジ本体で停止した場合はエッジが計画を保持し続ける(再開可能)ので、この経路は通らない。
     private fun stopPlanFromPhone(id: String) {
-        val e = planEdge(id)   // この計画のエッジ(無ければスマホ直接)
+        val name = planEdgeName(id)
+        if (name.isEmpty()) { beginStop(id) { HgeNative.nativeCaptureStopPlan(id) }; return }
+        // エッジ停止(再修正): 以前は planEdge() のキャッシュIPへ投げっぱなしで、戻り値も例外も捨てていた。
+        //  IPが空/古いと停止はどこにも届かないのに UI だけ「停止した」表示になり、エッジは撮影を続ける
+        //  (実機で発生: スマホは停止表示・Stick01 は waiting のまま)。開始時と同じくブロードキャストで
+        //  端末名一致の個体を解決してから送り、結果を確認する。失敗したらユーザーに知らせる。
         beginStop(id) {
+            val e = discoverEdgeByName(name)
             if (e == null) {
-                HgeNative.nativeCaptureStopPlan(id)
-            } else {
-                // #4: 停止は撮影を止めるだけ。エッジからは削除せず、計画のエッジ選択も勝手に変えない。
-                //  → エッジは計画を保有し続ける=ロック維持。編集したいときは「エッジ端末から削除」(#2)で明示的に外す。
-                HgeNative.nativeEdgeStop(e.ip, e.port, id)
+                runOnUiThread { onEdgeStopFailed(id, "エッジ端末「${name}」が見つかりません。") }
+                return@beginStop
             }
+            runOnUiThread { updateEdgeIp(name, e.ip, e.port) }
+            // #4: 停止は撮影を止めるだけ。エッジからは削除せず、計画のエッジ選択も勝手に変えない。
+            //  → エッジは計画を保有し続ける=ロック維持。編集したいときは「エッジ端末から削除」(#2)で明示的に外す。
+            val r = HgeNative.nativeEdgeStop(e.ip, e.port, id)
+            if (r != 0) { runOnUiThread { onEdgeStopFailed(id, "停止をエッジ端末へ送れませんでした (code=${r})。") } }
         }
+    }
+
+    // エッジへの停止が届かなかったとき。UIの「停止した」表示を取り消し、ポーリングに実状態を拾わせる。
+    //  勝手に停止済みへ倒すと、エッジで撮影が続いているのに画面上は止まって見える(最悪の状態)。
+    private fun onEdgeStopFailed(id: String, why: String) {
+        stoppingPlans.remove(id)   // 抑止を解除 → ポーリングがエッジの実状態(撮影中/待機)を反映する
+        histUserStop.remove(id)
+        refreshPlanList(); updateReadOnly()
+        if (activeEdgePlans().isNotEmpty()) ensureEdgePoll()
+        AlertDialog.Builder(this)
+            .setTitle("停止できませんでした")
+            .setMessage("${why}\nエッジ端末では撮影が続いている可能性があります。端末の電源とネットワークを確認して、もう一度お試しください。")
+            .setPositiveButton("OK", null)
+            .show()
     }
 
     // 項目2: エッジ端末から計画を外す(編集可能にする)。停止しただけの計画はエッジが保有し続けロックされている。
     //  エッジのその計画を停止(念のため)+削除する。次スイープでロスターから消え、即時にも保有台帳から外してロック解除。
     //  計画のエッジ選択(planEdgeName)は項目4に従い勝手に変えない(再送信できるよう保持)。
     private fun removeFromEdge(id: String) {
-        val e = planEdge(id) ?: return
-        Thread { runCatching {
-            HgeNative.nativeEdgeStop(e.ip, e.port, id)          // 走っていなければ無害
-            HgeNative.nativeEdgeDeletePlan(e.ip, e.port, id)    // エッジから削除
-        } }.start()
+        val name = planEdgeName(id)
+        if (name.isEmpty()) return
+        // 停止と同じく、キャッシュIPではなくブロードキャストで解決してから送る(届かない削除を防ぐ)。
+        Thread {
+            val e = discoverEdgeByName(name)
+            if (e == null) {
+                runOnUiThread {
+                    AlertDialog.Builder(this)
+                        .setTitle("削除できませんでした")
+                        .setMessage("エッジ端末「${name}」が見つかりません。\n端末の電源とネットワークを確認して、もう一度お試しください。")
+                        .setPositiveButton("OK", null).show()
+                    refreshPlanList(); updateReadOnly()   // 楽観的に外したロックを実状態へ戻す
+                }
+                return@Thread
+            }
+            runOnUiThread { updateEdgeIp(name, e.ip, e.port) }
+            runCatching {
+                HgeNative.nativeEdgeStop(e.ip, e.port, id)          // 走っていなければ無害
+                HgeNative.nativeEdgeDeletePlan(e.ip, e.port, id)    // エッジから削除
+            }
+        }.start()
         // 即時ロック解除(保有台帳から外す)+過渡集合の掃除。削除失敗なら次スイープで再出現し自己修復。
-        edgeHeldByEdge[e.name]?.remove(id)
+        edgeHeldByEdge[name]?.remove(id)
         startingPlans.remove(id); waitingPlans.remove(id); disconnectedPlans.remove(id); stoppingPlans.remove(id); clearNoCam(id)
         nocamShownWaiting.remove(id)   // 項目11: エッジから外したら「待機中1回だけ」もリセット
         refreshPlanList(); updateReadOnly()
