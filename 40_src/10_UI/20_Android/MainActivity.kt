@@ -1553,6 +1553,26 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // コンテキストメニューボタン(緑ピル ⋮。設計書イメージ)。
+    // メニュー内容を「タップした瞬間」に組み立てる版。
+    //  固定リスト版は行を作った時点の状態でメニューが凍るため、状態が変わっても反映されず
+    //  「出るときと出ないときがある」原因になる(項目2)。状態依存の項目はこちらを使う。
+    private fun ctxMenuButtonDynamic(provider: () -> List<Pair<String, () -> Unit>>): View {
+        val btn = TextView(this); btn.text = "⋮"; btn.textSize = 18f
+        btn.setTextColor(Color.WHITE); btn.gravity = Gravity.CENTER
+        btn.setBackgroundResource(R.drawable.ctx_menu_pill)
+        btn.setPadding(dp(12), dp(2), dp(12), dp(2))
+        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        lp.setMargins(dp(6), 0, dp(2), 0); btn.layoutParams = lp
+        btn.setOnClickListener { anchor ->
+            val items = provider()   // ← タップ時に最新状態で作る
+            val pm = PopupMenu(this, anchor)
+            items.forEachIndexed { i, mi -> pm.menu.add(0, i, i, mi.first) }
+            pm.setOnMenuItemClickListener { mi -> items[mi.itemId].second(); true }
+            pm.show()
+        }
+        return btn
+    }
+
     private fun ctxMenuButton(menuItems: List<Pair<String, () -> Unit>>): View {
         val btn = TextView(this); btn.text = "⋮"; btn.textSize = 18f
         btn.setTextColor(Color.WHITE); btn.gravity = Gravity.CENTER
@@ -2996,10 +3016,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // ⋮ コンテキストメニュー(他画面=撮影場所/撮影制御方法リストと同じ緑ピル。項目5)
         //  項目6: エッジ端末に送信済み(=どこかのエッジが保有)の計画は削除できない → 「削除」項目を出さない。
         //  スマホで停止すればエッジからも消え、ロックが解けて再び削除可能になる。
+        // 項目2(再修正2): メニューは「タップした瞬間」に組み立てる。行を作った時点で固定すると、
+        //  停止直後にどのタイミングで行が再構築されたかで内容が変わり、「出るときと出ないときがある」
+        //  状態になる(ポーリングが一時的に撮影中へ戻すこともある)。常に最新状態で判断する。
+        row.addView(ctxMenuButtonDynamic { buildPlanRowMenu(id, name) })
+        return row
+    }
+
+    // 計画行の ⋮ メニュー内容。タップのたびに最新の状態で組み立てる(項目2)。
+    private fun buildPlanRowMenu(id: String, name: String): List<Pair<String, () -> Unit>> {
         val onEdge = isPlanOnEdge(id)
-        // 項目2(再修正): 「実撮影中」だけを対象にする。中止操作直後は stoppingPlans に数秒残るが、
-        //  それを撮影中扱いにすると停止してRECへ戻った直後にメニューへ「エッジ端末から削除」が出ず、
-        //  停止確定(ポーリング)まで待たされていた。中止済みならもう撮影していないので出してよい。
+        // 「実撮影中」だけを撮影中とみなす。中止操作直後は stoppingPlans に数秒残るが、
+        //  中止済みならもう撮影していないので「エッジ端末から削除」を出してよい。
         val capturingNow = capturingPlans.contains(id)
         val menu = mutableListOf<Pair<String, () -> Unit>>("コピーを追加" to { copyPlanRow(id) })
         if (!onEdge) menu.add("削除" to { confirmDeletePlan(id, name) })
@@ -3007,8 +3035,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  停止しただけの計画はエッジが保有し続けロックされたまま(項目4)なので、これで明示的に外す。
         if (onEdge && !capturingNow) menu.add("エッジ端末から削除" to { confirmRemoveFromEdge(id, name) })
         menu.add("過去の計画削除" to { confirmDeletePastPlans() })   // 終了日が過去の計画を一括削除(エッジ保有分は対象外)
-        row.addView(ctxMenuButton(menu))
-        return row
+        return menu
     }
 
     private fun selectPlanRow(id: String) {
