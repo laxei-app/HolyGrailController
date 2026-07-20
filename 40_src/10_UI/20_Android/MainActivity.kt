@@ -121,6 +121,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private val disconnectedPlans = mutableSetOf<String>() // カメラ未検出(NOCAMERA/旧DISCONNECTED)の計画 id 群=✖点灯
     private val waitingPlans = mutableSetOf<String>()    // 撮影要求済・撮影窓前で待機中(カメラOK)の計画 id 群=カメラ点灯
     private val nocamDialogShown = mutableSetOf<String>() // カメラ未検出ポップアップを表示済みの計画 id(多重表示抑止。Phase3)
+    // 項目11: 撮影開始前(待機中)に未検出ポップアップを出した計画 id。待機中は1回だけ出すために使う。
+    //  clearNoCam(状態復帰)では消さない — 消すと NOCAMERA↔SEARCHING の往復で毎回出てしまう。
+    //  中止/エッジから削除で消し、次に開始要求したときは再び1回出るようにする。
+    private val nocamShownWaiting = mutableSetOf<String>()
     private val nocamDialogs = mutableMapOf<String, androidx.appcompat.app.AlertDialog>() // 表示中のNOCAMERAダイアログ(状態が復帰/停止したら閉じるための参照)
     private val edgeAppliedSerials = mutableSetOf<String>() // ①エッジ書き戻し済みのカメラserial(重複適用の抑止。1serial=1回)
     private val promptingCamSerials = mutableSetOf<String>() // ②登録プロンプト表示中のカメラserial(重複ダイアログ抑止)
@@ -2993,7 +2997,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  項目6: エッジ端末に送信済み(=どこかのエッジが保有)の計画は削除できない → 「削除」項目を出さない。
         //  スマホで停止すればエッジからも消え、ロックが解けて再び削除可能になる。
         val onEdge = isPlanOnEdge(id)
-        val capturingNow = capturingPlans.contains(id) || stoppingPlans.contains(id)   // 実撮影中/停止処理中
+        // 項目2(再修正): 「実撮影中」だけを対象にする。中止操作直後は stoppingPlans に数秒残るが、
+        //  それを撮影中扱いにすると停止してRECへ戻った直後にメニューへ「エッジ端末から削除」が出ず、
+        //  停止確定(ポーリング)まで待たされていた。中止済みならもう撮影していないので出してよい。
+        val capturingNow = capturingPlans.contains(id)
         val menu = mutableListOf<Pair<String, () -> Unit>>("コピーを追加" to { copyPlanRow(id) })
         if (!onEdge) menu.add("削除" to { confirmDeletePlan(id, name) })
         // 項目2: エッジ送信済み(ロック中)かつ未撮影なら「エッジ端末から削除」で外して編集可能にする。
@@ -3148,6 +3155,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun beginStop(id: String, doStop: () -> Unit) {
         addHistory("user break", id)   // 項目9: ユーザー操作での中止(この後のIDLEを auto end にしない)
         histUserStop.add(id)
+        nocamShownWaiting.remove(id)   // 項目11: 中止したら「待機中1回だけ」をリセット(次の開始要求で再び1回出す)
         stoppingPlans.add(id)
         capturingPlans.remove(id); waitingPlans.remove(id); disconnectedPlans.remove(id)   // 即時にアイコンを戻す
         clearNoCam(id)
@@ -3170,6 +3178,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun showNoCameraDialog(id: String) {
         if (stoppingPlans.contains(id)) return      // 中止操作済み(停止確定待ち)は出さない
         if (nocamDialogShown.contains(id)) return   // 既に表示中/継続中は出さない
+        // 項目11: 撮影開始前(待機中)のポップアップは最初の1回だけ。アイコンには×を出し続ける。
+        //  待機中はカメラの状態が NOCAMERA↔SEARCHING を往復し、そのたび clearNoCam で抑止が
+        //  解除されて繰り返し出ていた。撮影開始時刻を過ぎたら(実際にカメラが要る局面)再び毎回出す。
+        run {
+            val st = planStartMillis(id)
+            if (st > 0L && System.currentTimeMillis() < st) {
+                if (!nocamShownWaiting.add(id)) { return }   // 待機中は初回のみ
+            }
+        }
         // 項目8: 遠い未来の待機中(撮影窓がまだ先)は ×アイコンだけ出し、「見つかりません」ダイアログは出さない。
         //  ダイアログは撮影窓が近い/実行中(=実際にカメラが要る局面)でのみ。閾値=窓開始の120秒前。
         val sMs = planStartMillis(id)
@@ -3227,6 +3244,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 即時ロック解除(保有台帳から外す)+過渡集合の掃除。削除失敗なら次スイープで再出現し自己修復。
         edgeHeldByEdge[e.name]?.remove(id)
         startingPlans.remove(id); waitingPlans.remove(id); disconnectedPlans.remove(id); stoppingPlans.remove(id); clearNoCam(id)
+        nocamShownWaiting.remove(id)   // 項目11: エッジから外したら「待機中1回だけ」もリセット
         refreshPlanList(); updateReadOnly()
         Toast.makeText(this, "エッジ端末から削除しました(編集できます)", Toast.LENGTH_SHORT).show()
     }
