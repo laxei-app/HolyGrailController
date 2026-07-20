@@ -218,17 +218,23 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeSearch(JNIEnv* env, jobject, jint t
 // エッジ端末へ time→capturePlan→action を送って撮影開始させる。return: 0=成功。
 JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring host_, jint port,
-                                                   jstring datetime_, jint offMin, jbyteArray nameBmp, jstring planId_)
+                                                   jstring datetime_, jint offMin, jbyteArray nameBmp, jstring planId_,
+                                                   jstring planJson_)
 {
 	const char* host = env->GetStringUTFChars(host_, nullptr);
 	const char* dt   = env->GetStringUTFChars(datetime_, nullptr);
 	const char* pid  = planId_ ? env->GetStringUTFChars(planId_, nullptr) : nullptr;
+	// 項目5: 送る計画JSONは呼び出し側が planId から取得して渡す(選択中の計画=グローバル状態に依存しない)。
+	//  これにより「選択→JSON取得」を呼び出し側の短時間ロックで済ませ、遅いネットワーク送信を planExec から外せる。
+	const char* pj   = planJson_ ? env->GetStringUTFChars(planJson_, nullptr) : nullptr;
 	std::string hostS = host ? host : "";
 	std::string dtS   = dt ? dt : "";
 	std::string pidS  = pid ? pid : "";
+	std::string pjS   = pj ? pj : "";
 	env->ReleaseStringUTFChars(host_, host);
 	env->ReleaseStringUTFChars(datetime_, dt);
 	if (pid) { env->ReleaseStringUTFChars(planId_, pid); }
+	if (pj)  { env->ReleaseStringUTFChars(planJson_, pj); }
 
 	std::lock_guard<std::mutex> lk(g_connMtx);	// 永続接続を操作全体で占有(コマンド間に他操作を割り込ませない)
 
@@ -245,18 +251,23 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring
 	// ちょうどタイムアウトして開始不発になるため、この操作の間だけ受信タイムアウトを延ばす。
 	setRcvTimeout(fd, 15000);
 
-	// 2) 撮影計画(現在の計画JSONを entity から取得)
+	// 2) 撮影計画。呼び出し側が渡した planJson を使う(選択中の計画に依存しない=項目5)。
+	//    互換: 空で渡された場合のみ従来どおり選択中の計画を取得する。
 	if (result == 0)
 	{
-		int32_t len = 0;
-		hge_getPlanJson(nullptr, &len);
-		std::vector<char> pbuf(len > 0 ? static_cast<size_t>(len) : 1);
-		int32_t gj = hge_getPlanJson(pbuf.data(), &len);
-		ELOG("edgeStart planJson getRc=%d len=%d", (int)gj, (int)len);
-		if (gj == 0)
+		std::string planStr = pjS;
+		if (planStr.empty())
+		{
+			int32_t len = 0;
+			hge_getPlanJson(nullptr, &len);
+			std::vector<char> pbuf(len > 0 ? static_cast<size_t>(len) : 1);
+			if (hge_getPlanJson(pbuf.data(), &len) == 0) { planStr = pbuf.data(); }
+		}
+		ELOG("edgeStart planJson len=%d (fromArg=%d)", (int)planStr.size(), (int)!pjS.empty());
+		if (!planStr.empty())
 		{
 			// data = "id\t{plan json}"。エッジは id ごとに計画を蓄積する。
-			std::string body = pidS + "\t" + std::string(pbuf.data());
+			std::string body = pidS + "\t" + planStr;
 			int mPlan = tcpRequest(fd, etp::C_CAPTURE_PLAN, etp::M_PUT, body, rd);
 			ELOG("edgeStart C_CAPTURE_PLAN bodyLen=%d method=%d", (int)body.size(), mPlan);
 			if (mPlan != etp::M_ACK)

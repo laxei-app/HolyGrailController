@@ -85,7 +85,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private lateinit var planListContainer: LinearLayout
     // 編集対象の計画 id。切替(選択/新規/複製/起動時)のたびに「変更の取り消し」用のベースラインを取り直す。
     private var currentPlanId: String = ""
-        set(value) { val changed = field != value; field = value; if (changed) capturePlanBaseline() }
+        set(value) {
+            val changed = field != value; field = value
+            if (changed) {
+                capturePlanBaseline()
+                // 項目6: 進捗ステータスは「選択中の計画」に紐付く。計画を切り替えたら即座に選択計画の状態へ更新する
+                //  (前の計画の表示が残らないように・別カメラの計画を選べばその進捗を出す)。
+                if (::captureStatus.isInitialized) runOnUiThread { refreshCaptureStatusForCurrent() }
+            }
+        }
     private var planBaseline = ""           // 変更の取り消し用: 計画/画面に入った時点の cs JSON(nativeGetPlanJson)
     // 撮影計画画面の「変更の取り消し」ボタンの dirty 連動(現在の計画 != ベースライン なら有効)。
     // 計画画面表示中のみ、planExec 上で現在値を取り比較する(編集と直列化して安全)。
@@ -106,6 +114,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 計画の選択・改名・各種編集(g_plan/g_editIdを触る操作)は単一スレッドで直列化し競合を防ぐ
     // (例: 改名と別計画選択が並走すると選択がファイルから古い名前を読み戻して改名が無効化される)。
     private val planExec = java.util.concurrent.Executors.newSingleThreadExecutor()
+    // 項目5: エッジへの計画送信(数秒のネットワークI/O)専用の単一スレッド。planExec と分離することで、
+    //  送信中でも計画選択(planExec)がブロックされず UI が固まらない。送る計画JSONは送信前に取得して渡す。
+    private val edgeExec = java.util.concurrent.Executors.newSingleThreadExecutor()
     private val capturingPlans = mutableSetOf<String>()  // 実撮影中(撮影窓内)の計画 id 群=カメラ点滅
     private val disconnectedPlans = mutableSetOf<String>() // カメラ未検出(NOCAMERA/旧DISCONNECTED)の計画 id 群=✖点灯
     private val waitingPlans = mutableSetOf<String>()    // 撮影要求済・撮影窓前で待機中(カメラOK)の計画 id 群=カメラ点灯
@@ -125,7 +136,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // この計画は「エッジに送信済み(=どこかのエッジが保有)」か。ロック(編集/削除不可)の判定に使う。
     //  開始操作の過渡(startingPlans)や実行中集合も、ロスター反映前の一瞬をロックするため含める。
     private fun isPlanOnEdge(id: String): Boolean =
-        edgeHeldByEdge.values.any { it.contains(id) } ||
+        edgeHeldByEdge.values.any { it.contains(id) } || isPlanUsingCamera(id)
+    // 項目3: この計画は「今カメラを実際に使っている」か(開始要求中/待機/撮影中/未検出)。
+    //  エッジが保有しているだけ(中止後も常駐=項目4)はカメラを使っていないので含めない。
+    //  編集ロック(isPlanOnEdge)とは別物。予約重複の開始可否はこちらで判定する
+    //  (isPlanOnEdge で判定すると、停止済みでエッジ常駐の計画が相手を永久にブロックしてしまう)。
+    private fun isPlanUsingCamera(id: String): Boolean =
         startingPlans.contains(id) || capturingPlans.contains(id) ||
         waitingPlans.contains(id) || disconnectedPlans.contains(id)
     private val schedulePages = mutableListOf<ScheduleView>()   // §7.3.2 薄明ページの ScheduleView(読取専用切替に使う)
@@ -198,7 +214,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 常時スイープ(edgeSweep)によるエッジ生存状態。true=オンライン/false=オフライン/未登録=不明(起動直後)。
     private val edgeOnline = mutableMapOf<String, Boolean>()
     private val edgeMiss = mutableMapOf<String, Int>()   // スイープUDPの連続無応答回数(閾値超えでTCP生存確認→オフライン判定)
-    private var suppressEdgeSel = false          // スピナーをプログラムで設定する間は選択保存を抑止
+    // エッジ選択スピナーの保存制御。Spinner の onItemSelected は setAdapter/setSelection の中では呼ばれず
+    //  レイアウト後に“非同期”で届く。そのため「設定の間だけ true にするフラグ」では抑止できず(false に戻った
+    //  後にコールバックが来る)、しかも書き込み先を currentPlanId にすると計画を切り替えた瞬間に
+    //  前の計画のエッジが新しい計画へ漏れる。→ ユーザーが触った時だけ保存し、保存先はスピナーが表示中の計画に固定する。
+    private var edgeSpinnerUserTouched = false   // ユーザーがスピナーを操作した(=この後の選択通知は本人の意思)
+    private var edgeSpinnerPlanId: String = ""   // スピナーが今どの計画の選択を表示しているか(保存先。currentPlanId ではない)
+    private var edgeSpinnerLabels: List<String> = emptyList()   // 表示が変わらなければ adapter を作り直さない(余計な通知を出さない)
     private val handler = Handler(Looper.getMainLooper())
 
     // エッジ設定(QR+PoP §8.2.2)。スキャンしたPoP/端末名を保持。
@@ -473,11 +495,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
             }.start()
         }
         // スピナーでエッジを選ぶと、表示中の計画にその選択を保存する(計画ごとにエッジを指定)。
+        //  ユーザーがスピナーに触れた時だけ保存を許す。プログラムによる同期(refreshEdgeSpinner)で届く
+        //  通知は常に無視する — これが「別計画へエッジ割当が漏れる」不具合の根治。
+        edgeSpinner.setOnTouchListener { _, _ -> edgeSpinnerUserTouched = true; false }
         edgeSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, pos: Int, idl: Long) {
-                if (suppressEdgeSel) return
+                if (!edgeSpinnerUserTouched) return           // プログラム由来の通知(=表示の同期)。保存しない
+                edgeSpinnerUserTouched = false
+                // 保存先はスピナーが表示している計画。念のため選択中の計画と一致する時だけ書く(不一致=表示が追従前)。
+                val target = edgeSpinnerPlanId
+                if (target.isEmpty() || target != currentPlanId) return
                 val nm = if (pos in 1..edges.size) edges[pos - 1].name else ""
-                setPlanEdgeName(currentPlanId, nm)
+                setPlanEdgeName(target, nm)
             }
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
         }
@@ -2964,8 +2993,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  項目6: エッジ端末に送信済み(=どこかのエッジが保有)の計画は削除できない → 「削除」項目を出さない。
         //  スマホで停止すればエッジからも消え、ロックが解けて再び削除可能になる。
         val onEdge = isPlanOnEdge(id)
+        val capturingNow = capturingPlans.contains(id) || stoppingPlans.contains(id)   // 実撮影中/停止処理中
         val menu = mutableListOf<Pair<String, () -> Unit>>("コピーを追加" to { copyPlanRow(id) })
         if (!onEdge) menu.add("削除" to { confirmDeletePlan(id, name) })
+        // 項目2: エッジ送信済み(ロック中)かつ未撮影なら「エッジ端末から削除」で外して編集可能にする。
+        //  停止しただけの計画はエッジが保有し続けロックされたまま(項目4)なので、これで明示的に外す。
+        if (onEdge && !capturingNow) menu.add("エッジ端末から削除" to { confirmRemoveFromEdge(id, name) })
         menu.add("過去の計画削除" to { confirmDeletePastPlans() })   // 終了日が過去の計画を一括削除(エッジ保有分は対象外)
         row.addView(ctxMenuButton(menu))
         return row
@@ -2986,6 +3019,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val list = buildReservations(); saveReservations(list)   // 項目17: 新規作成時に予約表を作り直す
             runOnUiThread { currentPlanId = cur; refreshPlanList() }
         }
+    }
+
+    // 項目5/6(再修正): 開始要求などの非同期処理が終わっても、ユーザーが見ている計画を勝手に切り替えない。
+    //  native 側の「選択中の計画」は処理の都合で対象計画へ移動するが、UIの表示は動かさず、
+    //  終わったら native の選択を表示中の計画へ戻して UI と native の食い違いを解消する。
+    private fun restoreViewingSelection() {
+        val viewing = currentPlanId
+        if (viewing.isEmpty()) return
+        planExec.execute { try { HgeNative.nativeSelectPlan(viewing) } catch (_: Exception) {} }
     }
 
     private fun startPlan(id: String) {
@@ -3021,7 +3063,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 HgeNative.nativeSelectPlan(id)
                 val r = HgeNative.nativeCaptureStartPlan(id)
                 runOnUiThread {
-                    currentPlanId = id
                     startingPlans.remove(id)   // 開始要求の結果確定
                     when (r) {
                         HgeNative.ERR_OVERLAP_LIMIT -> { waitingPlans.remove(id); Toast.makeText(this, "撮影期間が重なる計画は2件までです。時間をずらすか他の計画を停止してください", Toast.LENGTH_LONG).show() }
@@ -3029,27 +3070,35 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         else -> {}   // 待機はタップ時に反映済み。実状態はEV_STATEで即補正される
                     }
                     refreshPlanList(); updateReadOnly()
+                    restoreViewingSelection()   // 項目5: 表示中の計画を勝手に変えない
                 }
             }
             return
         }
-        // エッジで撮影。IPは動的なので、開始時に端末名称で検索して現在のIPを解決する。見つからなければ開始しない。
+        // エッジで撮影。項目9: IPは記憶せず、開始時に必ずブロードキャストで端末名一致の個体を解決する。
+        //  同名端末が見つからなければ開始しない(繋ぎ直しでのIP誤認を防ぐ)。見つからないときはポップアップで中止。
         Thread {
             val e = discoverEdgeByName(name)
             runOnUiThread {
                 if (e == null) {
                     waitingPlans.remove(id); startingPlans.remove(id); refreshPlanList(); updateReadOnly()   // タップ時の即時反映を取り消す
-                    Toast.makeText(this, "エッジ端末(${name})が見つからないため撮影を開始できません", Toast.LENGTH_LONG).show()
+                    AlertDialog.Builder(this)
+                        .setTitle("エッジ端末が見つかりません")
+                        .setMessage("エッジ端末「${name}」が見つからないため撮影を開始できません。\n端末の電源・ネットワーク接続を確認してください。")
+                        .setPositiveButton("OK", null)
+                        .show()
                     return@runOnUiThread
                 }
                 updateEdgeIp(name, e.ip, e.port)   // 解決したIPを保持(停止/状態確認に使う)
+                // 項目5: planExec では「選択→計画JSON取得」だけを素早く原子的に行い(選択中の計画に依存する
+                //  グローバル取得のため直列化が必要)、遅いネットワーク送信は edgeExec へ逃がす。これで送信中も
+                //  計画選択(planExec)が詰まらず UI が固まらない。送る JSON は取得済みの値を startOnEdge へ渡す。
                 planExec.execute {
-                    // 選択→計画JSON送信→開始 を planExec(単一スレッド)上で原子化する。
-                    // nativeEdgeStart は「選択中の計画」のJSONを送るため、2計画の順次開始で別スレッドに
-                    // 逃がすと後発の nativeSelectPlan が割り込み、前の計画idに別計画の内容を送る競合があった。
                     HgeNative.nativeSelectPlan(id)
-                    runOnUiThread { currentPlanId = id; refreshPlanList(); updateReadOnly() }   // 待機はタップ時に反映済み
-                    startOnEdge(e, id)   // planExec 上で同期実行(内部でネットワークI/O)
+                    val planJson = try { HgeNative.nativeGetPlanJson() } catch (_: Exception) { "" }
+                    // 待機はタップ時に反映済み。項目5: 表示中の計画は動かさず、選択だけ元へ戻す。
+                    runOnUiThread { refreshPlanList(); updateReadOnly(); restoreViewingSelection() }
+                    edgeExec.execute { startOnEdge(e, id, planJson) }   // 遅いI/Oは専用スレッドで(planExecを塞がない)
                 }
             }
         }.start()
@@ -3081,6 +3130,21 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 「押したのが効いたか分からない」対策)、停止は非同期送信。停止(IDLE)が確定するまでは
     // stoppingPlans で NOCAMERA ダイアログとポーリングの再追加を抑止する(確定は reconcileEdgePlan /
     // EV_STATE の IDLE 到達。保険で一定時間後に強制掃除)。
+    // 項目6: 進捗ステータス行(分割バー下)は「選択中の計画」に紐付ける。選択計画の状態で表示/非表示を決める。
+    //  ・撮影中/待機/未検出 → その状態を表示(具体的な枚数は各ポーリングが currentPlanId 限定で上書きする)。
+    //  ・それ以外(非稼働) → 非表示(前の計画や別カメラの表示を残さない)。2台撮影でも選択した方が出る。
+    private fun refreshCaptureStatusForCurrent() {
+        if (!::captureStatus.isInitialized) return
+        val id = currentPlanId
+        when {
+            id.isEmpty() -> captureStatus.visibility = View.GONE
+            disconnectedPlans.contains(id) -> { captureStatus.text = "● カメラが見つかりません"; captureStatus.setTextColor(0xFFD32F2F.toInt()); captureStatus.visibility = View.VISIBLE }
+            capturingPlans.contains(id)    -> { captureStatus.text = "● 撮影中"; captureStatus.setTextColor(0xFF2E7D32.toInt()); captureStatus.visibility = View.VISIBLE }
+            waitingPlans.contains(id) || startingPlans.contains(id) -> { captureStatus.text = "● 撮影開始待ち"; captureStatus.setTextColor(0xFF1565C0.toInt()); captureStatus.visibility = View.VISIBLE }
+            else -> captureStatus.visibility = View.GONE
+        }
+    }
+
     private fun beginStop(id: String, doStop: () -> Unit) {
         addHistory("user break", id)   // 項目9: ユーザー操作での中止(この後のIDLEを auto end にしない)
         histUserStop.add(id)
@@ -3144,16 +3208,36 @@ class MainActivity : AppCompatActivity(), HgeListener {
             if (e == null) {
                 HgeNative.nativeCaptureStopPlan(id)
             } else {
-                HgeNative.nativeEdgeStop(e.ip, e.port, id)          // まず停止
-                HgeNative.nativeEdgeDeletePlan(e.ip, e.port, id)    // エッジからも削除(撮影中なら停止してから)
+                // #4: 停止は撮影を止めるだけ。エッジからは削除せず、計画のエッジ選択も勝手に変えない。
+                //  → エッジは計画を保有し続ける=ロック維持。編集したいときは「エッジ端末から削除」(#2)で明示的に外す。
+                HgeNative.nativeEdgeStop(e.ip, e.port, id)
             }
         }
-        if (e != null) {
-            // エッジから消えたので保有台帳からも即座に外す=即時ロック解除(スマホの計画は残る)。担当割り当ても外す。
-            // 削除失敗で実際にはまだ走行中なら、次スイープでロスター/実行中集合に再出現し再ロックされる(自己修復)。
-            edgeHeldByEdge[e.name]?.remove(id)
-            setPlanEdgeName(id, ""); refreshPlanList(); updateReadOnly()
-        }
+    }
+
+    // 項目2: エッジ端末から計画を外す(編集可能にする)。停止しただけの計画はエッジが保有し続けロックされている。
+    //  エッジのその計画を停止(念のため)+削除する。次スイープでロスターから消え、即時にも保有台帳から外してロック解除。
+    //  計画のエッジ選択(planEdgeName)は項目4に従い勝手に変えない(再送信できるよう保持)。
+    private fun removeFromEdge(id: String) {
+        val e = planEdge(id) ?: return
+        Thread { runCatching {
+            HgeNative.nativeEdgeStop(e.ip, e.port, id)          // 走っていなければ無害
+            HgeNative.nativeEdgeDeletePlan(e.ip, e.port, id)    // エッジから削除
+        } }.start()
+        // 即時ロック解除(保有台帳から外す)+過渡集合の掃除。削除失敗なら次スイープで再出現し自己修復。
+        edgeHeldByEdge[e.name]?.remove(id)
+        startingPlans.remove(id); waitingPlans.remove(id); disconnectedPlans.remove(id); stoppingPlans.remove(id); clearNoCam(id)
+        refreshPlanList(); updateReadOnly()
+        Toast.makeText(this, "エッジ端末から削除しました(編集できます)", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun confirmRemoveFromEdge(id: String, name: String) {
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("エッジ端末から削除")
+            .setMessage("「$name」をエッジ端末から削除しますか？\n(待機中なら停止し、編集できるようになります。計画自体は残ります)")
+            .setPositiveButton("削除") { _, _ -> removeFromEdge(id) }
+            .setNegativeButton("キャンセル", null)
+            .show()
     }
 
     private fun confirmStop(id: String) {
@@ -3372,14 +3456,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         }
                         refreshPlanList(); updateReadOnly()
                     }
-                    // 表示中の計画の状態をステータス表示(未検出=赤 / 撮影中=緑 / 待機=青)。
-                    if (disconnectedPlans.contains(currentPlanId)) {
-                        captureStatus.text = "● カメラが見つかりません"; captureStatus.setTextColor(0xFFD32F2F.toInt()); captureStatus.visibility = View.VISIBLE
-                    } else if (capturingPlans.contains(currentPlanId)) {
-                        captureStatus.text = "● 撮影中 (${HgeNative.stateName(st)})"; captureStatus.setTextColor(0xFF2E7D32.toInt()); captureStatus.visibility = View.VISIBLE
-                    } else if (waitingPlans.contains(currentPlanId)) {
-                        captureStatus.text = "● 撮影開始待ち"; captureStatus.setTextColor(0xFF1565C0.toInt()); captureStatus.visibility = View.VISIBLE
-                    } else { captureStatus.visibility = View.GONE }
+                    // 表示中の計画の状態をステータス表示(項目6: 選択中の計画に紐付く)。
+                    refreshCaptureStatusForCurrent()
                 }
                 HgeNative.EV_PROGRESS -> {
                     val o = JSONObject(json)
@@ -3605,10 +3683,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  ・保存: 撮影計画の新規作成/更新のたびに camReserve.json へ作り直す(§7.6 の /asset 配下)。
     private data class Reservation(
         val planId: String, val planName: String,
-        val camKey: String, val camLabel: String,   // camKey=同一機体の判定キー / camLabel=帯の表示
+        val camKey: String, val camLabel: String,   // camKey=保存/表示用の識別文字列 / camLabel=帯の表示
+        val camModel: String, val camSerial: String, // 同一機体の判定はこの2つで行う(下 sameCamera)
         val edge: String,                            // 端末名(空=スマホで撮影)
         val startMs: Long, val endMs: Long,
         var conflict: Boolean = false)
+
+    // 2つの予約が「同じ機体」を指すか。
+    //  シリアルが両方とも分かっている時だけシリアルで判定し(同機種の別ボディを区別)、
+    //  片方でも未確定なら機種一致で同一とみなす。
+    //  ※camKey の文字列一致で判定すると、一度も接続していない計画(シリアル空)が
+    //    接続済みの計画(シリアル有り)と別カメラ扱いになり、同じカメラの重複を見逃す。
+    private fun sameCamera(a: Reservation, b: Reservation): Boolean =
+        if (a.camSerial.isNotEmpty() && b.camSerial.isNotEmpty()) a.camSerial == b.camSerial
+        else a.camModel.isNotEmpty() && a.camModel == b.camModel
 
     private val reserveFmt = SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.JAPAN)
     // 計画一覧の start/end は Entity の dtToStr 形式("yyyy-MM-ddTHH:mm:ss"。T区切り)。
@@ -3649,14 +3737,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     if (friendly.isNotEmpty()) append("  $friendly")
                     if (serial.isNotEmpty()) append("  Sn:$serial")
                 }
-                list.add(Reservation(id, o.optString("name"), key, label, planEdgeName(id), s, e))
+                list.add(Reservation(id, o.optString("name"), key, label, model, serial, planEdgeName(id), s, e))
             }
         } catch (_: Exception) {}
         list.sortWith(compareBy({ it.camLabel }, { it.startMs }))
         // 同一カメラ内で時間が重なる組に印を付ける(半開区間[start,end)で判定)。
         for (i in list.indices) {
             for (j in i + 1 until list.size) {
-                if (list[i].camKey != list[j].camKey) continue
+                if (!sameCamera(list[i], list[j])) continue
                 if (list[i].startMs < list[j].endMs && list[j].startMs < list[i].endMs) {
                     list[i].conflict = true; list[j].conflict = true
                 }
@@ -3863,10 +3951,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val me = list.firstOrNull { it.planId == planId } ?: return null
         for (r in list) {
             if (r.planId == me.planId) continue
-            if (r.camKey != me.camKey) continue
-            if (r.edge == me.edge) continue                       // 同じ端末なら Entity 側が二重撮影を防ぐ
+            if (!sameCamera(r, me)) continue
+            // 端末が同じでも弾く。以前は「同一端末なら Entity 側が二重撮影を防ぐ」として素通りさせていたが、
+            // それでは同じカメラの重複計画を2つとも武装でき、要求が受け付けられたまま放置され得る(項目3再修正)。
+            // 同じカメラは1計画しか使えないので、端末に関係なく要求時点で弾く。
             if (me.startMs < r.endMs && r.startMs < me.endMs) {   // 時間が重なる
-                return if (r.edge.isEmpty()) "スマホ" else r.edge
+                // 項目3: そのカメラを実際に使用中(=開始済み: 開始要求中/待機/撮影/未検出)の計画だけがブロックする。
+                //  まだどちらも開始していない重複同士なら、先に開始する方を許可する(両方が開始不可にならない)。
+                //  ※「エッジが保有しているだけ」(中止後の常駐)はカメラを使っていないのでブロックしない。
+                if (isPlanUsingCamera(r.planId)) return if (r.edge.isEmpty()) "スマホ" else r.edge
             }
         }
         return null
@@ -4532,8 +4625,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // 撮影周期の表示(小数第1位まで。整数なら小数点を出さない)。15.0 -> "15" / 15.5 -> "15.5"
-    private fun fmtInterval(v: Double): String =
-        if (kotlin.math.abs(v - Math.round(v)) < 0.05) Math.round(v).toString() else String.format("%.1f", v)
+    // 撮影周期は常に小数第1位まで表示する(整数でも「15.0」)。
+    private fun fmtInterval(v: Double): String = String.format("%.1f", v)
 
     // 撮影周期をキーボード入力(秒・小数第1位まで)。最小周期(最長ss+2)未満は警告して反映しない。
     private fun editInterval() {
@@ -4622,31 +4715,31 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 計画ごとのエッジ選択(prefsに端末"名称"を保存。空=無し=スマホで撮影)。
     // IPはDHCPで変わり事前に不定のため、識別は端末名称で行い、IPは開始時に検索で解決する。
     private fun planEdgeName(planId: String) = if (planId.isEmpty()) "" else (hgcPrefs().getString("pe_$planId", "") ?: "")
-    private fun setPlanEdgeName(planId: String, name: String) { if (planId.isNotEmpty()) hgcPrefs().edit().putString("pe_$planId", name).apply() }
+    private fun setPlanEdgeName(planId: String, name: String) {
+        if (planId.isEmpty()) return
+        if (planEdgeName(planId) == name) return   // 変化なしは書かない(誤書き込みの影響を最小化・prefs churn抑制)
+        hgcPrefs().edit().putString("pe_$planId", name).apply()
+    }
     private fun planEdge(planId: String): Edge? {
         val name = planEdgeName(planId)
         return if (name.isEmpty()) null else (edges.firstOrNull { it.name == name } ?: Edge(name, "", 50506))
     }
     // 端末名称に一致するエッジをネットワーク検索して現在のIPを解決する(見つからなければ null)。
+    // 項目9: IPは記憶せず、必ずブロードキャストで問い合わせて「端末名が合致した個体」だけを採用する。
+    //  ・キャッシュ(last-seen)IPは絶対に流用しない。繋ぎ直しで同じIPを別端末が持つと誤認するため。
+    //  ・混雑WiFiでの取りこぼし対策として、名前一致が出るまで数回リトライする(それでも駄目なら null)。
     private fun discoverEdgeByName(name: String): Edge? {
-        // ① UDP検索で現在IPを解決(最も確実だが、混雑WiFiでは応答UDPを取りこぼすことがある)。
-        val js = HgeNative.nativeEdgeSearch(2500)
-        try {
-            val arr = JSONArray(js)
-            for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
-                if (o.optString("name") == name) return Edge(name, o.optString("ip"), o.optInt("port", 50506))
-            }
-        } catch (_: Exception) {}
-        // ② B-1: UDP検索が取りこぼした場合のフォールバック。登録一覧の last-seen IP がまだ ETP(TCP)で
-        //    応答するなら、それを採用して開始する(混雑WiFiでの検索不発による「開始できません」を回避)。
-        //    IPがDHCPで変わっていれば probe は無応答 → null(=本当に見つからない)で従来どおりトースト。
-        val cached = edges.firstOrNull { it.name == name && it.ip.isNotEmpty() }
-        if (cached != null) {
-            val pj = try { HgeNative.nativeEdgeProgress(cached.ip, cached.port, "") } catch (_: Exception) { "" }   // 生存確認のみ(内容は不問)
-            if (pj.isNotEmpty()) return cached
+        repeat(3) {
+            val js = HgeNative.nativeEdgeSearch(2500)
+            try {
+                val arr = JSONArray(js)
+                for (i in 0 until arr.length()) {
+                    val o = arr.getJSONObject(i)
+                    if (o.optString("name") == name) return Edge(name, o.optString("ip"), o.optInt("port", 50506))
+                }
+            } catch (_: Exception) {}
         }
-        return null
+        return null   // ブロードキャストで同名端末が見つからない=本当に居ない(キャッシュIPは流用しない)
     }
     // 登録一覧の last-seen IP を更新(stop/poll 用に開始時の解決結果を保持)。
     // 常時スイープからも30秒ごとに呼ばれるため、変化が無ければ prefs へ書かない。
@@ -4666,14 +4759,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val mark = when (edgeOnline[it.name]) { true -> "● "; false -> "○ "; null -> "" }
             labels.add(mark + it.name)
         }
-        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, labels)
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        suppressEdgeSel = true
-        edgeSpinner.adapter = adapter
         val name = planEdgeName(currentPlanId)
         val idx = if (name.isEmpty()) 0 else edges.indexOfFirst { it.name == name }.let { if (it >= 0) it + 1 else 0 }
-        try { edgeSpinner.setSelection(idx) } catch (_: Exception) {}
-        suppressEdgeSel = false
+        // このスピナーは currentPlanId の選択を表示している、と先に宣言する(保存先の固定)。
+        //  ここで触っていない限り以降の選択通知は保存されないので、順序による漏れは起きない。
+        edgeSpinnerPlanId = currentPlanId
+        edgeSpinnerUserTouched = false   // 表示同期の前に、取りこぼしたユーザー操作フラグを落とす
+        if (labels != edgeSpinnerLabels) {   // 表示が変わる時だけ作り直す(30秒スイープの度に通知を出さない)
+            edgeSpinnerLabels = labels.toList()
+            val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, labels)
+            adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+            edgeSpinner.adapter = adapter
+        }
+        if (edgeSpinner.selectedItemPosition != idx) { try { edgeSpinner.setSelection(idx) } catch (_: Exception) {} }
     }
 
     // 検索で見つかったエッジを登録一覧へ統合する(名称で重複判定、IPは最新へ更新)。手動登録分は残す。
@@ -5131,10 +5229,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         return ""
     }
 
-    // エッジへ計画を送って撮影開始する。ブロッキングI/Oを含むため planExec(バックグラウンド)から呼ぶこと。
-    // 呼び出し元の nativeSelectPlan と同一スレッドで連続実行することで「選択→計画JSON送信」を原子化する
-    // (別スレッド化すると2計画の順次開始で後発の選択が割り込み、別計画の内容を送る競合があった)。
-    private fun startOnEdge(e: Edge, planId: String) {
+    // エッジへ計画を送って撮影開始する。ブロッキングI/Oを含むため edgeExec(専用バックグラウンド)から呼ぶこと。
+    // 項目5: 送る計画JSON(planJson)は呼び出し側が planId から取得して渡す。選択中の計画(グローバル状態)に
+    //  依存しないので planExec を占有せず、送信中も計画選択が詰まらない。
+    private fun startOnEdge(e: Edge, planId: String, planJson: String) {
         // 時刻同期(C_TIME)はエッジ端末の時計を「現在時刻」に合わせるためのもの。現在時刻を送る。
         val nowCal = Calendar.getInstance()
         val s = fmtIso.format(nowCal.time)
@@ -5143,6 +5241,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val nameBmp = makeNameBitmapBytes(if (name.isEmpty()) "撮影計画" else name)
         run {
             // 発見中のオンラインカメラをエッジへ通知(IP直結ヒント)。エッジは (model,serial) で本人確認して直結する。
+            //  (在否の判定はエッジ自身が行う。ここは直結を速くするIPヒントに徹する。)
             try {
                 val arr = org.json.JSONArray(HgeNative.nativeSearchDevicesList())
                 val push = org.json.JSONArray()
@@ -5157,7 +5256,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 }
                 if (push.length() > 0) HgeNative.nativeEdgeCameraInfo(e.ip, e.port, push.toString())
             } catch (_: Exception) {}
-            val r = HgeNative.nativeEdgeStart(e.ip, e.port, s, off, nameBmp, planId)
+            val r = HgeNative.nativeEdgeStart(e.ip, e.port, s, off, nameBmp, planId, planJson)
             // 開始が失敗コードを返しても、エッジ側では実際に走っている場合がある:
             //  ・既に同じ計画がエッジで走行中 → C_ACTION が INVALID_STATE で NAK(-4)
             //  ・2台順次開始のETP競合や ACK 取りこぼしで NAK/タイムアウト
