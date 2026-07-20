@@ -2350,16 +2350,21 @@ int32_t hge_captureStartPlan(const char* planId_)
 	//  電源が入っていないカメラでも ×アイコンが出るまで最大2分半かかっていた(エッジで顕著)。
 	//  非ブロッキングで即確認を促し、次の hge_pump で WAITING/NOCAMERA が正しく切り替わるようにする。
 	hge::role::cameraPresenceVerify(raw->plan.camera);
+	// #1: 要求を受けた「今」オンラインと分かっていなければ、待たずに ×(NOCAMERA) を出す。
+	//  取得シーケンス(IP直結→SSDP再送→サブネット探索)は全部走ると数十秒かかり、それを待つと
+	//  電源の入っていないカメラでも×が出るのが遅い(実測30秒以上)。不明(-1)も×にする
+	//  ("検索して見つかっていない"は要求時点では同じ意味)。見つかれば取得成功時に上書きされる。
+	const int initSt = (hge::role::cameraPresence(raw->plan.camera) == 1) ? HGE_ST_WAITING : HGE_ST_NOCAMERA;
+	// 取得スレッドを起こす前に反映しておく(起こしてからでは取得シーケンスの完了待ちになる)。
+	raw->state = initSt; notifyStateP(raw->planId, initSt); refreshAggregateState();
 	if (now < raw->armAtEpoch - ARM_LEAD_SEC)
 	{
 		raw->deferred = true;
-		raw->state = HGE_ST_WAITING; notifyStateP(raw->planId, HGE_ST_WAITING); refreshAggregateState();
 	}
 	else if (anySeqActive())
 	{	// 起動シーケンスは同時1本(直列化)。実行中なら pump に委ねて数秒後に起動する。
 		// 同窓2計画の一括開始で 14KB タスクスタック×4本の同時要求(断片化した内部RAMで失敗しやすい)を避ける。
 		raw->deferred = true; raw->nextTryEpoch = now + 2;
-		raw->state = HGE_ST_WAITING; notifyStateP(raw->planId, HGE_ST_WAITING); refreshAggregateState();
 	}
 	else if (!launchStartThread(raw))
 	{
