@@ -1,4 +1,4 @@
-﻿#include "common.h"
+#include "common.h"
 #include "captureRunner.h"
 #include "osSystemCall.h"
 #include "debugOut.h"
@@ -145,6 +145,7 @@ bool captureRunner::meterWithRetry(cmdt::HISTOGRAM& hist, int& tries)
 	histSum_ = 0;
 	lvTimeMs_ = 0;
 	staleSkip_ = 0;
+	lvP99_ = -1.0; lvPMax_ = -1.0;	// 【診断トラップ】測光成功時に算出
 	// 古いフレーム判定: LVフレームの取得時刻(カメラ時計)の「進み」を、前回採用時からの「実経過時間」と比べる。
 	//  カメラは撮影周期に間に合わないとLV更新を飛ばし、更新前の古い映像を返す(実測: R100/13秒露光/周期15.2秒
 	//  で2コマに1回、31秒前の映像が返った)。古い測光で露出を決めると測光遅れが復活し夜明けで露出を誤る。
@@ -176,8 +177,23 @@ bool captureRunner::meterWithRetry(cmdt::HISTOGRAM& hist, int& tries)
 			// フレームを返している(=測光値が1コマ古い)」ことになる。alzMetering は先頭バイトの
 			// 形しか見ておらず中身の鮮度を判別できないため、ログで突き合わせられるようにする。
 			uint32_t s = 0;
-			for (int i = 0; i < cmdt::hist_bin; ++i) { s = s * 31u + hist.y[i]; }
+			double   total = 0.0;
+			for (int i = 0; i < cmdt::hist_bin; ++i) { s = s * 31u + hist.y[i]; total += hist.y[i]; }
 			histSum_ = s;
+			// 【診断トラップ】ライブビュー・ヒストの明るい側を算出(測光統計は変えない。既存ヒストから読むだけ)。
+			//  p99=累積99%点, pMax=画素のある最も明るいビン。夜明けにLVが明るい画素を持つかの判定用。
+			if (total > 0.0)
+			{
+				const double thr = total * 0.99; double cum = 0.0; int p99i = cmdt::hist_bin - 1, pmax = 0;
+				for (int i = 0; i < cmdt::hist_bin; ++i)
+				{
+					cum += hist.y[i];
+					if (cum >= thr) { p99i = i; break; }
+				}
+				for (int i = cmdt::hist_bin - 1; i >= 0; --i) { if (hist.y[i] > 0) { pmax = i; break; } }
+				lvP99_  = static_cast<double>(p99i) / static_cast<double>(cmdt::hist_bin - 1);
+				lvPMax_ = static_cast<double>(pmax) / static_cast<double>(cmdt::hist_bin - 1);
+			}
 			// このフレームをカメラが取得した時刻。シャッター時刻と突き合わせれば
 			// 「露光後の新鮮なフレームか / 露光前の古いフレームか」が推測なしに判る。
 			lvTimeMs_ = cameraController::lastLvTimeMs(*dev_);
@@ -187,6 +203,94 @@ bool captureRunner::meterWithRetry(cmdt::HISTOGRAM& hist, int& tries)
 		if (static_cast<int>(tool::getElapse(t0)) >= kMeterMaxMs) { return false; }	// 上限で諦め
 		interruptibleSleep(kMeterRetryMs);
 	}
+}
+
+// 測光シャッターへ切り替える(仕様: 測光する露出と撮影する露出を分ける)。
+//  ライブビューは暗所で張り付き、撮影露出(長秒)のままでは明るさを測れない。応答する短いシャッターへ
+//  一時的に変えて測光し、環境光はその露出から逆算する。撮影露出は測光後の適用で元に戻る
+//  (applyExposureChanged が ss の差分を見て送り直すため、明示的な復帰は不要)。
+//  失敗したら shotExp をそのまま返す = 従来どおり撮影露出で測光する(安全側フォールバック)。
+hgc::exposure captureRunner::enterMeteringShutter(const hgc::exposure& shotExp)
+{
+	meterSsUsed_.clear();
+	meterSettleMs_ = -1;
+	if (dev_ == nullptr || tables_.ss.empty()) { return shotExp; }
+
+	// 使う測光ssを決める。未決定なら撮影ssから kMeterInitDropStops 段短い所から始める。
+	std::string want = meterSs_;
+	if (want.empty())
+	{
+		const double target = expo::brightnessStops(shotExp, tables_) - static_cast<double>(kMeterInitDropStops);
+		double best = 1e9;
+		for (const auto& e : tables_.ss)
+		{
+			hgc::exposure t = shotExp; t.ss = e.value;
+			const double d = std::fabs(expo::brightnessStops(t, tables_) - target);
+			if (d < best) { best = d; want = e.value; }
+		}
+	}
+	if (want.empty() || want == shotExp.ss) { return shotExp; }	// 変える必要が無い
+
+	hgc::exposure me = shotExp; me.ss = want;
+	// ss だけ送る。lastSsApplied_ を更新しておくと、後段の露出適用が「撮影ssへ戻す」を自動で送る。
+	if (cameraController::setSS(*dev_, me.ss) != ERR_HGC_OK) { return shotExp; }
+	lastSsApplied_ = me.ss;
+
+	// 反映待ち: Tv変更直後のコマは systemtime が新しくても中身が変更前のことがある(実測)。
+	//  ここでは単純に上限まで待つ(実測 R10=1.3〜2.1秒)。待ちすぎないよう上限で打ち切る。
+	void* t0 = tool::startElapse();
+	interruptibleSleep(kMeterSettleMaxMs);
+	meterSettleMs_ = static_cast<int>(tool::getElapse(t0));
+	meterSsUsed_ = me.ss;
+	return me;
+}
+
+// 測光結果から次コマの測光ssを決め、張り付き(=露出を変えても値が動かない)を判定する。
+//  応答比 = Δ測光段 / Δss段。1に近ければ正常、0付近なら張り付き。
+//  張り付いていたら「もっと短く」する(暗いほど短い側でしか応答しないため。直感に反するがこれが正しい)。
+void captureRunner::updateMeterShutter(const hgc::exposure& meterExp, double linear)
+{
+	if (tables_.ss.empty()) { return; }
+	const double curStops = expo::brightnessStops(meterExp, tables_);
+	const double x = (linear > 0.0) ? linear : 0.0;
+
+	lvPinned_ = false;
+	if (meterPrevLin_ > 0.0 && x > 0.0)
+	{
+		const double dSs = curStops - meterPrevStops_;			// 指示した変化[段]
+		if (std::fabs(dSs) >= 0.5)
+		{
+			const double dLin = std::log2(x / meterPrevLin_);	// 実際に動いた[段]
+			if ((dLin / dSs) < kMeterRespondRatio) { lvPinned_ = true; }
+		}
+	}
+	lvPinnedLog_ = lvPinned_;
+	meterPrevStops_ = curStops;
+	meterPrevLin_   = x;
+
+	// 次コマの測光ssを決める。
+	double wantStops;
+	if (lvPinned_)
+	{	// 張り付き → 1段短くして応答する領域を探す。
+		wantStops = curStops - 1.0;
+	}
+	else
+	{	// 応答している → 目標(中央値 kMeterTargetX)へ寄せる。1コマの移動は±3段まで。
+		const double targetLin = expo::srgbToLinear(kMeterTargetX);
+		double d = (x > 0.0) ? std::log2(targetLin / x) : 0.0;
+		if (d >  3.0) { d =  3.0; }
+		if (d < -3.0) { d = -3.0; }
+		wantStops = curStops + d;
+	}
+	// テーブルから最も近い ss を選ぶ(iso/fn は動かさない)。
+	std::string pick; double best = 1e9;
+	for (const auto& e : tables_.ss)
+	{
+		hgc::exposure t = meterExp; t.ss = e.value;
+		const double d = std::fabs(expo::brightnessStops(t, tables_) - wantStops);
+		if (d < best) { best = d; pick = e.value; }
+	}
+	if (!pick.empty()) { meterSs_ = pick; }
 }
 
 // 露出設定を最大 kApplyMaxMs まで kApplyRetryMs 間隔でリトライする。
@@ -615,7 +719,12 @@ errCode captureRunner::loop(void)
 		int     applyTry = 0;
 		errCode applyErr = ERR_HGC_OK;
 		void*   prep = warmedUp ? tool::startElapse() : nullptr;
-		if (warmedUp) { lastExp = shotExp; }	// ev0 は「測光時の露出」= 撮ったコマの露出
+		// 測光シャッターへ切り替える(撮影露出のままでは暗所でライブビューが張り付いて測れない)。
+		//  meterExp = 実際に測光を行う露出。ev0 の逆算にはこれを使う(ここが従来の誤りの本体:
+		//  1秒相当しか写っていない値を 8秒露光として換算していた)。撮影露出へは後段の適用で戻る。
+		hgc::exposure meterExp = shotExp;
+		if (warmedUp) { meterExp = this->enterMeteringShutter(shotExp); }
+		if (warmedUp) { lastExp = meterExp; }	// ev0 は「測光時の露出」= 測光シャッターの露出
 
 		const hgc::ccmWindow* prevWin = curWin;
 		const bool windowChanged = (w != curWin);
@@ -940,6 +1049,9 @@ errCode captureRunner::loop(void)
 				onError_(applyErr, "setExposure failed after retry");
 			}
 		}
+		// 今回の測光結果から次コマの測光ssを決める(張り付きなら短い側へ、応答していれば目標へ)。
+		if (warmedUp && !meterSsUsed_.empty() && meteredLinear > 0.0)
+		{ this->updateMeterShutter(meterExp, meteredLinear); }
 		const int prepMs = (prep != nullptr) ? static_cast<int>(tool::getElapse(prep)) : -1;
 		pending = target;	// 次シャッターはこの target で撮る(既にカメラへ適用済み)
 
@@ -948,7 +1060,8 @@ errCode captureRunner::loop(void)
 			double lum = expo::brightnessStops(shotExp, tables_);	// 撮ったのは shotExp
 			onCaptured_(capturedInfo{ frame, shotExp, lum, ccm->name, meteredLinear, meterMs_, applyMs, prepMs,
 			                          static_cast<int>(lateMs), meterOk_, (applyErr == ERR_HGC_OK),
-			                          meterTry_, applyTry, histSum_, lvTimeMs_, staleSkip_, shutterMs });
+			                          meterTry_, applyTry, histSum_, lvTimeMs_, staleSkip_, shutterMs, lvP99_, lvPMax_,
+			                          meterSsUsed_, meterSettleMs_, lvPinnedLog_ });
 		}
 
 		// 撮影/測光が連続失敗 → 再接続。相対アンカーなので再アンカー不要(次コマが即[A]起点=overrun許容)。

@@ -1040,6 +1040,22 @@ namespace
 				notify(HGE_EV_CAPTURED, b);
 				if (c.ccm != S->lastCcm) { std::string d = (S->lastCcm.empty() ? "" : S->lastCcm + " -> ") + c.ccm; dataManager::logEvent("CCMSW", d.c_str()); S->lastCcm = c.ccm; }
 				dataManager::logShot(c.frame, c.exp, c.luminance, c.ccm.c_str(), c.metered, c.rdyMeteringMs, c.rdyShutterMs, c.prepMs, c.lateMs, c.rdyOk, c.setOk, c.meterTry, c.applyTry, c.histSum, c.lvTimeMs, c.staleSkip, c.shutterMs);
+				// 【診断トラップ(一時)】測光ヒストの明るい側をSHOTと別行で記録。夜明けにライブビューが
+				// 明るい画素を捉えているか(p99/最大ビン)を後で実写と突き合わせるため。測光時のみ・タイミング不変。
+				if (c.metered >= 0.0 && c.lvP99 >= 0.0)
+				{
+					// mss=測光に使ったシャッター(-=撮影露出のまま=従来動作) / stl=Tv変更がLVへ反映されるまでの待ち[ms]
+					// pin=1: 測光ssを変えても値が動かない=ライブビュー張り付き(測光値は信用できない)
+					// late=このコマのシャッターが撮影周期からどれだけ遅れたか[ms](0=周期ぴったり)
+					// prep=準備(測光→計算→設定)の合計[ms]。リード kPrepLeadMs=5000 に収まったかの判定。
+					char d[176];
+					std::snprintf(d, sizeof(d),
+						"fr=%d Y=%.4f p99=%.3f pMx=%.3f mss=%s stl=%dms pin=%d late=%dms prep=%dms",
+						c.frame, c.metered, c.lvP99, c.lvPMax,
+						c.meterSs.empty() ? "-" : c.meterSs.c_str(), c.meterSettleMs, c.lvPinned ? 1 : 0,
+						c.lateMs, c.prepMs);
+					dataManager::logEvent("LVHIST", d);
+				}
 				// 撮影結果レポートの積算(1コマ=1回)。撮影終了時にまとめてファイルへ出す。
 				{
 					dataManager::captureReport& R = S->report;
@@ -2385,6 +2401,19 @@ int32_t hge_pump(void)
 		break;	// 1回のポンプで起動するのは1件(直列化)
 	}
 	return ERR_HGC_OK;
+}
+
+// 項目1(エッジ在否モニタ用): いずれかのセッションがカメラI/O中(取得/撮影/停止処理)か。
+//  true の間はエッジのプレゼンス探索(M-SEARCH/疎通)を止め、時間厳守のシャッターI/Oと単一netThreadで
+//  競合させない。撮影中の在否はランナー(取得フェーズ/接続断検知)が管理するので二重にならない。
+bool hge_anyActiveCameraSession(void)
+{
+	for (auto& up : g_sessions)
+	{
+		int st = up->state.load();
+		if (st == HGE_ST_CAPTURING || st == HGE_ST_SEARCHING || st == HGE_ST_READY || st == HGE_ST_STOPPING) { return true; }
+	}
+	return false;
 }
 
 // 計画id指定で撮影停止(planId 空=編集対象)。
