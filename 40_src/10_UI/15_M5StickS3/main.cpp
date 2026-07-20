@@ -3,7 +3,7 @@
 // CoreS3版(10_M5Stack)とロジックは共通だが、UIが異なる:
 //   ・LCD は小さく(240x135 横向き)タッチ非対応。物理ボタン2つで操作する。
 //   ・KEY2(側面/GPIO12)= 計画スクロール(1方向ローリング、末尾で先頭へ戻る)。
-//   ・KEY1(正面/GPIO11)= 表示中の計画を開始/停止、長押しで削除(確認あり)。
+//   ・KEY1(正面/GPIO11)= 表示中の計画を開始/停止(項目7: エッジ側削除は廃止=長押し削除なし)。
 //   ・端末名称 + 1つの撮影計画(名称は2段折り返し + 日付/時刻)だけ表示する。
 // etpEdge.cpp / edgeProv.cpp は表示非依存なので CoreS3版を共有ビルドする(build_src_filter)。
 
@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>	// 時刻表示(time())
 #include <string>
 #include <vector>
 #include <map>
@@ -110,7 +111,7 @@ static void m5pm1LcdPowerOn(void)
 static int              g_scrW = 240, g_scrH = 135;	// 横向きの論理サイズ
 
 // ── 物理ボタン(生GPIO。M5Unified は本ボードのボタンを対応付けないため直接読む) ──
-//  KEY1=GPIO11(正面): 開始/停止・長押し削除 / KEY2=GPIO12(側面): スクロール。押下=LOW(内部プルアップ)。
+//  KEY1=GPIO11(正面): 開始/停止 / KEY2=GPIO12(側面): スクロール。押下=LOW(内部プルアップ)。
 static constexpr gpio_num_t PIN_KEY1 = GPIO_NUM_11;
 static constexpr gpio_num_t PIN_KEY2 = GPIO_NUM_12;
 static constexpr uint32_t   LONG_PRESS_MS = 800;
@@ -215,10 +216,10 @@ const std::string& edgePop(void) { return g_pop; }
 
 // ── 表示状態 ──
 static int  g_cur = 0;			// 表示中の計画インデックス(スクロールで進める)
-static bool g_confirmDel = false;	// 表示中計画の削除確認中か
 static bool g_listDirty = true;
 static volatile int g_state = HGE_ST_IDLE;
 static bool g_blinkOn = true;
+static bool g_colonOn = true;	// 時計の ":" 点滅(1秒周期)。撮影状態に関係なく常時トグル
 
 // KEY1即時反映用: 保留中の開始/停止操作。押した瞬間にアイコンだけ先に切り替えて描画し、
 // 実処理(開始=計画ファイル読込+スケジュール構築で数百ms / 停止=撮影スレッドjoinで数秒)は
@@ -483,6 +484,30 @@ static void drawKeyBlockV(int left, int cy, const char* label, uint16_t bg)
 	g_cv.setTextColor(TFT_WHITE);
 }
 
+// 現在時刻 "HH:MM"(: は g_colonOn で点滅)。時計未設定(RTC無し未受信/RTC未初期化)は "--:--"。
+//  システム時計は phone の time コマンド or 起動時のRTC復元でUTCがセットされる。未設定なら1970年付近。
+static std::string clockStr(void)
+{
+	time_t now = time(nullptr);
+	if (static_cast<long long>(now) < 1577836800LL) { return std::string("--:--"); }	// 2020-01-01前=未設定
+	hgc::dateTime d = hgc::fromUnixUtc(static_cast<long long>(now), osclock::utcOffsetMin());
+	char b[8];
+	std::snprintf(b, sizeof(b), "%02u%c%02u", (unsigned)d.hour, g_colonOn ? ':' : ' ', (unsigned)d.min);
+	return std::string(b);
+}
+
+// 最下段・右下に現在時刻を描く(#8)。band(下部)更新で毎回描かれる位置に置く。
+static void drawClock(void)
+{
+	g_cv.setFont(&fonts::Font2);
+	g_cv.setTextColor(TFT_LIGHTGREY);
+	const int cw = g_cv.textWidth("00:00");	// 幅を固定し点滅で右端がずれないようにする
+	const int cx = g_scrW - cw - 4;
+	g_cv.fillRect(cx, g_scrH - 17, cw + 4, 17, TFT_BLACK);	// 前回描画を消す
+	g_cv.setCursor(cx, g_scrH - 16); g_cv.print(clockStr().c_str());
+	g_cv.setTextColor(TFT_WHITE);
+}
+
 // ── 計画画面(端末名 + 1計画: 名称2段 + 日付/時刻)。 ──
 static void renderPlan(void)
 {
@@ -502,6 +527,8 @@ static void renderPlan(void)
 	g_cv.setTextColor(stcol);
 	g_cv.setCursor(g_scrW - g_cv.textWidth(stz) - 4, 2); g_cv.print(stz);
 	g_cv.setTextColor(TFT_WHITE);
+
+	drawClock();	// #8 最下段右下の現在時刻(計画の有無に関わらず表示)
 
 	// 物理キーのガイダンス(項目1): 画面左に縦の帯を置き、物理キーの位置に合わせて機能を示す。
 	//  ・KEY1(正面/この向きでは画面の左)  = 開始/停止 → 上側の枠
@@ -596,17 +623,7 @@ static void renderPlan(void)
 	int sy = hasIcon ? (g_scrH - 2 - iconH) + (iconH - 16) / 2 : g_scrH - 16;
 	g_cv.setTextColor(scol);
 	g_cv.setCursor(sx, sy); g_cv.print(stxt);
-
-	// 削除確認オーバーレイ。
-	if (g_confirmDel)
-	{
-		g_cv.fillRoundRect(20, 34, g_scrW - 40, 66, 6, g_cv.color565(0x22, 0x22, 0x22));
-		g_cv.drawRoundRect(20, 34, g_scrW - 40, 66, 6, TFT_WHITE);
-		g_cv.setTextColor(TFT_WHITE);
-		g_cv.setCursor(32, 44); g_cv.print("Delete this plan?");
-		g_cv.setTextColor(g_cv.color565(0xFF, 0x88, 0x88));
-		g_cv.setCursor(32, 70); g_cv.print("KEY1:Yes   KEY2:No");
-	}
+	// 項目7: エッジ側の削除機能は廃止。削除確認オーバーレイは撤去した。
 }
 
 // ── 起動画面(項目8) ──────────────────────────────────────────────
@@ -712,7 +729,7 @@ static void startApAndEtp(void)
 		Serial.printf("[AP] SoftAP up ssid=%s pass=%s ip=%s\n", g_apSsid.c_str(), g_apPass.c_str(), wifiConnect::apIp().c_str());
 		etpEdge::setup(g_devName);
 		g_edgeUp = true; g_apQrMode = true;
-		hge_resumeCapture(); g_state = hge_getState();
+		hge_resumeCapture(); hge_presenceStart(); g_state = hge_getState();	// 項目1: 在否モニタ開始(共通)
 	}
 	else { Serial.println("[AP] softAP start FAILED"); }
 }
@@ -756,23 +773,11 @@ static void handleButtons(uint32_t now)
 
 	const json& arr = planList();
 
-	// 削除確認中: KEY1=はい / KEY2=いいえ。
-	if (g_confirmDel)
-	{
-		if (e1 & 1)
-		{
-			if (g_cur >= 0 && g_cur < (int)arr.size()) { edgeRemoveReceivedPlan(arr[g_cur].value("id", std::string())); }
-			g_confirmDel = false; g_dirty = true;
-		}
-		else if (e2 & 1) { g_confirmDel = false; g_dirty = true; }
-		return;
-	}
+	// 項目7: エッジ側の削除機能は廃止(スマホ管理へ一本化)。KEY1長押し削除・削除確認は撤去した。
+	//  終わった計画は pruneFinishedPlans が自動削除する。
 
 	// KEY2 短押し: 次の計画へ(1方向ローリング、末尾で先頭へ)。
 	if ((e2 & 1) && !arr.empty()) { g_cur = (g_cur + 1) % (int)arr.size(); g_dirty = true; }
-
-	// KEY1 長押し: 表示中の計画を削除(確認へ)。
-	if ((e1 & 2) && !arr.empty()) { g_confirmDel = true; g_dirty = true; return; }
 
 	// KEY1 短押し: 開始/停止。即時反映: アイコンだけ先に切り替えて描画し、実処理は loop 末尾で行う
 	// (開始は計画読込で数百ms・停止はスレッドjoinで数秒ブロックするため、先に描く)。処理待ち中の連打は無視。
@@ -919,6 +924,7 @@ void loop(void)
 				etpEdge::setup(g_devName);
 				g_edgeUp = true;
 				hge_resumeCapture();	// PSRAM有効化で測光/CCAPIがPSRAMに載りOOMしない。無人再起動の撮影再開を復活。
+				hge_presenceStart();	// 項目1: エッジ自身の在否モニタ(スマホと共通)を開始。未検出は×で示す
 				g_state = hge_getState();
 			}
 			g_dirty = true;
@@ -949,6 +955,13 @@ void loop(void)
 		// 点滅は状態帯だけの部分更新(g_dirty=全画面 とは別経路)。全画面 pushSprite の掃引が
 		// 500ms ごとに画面全体のちらつきとして見えていた問題を回避する。
 		if (g_state == HGE_ST_CAPTURING && (now - lastBlink) >= 500) { lastBlink = now; g_blinkOn = !g_blinkOn; g_bandDirty = true; }
+	}
+
+	// #8 時計の ":" 点滅(1秒周期=500msでトグル)+分の進行。撮影状態に関係なく常時。
+	// QR/プロビジョニング表示中は下部バンド更新をしない(それらは全画面で別描画のため)。
+	{
+		static uint32_t lastColon = 0;
+		if (!g_apQrMode && !g_provMode && (now - lastColon) >= 500) { lastColon = now; g_colonOn = !g_colonOn; g_bandDirty = true; }
 	}
 
 	// シリアルコマンド(検証用。CoreS3版と同じ主要コマンド)。

@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>	// 時刻表示(time())
 #include <string>
 #include <vector>
 #include <map>
@@ -124,6 +125,7 @@ static bool g_listDirty = true;	// 計画リスト(hge_listPlansJson)の再取�
 
 static volatile int g_state = HGE_ST_IDLE;
 static bool  g_blinkOn = true;	// 撮影中(緑カメラ)アイコンの点滅状態。接続断(赤)は点灯のまま。
+static bool  g_colonOn = true;	// 時計の ":" 点滅(1秒周期)。撮影状態に関係なく常時トグル(#8)
 static char  g_prog[64] = "";
 static char  g_shot[64] = "";
 
@@ -216,8 +218,6 @@ void edgeRemoveReceivedPlan(const std::string& id)
 	osfile::removeFile("asset", "nbmp_" + id + ".bin");	// 永続化したビットマップも削除
 	g_listDirty = true; g_dirty = true;
 }
-// 削除確認ダイアログ対象の計画id(空=非表示)。item4。
-static std::string g_confirmDelId;
 
 // 項目2: 終わった撮影計画をエッジから自動削除する。エッジは画面が小さく、終わった計画が溜まると
 // 選択の邪魔になるため。撮影終了(state=IDLE)かつ撮影終了時刻が過去(capturable=false)の計画が対象。
@@ -226,6 +226,7 @@ static std::string g_confirmDelId;
 static void pruneFinishedPlans(void);
 
 static constexpr int HEAD_H   = 28;
+static constexpr int CLOCK_H  = 22;	// 最下段の時計予約帯の高さ(px)。計画表示・スクロール対象外(#8)
 
 static M5Canvas g_cv(&M5.Display);	// ダブルバッファ(ちらつき防止)
 
@@ -363,6 +364,30 @@ static void pruneFinishedPlans(void)
 // ── 撮影計画画面(簡素化: 計画名 + 開始/停止のみ。仕様 8.1) ─────────────
 // 計画名はスマホからモノクロ2値ビットマップで受信していればそれを、無ければ
 // スケジュールJSONの名称テキストを表示する(今後の多言語対応のため §8.2.1)。
+// 現在時刻 "HH:MM"(: は g_colonOn で点滅)。時計未設定(RTC無し未受信/RTC未初期化)は "--:--"。
+static std::string clockStr(void)
+{
+	time_t now = time(nullptr);
+	if (static_cast<long long>(now) < 1577836800LL) { return std::string("--:--"); }	// 2020-01-01前=未設定
+	hgc::dateTime d = hgc::fromUnixUtc(static_cast<long long>(now), osclock::utcOffsetMin());
+	char b[8];
+	std::snprintf(b, sizeof(b), "%02u%c%02u", (unsigned)d.hour, g_colonOn ? ':' : ' ', (unsigned)d.min);
+	return std::string(b);
+}
+
+// 最下段に時計予約帯を描く(#8)。計画表示・スクロール対象外の固定エリア。時刻は右下。
+static void drawClockBand(void)
+{
+	const int by = 240 - CLOCK_H;
+	g_cv.fillRect(0, by, 320, CLOCK_H, TFT_BLACK);	// 予約帯をクリア(スクロール内容が入らない)
+	g_cv.drawFastHLine(0, by, 320, M5.Display.color565(0x33, 0x33, 0x33));	// 計画リストとの区切り線
+	g_cv.setFont(&fonts::Font2);
+	g_cv.setTextColor(TFT_LIGHTGREY);
+	const int cw = g_cv.textWidth("00:00");
+	g_cv.setCursor(320 - cw - 8, by + 4); g_cv.print(clockStr().c_str());
+	g_cv.setTextColor(TFT_WHITE);
+}
+
 // 撮影計画リスト画面。各行に名称+開始/終了時刻と、左に開始/停止アイコン(終了>現在 の計画のみ)。
 // 左アイコンをタップでその計画を開始/停止する(スマホUIと同様。指示5)。
 static void renderPlan(void)
@@ -391,7 +416,7 @@ static void renderPlan(void)
 
 	const int rowH = 50;
 	const int top  = HEAD_H;
-	const int bot  = 240;
+	const int bot  = 240 - CLOCK_H;	// 最下段は時計予約帯。計画リストはここまで(#8)
 	int total = static_cast<int>(arr.size()) * rowH;
 	g_maxScroll = (total > (bot - top)) ? (total - (bot - top)) : 0;
 	if (g_scroll > g_maxScroll) { g_scroll = g_maxScroll; }
@@ -467,16 +492,8 @@ static void renderPlan(void)
 			}
 			g_cv.setTextColor(TFT_LIGHTGREY);
 			g_cv.setCursor(52, ry0 + 30); g_cv.print((mmddhhmm(st) + " -> " + mmddhhmm(en)).c_str());
-			// 右端: ゴミ箱アイコン(タップで削除確認。item4)。
-			{
-				int tx0 = 290, tyc = ry0 + rowH / 2;
-				uint16_t tcol = M5.Display.color565(0xCC, 0x44, 0x44);
-				g_cv.fillRect(tx0 - 2, tyc - 8, 24, 3, tcol);		// ふた
-				g_cv.fillRect(tx0 + 6, tyc - 11, 6, 3, tcol);		// 取っ手
-				g_cv.fillRect(tx0, tyc - 4, 20, 14, tcol);			// 本体
-				g_cv.drawFastVLine(tx0 + 6,  tyc - 1, 8, TFT_BLACK);	// 溝
-				g_cv.drawFastVLine(tx0 + 13, tyc - 1, 8, TFT_BLACK);
-			}
+			// 項目7: エッジ側の削除は廃止(スマホ管理へ一本化)。ゴミ箱アイコンは撤去。
+			//  終わった計画は pruneFinishedPlans が自動削除する。
 			g_cv.drawFastHLine(0, ry1 - 1, 320, M5.Display.color565(0x33, 0x33, 0x33));
 		}
 		g_planHits.push_back({ ry0, ry1, id, active, capturable });
@@ -489,20 +506,9 @@ static void renderPlan(void)
 		g_cv.setCursor(16, top + 24); g_cv.print("No plans");
 		g_cv.setCursor(16, top + 48); g_cv.print("Transfer from phone");
 	}
+	drawClockBand();	// #8 最下段の時計(計画表示・スクロール対象外の固定帯)
 
-	// 削除確認ダイアログ(item4)。はい=削除 / いいえ=取消。ボタン座標は onTap と一致させる。
-	if (!g_confirmDelId.empty())
-	{
-		int bx = 30, by = 84;
-		g_cv.fillRoundRect(bx, by, 260, 92, 6, M5.Display.color565(0x22, 0x22, 0x22));
-		g_cv.drawRoundRect(bx, by, 260, 92, 6, TFT_WHITE);
-		g_cv.setTextColor(TFT_WHITE);
-		g_cv.setCursor(bx + 16, by + 14); g_cv.print("Delete?");
-		g_cv.fillRoundRect(bx + 20,  by + 52, 90, 30, 4, M5.Display.color565(0xCC, 0x44, 0x44));
-		g_cv.setCursor(bx + 50,  by + 60); g_cv.print("Yes");
-		g_cv.fillRoundRect(bx + 150, by + 52, 90, 30, 4, M5.Display.color565(0x55, 0x55, 0x55));
-		g_cv.setCursor(bx + 172, by + 60); g_cv.print("No");
-	}
+	// 項目7: エッジ側の削除機能は廃止。削除確認ダイアログも撤去(計画管理はスマホから)。
 
 	g_cv.pushSprite(0, 0);
 }
@@ -588,6 +594,7 @@ static void startApAndEtp(void)
 		g_edgeUp = true;
 		g_apQrMode = true;			// LCDに参加用QR
 		hge_resumeCapture();		// AP参加済みカメラがあれば撮影再開(Phase2でstation列挙発見)
+		hge_presenceStart();		// 項目1: エッジ自身の在否モニタ(スマホと共通)を開始(APサブネットのカメラを探す)
 		g_state = hge_getState();
 	}
 	else { Serial.println("[AP] softAP start FAILED"); }
@@ -649,15 +656,7 @@ static void onTap(int x, int y)
 {
 	if (g_apQrMode)  { g_apQrMode = false; g_dirty = true; return; }	// APモード: QRを閉じて計画画面へ
 	if (g_provMode) { g_provMode = false; g_dirty = true; return; }
-	if (!g_confirmDelId.empty())	// 削除確認ダイアログ表示中(item4): はい/いいえ のみ受ける
-	{
-		if (y >= 136 && y < 166)
-		{
-			if (x >= 50 && x < 140)       { edgeRemoveReceivedPlan(g_confirmDelId); g_confirmDelId.clear(); }
-			else if (x >= 180 && x < 270) { g_confirmDelId.clear(); g_dirty = true; }
-		}
-		return;
-	}
+	// 項目7: エッジ側の削除は廃止。削除確認ダイアログ/ゴミ箱タップは撤去した。
 	for (const auto& h : g_planHits)
 	{
 		if (y >= h.y0 && y < h.y1)
@@ -678,10 +677,7 @@ static void onTap(int x, int y)
 					}
 				}
 			}
-			else if (x >= 280)	// 右端のゴミ箱: 削除確認ダイアログを出す(item4)
-			{
-				g_confirmDelId = h.id; g_dirty = true;
-			}
+			// 項目7: 右端ゴミ箱による削除は廃止。
 			break;
 		}
 	}
@@ -693,6 +689,7 @@ static void handleTouch(void)
 	static bool prevPressed = false;
 	static int  startX = 0, startY = 0, startScroll = 0;
 	static bool moved = false;
+	static bool ignoreGesture = false;	// #8 時計帯から始まったジェスチャは丸ごと無視
 
 	auto t = M5.Touch.getDetail();
 	bool pressed = t.isPressed();
@@ -700,8 +697,11 @@ static void handleTouch(void)
 
 	if (pressed && !prevPressed)
 	{
+		// #8 最下段の時計予約帯はスクロール・タップ対象外。そこから始まった操作はジェスチャ全体を無視。
+		ignoreGesture = (ty >= 240 - CLOCK_H);
 		startX = tx; startY = ty; startScroll = g_scroll; moved = false;
 	}
+	if (ignoreGesture) { if (!pressed) { ignoreGesture = false; } prevPressed = pressed; return; }
 	else if (pressed && prevPressed)
 	{
 		if (std::abs(tx - startX) > 8 || std::abs(ty - startY) > 8) { moved = true; }
@@ -820,6 +820,7 @@ void loop(void)
 				etpEdge::setup(g_devName);	// プロビジョニングで設定した端末名で検索応答する(スマホは名称で探す)
 				g_edgeUp = true;
 				hge_resumeCapture();		// item2: WiFi接続後に撮影再開(SSDPでカメラを探せる)
+				hge_presenceStart();		// 項目1: エッジ自身の在否モニタ(スマホと共通の仕組み)を開始。未検出は×で示す
 				g_state = hge_getState();
 			}
 			g_dirty = true;
@@ -858,6 +859,14 @@ void loop(void)
 		{
 			lastBlink = nowMs; g_blinkOn = !g_blinkOn; g_dirty = true;
 		}
+	}
+
+	// #8 時計の ":" 点滅(1秒周期=500msでトグル)+分の進行。撮影状態に関係なく常時。
+	// QR/プロビジョニング表示中は計画画面ではないので更新しない。
+	{
+		static uint32_t lastColon = 0;
+		uint32_t nowMs = millis();
+		if (!g_apQrMode && !g_provMode && (nowMs - lastColon) >= 500) { lastColon = nowMs; g_colonOn = !g_colonOn; g_dirty = true; }
 	}
 
 	// シリアルコマンド(検証用): 's'=開始 'x'=停止 'i'=情報 'l'=ログ 'F'=保存先 'D'=内蔵ログ削除
