@@ -295,6 +295,10 @@ int32_t hge_resumeCapture(void);
 // 生成失敗(内部RAM断片化)も10秒間隔で再試行する。エッジ=メインloopから毎秒、スマホ=UIタイマから数秒毎に呼ぶ。
 int32_t hge_pump(void);
 
+// 項目1: いずれかのセッションがカメラI/O中(取得/撮影/停止処理)か。エッジの在否モニタが撮影中は探索を
+// 止めるための判定に使う(時間厳守のシャッターI/Oと単一netThreadで競合させない)。
+bool hge_anyActiveCameraSession(void);
+
 #ifdef __cplusplus
 }
 #endif

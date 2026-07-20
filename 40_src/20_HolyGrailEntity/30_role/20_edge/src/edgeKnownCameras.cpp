@@ -4,6 +4,8 @@
 #include "dataManager.h"
 #include "osFile.h"
 #include "net.h"			// §3.3 tier3: 限定サブネットのバッチ探索(net::scanSubnetPort)
+#include "presenceMonitor.h"	// 項目1: 在否モニタ(スマホと共通)。エッジ自身が M-SEARCH/NOTIFY で在否を持つ
+#include "holyGrailEntity.h"	// 項目1: hge_anyActiveCameraSession(撮影中はスキャンを止める)
 #include <json/nlohmann/json.hpp>
 #include <vector>
 #include <mutex>
@@ -208,26 +210,21 @@ void loadPersisted()
 	} catch (const std::exception&) { /* 壊れていれば無視(次回の接続成功で上書き保存される) */ }
 }
 
-// スマホ役の常駐プレゼンスマップ(§5.4)はエッジには不要(自前の探索は撮影干渉回避のため持たない)。no-op。
-void presenceStart(std::function<void()> /*onChange*/) {}
-void presenceStop() {}
-std::string presenceJson() { return "[]"; }
-
-// 項目8: 既知カメラテーブル(スマホからのC_CAMERA_INFOで online が更新される)から在否を判定。
-//  1=オンライン/0=オフライン/-1=不明。スマホ未接続で情報が無ければ不明(×を出さない)。
-int cameraPresence(const hgc::camera& cam)
+// 項目1: エッジも「スマホと同じ在否モニタ(共通 presenceMonitor)」を自分で動かす。
+//  ・M-SEARCH(定期)+ 受動NOTIFY + 既知オンライン個体への軽量疎通で、エッジ自身が在否を持つ
+//    (スマホ push 依存を廃止=スマホ非接続の単独運用でも×を出せる)。
+//  ・エッジ特有: 撮影中(カメラI/O中)はスキャンしない=時間厳守のシャッターと単一netThreadで競合させない。
+//    撮影中の在否はランナー(取得フェーズ/接続断検知)が管理するので二重にならない。
+void presenceStart(std::function<void()> onChange)
 {
-	if (g_knownCams.empty()) { return -1; }		// スマホからの情報がまだ無い=不明(×を出さない)
-	if (!cam.serial.empty())
-	{
-		for (const auto& k : g_knownCams) { if (k.serial == cam.serial) { return k.online ? 1 : 0; } }
-		// serial 未知 → モデル照合へフォールバック。
-	}
-	for (const auto& k : g_knownCams)
-	{
-		if (k.online && knownModelMatch(k.model, cam)) { return 1; }
-	}
-	return 0;	// 情報はあるがオンライン一致が無い=オフライン(×)
+	// useNotify=false: SSDP共有リスナは entity 側(ensureWatching=runner poke 用)が管理するため二重登録しない。
+	//  在否は定期M-SEARCH(60秒)+疎通で拾う(起動時から走るので、開始時には既に在否を把握済み)。
+	presenceMon::start(std::move(onChange), []() { return !hge_anyActiveCameraSession(); }, false);
 }
+void presenceStop() { presenceMon::stop(); }
+std::string presenceJson() { return presenceMon::json(); }
+
+// 計画カメラの在否。エッジ自身の在否モニタ(共通)から判定する。1=オンライン/0=オフライン/-1=不明。
+int cameraPresence(const hgc::camera& cam) { return presenceMon::presence(cam); }
 
 }}	// namespace hge::role
