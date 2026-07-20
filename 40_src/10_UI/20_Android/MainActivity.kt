@@ -5358,6 +5358,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
             runOnUiThread {
                 startingPlans.remove(planId)   // 開始要求の結果確定(以降はポーリングが実状態を反映)
                 if (running) {
+                    // 項目2(再修正3): 送った時点でこのエッジが保有していると台帳へ即記録する。
+                    //  従来は30秒周期のスイープ(reconcileEdgeRoster)が反映するまで台帳が空で、
+                    //  「エッジから削除→開始→停止」と素早く操作すると isPlanOnEdge が false のままになり、
+                    //  ⋮メニューに「エッジ端末から削除」が出なかった(スイープが回ると出る=出たり出なかったり)。
+                    //  送信が成功した=エッジが持っている、は我々が確実に知っている事実なので待つ必要がない。
+                    edgeHeldByEdge.getOrPut(e.name) { mutableSetOf() }.add(planId)
                     // waitingPlans には startPlan で追加済み。以降は edgePoll(全エッジ計画対象)が各計画の状態を反映する。
                     if (currentPlanId == planId) { captureStatus.text = "● エッジ端末へ転送・撮影開始"; captureStatus.visibility = View.VISIBLE }
                     ensureEdgePoll()
