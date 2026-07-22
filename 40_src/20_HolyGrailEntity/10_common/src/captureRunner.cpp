@@ -245,6 +245,48 @@ hgc::exposure captureRunner::enterMeteringShutter(const hgc::exposure& shotExp)
 	return me;
 }
 
+// 測光リニア値から露出成分を割り戻し、露出に依存しない「場面の明るさ」を得る。
+//  測光は撮影とは別の露出(測光シャッター)で行うので、測光値をそのまま撮影露出の目標と
+//  比べてはいけない(両者の段差ぶんずれ、比較が永久に閉じず露出が暴走する)。
+//  linear ∝ 場面の明るさ × 2^brightnessStops(測光露出) なので、割り戻せば露出に依存しない。
+double captureRunner::sceneRefFromMetered(double linear, const hgc::exposure& meterExp) const
+{
+	if (linear <= 0.0) { return -1.0; }
+	if (!validExposure(meterExp)) { return linear; }	// 割り戻せない → 従来どおり
+	return linear / std::pow(2.0, expo::brightnessStops(meterExp, tables_));
+}
+
+// 「場面の明るさ」を、その露出で撮ったときのリニア輝度へ投影する(上の逆変換)。
+double captureRunner::linearAtExposure(double sceneRef, const hgc::exposure& e) const
+{
+	if (sceneRef <= 0.0) { return -1.0; }
+	if (!validExposure(e)) { return sceneRef; }
+	return sceneRef * std::pow(2.0, expo::brightnessStops(e, tables_));
+}
+
+// 実際にカメラへ適用できている露出。lastXxxApplied_ は各軸の設定が成功したときだけ更新されるので、
+//  一部の軸だけ失敗した場合(実測: ISOは通ったが ss だけ通らない)も実機の状態を正しく表す。
+hgc::exposure captureRunner::appliedExposure(void) const
+{
+	hgc::exposure e{};
+	e.iso = lastIsoApplied_;
+	e.ss  = lastSsApplied_;
+	e.fn  = lastFnApplied_;
+	return e;
+}
+
+// 目標との差(段)から、このコマで踏む 1/3 段ステップ数を決める。
+//  定常時は1ステップ(=1/3段)に留めてフリッカーを抑え、大きくずれているときだけ速く詰める。
+int captureRunner::stepsToClose(double needStops) const
+{
+	const double a = std::fabs(needStops);
+	int n = static_cast<int>(a / kExposureStepStops + 0.5);
+	const int maxN = static_cast<int>(kMaxCatchUpStops / kExposureStepStops + 0.5);
+	if (n < 1)    { n = 1; }
+	if (n > maxN) { n = maxN; }
+	return n;
+}
+
 // 測光結果から次コマの測光ssを決め、張り付き(=露出を変えても値が動かない)を判定する。
 //  応答比 = Δ測光段 / Δss段。1に近ければ正常、0付近なら張り付き。
 //  張り付いていたら「もっと短く」する(暗いほど短い側でしか応答しないため。直感に反するがこれが正しい)。
@@ -679,6 +721,15 @@ errCode captureRunner::loop(void)
 				const hgc::ccmWindow* wS = activeWindow(now);
 				if (wS == nullptr || !wS->ccm) { interruptibleSleep(500); continue; }	// 隙間は撮らない
 			}
+			// 直前の露出適用が失敗していると、カメラは測光シャッターのままで、このまま撮ると
+			// そのコマだけ露出が飛ぶ(2026-07-20 の IMG_1092/IMG_1100)。落とす前に1回だけ試し直す。
+			//  ここは露光も記録も終わっている区間なので 503 で弾かれにくい。リトライループは使わず
+			//  1パスだけ(シャッターを遅らせないため)。通れば pending を本来の露出へ戻す。
+			if (applyFailed_ && validExposure(wantExp_))
+			{
+				if (this->applyExposureChanged(wantExp_) == ERR_HGC_OK) { pending = wantExp_; }
+				applyFailed_ = false;
+			}
 			shotExp = pending;
 			shutterMs = tool::epochMs();	// シャッター投下直前の壁時計(ms精度)
 			err = cameraController::actShutter(*dev_);
@@ -814,7 +865,8 @@ errCode captureRunner::loop(void)
 				meteredLinear = linear;
 				if (linear > 0.0)
 				{
-					avgBuf.push_back(linear);
+					// 測光値は測光露出で写る明るさ → 露出成分を割り戻してから平均する(土俵合わせ)。
+					avgBuf.push_back(this->sceneRefFromMetered(linear, meterExp));
 					int n = (smooth_.movingAverage > 0) ? smooth_.movingAverage : 5;
 					while (static_cast<int>(avgBuf.size()) > n) { avgBuf.erase(avgBuf.begin()); }
 					double avg = 0.0;
@@ -823,9 +875,22 @@ errCode captureRunner::loop(void)
 					double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : preCtl.current(), ev0cfg_);
 					double linU = expo::linearFromEvBase(preEv + smooth_.hysteresis / 2.0, lin0);
 					double linD = expo::linearFromEvBase(preEv - smooth_.hysteresis / 2.0, lin0);
-					double cB   = expo::brightnessStops(preCtl.current(), tables_);
-					if (avg > linU)      { if (haveHome && cB > homeB) { preCtl.stepHome(false, nightExp); } else { preCtl.darken(); } }
-					else if (avg < linD) { if (haveHome && cB < homeB) { preCtl.stepHome(true, nightExp); } else { preCtl.brighten(); } }
+					// 撮影露出で撮った場合の明るさへ投影してから比べる(ループを閉じる)。
+					const double predicted = this->linearAtExposure(avg, preCtl.current());
+					if (predicted > linU || predicted < linD)
+					{
+						const double center = expo::linearFromEvBase(preEv, lin0);
+						const double need   = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;
+						const int    steps  = this->stepsToClose(need);
+						for (int s = 0; s < steps; ++s)
+						{
+							const double cB = expo::brightnessStops(preCtl.current(), tables_);
+							bool moved;
+							if (need < 0.0) { moved = (haveHome && cB > homeB) ? preCtl.stepHome(false, nightExp) : preCtl.darken(); }
+							else            { moved = (haveHome && cB < homeB) ? preCtl.stepHome(true,  nightExp) : preCtl.brighten(); }
+							if (!moved) { break; }
+						}
+					}
 					meterFailStreak = 0;
 				}
 				else
@@ -889,7 +954,8 @@ errCode captureRunner::loop(void)
 			if (linear > 0.0)
 			{
 				// 露出補正(仕様 4.5): 移動平均・ヒステリシス。目標 ev=postEv。往復対称(home=次の基準)。
-				avgBuf.push_back(linear);
+				// 測光値は測光露出で写る明るさ → 露出成分を割り戻してから平均する(土俵合わせ)。
+				avgBuf.push_back(this->sceneRefFromMetered(linear, meterExp));
 				int n = (smooth_.movingAverage > 0) ? smooth_.movingAverage : 5;
 				while (static_cast<int>(avgBuf.size()) > n) { avgBuf.erase(avgBuf.begin()); }
 				double avg = 0.0;
@@ -898,9 +964,22 @@ errCode captureRunner::loop(void)
 				double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : postCtl.current(), ev0cfg_);
 				double linU = expo::linearFromEvBase(postEv + smooth_.hysteresis / 2.0, lin0);
 				double linD = expo::linearFromEvBase(postEv - smooth_.hysteresis / 2.0, lin0);
-				double curB = expo::brightnessStops(postCtl.current(), tables_);
-				if (avg > linU)      { if (haveHome && curB > homeB) { postCtl.stepHome(false, goal); } else { postCtl.darken(); } }
-				else if (avg < linD) { if (haveHome && curB < homeB) { postCtl.stepHome(true, goal); } else { postCtl.brighten(); } }
+				// 撮影露出で撮った場合の明るさへ投影してから比べる(ループを閉じる)。
+				const double predicted = this->linearAtExposure(avg, postCtl.current());
+				if (predicted > linU || predicted < linD)
+				{
+					const double center = expo::linearFromEvBase(postEv, lin0);
+					const double need   = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;
+					const int    steps  = this->stepsToClose(need);
+					for (int s = 0; s < steps; ++s)
+					{
+						const double curB = expo::brightnessStops(postCtl.current(), tables_);
+						bool moved;
+						if (need < 0.0) { moved = (haveHome && curB > homeB) ? postCtl.stepHome(false, goal) : postCtl.darken(); }
+						else            { moved = (haveHome && curB < homeB) ? postCtl.stepHome(true,  goal) : postCtl.brighten(); }
+						if (!moved) { break; }
+					}
+				}
 				meterFailStreak = 0;
 			}
 			else
@@ -972,7 +1051,9 @@ errCode captureRunner::loop(void)
 				if (linear > 0.0)
 				{
 					// 露出補正(仕様 4.5): 移動平均とヒステリシス帯(項目7: ccm 個別値を優先)
-					avgBuf.push_back(linear);
+					// 測光値は「測光露出で写る明るさ」なので、露出成分を割り戻した場面の明るさを
+					// 平均する(測光ssはコマ毎に変わるため、生の測光値を平均すると別条件が混ざる)。
+					avgBuf.push_back(this->sceneRefFromMetered(linear, meterExp));
 					int n = effMA;
 					while (static_cast<int>(avgBuf.size()) > n) { avgBuf.erase(avgBuf.begin()); }
 					double avg = 0.0;
@@ -982,9 +1063,23 @@ errCode captureRunner::loop(void)
 					double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : autoCtl.current(), ev0cfg_);
 					double linU = expo::linearFromEvBase(evT + effHyst / 2.0, lin0);
 					double linD = expo::linearFromEvBase(evT - effHyst / 2.0, lin0);
-						double curB = expo::brightnessStops(autoCtl.current(), tables_);
-					if (avg > linU)      { if (haveHome && curB > homeB) { autoCtl.stepHome(false, ccm->initial); } else { autoCtl.darken(); } }
-					else if (avg < linD) { if (haveHome && curB < homeB) { autoCtl.stepHome(true, ccm->initial); } else { autoCtl.brighten(); } }
+					// 撮影露出で撮った場合の明るさへ投影してから比べる(土俵合わせ)。これでループが
+					// 閉じ、露出を動かすと比較結果も動く(従来は測光値が撮影露出に依存せず暴走した)。
+					const double predicted = this->linearAtExposure(avg, autoCtl.current());
+					if (predicted > linU || predicted < linD)
+					{
+						const double center = expo::linearFromEvBase(evT, lin0);
+						const double need   = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;	// +:明るく -:暗く
+						const int    steps  = this->stepsToClose(need);
+						for (int s = 0; s < steps; ++s)
+						{
+							const double curB = expo::brightnessStops(autoCtl.current(), tables_);
+							bool moved;
+							if (need < 0.0) { moved = (haveHome && curB > homeB) ? autoCtl.stepHome(false, ccm->initial) : autoCtl.darken(); }
+							else            { moved = (haveHome && curB < homeB) ? autoCtl.stepHome(true,  ccm->initial) : autoCtl.brighten(); }
+							if (!moved) { break; }	// 限界に到達
+						}
+					}
 					meterFailStreak = 0;	// 測光成功
 				}
 				else
@@ -1053,7 +1148,18 @@ errCode captureRunner::loop(void)
 		if (warmedUp && !meterSsUsed_.empty() && meteredLinear > 0.0)
 		{ this->updateMeterShutter(meterExp, meteredLinear); }
 		const int prepMs = (prep != nullptr) ? static_cast<int>(tool::getElapse(prep)) : -1;
-		pending = target;	// 次シャッターはこの target で撮る(既にカメラへ適用済み)
+		// 次シャッターで撮る露出。適用に成功していれば target。
+		// 失敗しているならカメラは測光シャッターのまま(軸ごとに一部だけ適用されることもある)なので、
+		// target で撮ったことにしてはいけない。実際に適用できている値を次コマの露出とする。
+		// これでアプリの露出モデル・ログ・実写が一致する(2026-07-20 IMG_1092/IMG_1100 の食い違いを根治)。
+		applyFailed_ = (warmedUp && applyErr != ERR_HGC_OK);
+		wantExp_     = target;
+		if (!applyFailed_) { pending = target; }
+		else
+		{
+			const hgc::exposure act = this->appliedExposure();
+			pending = validExposure(act) ? act : target;	// 読めないときは従来どおり
+		}
 
 		if (onCaptured_)
 		{

@@ -136,6 +136,19 @@ public:
 	// 測光間隔に依存しないため、本撮影(15秒間隔)でも初期収束(1〜2秒間隔)でも正しく判定できる。
 	static constexpr int    kLvFreshMarginMs     = 2000;
 
+	// --- 測光値と撮影露出の「土俵合わせ」(2026-07-21 白飛び暴走の根治) ---
+	// 測光は測光シャッター(短い露出)で行うため、測光リニア値はその露出で写る明るさである。
+	// これを撮影露出の目標(ev0基準)とそのまま比べると、両露出の段差ぶん(実測で最大9段)ずれる。
+	// さらに測光ループは中央値を kMeterTargetX に貼り付けるので測光値は撮影露出を動かしても
+	// 変化せず、比較結果が永久に同じ向きのまま=1/3段/コマで限界まで暴走した
+	// (2026-07-20夕方の実機: 1/60→8秒へ8.91段/27コマ=0.33段/コマ、実写は飽和85〜98%)。
+	// → 測光値から露出成分を割り戻して「場面の明るさ」にし、撮影露出で撮った場合の値へ
+	//   投影してから比較する。これでループが閉じ、露出を動かすと比較結果も動く。
+	static constexpr double kExposureStepStops   = 1.0 / 3.0;	// 露出制御の1ステップ(段)
+	// 1コマで詰めてよい上限(段)。定常時は1ステップでフリッカーを抑え、大きくずれている
+	// ときだけ速く詰める(初期収束/制御方法切替直後の復帰用)。
+	static constexpr double kMaxCatchUpStops     = 3.0;
+
 private:
 	errCode loop(void);								// 撮影ループ本体(別スレッド)
 	bool    establishSession(void);					// startShooting+M設定+設定値テーブル構築(開始/再接続で使用)
@@ -149,6 +162,16 @@ private:
 	hgc::exposure enterMeteringShutter(const hgc::exposure& shotExp);
 	// 今回の測光結果から「次コマの測光ss」を更新し、張り付きを判定する。
 	void          updateMeterShutter(const hgc::exposure& meterExp, double linear);
+	// 測光リニア値から露出成分を割り戻し、露出に依存しない「場面の明るさ」にする(土俵合わせ)。
+	//  測光露出が無効なら割り戻さずそのまま返す(従来動作へのフォールバック)。
+	double        sceneRefFromMetered(double linear, const hgc::exposure& meterExp) const;
+	// 「場面の明るさ」を、その露出で撮ったときのリニア輝度へ戻す(sceneRefFromMetered の逆)。
+	double        linearAtExposure(double sceneRef, const hgc::exposure& e) const;
+	// 目標との差(段)から、このコマで踏む 1/3 段ステップ数を決める(1〜kMaxCatchUpStops相当)。
+	int           stepsToClose(double needStops) const;
+	// 実際にカメラへ適用できている露出を返す。lastXxxApplied_ は「その軸の設定が成功したときだけ」
+	// 更新されるので、一部の軸だけ失敗した場合も含めて実機の状態を正しく表す。
+	hgc::exposure appliedExposure(void) const;
 	errCode applyExposureChanged(const hgc::exposure& exp);	// 変更のあった ss/iso/fn だけを適用
 	// 露出設定を最大 kApplyMaxMs まで kApplyRetryMs 間隔でリトライ。tries=試行回数を返す。
 	errCode applyWithRetry(const hgc::exposure& exp, int& tries);
@@ -199,6 +222,11 @@ private:
 	bool        lvPinnedLog_    = false;	// 今コマのログ用
 	// 変更分のみ適用(タイマ方式tm0)の直近適用値。establishSession でクリアし次回フル適用させる。
 	std::string lastFnApplied_, lastSsApplied_, lastIsoApplied_;
+	// 露出設定に失敗したまま次のシャッターを落とすと、カメラは測光シャッターのままなので
+	// そのコマだけ露出が飛ぶ(2026-07-20 IMG_1092=1/100, IMG_1100=1/320 が実例)。
+	// 失敗を覚えておき、次のシャッター直前にもう一度だけ適用を試す。
+	bool          applyFailed_ = false;	// 直前の露出適用が失敗した
+	hgc::exposure wantExp_{};			// そのとき適用したかった露出(再試行用)
 
 	stateCb     onState_;
 	progressCb  onProgress_;
