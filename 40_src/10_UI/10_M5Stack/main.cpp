@@ -832,9 +832,32 @@ void setup(void)
 	redraw();
 }
 
+// ── バッテリ残量ログ(放電カーブの実測用) ──
+// 単独動作(USB非接続)で電池が切れるまでの推移をログに残す。残量表示のしきい値や
+// 「自ら電源を切る」限界電圧は、このログの実測から決める(推測で決めない)。
+//  ・up= は起動からの経過秒。途中で再起動すると 0 に戻るので、電池切れ以外の再起動を見分けられる。
+//  ・osfile::append は都度追記なので、電源が落ちても直前の行までは残る。
+// 60秒間隔なら 10時間で 600行 = 数十KB程度でログ領域を圧迫しない。
+static constexpr uint32_t kBattLogIntervalMs = 60000;
+static void logBatteryPeriodic(void)
+{
+	static uint32_t last = 0;
+	const uint32_t nowMs = millis();
+	if (last != 0 && (nowMs - last) < kBattLogIntervalMs) { return; }
+	last = nowMs;
+	char d[96];
+	std::snprintf(d, sizeof(d), "pct=%d volt=%dmV chg=%d up=%lus",
+	              (int)M5.Power.getBatteryLevel(),
+	              (int)M5.Power.getBatteryVoltage(),
+	              (int)M5.Power.isCharging(),
+	              (unsigned long)(nowMs / 1000));
+	dataManager::logEvent("BATT", d);
+}
+
 void loop(void)
 {
 	M5.update();
+	logBatteryPeriodic();	// 放電カーブ測定用(60秒ごと)
 
 	// WiFi 切断時は再接続を試みる(実機運用時に SSID/PASS を設定する)。APモードではSTA再接続しない。
 	if (g_netMode != "ap" && wifiConnect::getStatus() == wifiConnect::wifiStatus::cuttingOff)
@@ -930,6 +953,13 @@ void loop(void)
 		else if (c == 'F')	// 検証用: 現在のログ保存先(SD/LittleFS)を表示
 		{
 			Serial.printf("[FS] backend=%s\n", osfile::backendName());
+		}
+		else if (c == 'b')	// 検証用: 電源(バッテリ)の読み値を確認する
+		{
+			Serial.printf("[BATT] pct=%d volt=%dmV chg=%d\n",
+			              (int)M5.Power.getBatteryLevel(),
+			              (int)M5.Power.getBatteryVoltage(),
+			              (int)M5.Power.isCharging());
 		}
 		else if (c == 'N')	// 検証用: 名前ビットマップの保持状況(RAM件数 + 永続ファイル)を表示
 		{

@@ -115,6 +115,9 @@ static int              g_scrW = 240, g_scrH = 135;	// 横向きの論理サイ�
 static constexpr gpio_num_t PIN_KEY1 = GPIO_NUM_11;
 static constexpr gpio_num_t PIN_KEY2 = GPIO_NUM_12;
 static constexpr uint32_t   LONG_PRESS_MS = 800;
+// バッテリ残量ログの間隔[ms]。放電カーブを描くのに十分な粒度で、かつ書き込み負荷を抑える。
+// 60秒間隔なら 10時間で 600行 = 数十KB程度で LittleFS を圧迫しない。
+static constexpr uint32_t   kBattLogIntervalMs = 60000;
 
 struct Button
 {
@@ -902,10 +905,31 @@ void setup(void)
 	redraw(false);
 }
 
+// ── バッテリ残量ログ(放電カーブの実測用) ──
+// 単独動作(USB非接続)で電池が切れるまでの推移をログに残す。残量表示のしきい値や
+// 「自ら電源を切る」限界電圧は、このログの実測から決める(推測で決めない)。
+//  ・M5.Power は StickS3(ボード未認識)でも有効な値を返すことを実測で確認済み(2026-07-22)。
+//  ・up= は起動からの経過秒。途中で再起動すると 0 に戻るので、電池切れ以外の再起動を見分けられる。
+//  ・osfile::append は都度追記なので、電源が落ちても直前の行までは残る。
+static void logBatteryPeriodic(uint32_t nowMs)
+{
+	static uint32_t last = 0;
+	if (last != 0 && (nowMs - last) < kBattLogIntervalMs) { return; }
+	last = nowMs;
+	char d[96];
+	std::snprintf(d, sizeof(d), "pct=%d volt=%dmV chg=%d up=%lus",
+	              (int)M5.Power.getBatteryLevel(),
+	              (int)M5.Power.getBatteryVoltage(),
+	              (int)M5.Power.isCharging(),
+	              (unsigned long)(nowMs / 1000));
+	dataManager::logEvent("BATT", d);
+}
+
 void loop(void)
 {
 	M5.update();
 	uint32_t now = millis();
+	logBatteryPeriodic(now);	// 放電カーブ測定用(60秒ごと)
 
 	// WiFi 再接続(STA)。
 	if (g_netMode != "ap" && wifiConnect::getStatus() == wifiConnect::wifiStatus::cuttingOff)
@@ -983,6 +1007,17 @@ void loop(void)
 			              WiFi.localIP().toString().c_str(), (int)g_edgeUp, g_scrW, g_scrH, (int)g_spriteOk);
 		}
 		else if (c == 'F') { Serial.printf("[FS] backend=%s\n", osfile::backendName()); }
+		else if (c == 'b')	// 検証用: 電源(バッテリ)の読み値を確認する。
+		{
+			// StickS3 は M5.begin にボードを認識させていない(ブートループ回避)ので M5.Power が
+			// 使えるか不明だったが、実測で有効な値を返すことを確認した
+			// (2026-07-22: CoreS3 4135mV / StickS3 4148mV と機体別の実値)。
+			// 電源IC(M5PM1 0x6E)の直読みも試したが全レジスタ応答なしで、そもそも不要だった。
+			Serial.printf("[BATT] pct=%d volt=%dmV chg=%d\n",
+			              (int)M5.Power.getBatteryLevel(),
+			              (int)M5.Power.getBatteryVoltage(),
+			              (int)M5.Power.isCharging());
+		}
 		else if (c == 'k') { Serial.printf("[KEY] k1=%d k2=%d\n", (int)g_key1.pressedNow(), (int)g_key2.pressedNow()); }
 		else if (c == 'N')
 		{
