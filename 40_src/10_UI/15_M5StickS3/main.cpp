@@ -231,7 +231,7 @@ static bool g_dirty = true;
 static bool g_edgeUp = false;
 static bool     g_spriteOk = false;		// createSprite 成否
 static bool     g_bandDirty = false;	// 状態帯(下部)だけの部分更新。全画面転送を減らして SPI 負荷を抑える
-static const int BAND_H = 40;			// 状態アイコン/文字が収まる下部バンドの高さ(px)
+static const int BAND_H = 58;			// 下部バンド(状態アイコン+最下段キーガイダンス/時刻)の高さ(px)
 
 // ── 受信計画の永続化(CoreS3版と同一) ──
 static std::set<std::string> g_recvPlans;
@@ -422,66 +422,25 @@ static int drawNameTextWrapped(const std::string& name, int x, int y, int maxW)
 	return lh;
 }
 
-// ── 物理キーのガイダンス(項目1) ──
-// StickS3 は KEY1(正面)/KEY2(側面)が「どのキーか」画面から分からない。この向きでは KEY1 が画面の
-// 左、KEY2 が左下に来るので、物理キーの位置に合わせて「明るい緑のブロック」で機能名を示す。
-//  ・KEY1 = 画面左端の細い縦ブロック(文字は90°回転して縦書き)。場所を取らないよう最小フォント。
-//  ・KEY2 = 画面下端にぴったり寄せた小さな横ブロック(KEY1より少し右)。
-static constexpr int KEY_GUIDE_W = 14;	// KEY1(左端)の縦ブロックの幅[px]
-static constexpr int KEY2_X      = 18;	// KEY2 ブロックの左端(KEY1の右)
-static constexpr int STATUS_X    = 64;	// 下部の状態アイコン/テキストの左端(KEY2ブロックを避ける)
+// ── コンテンツの左マージン ──
+// 旧レイアウトは画面左に KEY1/KEY2 の縦横ブロックを縦に並べていたが「かっこ悪い」ため廃止し、
+// キーガイダンスは最下段(時刻と同じ行)へ矢印付きで移した(drawBottomBar)。コンテンツは全て左寄せ。
+static constexpr int LEFT_MARGIN = 4;	// 端末名・計画名・日時・状態アイコンの左端
 
-// KEY1 の現在の機能ラベル。表示中の計画が動作中なら Stop、撮影可なら Start(過去計画は Del のみ)。
-static const char* keyGuideKey1Label(const json& arr)
+// ── 最下段キーガイダンス用の矢印(内蔵GFXフォントに矢印字形が無いため自前で描く) ──
+// この横向き(rotation 3)では KEY1(正面)が画面の左、KEY2(側面)が画面の下に来るので、
+// ← が KEY1(start/stop)を、↓ が KEY2(select)を指す(物理キーの位置を矢印で示す)。
+static constexpr int ARROW_W = 11;	// 矢印1つの占有幅[px](矢じり+軸)
+static void drawArrowLeft(int x, int cy, uint16_t col)	// ← 左向き(KEY1=画面左)
 {
-	if (arr.empty() || g_cur < 0 || g_cur >= (int)arr.size()) { return "-"; }
-	const auto& p = arr[g_cur];
-	int state = p.value("state", 0);
-	bool active = (state == HGE_ST_CAPTURING || state == HGE_ST_STOPPING ||
-	               state == HGE_ST_WAITING   || state == HGE_ST_SEARCHING ||
-	               state == HGE_ST_NOCAMERA  || state == HGE_ST_DISCONNECTED);
-	// KEY1押下直後の保留(即時アイコン反映)中は、押した結果の機能を先に見せる。
-	auto po = g_pendingIcon.find(p.value("id", std::string()));
-	if (po != g_pendingIcon.end()) { active = (po->second == 1); }
-	if (active) { return "Stop"; }
-	return p.value("capturable", false) ? "Start" : "-";
+	g_cv.fillTriangle(x, cy, x + 5, cy - 4, x + 5, cy + 4, col);	// 矢じり(左が尖る)
+	g_cv.fillRect(x + 5, cy - 1, 5, 2, col);					// 軸
 }
-
-// KEY2 用: 明るい緑のブロックに横書きの小さなラベル(最小フォント Font0=6x8)。
-static void drawKeyBlockH(int x, int y, const char* label, uint16_t bg)
+static void drawArrowDown(int x, int cy, uint16_t col)	// ↓ 下向き(KEY2=画面下)
 {
-	g_cv.setFont(&fonts::Font0);
-	int tw = g_cv.textWidth(label);
-	int w  = tw + 6;
-	int h  = g_cv.fontHeight() + 4;
-	g_cv.fillRoundRect(x, y, w, h, 2, bg);
-	g_cv.setTextColor(TFT_BLACK);				// 明るい緑地なので文字は黒
-	g_cv.setCursor(x + 3, y + 2); g_cv.print(label);
-	g_cv.setFont(&fonts::Font2);
-	g_cv.setTextColor(TFT_WHITE);
-}
-
-// KEY1 用: 文字を90°回転した細い縦ブロック。一時スプライトへ描いて pushRotated で転送する
-// (LovyanGFX にテキスト回転が無いため。ブロックはスプライトそのもの=回転後も緑地のまま)。
-// left = ブロックの左辺のx(LCDの左端に寄せるため中心ではなく左辺で指定する)。cy = 縦の中心。
-static void drawKeyBlockV(int left, int cy, const char* label, uint16_t bg)
-{
-	lgfx::LGFX_Sprite sp(&g_cv);
-	sp.setColorDepth(16);
-	sp.setFont(&fonts::Font0);
-	int w = sp.textWidth(label) + 6;		// 回転後は「縦の長さ」になる
-	int h = sp.fontHeight() + 4;			// 回転後は「帯の細さ」= ブロックの幅
-	if (sp.createSprite(w, h) == nullptr) { return; }
-	sp.fillSprite(bg);
-	sp.setTextColor(TFT_BLACK);
-	sp.setCursor(3, 2); sp.print(label);
-	sp.setPivot(w / 2.0f, h / 2.0f);
-	// 回転後の幅は h。左辺を left に合わせるには中心を left + h/2 に置く。
-	g_cv.setPivot((float)(left + h / 2), (float)cy);
-	sp.pushRotated(&g_cv, 270);				// 反時計回り90°=下から上へ読む縦書き
-	sp.deleteSprite();
-	g_cv.setFont(&fonts::Font2);
-	g_cv.setTextColor(TFT_WHITE);
+	const int cx = x + 4;
+	g_cv.fillTriangle(cx, cy + 5, cx - 4, cy, cx + 4, cy, col);	// 矢じり(下が尖る)
+	g_cv.fillRect(cx - 1, cy - 5, 2, 5, col);					// 軸
 }
 
 // 現在時刻 "HH:MM"(: は g_colonOn で点滅)。時計未設定(RTC無し未受信/RTC未初期化)は "--:--"。
@@ -527,15 +486,31 @@ static void drawClockFixed(int x, int y)
 	}
 }
 
-// 最下段・右下に現在時刻を描く(#8)。band(下部)更新で毎回描かれる位置に置く。
-static void drawClock(void)
+// 最下段の1行(キーガイダンス + 現在時刻)。左から「←start/stop」「↓select」を並べ、
+// 右端に現在時刻 "HH:MM"(桁位置固定・":"点滅)を描く。例: "←start/stop ↓select      12:34"。
+// band(下部)更新で毎フレーム描かれる位置に置く(点滅・時刻更新もここで反映される)。
+static constexpr int BOTTOM_BAR_H = 16;	// 最下段の行高(Font2)
+static void drawBottomBar(void)
 {
+	const int rowY = g_scrH - BOTTOM_BAR_H;		// 行の上端
+	const int cy   = rowY + BOTTOM_BAR_H / 2;	// 矢印の縦中心
+	const uint16_t green = g_cv.color565(0x66, 0xEE, 0x66);	// 物理キーを指す明るい緑の矢印
+	g_cv.fillRect(0, rowY, g_scrW, BOTTOM_BAR_H, TFT_BLACK);	// 前回描画を消す
 	g_cv.setFont(&fonts::Font2);
+
+	int x = LEFT_MARGIN;
+	// KEY1(画面左)= 開始/停止
+	drawArrowLeft(x, cy, green); x += ARROW_W;
+	g_cv.setTextColor(TFT_WHITE);
+	g_cv.setCursor(x, rowY); g_cv.print("start/stop");
+	x += g_cv.textWidth("start/stop") + 10;
+	// KEY2(画面下)= 計画送り
+	drawArrowDown(x, cy, green); x += ARROW_W;
+	g_cv.setCursor(x, rowY); g_cv.print("select");
+
+	// 右端に現在時刻(桁位置固定なので点滅・分更新で位置が動かない)。
 	g_cv.setTextColor(TFT_LIGHTGREY);
-	const int cw = clockWidth();	// 桁位置固定の描画幅
-	const int cx = g_scrW - cw - 4;
-	g_cv.fillRect(cx, g_scrH - 17, cw + 4, 17, TFT_BLACK);	// 前回描画を消す
-	drawClockFixed(cx, g_scrH - 16);
+	drawClockFixed(g_scrW - clockWidth() - 4, rowY);
 	g_cv.setTextColor(TFT_WHITE);
 }
 
@@ -559,16 +534,9 @@ static void renderPlan(void)
 	g_cv.setCursor(g_scrW - g_cv.textWidth(stz) - 4, 2); g_cv.print(stz);
 	g_cv.setTextColor(TFT_WHITE);
 
-	drawClock();	// #8 最下段右下の現在時刻(計画の有無に関わらず表示)
-
-	// 物理キーのガイダンス(項目1): 画面左に縦の帯を置き、物理キーの位置に合わせて機能を示す。
-	//  ・KEY1(正面/この向きでは画面の左)  = 開始/停止 → 上側の枠
-	//  ・KEY2(側面/この向きでは画面の左下)= 計画の送り → 下側の枠
-	// 現在の状態でKEY1の機能(Start/Stop)が変わるので、ラベルもそれに追従させる。
-	const uint16_t kgGreen = g_cv.color565(0x66, 0xEE, 0x66);	// 明るい緑
-	drawKeyBlockV(0, (headH + g_scrH) / 2, keyGuideKey1Label(arr), kgGreen);					// KEY1(LCD左端に密着・縦)
-	drawKeyBlockH(KEY2_X, g_scrH - 12, "Select", kgGreen);									// KEY2(下端にぴったり)
-	const int cx0 = KEY2_X;                 // コンテンツの左端(KEY1の縦帯の右)
+	// 最下段: キーガイダンス(←start/stop ↓select)+ 現在時刻(計画の有無に関わらず表示)。
+	drawBottomBar();
+	const int cx0  = LEFT_MARGIN;           // コンテンツの左端(全て左寄せ)
 	const int maxW = g_scrW - cx0 - 4;      // コンテンツ幅
 
 	if (arr.empty())
@@ -614,44 +582,46 @@ static void renderPlan(void)
 	if (it != g_nameBmps.end() && it->second.px) { used = drawNameBitmapWrapped(it->second, cx0, nameY, maxW); }
 	else { used = drawNameTextWrapped(name, cx0, nameY, maxW); }
 
-	// 日付/時刻(開始・終了を2行)。
+	// 日付/時刻(開始 - 終了を1行・左寄せ)。Start/End の見出しは付けず日付と時刻だけ。
+	// 例: "07/22 13:15 - 07/23 07:00"
 	int ty = nameY + used + 6;
 	g_cv.setFont(&fonts::Font2);
 	g_cv.setTextColor(TFT_LIGHTGREY);
-	g_cv.setCursor(cx0, ty);      g_cv.print(("Start " + mmddhhmm(st)).c_str());
-	g_cv.setCursor(cx0, ty + 18); g_cv.print(("End   " + mmddhhmm(en)).c_str());
+	g_cv.setCursor(cx0, ty); g_cv.print((mmddhhmm(st) + " - " + mmddhhmm(en)).c_str());
 
 	// 状態(下部): CoreS3 と同じ ICON_* を計画名の状態表示として描画 + テキスト + KEY1操作。
 	//   撮影中(CAPTURING)=カメラ点滅 / 待機(WAITING)=カメラ点灯 / 未検出(NOCAMERA)=✖カメラ点灯 / 撮影可=開始アイコン。
 	//   点滅は g_blinkOn(CAPTURING のみ)。アイコン背景はデータに焼込済(CAPTURING/NG=黒地でStickS3の黒背景に馴染む)。
+	// 状態アイコン+テキストは、開始/終了時刻と最下段キーガイダンスの間に左寄せで置く。
+	// アイコンは最下段バーのすぐ上に「底辺」を合わせるので、状態が変わっても縦位置が動かない。
+	// KEY1の操作(start/stop)は最下段のキーガイダンスが示すので、状態テキストからは外す。
+	const int iconBottom = g_scrH - BOTTOM_BAR_H - 2;	// アイコンの底辺(最下段バーの直上)
 	uint16_t scol = TFT_LIGHTGREY; const char* stxt = "";
 	bool hasIcon = true; int iconH = ICON_CAPTURING_H;
-	// KEY1の操作(Start/Stop)は左のキーガイダンス帯が示すので、状態テキストからは外す。
-	// 下部の状態行は KEY2 ブロック(左下)を避けて STATUS_X から描く。
 	if (nocam)
 	{
-		g_cv.pushImage(STATUS_X, g_scrH - 2 - ICON_CAMERA_NG_H, ICON_CAMERA_NG_W, ICON_CAMERA_NG_H, ICON_CAMERA_NG);
+		g_cv.pushImage(LEFT_MARGIN, iconBottom - ICON_CAMERA_NG_H, ICON_CAMERA_NG_W, ICON_CAMERA_NG_H, ICON_CAMERA_NG);
 		iconH = ICON_CAMERA_NG_H; scol = g_cv.color565(0xFF, 0x55, 0x55); stxt = "NO CAMERA";
 	}
 	else if (capturing)
 	{
-		if (g_blinkOn) { g_cv.pushImage(STATUS_X, g_scrH - 2 - ICON_CAPTURING_H, ICON_CAPTURING_W, ICON_CAPTURING_H, ICON_CAPTURING); }
+		if (g_blinkOn) { g_cv.pushImage(LEFT_MARGIN, iconBottom - ICON_CAPTURING_H, ICON_CAPTURING_W, ICON_CAPTURING_H, ICON_CAPTURING); }
 		iconH = ICON_CAPTURING_H; scol = g_cv.color565(0x66, 0xEE, 0x66); stxt = "CAPTURING";
 	}
 	else if (waiting)
 	{
-		g_cv.pushImage(STATUS_X, g_scrH - 2 - ICON_CAPTURING_H, ICON_CAPTURING_W, ICON_CAPTURING_H, ICON_CAPTURING);
+		g_cv.pushImage(LEFT_MARGIN, iconBottom - ICON_CAPTURING_H, ICON_CAPTURING_W, ICON_CAPTURING_H, ICON_CAPTURING);
 		iconH = ICON_CAPTURING_H; scol = g_cv.color565(0x66, 0xEE, 0x66); stxt = "WAITING";
 	}
 	else if (capturable)
 	{
-		g_cv.pushImage(STATUS_X, g_scrH - 2 - ICON_START_H, ICON_START_W, ICON_START_H, ICON_START);
+		g_cv.pushImage(LEFT_MARGIN, iconBottom - ICON_START_H, ICON_START_W, ICON_START_H, ICON_START);
 		iconH = ICON_START_H; scol = TFT_WHITE; stxt = "READY";
 	}
 	else { hasIcon = false; scol = TFT_DARKGREY; stxt = "(past)"; }
-	// テキストはアイコンの右・縦中心に合わせる(アイコン無し=(past)は左端)。
-	int sx = hasIcon ? (STATUS_X + ICON_START_W + 4) : STATUS_X;
-	int sy = hasIcon ? (g_scrH - 2 - iconH) + (iconH - 16) / 2 : g_scrH - 16;
+	// テキストはアイコンの右・縦中心に合わせる(アイコン無し=(past)はアイコン底辺に合わせて左端)。
+	int sx = hasIcon ? (LEFT_MARGIN + ICON_START_W + 4) : LEFT_MARGIN;
+	int sy = hasIcon ? (iconBottom - iconH) + (iconH - 16) / 2 : (iconBottom - 16);
 	g_cv.setTextColor(scol);
 	g_cv.setCursor(sx, sy); g_cv.print(stxt);
 	// 項目7: エッジ側の削除機能は廃止。削除確認オーバーレイは撤去した。
