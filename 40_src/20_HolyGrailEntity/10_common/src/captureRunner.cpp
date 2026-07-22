@@ -3,8 +3,10 @@
 #include "osSystemCall.h"
 #include "debugOut.h"
 #include "astroSched.h"		// ② 太陽高度(sunHoriz)から ev0 中心bmを算出
+#include "netThread.h"		// 失敗した HTTP のステータス/応答をログへ添えるため
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <ctime>
 
 namespace
@@ -264,6 +266,23 @@ double captureRunner::linearAtExposure(double sceneRef, const hgc::exposure& e) 
 	return sceneRef * std::pow(2.0, expo::brightnessStops(e, tables_));
 }
 
+// HTTP を伴うカメラ操作の失敗メッセージに、直近の HTTP 失敗の詳細を添える。
+//  例) "actShutter http=503 During shooting or recording" / "actShutter http=応答なし"
+//  status>0 = カメラが断った(理由は応答本文に出る) / status=0 = そもそも届かなかった。
+//  この区別が無いために 2026-07-21 の actShutter 失敗(code=3)の原因を特定できなかった。
+//  失敗した呼び出しの直後に使うこと(それが直近の失敗である前提)。
+std::string captureRunner::withHttpDetail(const char* what) const
+{
+	int status = 0;
+	std::string body;
+	netThread::lastHttpFailure(status, body);
+	for (auto& c : body) { if (c == '\r' || c == '\n' || c == '\t') { c = ' '; } }	// ログは1行
+	char buf[220];
+	if (status > 0) { std::snprintf(buf, sizeof(buf), "%s http=%d %s", what, status, body.c_str()); }
+	else            { std::snprintf(buf, sizeof(buf), "%s http=応答なし", what); }
+	return std::string(buf);
+}
+
 // 実際にカメラへ適用できている露出。lastXxxApplied_ は各軸の設定が成功したときだけ更新されるので、
 //  一部の軸だけ失敗した場合(実測: ISOは通ったが ss だけ通らない)も実機の状態を正しく表す。
 hgc::exposure captureRunner::appliedExposure(void) const
@@ -501,7 +520,7 @@ bool captureRunner::establishSession(void)
 	errCode err = cameraController::startShooting(*dev_);
 	if (err != ERR_HGC_OK)
 	{
-		if (onError_) { onError_(err, "startShooting"); }
+		if (onError_) { onError_(err, this->withHttpDetail("startShooting")); }
 		return false;
 	}
 
@@ -512,7 +531,7 @@ bool captureRunner::establishSession(void)
 		errCode me = cameraController::setupShootingModeManual(*dev_);
 		if (me == ERR_HGC_OK)            { interruptibleSleep(800); }	// モード変更/ability更新の反映待ち(初回rdyShutterの取りこぼし防止)
 		else if (me == ERR_HGC_NOT_SUPPORTED) { /* モード変更非対応機。そのまま続行 */ }
-		else if (onError_)               { onError_(me, "setupShootingModeManual"); }
+		else if (onError_)               { onError_(me, this->withHttpDetail("setupShootingModeManual")); }
 	}
 
 	// 設定可能値を取得して設定可能値テーブルを作る(仕様 4.2)
@@ -734,7 +753,7 @@ errCode captureRunner::loop(void)
 			shutterMs = tool::epochMs();	// シャッター投下直前の壁時計(ms精度)
 			err = cameraController::actShutter(*dev_);
 			if (err != ERR_HGC_OK) { err = cameraController::actShutter(*dev_); }	// シャッター失敗は1回だけリトライ
-			if (err != ERR_HGC_OK) { if (onError_) { onError_(err, "actShutter"); } ++shootFailStreak; }
+			if (err != ERR_HGC_OK) { if (onError_) { onError_(err, this->withHttpDetail("actShutter")); } ++shootFailStreak; }
 			else { shootFailStreak = 0; }
 			++frame;
 			if (onProgress_) { onProgress_(progressInfo{ frame, total, static_cast<int>(endSec - now), static_cast<int>(now - startSec) }); }
@@ -1115,7 +1134,7 @@ errCode captureRunner::loop(void)
 			{
 				int t1 = 0;
 				const errCode ae = applyWithRetry(pending, t1);
-				if (ae != ERR_HGC_OK && onError_) { onError_(ae, "setExposure failed after retry (1st frame)"); }
+				if (ae != ERR_HGC_OK && onError_) { onError_(ae, this->withHttpDetail("setExposure failed after retry (1st frame)")); }
 			}
 			// 収束が撮影窓より早く終わった余り時間は keepAlive で待つ。窓開始で CAPTURING。
 			while (running_ && static_cast<long long>(std::time(nullptr)) < startSec)
@@ -1141,7 +1160,7 @@ errCode captureRunner::loop(void)
 			if (applyErr != ERR_HGC_OK && onError_)
 			{	// リトライしても設定できなかった。放置するとカメラは古い露出のまま撮り続け、
 				// アプリの露出モデルと実機がズレる(白飛び/黒潰れの原因)。必ずログへ出して気付けるようにする。
-				onError_(applyErr, "setExposure failed after retry");
+				onError_(applyErr, this->withHttpDetail("setExposure failed after retry"));
 			}
 		}
 		// 今回の測光結果から次コマの測光ssを決める(張り付きなら短い側へ、応答していれば目標へ)。
@@ -1192,7 +1211,7 @@ errCode captureRunner::loop(void)
 			{	// establishでキャッシュclear済 → 次シャッター前に露出を再適用しカメラ状態を合わせる。
 				int t2 = 0;
 				const errCode ae = applyWithRetry(pending, t2);
-				if (ae != ERR_HGC_OK && onError_) { onError_(ae, "setExposure failed after retry (reconnect)"); }
+				if (ae != ERR_HGC_OK && onError_) { onError_(ae, this->withHttpDetail("setExposure failed after retry (reconnect)")); }
 			}
 			continue;	// 次コマは即[A]起点(再接続で時間を食った=周期超過扱い)
 		}

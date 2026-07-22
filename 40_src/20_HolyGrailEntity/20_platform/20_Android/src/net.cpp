@@ -170,9 +170,14 @@ namespace net
 
 		// HTTP リクエストを送って応答本体とステータスコードを得る。
 		//  return : ステータスコード(失敗は 0)
+		// 直前の http*() が受け取った HTTP ステータス。0=応答なし(接続失敗/送信失敗/解釈不能)。
+		//  失敗が「カメラが 503 等で断った」のか「そもそも届かなかった」のかをログで区別するため。
+		int g_lastHttpStatus = 0;
+
 		int httpRequest(const std::string& method, const std::string& url,
 		                const std::string& body, bool hasBody, std::string& response)
 		{
+			g_lastHttpStatus = 0;	// 応答を得られなければ 0 のまま
 			response.clear();
 			std::string host, path;
 			int port = 80;
@@ -222,9 +227,12 @@ namespace net
 				content = dechunk(content);
 			}
 			response = content;
+			g_lastHttpStatus = code;
 			return code;
 		}
 	} // anonymous namespace
+
+	int lastHttpStatus(void) { return g_lastHttpStatus; }
 
 	bool init()
 	{

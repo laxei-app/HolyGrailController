@@ -47,6 +47,12 @@ namespace net
     bool httpPut(const std::string& url, const std::string& body, std::string& response);
     bool httpDelete(const std::string& url, std::string& response);
 
+    // 直前の http*() が受け取った HTTP ステータスコードを返す(同一スレッドで直後に読むこと)。
+    //  0 = 応答なし(接続失敗/送信失敗/応答を解釈できず)。それ以外は受信したステータス。
+    // 失敗が「カメラが 503 等で断ったのか」「そもそも届かなかったのか」をログで区別するために使う。
+    // 2026-07-21: actShutter 失敗(code=3)の原因を後から特定できず、この区別が必要と判明した。
+    int  lastHttpStatus(void);
+
  
 };
 

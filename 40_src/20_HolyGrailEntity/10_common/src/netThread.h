@@ -28,6 +28,12 @@ namespace netThread
     bool httpPost(const std::string& url, const std::string& body, std::string& response);
     bool httpPut(const std::string& url, const std::string& body, std::string& response);
     bool httpDelete(const std::string& url, std::string& response);
+
+    // 直近に失敗した HTTP POST/PUT の記録を返す(診断用)。
+    //  status : 受け取った HTTP ステータス。0 = 応答なし(接続失敗/送信失敗)
+    //  body   : 応答本文の先頭(最大120文字)。CCAPI はここに理由を返す(例: "During shooting or recording")
+    // 失敗が「カメラが断った」のか「そもそも届かなかった」のかをログで区別するために使う。
+    void lastHttpFailure(int& status, std::string& body);
 };
 
 #endif  // _NET_THREAD_H_

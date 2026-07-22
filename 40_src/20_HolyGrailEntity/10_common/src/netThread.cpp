@@ -138,20 +138,47 @@ namespace netThread
         const std::string& body;
         std::string&        response;
 		bool                result;
+		// 受け取った HTTP ステータス(0=応答なし)。net::httpXxx はワーカースレッド上で実行されるので、
+		// 呼び出し元スレッドから net::lastHttpStatus() を読んでも取り違える。要求ごとに持ち帰る。
+		int                 status;
 
 		// コンストラクタ
         http_t(const std::string& url, const std::string& body, std::string& response) : url(url), body(body), response(response)
         {
             type = queType::HTTP_GET; // デフォルトは GET とする
             result = false;
+            status = 0;
 		}
-        http_t(http_t& other) : requestQue_t(other), url(other.url), body(other.body), response(other.response) 
+        http_t(http_t& other) : requestQue_t(other), url(other.url), body(other.body), response(other.response)
         {
             result = false;
+            status = 0;
         }
 		~http_t() {}
     };
     
+    // 直近に失敗した HTTP 要求の記録(診断用)。
+    //  失敗が「カメラが 503 等で断った(status>0)」のか「そもそも届かなかった(status==0)」のかを
+    //  ログで区別するため。2026-07-21 に actShutter 失敗(code=3)の原因を後から特定できず必要と判明。
+    //  ワーカースレッドが書き、撮影スレッドが読むので mutex で保護する。
+    static std::mutex   lastErrMtx;
+    static int          lastErrStatus = 0;
+    static std::string  lastErrBody;
+
+    static void noteHttpFailure(int status, const std::string& body)
+    {
+        std::lock_guard<std::mutex> lock(lastErrMtx);
+        lastErrStatus = status;
+        lastErrBody   = body.substr(0, 120);	// 応答本文は先頭だけ(ログ1行に収める)
+    }
+
+    void lastHttpFailure(int& status, std::string& body)
+    {
+        std::lock_guard<std::mutex> lock(lastErrMtx);
+        status = lastErrStatus;
+        body   = lastErrBody;
+    }
+
     // スレッドに要求しその終了を待つ
     // return : 実行結果
     errCode execRequest(requestQue_t* req)
@@ -251,7 +278,8 @@ namespace netThread
         http_t req(url, body, response);
         req.type = queType::HTTP_POST;
         auto result = execRequest(&req);            // 実行
-        if (result != ERR_HGC_OK) { return false; }
+        if (result != ERR_HGC_OK) { noteHttpFailure(0, ""); return false; }
+        if (!req.result) { noteHttpFailure(req.status, response); }
         return req.result;                          // 成功
     }
 
@@ -262,7 +290,8 @@ namespace netThread
         http_t req(url, body, response);
         req.type = queType::HTTP_PUT;
         auto result = execRequest(&req);            // 実行
-        if (result != ERR_HGC_OK) { return false; }
+        if (result != ERR_HGC_OK) { noteHttpFailure(0, ""); return false; }
+        if (!req.result) { noteHttpFailure(req.status, response); }
         return req.result;                          // 成功
     }
 
@@ -350,24 +379,29 @@ namespace netThread
                 net::ssdpClose(ssdpCloseReq->handle);
                 break;
 
+            // 各 http は「実行直後に同じスレッドで」ステータスを拾って要求へ持ち帰る。
             case queType::HTTP_GET:
                 httpReq = static_cast<http_t*>(req);
                 httpReq->result = net::httpGet(httpReq->url, httpReq->response);
+                httpReq->status = net::lastHttpStatus();
                 break;
 
             case queType::HTTP_POST:
                 httpReq = static_cast<http_t*>(req);
                 httpReq->result = net::httpPost(httpReq->url, httpReq->body, httpReq->response);
+                httpReq->status = net::lastHttpStatus();
                 break;
 
             case queType::HTTP_PUT:
                 httpReq = static_cast<http_t*>(req);
                 httpReq->result = net::httpPut(httpReq->url, httpReq->body, httpReq->response);
+                httpReq->status = net::lastHttpStatus();
                 break;
 
             case queType::HTTP_DELETE:
                 httpReq = static_cast<http_t*>(req);
                 httpReq->result = net::httpDelete(httpReq->url, httpReq->response);
+                httpReq->status = net::lastHttpStatus();
                 break;
 
             case queType::FINISH:

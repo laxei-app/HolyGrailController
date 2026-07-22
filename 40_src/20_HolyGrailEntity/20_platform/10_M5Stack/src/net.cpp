@@ -196,6 +196,13 @@ void* ssdpListenStart(void)
 
 bool ssdpListenRead(void* handle, std::string& answer) { return ssdpRead(handle, answer); }
 void ssdpListenClose(void* handle) { ssdpClose(handle); }
+// 直前の http*() が受け取った HTTP ステータス。0=応答なし(接続失敗等)。
+//  失敗が「カメラが 503 等で断った」のか「そもそも届かなかった」のかをログで区別するため。
+//  Arduino HTTPClient は接続失敗を負値で返すので、その場合は 0 に丸めて「応答なし」とする。
+static int g_lastHttpStatus = 0;
+static inline int noteHttpStatus(int code) { g_lastHttpStatus = (code > 0) ? code : 0; return code; }
+int lastHttpStatus(void) { return g_lastHttpStatus; }
+
 //#define     USE_KEEP_ALIVE
 #if defined(USE_KEEP_ALIVE)
     ///////////////////////////////////////////////////////////////
@@ -314,7 +321,7 @@ void ssdpListenClose(void* handle) { ssdpClose(handle); }
         http.begin(url.c_str());
         http.setConnectTimeout(1500);   // ②カメラ不達時にTCP接続(SYN)で数十秒ブロックしない=復帰を速く。健全な同一LANカメラは<100msで接続する。
         http.setTimeout(500);
-        int code = http.GET();
+        int code = noteHttpStatus(http.GET());
         if(code == 200)
         {
             int len = http.getSize();
@@ -337,7 +344,7 @@ void ssdpListenClose(void* handle) { ssdpClose(handle); }
         HTTPClient http;
         http.begin(url.c_str());
         http.setConnectTimeout(1500);   // ②不達時に接続で長時間ブロックしない
-        int code = http.POST(body.c_str());
+        int code = noteHttpStatus(http.POST(body.c_str()));
         if (code > 0) response = http.getString().c_str();
         http.end();
         return (code == 200 || code == 204);
@@ -354,7 +361,7 @@ void ssdpListenClose(void* handle) { ssdpClose(handle); }
         http.addHeader("Content-Type", "application/json");
 
         // PUTメソッドの実行
-        int code = http.PUT(body.c_str());
+        int code = noteHttpStatus(http.PUT(body.c_str()));
 
         if (code > 0) {
             response = http.getString().c_str();
@@ -373,7 +380,7 @@ void ssdpListenClose(void* handle) { ssdpClose(handle); }
         http.setConnectTimeout(1500);   // ②不達時に接続で長時間ブロックしない
 
         // DELETEメソッドの実行
-        int code = http.sendRequest("DELETE");
+        int code = noteHttpStatus(http.sendRequest("DELETE"));
 
         if (code > 0) {
             response = http.getString().c_str();

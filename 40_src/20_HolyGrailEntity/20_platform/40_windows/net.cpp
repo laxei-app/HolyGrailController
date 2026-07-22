@@ -139,6 +139,11 @@ void  ssdpListenClose(void* handle) { (void)handle; }
 std::atomic<bool> httpBreakRequest = false;
 
 // 中断の要求。http通信を中断させる
+// 直前の http*() の HTTP ステータス。0=応答なし。
+//  Windows は検証用の非対象プラットフォーム(仕様: 対象は Android とエッジのみ)なので、
+//  インターフェースを満たすための最小実装に留める(常に 0 = 不明を返す)。
+int lastHttpStatus(void) { return 0; }
+
 void httpBreak(void)
 {
     httpBreakRequest = true;
