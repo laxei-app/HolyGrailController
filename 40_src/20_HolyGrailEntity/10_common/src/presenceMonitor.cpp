@@ -94,6 +94,11 @@ namespace {
 		while (g_running.load())
 		{
 			const long long now = static_cast<long long>(std::time(nullptr));
+			// wake は「この周回で必ず消費する」。条件式の中で exchange すると、短絡評価で
+			// 評価されない経路ができ、wake が立ちっぱなしになって下の待ちが 0 秒になる
+			// (=CPUを明け渡さない空回り → IDLEタスクが走れず task_wdt でリセット)。
+			// 実際 2026-07-23 に両エッジが約2秒周期でリセットを繰り返した(WDT/ossNet)。
+			const bool woke = g_wake.exchange(false);
 			bool changed = false;
 			if (canScanNow())	// エッジ: 撮影中はネットワークを触らずマップを保持(前回値のまま)
 			{
@@ -102,14 +107,18 @@ namespace {
 				//  その後のフル探索で、IPが変わっただけの個体は拾い直される。
 				const bool verifyFirst = anyVerifyPendingLocked();
 				const bool doFull = !verifyFirst &&
-				                    (g_wake.exchange(false) || (now - lastFull >= kFullEverySec) || lastFull == 0);
+				                    (woke || (now - lastFull >= kFullEverySec) || lastFull == 0);
 				if (doFull) { mergeFullLocked(now); lastFull = now; g_scanned.store(true); }
 				else        { refreshLivenessLocked(now); }
 				std::string sig = signatureLocked();
 				if (sig != g_lastSig) { g_lastSig = sig; changed = true; }
 			}
 			if (changed && g_onChange) { g_onChange(); }
-			for (int i = 0; i < kTickSec && g_running.load() && !g_wake.load(); ++i)
+			// 待ち。wake で早く起きるのは良いが、**1秒は必ず眠る**。そうしないと wake が
+			// 立て続けに来たときや、上のブロックを丸ごと飛ばす経路(撮影中=canScanNow false)で
+			// 1周が一瞬で終わり、このスレッドがCPUを占有してWDTリセットに至る。
+			std::this_thread::sleep_for(std::chrono::seconds(1));
+			for (int i = 1; i < kTickSec && g_running.load() && !g_wake.load(); ++i)
 			{ std::this_thread::sleep_for(std::chrono::seconds(1)); }
 		}
 	}
