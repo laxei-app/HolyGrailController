@@ -1,11 +1,12 @@
 #ifndef _BATTERY_GUARD_H_
 #define _BATTERY_GUARD_H_
-// バッテリ残量の監視と、限界での自動シャットダウン(CoreS3/StickS3 共通)。
+// バッテリ残量の監視と、限界での自動シャットダウン(エッジ端末のUI共通部)。
+// **このファイルに機種名は出てこない。** 機種ごとに違う値は batteryParams.h(各機種フォルダ)。
 //
 // 60秒ごとの BATT ログ出力と同じ周期で更新する。レベル判定は batteryLevel.h。
 //
 // 【電源を切るまでの手順】(ユーザー指示)
-//  1. 限界(kMvOff)を kOffConfirmCount 回連続で下回る
+//  1. 限界(kParams.mvOff)を kParams.offConfirm 回連続で下回る
 //  2. ログに残す(電源断の記録。osfile::append は都度追記なので確実に残る)
 //  3. 全セッションを NOCAMERA(✖)にする → スマホのポーリング(約10秒)が1回拾える
 //  4. スマホのポーリング1周期ぶん待つ(kNotifyWaitMs)
@@ -35,8 +36,8 @@ namespace batt
 		bool update(int volt, uint32_t nowMs)
 		{
 			lv = next(volt, lv);
-			if (volt > 0 && volt < current()->mvOff) { ++offStreak; } else { offStreak = 0; }
-			if (!shutdownRequested && offStreak >= kOffConfirmCount)
+			if (volt > 0 && volt < kParams.mvOff) { ++offStreak; } else { offStreak = 0; }
+			if (!shutdownRequested && offStreak >= kParams.offConfirm)
 			{
 				shutdownRequested = true;
 				shutdownAtMs = nowMs + kNotifyWaitMs;
@@ -52,7 +53,7 @@ namespace batt
 		}
 	};
 
-	// 電源断シーケンスの開始処理(ログ + スマホへ✖を見せる)。両機で同じ手順にする。
+	// 電源断シーケンスの開始処理(ログ + スマホへ✖を見せる)。機種によらず同じ手順。
 	inline void beginShutdown(int volt, int pct)
 	{
 		char d[128];

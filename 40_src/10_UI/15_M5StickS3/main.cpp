@@ -869,8 +869,6 @@ void setup(void)
 	// これにより電源断→復帰でもスマホ無しで時刻が戻り、単独運用ができる。
 	cfg.external_rtc = true;
 	M5.begin(cfg);		// board 認識は既定のまま。StickS3電源管理はさせない(ブートループ回避)
-	// バッテリのしきい値は機種ごとに違う(容量も消費電流も違うため)。この機体は StickS3。
-	batt::useThresholds(batt::kStickS3);
 	dbg::init();
 	Serial.printf("[M5] board=%d rtc=%d ex_i2c=%d\n",
 	              (int)M5.getBoard(), (int)M5.Rtc.isEnabled(), (int)M5.Ex_I2C.isEnabled());

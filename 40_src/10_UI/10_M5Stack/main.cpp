@@ -805,8 +805,6 @@ void setup(void)
 {
 	auto cfg = M5.config();
 	M5.begin(cfg);
-	// バッテリのしきい値は機種ごとに違う(容量も消費電流も違うため)。この機体は CoreS3。
-	batt::useThresholds(batt::kCoreS3);
 	dbg::init();
 
 	// ①内部DRAM節約: malloc の PSRAM 振り分け閾値を実行時に下げる。512B超の確保(ライブビュー生文字列
