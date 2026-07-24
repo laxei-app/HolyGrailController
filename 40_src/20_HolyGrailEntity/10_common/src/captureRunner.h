@@ -122,6 +122,10 @@ public:
 	static constexpr double kMeterUsableHiX      = 0.850;	// これ超は明るすぎて信用しない
 	static constexpr double kMeterRespondRatio   = 0.50;	// 「Δss段」に対しΔ測光段がこの比未満なら張り付き
 	static constexpr int    kMeterInitDropStops  = 5;	// 初回の測光ss=撮影ssから何段短くするか(以後は実測で追従)
+	// 測光ssは「明るい中央値(0.35)を狙って長秒化」せず、pin=0(LVが応答する短い側)を保つ(2026-07-24)。
+	static constexpr double kMeterPinBackoffStops = 1.0;	// 張り付き検出時、天井をこの段数だけ短く下げる
+	static constexpr double kMeterMaxLenStep      = 1.0;	// 暗すぎるとき1コマで伸ばす上限[段](pin突入を防ぐ)
+	static constexpr double kMeterCeilRelaxStops  = 0.10;	// 天井を毎コマこれだけ緩め、条件変化(明るくなる等)へ追従
 	static constexpr int    kPreConvergeSec      = 30;	// 撮影窓の何秒前から初期収束(測光のみ・シャッター無し)を始めるか
 	// ③ ヒスト取得リトライ: 失敗なら kMeterRetryMs 間隔で kMeterMaxMs まで繰り返す。
 	static constexpr int    kMeterRetryMs        = 100;	// ヒスト取得リトライ間隔[ms]
@@ -145,9 +149,10 @@ public:
 	// → 測光値から露出成分を割り戻して「場面の明るさ」にし、撮影露出で撮った場合の値へ
 	//   投影してから比較する。これでループが閉じ、露出を動かすと比較結果も動く。
 	static constexpr double kExposureStepStops   = 1.0 / 3.0;	// 露出制御の1ステップ(段)
-	// 1コマで詰めてよい上限(段)。定常時は1ステップでフリッカーを抑え、大きくずれている
-	// ときだけ速く詰める(初期収束/制御方法切替直後の復帰用)。
-	static constexpr double kMaxCatchUpStops     = 3.0;
+	// 1コマで詰めてよい上限(段)。撮影中は必ず1ステップ(=1/3段)に留め、撮影計画の境目も含めて
+	// 露出設定を飛ばさず滑らかに動かす(2026-07-24: 境目の多段ジャンプを禁止)。
+	// 大きなズレを速く詰めるのは撮影前の初期収束(initialConverge, シャッター無し)だけの役割とする。
+	static constexpr double kMaxCatchUpStops     = kExposureStepStops;
 
 private:
 	errCode loop(void);								// 撮影ループ本体(別スレッド)
@@ -223,6 +228,7 @@ private:
 	double      meterPrevLin_   = -1.0;		// 前コマの測光リニア値(<0=無し)
 	bool        lvPinned_       = false;	// ライブビューが張り付いている(測光値を信用しない)
 	bool        lvPinnedLog_    = false;	// 今コマのログ用
+	double      meterCeilStops_ = 1e9;		// 測光ssの長さ上限[段]。張り付き検出で下がる(=pin=0を保つ天井)。1e9=天井なし
 	// 変更分のみ適用(タイマ方式tm0)の直近適用値。establishSession でクリアし次回フル適用させる。
 	std::string lastFnApplied_, lastSsApplied_, lastIsoApplied_;
 	// 露出設定に失敗したまま次のシャッターを落とすと、カメラは測光シャッターのままなので

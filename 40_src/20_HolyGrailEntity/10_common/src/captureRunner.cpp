@@ -329,19 +329,39 @@ void captureRunner::updateMeterShutter(const hgc::exposure& meterExp, double lin
 	meterPrevStops_ = curStops;
 	meterPrevLin_   = x;
 
-	// 次コマの測光ssを決める。
+	// 次コマの測光ssを決める(短い側・忠実優先: pin=0=ライブビューが応答する範囲を保つ)。
+	//  旧実装は中央値を明るい 0.35 に合わせようと ss を長秒化し、LVの積分上限(pin)へ突入して
+	//  測光値が実写より数段暗く出ていた(2026-07-24 実機で夕/朝とも確認)。明るい中央値は狙わない。
 	double wantStops;
 	if (lvPinned_)
-	{	// 張り付き → 1段短くして応答する領域を探す。
-		wantStops = curStops - 1.0;
+	{	// 張り付き=このssは長すぎてLVが積分できない。ここまで伸ばさない天井として記録し、短い側へ後退する。
+		meterCeilStops_ = curStops - kMeterPinBackoffStops;
+		wantStops = meterCeilStops_;
 	}
 	else
-	{	// 応答している → 目標(中央値 kMeterTargetX)へ寄せる。1コマの移動は±3段まで。
-		const double targetLin = expo::srgbToLinear(kMeterTargetX);
-		double d = (x > 0.0) ? std::log2(targetLin / x) : 0.0;
-		if (d >  3.0) { d =  3.0; }
-		if (d < -3.0) { d = -3.0; }
-		wantStops = curStops + d;
+	{	// 応答している(忠実)。信号がノイズ底に近いときだけ控えめに伸ばし、飽和寄りなら縮める。
+		//  それ以外は短い側を維持し、環境光は撮影露出へ投影して得る(=長秒化しない)。
+		const double loLin = expo::srgbToLinear(kMeterUsableLoX);	// これ未満は暗すぎ(信用しない)
+		const double hiLin = expo::srgbToLinear(kMeterUsableHiX);	// これ超は明るすぎ(飽和寄り)
+		if (x > 0.0 && x < loLin)
+		{	// 暗すぎ → 信号を得るため少しだけ伸ばす(1コマの伸ばしは kMeterMaxLenStep まで=pin突入を防ぐ)。
+			double d = std::log2(loLin / x);
+			if (d > kMeterMaxLenStep) { d = kMeterMaxLenStep; }
+			wantStops = curStops + d;
+		}
+		else if (x > hiLin)
+		{	// 明るすぎ(飽和寄り) → 縮める。
+			double d = std::log2(hiLin / x);
+			if (d < -3.0) { d = -3.0; }
+			wantStops = curStops + d;
+		}
+		else
+		{	// 十分な信号がある → これ以上伸ばさず短い側を維持する。
+			wantStops = curStops;
+		}
+		// 過去に張り付いた長さ(天井)は超えない。天井は毎コマ少しずつ緩め、条件変化(明るくなる等)へ追従する。
+		meterCeilStops_ += kMeterCeilRelaxStops;
+		if (wantStops > meterCeilStops_) { wantStops = meterCeilStops_; }
 	}
 	// テーブルから最も近い ss を選ぶ(iso/fn は動かさない)。
 	std::string pick; double best = 1e9;
@@ -512,6 +532,9 @@ bool captureRunner::establishSession(void)
 	// 前セッションの時刻と比べると、復帰後の正常なフレームまで「古い」と誤判定してしまう。
 	lvPrev_ = 0;
 	lvPrevAt_ = nullptr;
+	// 測光ssの張り付き天井もセッション単位で捨てる(次コマから改めて pin=0 の範囲を探す)。
+	meterCeilStops_ = 1e9;
+	meterPrevLin_   = -1.0;
 
 	// 変更分のみ適用のキャッシュをクリア(再接続直後はカメラ状態が不定なので次回フル適用させる)。
 	lastFnApplied_.clear(); lastSsApplied_.clear(); lastIsoApplied_.clear();

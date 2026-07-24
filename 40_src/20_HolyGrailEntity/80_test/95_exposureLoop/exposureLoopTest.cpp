@@ -46,7 +46,8 @@ static double linearAtExposure(double sceneRef, const hgc::exposure& e, const ex
 	return sceneRef * std::pow(2.0, expo::brightnessStops(e, t));
 }
 static const double kStep = 1.0 / 3.0;
-static const double kMaxCatchUp = 3.0;
+// 撮影中は必ず1ステップ(=1/3段)に留める(2026-07-24: 境目の多段ジャンプ禁止)。captureRunner と同値。
+static const double kMaxCatchUp = 1.0 / 3.0;
 static int stepsToClose(double needStops)
 {
 	const double a = std::fabs(needStops);
@@ -147,10 +148,10 @@ int main()
 		check(expo::brightnessStops(fin, t) < bShot - 6.0, "4秒から6段以上暗い側へ戻っている");
 	}
 
-	// --- 4) ステップ数の飽和(フリッカー抑制と初期収束の両立) ---
+	// --- 4) 撮影中は必ず1ステップ(=1/3段)に留める(境目のジャンプ禁止。速い収束は撮影前のinitialConverge) ---
 	check(stepsToClose(0.05) == 1, "小さな誤差は1ステップ(1/3段)");
-	check(stepsToClose(1.0)  == 3, "1段の誤差は3ステップ");
-	check(stepsToClose(9.0)  == 9, "大きな誤差でも上限9ステップ(=3段)に飽和");
+	check(stepsToClose(1.0)  == 1, "1段の誤差でも1ステップ(1/3段)に留める");
+	check(stepsToClose(9.0)  == 1, "大きな誤差でも1ステップ(1/3段)に留める(多段ジャンプ禁止)");
 
 	std::printf("\n%s (fail=%d)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail);
 	return g_fail == 0 ? 0 : 1;
