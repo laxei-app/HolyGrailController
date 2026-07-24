@@ -39,49 +39,61 @@ namespace batt
 		full  = 5,	// level5: 3/3
 	};
 
-	// しきい値[mV](下がる向きで「この値を下回ったら」下のレベルへ)。
-	// 実測の残り時間: 3900→CoreS3 68分 / 3700→29分 / 3450→9分 / 3300→3分。
-	// 【段の切り方】要望により「点滅(最後の約10分)を除いた残りを“時間で”3等分」する。
-	//  電圧を等間隔に切ると時間は不均等になる(満充電付近は電圧がほとんど下がらないため。
-	//  実測: 3900→3700mV に約30分かかる一方 3400→3040mV は6分)。
-	//  そこで実測カーブから「電圧→電源断までの残り分」の表を作り、両機の平均で
-	//  残り 64.8分 / 37.4分 / 10分 に当たる電圧を逆算した:
-	//     残り64.8分 → 3875mV     残り37.4分 → 3725mV     残り10分 → 3450mV
-	constexpr int kMvFull  = 3875;	// これ以上 = 3/3
-	constexpr int kMvMid   = 3725;	// これ以上 = 2/3
-	constexpr int kMvLow   = 3450;	// これ以上 = 1/3  (下回ると点滅)
-	constexpr int kMvOff   = 3300;	// これを下回り続けたら電源断(実測 残り約2〜3分)
-	// この値での実測シミュレーション(戻りの往復は両機とも0回):
-	//   CoreS3 : 3/3=33分 2/3=30分 1/3=25分 点滅= 5分
-	//   Stick01: 3/3=18分 2/3=25分 1/3=34分 点滅=10分
-	// 上位3段はおおむね均等になった。点滅時間に機体差(5分/10分)が残るのは電池特性の差で、
-	// 3450→3300mV の通過速度が CoreS3 の方が速いため。kMvOff を下げれば点滅は伸びるが、
-	// 実測では 3250mV 以下にすると電源断の判定が電池切れに間に合わなくなるので 3300mV を維持する。
+	// 【段の切り方】「点滅(最後の約10分)を除いた残りを“時間で”3等分」する。
+	//  電圧を等間隔に切っても時間は均等にならない(満充電付近はほとんど電圧が下がらず
+	//  終盤で急降下する。実測: 3900→3700mV に約30分 / 3400→3040mV は6分)。
+	//  そこで実測カーブから「電圧→電源断までの残り分」の表を作り、残り時間で逆算した。
+	//
+	// 【機種ごとに値を分ける】バッテリ容量も消費電流も違うので、共通の電圧では
+	//  どちらかが必ず偏る(実測: 共通値だと CoreS3 33/30/25分 に対し StickS3 18/25/34分)。
+	//  機種別にすると両方とも均等になる(下記)。
+	struct thresholds
+	{
+		int mvFull;		// これ以上 = 3/3
+		int mvMid;		// これ以上 = 2/3
+		int mvLow;		// これ以上 = 1/3 (下回ると点滅)
+		int mvOff;		// これを下回り続けたら電源断
+		int hystMv;		// 復帰(上がる向き)に必要な上乗せ[mV]
+	};
 
-	// 復帰(上がる向き)に必要な上乗せ[mV]。実測ログを流して決めた:
-	//  60mV では Stick01 が 3858→3962→3830mV と揺れて level5⇄level4 を1往復した。
-	//  100mV にすると両機とも戻りの往復が 0 回になる。
-	constexpr int kHystMv  = 100;
+	// M5Stack CoreS3。2026-07-24 実測: 4073mV→3041mV / 95分。
+	//  点滅10分を除く85分を3等分(28.4分)して逆算 → 残り66.8分=3894 / 38.4分=3770 / 10分=3463。
+	//  検証: 3/3=29分 2/3=29分 1/3=28分 点滅=7分、戻りの往復0回。
+	constexpr thresholds kCoreS3 { 3894, 3770, 3463, 3300, 100 };
+
+	// M5StickS3。2026-07-24 実測: 4060mV→3044mV / 89分。
+	//  点滅10分を除く79分を3等分(26.4分)して逆算 → 残り62.7分=3856 / 36.4分=3652 / 10分=3366。
+	//  検証: 3/3=27分 2/3=27分 1/3=27分 点滅=6分、戻りの往復0回。
+	//  ヒステリシスは 100mV だと 3962mV で level4→5 へ1回戻ったため 120mV にした。
+	constexpr thresholds kStickS3 { 3856, 3652, 3366, 3300, 120 };
+
 	// 電源断は「連続でこの回数」下回ったら実行する(BATT判定は60秒間隔なので実質1分の確認)。
-	//  実測では kMvOff を下回ってから実際に電池が尽きるまで CoreS3/Stick01 とも約2分しかない。
+	//  実測では mvOff を下回ってから実際に電池が尽きるまで両機とも約2分しかない。
 	//  3回(=2分)待つと間に合わないので 2回。1回だと瞬間的な電圧降下で誤判定しうるため 2回とする。
+	//  mvOff をこれ以上下げると断の判定が電池切れに間に合わない(実測 3150mV で CoreS3 が到達せず)。
 	constexpr int kOffConfirmCount = 2;
+
+	// この機種のしきい値。UI(main.cpp)が自機のものを選んで設定する。
+	//  既定は CoreS3。StickS3 側は setup() で batt::useThresholds(batt::kStickS3) を呼ぶ。
+	inline const thresholds*& current(void) { static const thresholds* p = &kCoreS3; return p; }
+	inline void useThresholds(const thresholds& t) { current() = &t; }
 
 	// 電圧[mV]と現在のレベルから次のレベルを求める(ヒステリシス付き)。
 	//  cur を level::full 相当で初期化して呼び始めればよい。volt<=0(読めない)は cur を維持。
 	inline level next(int volt, level cur)
 	{
 		if (volt <= 0) { return cur; }
+		const thresholds& T = *current();
 		const int c = static_cast<int>(cur);
 		// 下がる向き: しきい値を下回ったら即座に落とす(安全側)。
-		if      (volt <  kMvOff) { return level::off;   }
-		else if (volt <  kMvLow) { return level::empty; }
-		else if (volt <  kMvMid) { return (c > static_cast<int>(level::low))  ? level::low  : cur; }
-		else if (volt <  kMvFull){ return (c > static_cast<int>(level::mid))  ? level::mid  : cur; }
+		if      (volt <  T.mvOff) { return level::off;   }
+		else if (volt <  T.mvLow) { return level::empty; }
+		else if (volt <  T.mvMid) { return (c > static_cast<int>(level::low))  ? level::low  : cur; }
+		else if (volt <  T.mvFull){ return (c > static_cast<int>(level::mid))  ? level::mid  : cur; }
 		// 上がる向き: しきい値 + ヒステリシス を超えるまで戻さない。
-		if      (volt >= kMvFull + kHystMv) { return level::full; }
-		else if (volt >= kMvMid  + kHystMv) { return (c < static_cast<int>(level::mid)) ? level::mid : cur; }
-		else if (volt >= kMvLow  + kHystMv) { return (c < static_cast<int>(level::low)) ? level::low : cur; }
+		if      (volt >= T.mvFull + T.hystMv) { return level::full; }
+		else if (volt >= T.mvMid  + T.hystMv) { return (c < static_cast<int>(level::mid)) ? level::mid : cur; }
+		else if (volt >= T.mvLow  + T.hystMv) { return (c < static_cast<int>(level::low)) ? level::low : cur; }
 		return cur;
 	}
 

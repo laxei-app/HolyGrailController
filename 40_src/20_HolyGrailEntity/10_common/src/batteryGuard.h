@@ -35,7 +35,7 @@ namespace batt
 		bool update(int volt, uint32_t nowMs)
 		{
 			lv = next(volt, lv);
-			if (volt > 0 && volt < kMvOff) { ++offStreak; } else { offStreak = 0; }
+			if (volt > 0 && volt < current()->mvOff) { ++offStreak; } else { offStreak = 0; }
 			if (!shutdownRequested && offStreak >= kOffConfirmCount)
 			{
 				shutdownRequested = true;
