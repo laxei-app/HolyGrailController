@@ -27,6 +27,9 @@
 #include "etpEdge.h"
 #include "edgeProv.h"
 #include "dataManager.h"
+#include "batteryLevel.h"	// バッテリ残量レベル(実測放電カーブから決めたしきい値)
+#include "batteryIcon.h"	// 残量アイコンの描画
+#include "batteryGuard.h"	// 限界での自動シャットダウン
 #include "osFile.h"
 #include "osClock.h"
 #include "net.h"		// 検証用: 限定サブネット :8080 バッチ探索の手動実行(zコマンド)
@@ -126,6 +129,8 @@ static bool g_listDirty = true;	// 計画リスト(hge_listPlansJson)の再取�
 static volatile int g_state = HGE_ST_IDLE;
 static bool  g_blinkOn = true;	// 撮影中(緑カメラ)アイコンの点滅状態。接続断(赤)は点灯のまま。
 static bool  g_colonOn = true;	// 時計の ":" 点滅(1秒周期)。撮影状態に関係なく常時トグル(#8)
+static batt::guard g_batt;			// バッテリ残量の監視(表示レベル+自動シャットダウン)
+static bool  g_battBlinkOn = true;	// level2(0/3)の点滅
 static char  g_prog[64] = "";
 static char  g_shot[64] = "";
 
@@ -415,8 +420,16 @@ static void drawClockBand(void)
 	g_cv.drawFastHLine(0, by, 320, M5.Display.color565(0x33, 0x33, 0x33));	// 計画リストとの区切り線
 	g_cv.setFont(&fonts::Font2);
 	g_cv.setTextColor(TFT_LIGHTGREY);
-	drawClockFixed(320 - clockWidth() - 8, by + 4);	// 桁位置固定(点滅・時刻更新で位置が動かない)
+	const int clockX = 320 - clockWidth() - 8;
+	drawClockFixed(clockX, by + 4);	// 桁位置固定(点滅・時刻更新で位置が動かない)
 	g_cv.setTextColor(TFT_WHITE);
+	// 時刻の左にバッテリ残量アイコン(左がプラス電極)。幅は残量に依らず固定。
+	//  level2(0/3)は点滅させる(描画を飛ばすだけ。位置は保持)。
+	if (!(g_batt.lv == batt::level::empty && !g_battBlinkOn))
+	{
+		batt::drawIcon(g_cv, clockX - batt::kIconW - 6, by + 4 + (16 - batt::kIconH) / 2,
+		               batt::bars(g_batt.lv), batt::iconColor(g_cv, g_batt.lv));
+	}
 }
 
 // 撮影計画リスト画面。各行に名称+開始/終了時刻と、左に開始/停止アイコン(終了>現在 の計画のみ)。
@@ -845,19 +858,35 @@ static void logBatteryPeriodic(void)
 	const uint32_t nowMs = millis();
 	if (last != 0 && (nowMs - last) < kBattLogIntervalMs) { return; }
 	last = nowMs;
+	const int pct  = (int)M5.Power.getBatteryLevel();
+	const int volt = (int)M5.Power.getBatteryVoltage();
 	char d[96];
 	std::snprintf(d, sizeof(d), "pct=%d volt=%dmV chg=%d up=%lus",
-	              (int)M5.Power.getBatteryLevel(),
-	              (int)M5.Power.getBatteryVoltage(),
-	              (int)M5.Power.isCharging(),
-	              (unsigned long)(nowMs / 1000));
+	              pct, volt, (int)M5.Power.isCharging(), (unsigned long)(nowMs / 1000));
 	dataManager::logEvent("BATT", d);
+
+	// 残量レベルの更新(ヒステリシス付き)。変化したら再描画する。
+	const batt::level prev = g_batt.lv;
+	if (g_batt.update(volt, nowMs))	// true = 限界に達して電源断シーケンス開始
+	{
+		batt::beginShutdown(volt, pct);	// ログ + 全セッションを✖にしてスマホに拾わせる
+		g_dirty = true;
+	}
+	if (g_batt.lv != prev) { g_dirty = true; }
 }
 
 void loop(void)
 {
 	M5.update();
-	logBatteryPeriodic();	// 放電カーブ測定用(60秒ごと)
+	logBatteryPeriodic();	// 残量ログ(60秒ごと)+ レベル更新 + 電源断シーケンスの開始
+	// 電源断: スマホのポーリング1周期ぶん待ってから切る(✖を1回拾わせるため)。
+	if (g_batt.readyToPowerOff(millis()))
+	{
+		dataManager::logEvent("PWROFF", "power off now", true);
+		delay(50);				// ログの書き込みを確実に落とす
+		M5.Power.powerOff();
+		for (;;) { delay(1000); }	// powerOff が戻る機種でも先へ進ませない
+	}
 
 	// WiFi 切断時は再接続を試みる(実機運用時に SSID/PASS を設定する)。APモードではSTA再接続しない。
 	if (g_netMode != "ap" && wifiConnect::getStatus() == wifiConnect::wifiStatus::cuttingOff)
@@ -920,7 +949,14 @@ void loop(void)
 	{
 		static uint32_t lastColon = 0;
 		uint32_t nowMs = millis();
-		if (!g_apQrMode && !g_provMode && (nowMs - lastColon) >= 500) { lastColon = nowMs; g_colonOn = !g_colonOn; g_dirty = true; }
+		if (!g_apQrMode && !g_provMode && (nowMs - lastColon) >= 500)
+		{
+			lastColon = nowMs; g_colonOn = !g_colonOn;
+			// バッテリ残りわずか(level2)のアイコン点滅。1秒周期にするため ":" 2回ぶんで1トグル。
+			static int half = 0;
+			if (++half >= 2) { half = 0; g_battBlinkOn = !g_battBlinkOn; }
+			g_dirty = true;
+		}
 	}
 
 	// シリアルコマンド(検証用): 's'=開始 'x'=停止 'i'=情報 'l'=ログ 'F'=保存先 'D'=内蔵ログ削除

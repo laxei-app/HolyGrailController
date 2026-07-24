@@ -32,6 +32,9 @@
 #include "edgeProv.h"
 #include "edgeIcons.h"	// CoreS3 と共有する状態アイコン(ICON_START/CAPTURING/CAMERA_NG)
 #include "dataManager.h"
+#include "batteryLevel.h"	// バッテリ残量レベル(実測放電カーブから決めたしきい値)
+#include "batteryIcon.h"	// 残量アイコンの描画
+#include "batteryGuard.h"	// 限界での自動シャットダウン
 #include "osFile.h"
 #include "osClock.h"
 #include "debugOut.h"
@@ -118,6 +121,9 @@ static constexpr uint32_t   LONG_PRESS_MS = 800;
 // バッテリ残量ログの間隔[ms]。放電カーブを描くのに十分な粒度で、かつ書き込み負荷を抑える。
 // 60秒間隔なら 10時間で 600行 = 数十KB程度で LittleFS を圧迫しない。
 static constexpr uint32_t   kBattLogIntervalMs = 60000;
+// バッテリ残量の監視(表示レベル + 限界での自動シャットダウン)。判定は batteryLevel.h。
+static batt::guard          g_batt;
+static bool                 g_battBlinkOn = true;	// level2(0/3)の点滅。時計の":"と同じ1秒周期
 
 struct Button
 {
@@ -506,15 +512,24 @@ static void drawBottomBar(void)
 	drawArrowLeft(x, cy, green); x += ARROW_W;
 	g_cv.setTextColor(TFT_WHITE);
 	g_cv.setCursor(x, rowY); g_cv.print("start/stop");
-	x += g_cv.textWidth("start/stop") + 10;
-	// KEY2(画面下)= 計画送り
+	x += g_cv.textWidth("start/stop") + 8;
+	// KEY2(画面下)= 計画送り。240px幅に電池アイコンも収めるため "select"→"sel" と間隔を詰めた。
 	drawArrowDown(x, cy, green); x += ARROW_W;
-	g_cv.setCursor(x, rowY); g_cv.print("select");
+	g_cv.setCursor(x, rowY); g_cv.print("sel");
 
 	// 右端に現在時刻(桁位置固定なので点滅・分更新で位置が動かない)。
 	g_cv.setTextColor(TFT_LIGHTGREY);
-	drawClockFixed(g_scrW - clockWidth() - 4, rowY);
+	const int clockX = g_scrW - clockWidth() - 4;
+	drawClockFixed(clockX, rowY);
 	g_cv.setTextColor(TFT_WHITE);
+
+	// 時刻の左にバッテリ残量アイコン(左がプラス電極)。幅は残量に依らず固定なので桁位置は動かない。
+	//  level2(0/3)は点滅させる。点滅は「枠ごと消す」のではなく描画を飛ばす(位置は保持)。
+	if (!(g_batt.lv == batt::level::empty && !g_battBlinkOn))
+	{
+		batt::drawIcon(g_cv, clockX - batt::kIconW - 5, rowY + (BOTTOM_BAR_H - batt::kIconH) / 2,
+		               batt::bars(g_batt.lv), batt::iconColor(g_cv, g_batt.lv));
+	}
 }
 
 // ── 計画画面(端末名 + 1計画: 名称2段 + 日付/時刻)。 ──
@@ -916,20 +931,36 @@ static void logBatteryPeriodic(uint32_t nowMs)
 	static uint32_t last = 0;
 	if (last != 0 && (nowMs - last) < kBattLogIntervalMs) { return; }
 	last = nowMs;
+	const int pct  = (int)M5.Power.getBatteryLevel();
+	const int volt = (int)M5.Power.getBatteryVoltage();
 	char d[96];
 	std::snprintf(d, sizeof(d), "pct=%d volt=%dmV chg=%d up=%lus",
-	              (int)M5.Power.getBatteryLevel(),
-	              (int)M5.Power.getBatteryVoltage(),
-	              (int)M5.Power.isCharging(),
-	              (unsigned long)(nowMs / 1000));
+	              pct, volt, (int)M5.Power.isCharging(), (unsigned long)(nowMs / 1000));
 	dataManager::logEvent("BATT", d);
+
+	// 残量レベルの更新(ヒステリシス付き)。変化したら再描画する。
+	const batt::level prev = g_batt.lv;
+	if (g_batt.update(volt, nowMs))	// true = 限界に達して電源断シーケンス開始
+	{
+		batt::beginShutdown(volt, pct);	// ログ + 全セッションを✖にしてスマホに拾わせる
+		g_dirty = true;
+	}
+	if (g_batt.lv != prev) { g_dirty = true; }
 }
 
 void loop(void)
 {
 	M5.update();
 	uint32_t now = millis();
-	logBatteryPeriodic(now);	// 放電カーブ測定用(60秒ごと)
+	logBatteryPeriodic(now);	// 残量ログ(60秒ごと)+ レベル更新 + 電源断シーケンスの開始
+	// 電源断: スマホのポーリング1周期ぶん待ってから切る(✖を1回拾わせるため)。
+	if (g_batt.readyToPowerOff(now))
+	{
+		dataManager::logEvent("PWROFF", "power off now", true);
+		delay(50);				// ログの書き込みを確実に落とす
+		M5.Power.powerOff();
+		for (;;) { delay(1000); }	// powerOff が戻る機種でも先へ進ませない
+	}
 
 	// WiFi 再接続(STA)。
 	if (g_netMode != "ap" && wifiConnect::getStatus() == wifiConnect::wifiStatus::cuttingOff)
@@ -986,7 +1017,14 @@ void loop(void)
 	// QR/プロビジョニング表示中は下部バンド更新をしない(それらは全画面で別描画のため)。
 	{
 		static uint32_t lastColon = 0;
-		if (!g_apQrMode && !g_provMode && (now - lastColon) >= 500) { lastColon = now; g_colonOn = !g_colonOn; g_bandDirty = true; }
+		if (!g_apQrMode && !g_provMode && (now - lastColon) >= 500)
+		{
+			lastColon = now; g_colonOn = !g_colonOn;
+			// バッテリ残りわずか(level2)のアイコン点滅。1秒周期にするため ":" 2回ぶんで1トグル。
+			static int half = 0;
+			if (++half >= 2) { half = 0; g_battBlinkOn = !g_battBlinkOn; }
+			g_bandDirty = true;
+		}
 	}
 
 	// シリアルコマンド(検証用。CoreS3版と同じ主要コマンド)。

@@ -299,6 +299,11 @@ int32_t hge_pump(void);
 // 止めるための判定に使う(時間厳守のシャッターI/Oと単一netThreadで競合させない)。
 bool hge_anyActiveCameraSession(void);
 
+// バッテリ切れによる自動シャットダウンの直前に呼ぶ。全セッションを NOCAMERA(✖)にして
+// スマホのポーリングが1回拾えるようにする。撮影の意図(capturing.json)は残すので、
+// 充電して電源を入れ直せば hge_resumeCapture で再開される。
+void hge_markAllNoCameraForShutdown(void);
+
 #ifdef __cplusplus
 }
 #endif

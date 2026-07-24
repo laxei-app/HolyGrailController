@@ -2425,6 +2425,25 @@ bool hge_anyActiveCameraSession(void)
 	return false;
 }
 
+// バッテリ切れで自ら電源を切る直前に呼ぶ。全セッションを NOCAMERA(✖) にして、
+// スマホのポーリング(約10秒間隔)がその状態を1回拾えるようにする。
+//  ・撮影は止める(runner停止)が、**撮影の意図(capturing.json)は消さない**。
+//    電源を入れ直したとき hge_resumeCapture が再開できるようにするため
+//    (ユーザーによる明示停止ではないので setCapturing(false) は呼ばない)。
+//  ・状態を ERROR ではなく NOCAMERA にするのは、スマホ側の reconcileEdgePlan が
+//    NOCAMERA を disconnectedPlans に入れて ✖ を点灯させるため。ERROR/IDLE では
+//    「終了」と解釈されて集合から除去され、✖ が出ない。
+void hge_markAllNoCameraForShutdown(void)
+{
+	for (auto& up : g_sessions)
+	{
+		if (up->runner) { up->runner->stop(); }	// 撮影ループを止める(フラグのみ。joinはしない)
+		up->state = HGE_ST_NOCAMERA;
+		notifyStateP(up->planId, HGE_ST_NOCAMERA);
+	}
+	refreshAggregateState();
+}
+
 // 計画id指定で撮影停止(planId 空=編集対象)。
 int32_t hge_captureStopPlan(const char* planId_)
 {
