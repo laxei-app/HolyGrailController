@@ -36,15 +36,11 @@ namespace
 		if (g_stat) { g_stat->setValue((uint8_t*)s, strlen(s)); g_stat->notify(); }
 	}
 
-	// NimBLE 2.x はコールバックに NimBLEConnInfo& を追加し onDisconnect に理由(int)が付く。
-	// CoreS3 の NimBLE 1.4 と両立させるため EDGE_NIMBLE2 で分岐する。
+	// NimBLE 2.x のコールバック署名(NimBLEConnInfo& / onDisconnect の理由int)に合わせている。
+	// 以前は 1.4 と両立させるため EDGE_NIMBLE2 で分岐していたが、両機とも 2.x になったので削除した。
 	class CtrlCb : public NimBLECharacteristicCallbacks
 	{
-#ifdef EDGE_NIMBLE2
 		void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& /*info*/) override
-#else
-		void onWrite(NimBLECharacteristic* c) override
-#endif
 		{
 			std::string v = c->getValue();
 			if (v.rfind("start", 0) == 0) { g_startReq = true; }
@@ -52,11 +48,7 @@ namespace
 	};
 	class CredCb : public NimBLECharacteristicCallbacks
 	{
-#ifdef EDGE_NIMBLE2
 		void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& /*info*/) override
-#else
-		void onWrite(NimBLECharacteristic* c) override
-#endif
 		{
 			g_credBlob = c->getValue();   // 生バイト([IV|CT|TAG])
 			g_credReq  = true;
@@ -64,13 +56,8 @@ namespace
 	};
 	class SrvCb : public NimBLEServerCallbacks
 	{
-#ifdef EDGE_NIMBLE2
 		void onConnect(NimBLEServer*, NimBLEConnInfo&) override    { Serial.println("[PROV] BLE client connected"); }
 		void onDisconnect(NimBLEServer*, NimBLEConnInfo&, int) override { Serial.println("[PROV] BLE client disconnected"); NimBLEDevice::startAdvertising(); }
-#else
-		void onConnect(NimBLEServer*) override    { Serial.println("[PROV] BLE client connected"); }
-		void onDisconnect(NimBLEServer*) override { Serial.println("[PROV] BLE client disconnected"); NimBLEDevice::startAdvertising(); }
-#endif
 	};
 
 	// AES-256-GCM 復号。鍵=SHA256(PoP)。in=[IV(12)|CT|TAG(16)]。成功で out に平文。
@@ -126,11 +113,7 @@ namespace edgeProv
 		svc->start();
 		NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
 		adv->addServiceUUID(UUID_SVC);
-#ifdef EDGE_NIMBLE2
 		adv->enableScanResponse(true);
-#else
-		adv->setScanResponse(true);
-#endif
 		NimBLEDevice::startAdvertising();
 		Serial.printf("[PROV] BLE advertising started name=HGC-Edge svc=%s (dev=%s)\n", UUID_SVC, devName.c_str());
 	}
