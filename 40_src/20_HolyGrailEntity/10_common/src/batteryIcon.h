@@ -35,12 +35,16 @@ namespace batt
 		gfx.fillRect(x, y + kIconH / 2 - 1, tipW, 3, col);
 		// 本体の枠
 		gfx.drawRect(bodyX, y, bodyW, kIconH, col);
-		// 中の3段(左から塗る)。枠の内側に1px余白を取る。
+		// 中の3段。枠の内側に1px余白を取る。
+		// **プラス側(左)から減る**ように、残量ぶんを「右詰め」で塗る。
+		//  例) 2/3 なら 左の1段が空き、右2段が塗られる。
+		//  (左詰めにすると右から空いていき「マイナス側から減る」見た目になってしまう)
 		const int inX = bodyX + 2;
 		const int inY = y + 2;
 		const int inH = kIconH - 4;
 		const int segW = (bodyW - 4 - 2) / 3;	// 3段+段間2pxぶんを引いて等分
-		for (int i = 0; i < bars && i < 3; ++i)
+		const int n = (bars < 0) ? 0 : (bars > 3 ? 3 : bars);
+		for (int i = 3 - n; i < 3; ++i)			// 右側の n 段を塗る
 		{
 			gfx.fillRect(inX + i * (segW + 1), inY, segW, inH, col);
 		}
