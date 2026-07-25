@@ -3,10 +3,16 @@
 // バッテリ残量の監視と、限界での自動シャットダウン(エッジ端末のUI共通部)。
 // **このファイルに機種名は出てこない。** 機種ごとに違う値は batteryParams.h(各機種フォルダ)。
 //
+// 「限界に達したか」の判定(offJudge)は**機種ごとに別実装**とする:
+//   10_M5Stack/batteryGuard.cpp    … CoreS3。連続 offConfirm 回下回りで断(素直な電圧降下向け)
+//   15_M5StickS3/batteryGuard.cpp  … StickS3。ラッチ式+即断フロア(撮影負荷のサグ/バウンス対応)
+// どちらをリンクするかは各ターゲットの build_src_filter(src_dir)が決めるので、
+// 呼び出し側(main.cpp)にも本ヘッダにも機種による分岐は無い(edgeRtc と同じ方式)。
+//
 // 60秒ごとの BATT ログ出力と同じ周期で更新する。レベル判定は batteryLevel.h。
 //
 // 【電源を切るまでの手順】(ユーザー指示)
-//  1. 限界(kParams.mvOff)を kParams.offConfirm 回連続で下回る
+//  1. 限界に達したと offJudge が判定する(判定条件は機種別)
 //  2. ログに残す(電源断の記録。osfile::append は都度追記なので確実に残る)
 //  3. 全セッションを NOCAMERA(✖)にする → スマホのポーリング(約10秒)が1回拾える
 //  4. スマホのポーリング1周期ぶん待つ(kNotifyWaitMs)
@@ -23,11 +29,15 @@ namespace batt
 	// スマホの edgePoll は約10秒間隔(MainActivity.kt)。1周期+余裕を見て待つ。
 	constexpr uint32_t kNotifyWaitMs = 12000;
 
+	// 「限界に達した=電源断を開始せよ」の判定。**機種別実装**(各機種フォルダの batteryGuard.cpp)。
+	//  60秒周期で毎回呼ばれる。判定に使う内部状態(連続回数/ラッチ等)は実装側が持つ。
+	//  volt<=0(読めない)は状態を変えず false を返すこと。
+	bool offJudge(int volt);
+
 	// 監視の状態。UI側が表示に使う。
 	struct guard
 	{
 		level    lv        = level::full;	// 現在の表示レベル
-		int      offStreak = 0;				// 限界電圧を連続で下回った回数
 		bool     shutdownRequested = false;	// 電源断シーケンスに入った
 		uint32_t shutdownAtMs = 0;			// 電源を切る時刻(millis基準)
 
@@ -36,8 +46,7 @@ namespace batt
 		bool update(int volt, uint32_t nowMs)
 		{
 			lv = next(volt, lv);
-			if (volt > 0 && volt < kParams.mvOff) { ++offStreak; } else { offStreak = 0; }
-			if (!shutdownRequested && offStreak >= kParams.offConfirm)
+			if (!shutdownRequested && offJudge(volt))
 			{
 				shutdownRequested = true;
 				shutdownAtMs = nowMs + kNotifyWaitMs;
