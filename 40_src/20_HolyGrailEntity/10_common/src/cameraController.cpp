@@ -189,6 +189,31 @@ errCode cameraController::alzMetering(const class device& device, cmdt::HISTOGRA
 	return device.apiBase->alzMetering(hist);
 }
 
+// 測光(場面のリニア輝度の取得)。実装はカメラ依存(apiBase実装側)。
+errCode cameraController::meterScene(const class device& device, const hgc::exposure& shotExp,
+                                     apiBase::meterResult& out, const std::function<bool()>& keepGoing)
+{
+	if (device.apiBase == nullptr) { return ERR_HGC_READY; }
+	return device.apiBase->meterScene(shotExp, out, keepGoing);
+}
+
+errCode cameraController::meterHere(const class device& device, apiBase::meterResult& out,
+                                    const std::function<bool()>& keepGoing)
+{
+	if (device.apiBase == nullptr) { return ERR_HGC_READY; }
+	return device.apiBase->meterHere(out, keepGoing);
+}
+
+void cameraController::meterReset(const class device& device)
+{
+	if (device.apiBase != nullptr) { device.apiBase->meterReset(); }
+}
+
+void cameraController::setExpoTables(const class device& device, const expo::expoTables& t)
+{
+	if (device.apiBase != nullptr) { device.apiBase->setExpoTables(t); }
+}
+
 errCode cameraController::setupShootingModeManual(const class device& device)
 {
 	if (device.apiBase == nullptr) { return ERR_HGC_READY; }

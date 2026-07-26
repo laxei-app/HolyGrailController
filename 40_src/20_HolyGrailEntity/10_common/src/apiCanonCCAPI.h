@@ -141,7 +141,30 @@ public:
 	errCode setSS(const std::string& ss) override;					// シャッター速度を設定する
 	errCode setIso(const std::string& iso) override;				// ISO を設定する
 
+	// === 測光(apiBase の CCAPI 実装。2026-07-27 captureRunner から移設) ===
+	// 「どう測るか」= LVヒストグラム中央値。暗所ではLVが積分できないため測光ssへ一時切替し、
+	// 場面の明るさへ割り戻す。測光ssの学習・張り付き検出などの適応状態もこの層が持つ。
+	errCode meterScene(const hgc::exposure& shotExp, meterResult& out,
+	                   const std::function<bool()>& keepGoing) override;
+	errCode meterHere(meterResult& out, const std::function<bool()>& keepGoing) override;
+	void    meterReset(void) override;
+	void    setExpoTables(const expo::expoTables& t) override { tables_ = t; }
+
 protected:
+	// --- 測光の内部状態(セッション単位。meterReset で捨てる) ---
+	expo::expoTables tables_;			// 設定可能値テーブル(captureRunner から共有)
+	std::string      meterSs_;			// 次に使う測光ss(空=未決定→撮影ssから既定段数短く)
+	double           meterCeilStops_ = 1e9;	// 測光ssの長さ上限[段](張り付き検出で下がる天井)
+	double           meterPrevStops_ = 0.0;	// 前回測光の明るさ[段](張り付き判定用)
+	double           meterPrevLin_   = -1.0;	// 前回測光のリニア値(<0=無し)
+	uint64_t         lvFreshPrevMs_  = 0;	// 直近採用フレームのカメラ側時刻(鮮度判定)
+	void*            lvFreshPrevAt_  = nullptr;	// その採用時点の実時刻アンカー
+	// 測光ssの決定と適応(旧 captureRunner::enterMeteringShutter / updateMeterShutter)。
+	std::string decideMeterSs(const hgc::exposure& shotExp) const;
+	void        adaptMeterSs(const hgc::exposure& meterExp, double linear, bool& pinnedOut);
+	// 中断可能な待ち(keepGoing が false になったら早期に戻る)。
+	void        meterSleep(int ms, const std::function<bool()>& keepGoing) const;
+
 	// カメラの情報を取得する
 	errCode getDeviceDescriptor(class device& device);
 	errCode ascCanFNumber(std::vector<std::string>& fNumber);	// 指定可能な f 値(文字列)を取得する

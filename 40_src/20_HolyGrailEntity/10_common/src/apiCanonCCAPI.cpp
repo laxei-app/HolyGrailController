@@ -977,3 +977,239 @@ errCode apiCanonCCAPI::alzMetering(cmdt::HISTOGRAM& histoOut)
     }
     return ERR_HGC_OK;
 }
+
+// ============================================================================
+//  測光(apiBase::meterScene / meterHere の CCAPI 実装)
+//  2026-07-27 captureRunner から移設。「測光してリニア輝度(場面の明るさ)を得る」機能の
+//  実装詳細(LVヒストグラム・暗所での測光ss切替・張り付き検出)はカメラ依存なのでこの層に置く。
+//  別方式(撮影画像サムネイル等)への差し替えはこの2関数の実装交換で行う。
+// ============================================================================
+namespace
+{
+	// --- 測光の調整定数(実測から決定。captureRunner から移設) ---
+	constexpr int    kMeterSettleMaxMs    = 2600;	// Tv変更がLVに反映されるまでの待ち上限[ms](実測R10=1.3〜2.1秒)
+	constexpr double kMeterUsableLoX      = 0.020;	// 中央値がこれ未満は暗すぎて信用しない(sRGB)
+	constexpr double kMeterUsableHiX      = 0.850;	// これ超は明るすぎ(飽和寄り)
+	constexpr double kMeterRespondRatio   = 0.50;	// 「Δss段」に対しΔ測光段がこの比未満なら張り付き
+	constexpr int    kMeterInitDropStops  = 5;		// 初回の測光ss=撮影ssから何段短くするか
+	constexpr int    kMeterRetryMs        = 100;	// ヒスト取得リトライ間隔[ms]
+	constexpr int    kMeterMaxMs          = 5000;	// ヒスト取得リトライ上限[ms]
+	constexpr int    kLvFreshMarginMs     = 2000;	// 古いLVフレーム判定の許容[ms](生成周期+揺らぎ)
+	constexpr double kMeterPinBackoffStops = 1.0;	// 張り付き検出時、天井をこの段数だけ短く下げる
+	constexpr double kMeterMaxLenStep      = 1.0;	// 暗すぎるとき1コマで伸ばす上限[段](pin突入を防ぐ)
+	constexpr double kMeterCeilRelaxStops  = 0.10;	// 天井を毎コマこれだけ緩め、条件変化へ追従
+}
+
+void apiCanonCCAPI::meterSleep(int ms, const std::function<bool()>& keepGoing) const
+{
+	void* t0 = tool::startElapse();
+	while (static_cast<int>(tool::getElapse(t0)) < ms)
+	{
+		if (keepGoing && !keepGoing()) { return; }
+		tool::sleep(50);
+	}
+}
+
+void apiCanonCCAPI::meterReset(void)
+{
+	meterSs_.clear();
+	meterCeilStops_ = 1e9;
+	meterPrevStops_ = 0.0;
+	meterPrevLin_   = -1.0;
+	// 再接続でLVセッションが作り直されるため鮮度基準も捨てる(前セッションと比べると誤判定する)。
+	lvFreshPrevMs_  = 0;
+	lvFreshPrevAt_  = nullptr;
+}
+
+// カメラの現在の露出のまま、LVヒストグラムからリニア輝度(中央値)を得る。
+//  古いフレームは捨てて再取得し、上限まで粘る(長秒露光後はLVが使えるまで実測3.3秒かかる機種がある)。
+errCode apiCanonCCAPI::meterHere(meterResult& out, const std::function<bool()>& keepGoing)
+{
+	void* t0 = tool::startElapse();
+	out = meterResult{};
+	cmdt::HISTOGRAM hist;
+	for (;;)
+	{
+		++out.tries;
+		void* mt = tool::startElapse();
+		const bool got = (rdyMetering() == ERR_HGC_OK) && (alzMetering(hist) == ERR_HGC_OK);
+		out.rdyMs = static_cast<int>(tool::getElapse(mt));
+		if (got)
+		{
+			// 鮮度判定: LVフレーム時刻の進みが実経過に足りなければ古い映像(採用せず再取得)。
+			const uint64_t lv = lvSysTimeMs_;
+			if (lv != 0 && lvFreshPrevMs_ != 0 && lvFreshPrevAt_ != nullptr && lv > lvFreshPrevMs_)
+			{
+				const long long adv  = static_cast<long long>(lv - lvFreshPrevMs_);
+				const long long wall = static_cast<long long>(tool::getElapse(lvFreshPrevAt_));
+				if (adv < wall - static_cast<long long>(kLvFreshMarginMs))
+				{
+					++out.staleSkip;
+					if (keepGoing && !keepGoing()) { return ERR_HGC_RDY_METARING; }
+					if (static_cast<int>(tool::getElapse(t0)) >= kMeterMaxMs) { return ERR_HGC_RDY_METARING; }
+					meterSleep(kMeterRetryMs, keepGoing);
+					continue;
+				}
+			}
+			if (lv != 0) { lvFreshPrevMs_ = lv; lvFreshPrevAt_ = tool::startElapse(); }
+			// チェックサム+明側診断(p99/pMax)。
+			uint32_t s = 0; double total = 0.0;
+			for (int i = 0; i < cmdt::hist_bin; ++i) { s = s * 31u + hist.y[i]; total += hist.y[i]; }
+			out.histSum = s;
+			if (total > 0.0)
+			{
+				const double thr = total * 0.99; double cum = 0.0; int p99i = cmdt::hist_bin - 1, pmax = 0;
+				for (int i = 0; i < cmdt::hist_bin; ++i) { cum += hist.y[i]; if (cum >= thr) { p99i = i; break; } }
+				for (int i = cmdt::hist_bin - 1; i >= 0; --i) { if (hist.y[i] > 0) { pmax = i; break; } }
+				out.p99  = static_cast<double>(p99i) / static_cast<double>(cmdt::hist_bin - 1);
+				out.pMax = static_cast<double>(pmax) / static_cast<double>(cmdt::hist_bin - 1);
+			}
+			out.lvTimeMs = lvSysTimeMs_;
+			out.x        = expo::histMedian(hist.y, cmdt::hist_bin);
+			out.linear   = expo::srgbToLinear(out.x);
+			out.ok       = (out.linear > 0.0);
+			return ERR_HGC_OK;
+		}
+		if (keepGoing && !keepGoing()) { return ERR_HGC_RDY_METARING; }
+		if (static_cast<int>(tool::getElapse(t0)) >= kMeterMaxMs) { return ERR_HGC_RDY_METARING; }
+		meterSleep(kMeterRetryMs, keepGoing);
+	}
+}
+
+// 使う測光ssを決める(未学習なら撮影ssから既定段数短く。学習値は撮影ssより長くしない)。
+//  空を返したら「切替不要=撮影露出のまま測る」。
+std::string apiCanonCCAPI::decideMeterSs(const hgc::exposure& shotExp) const
+{
+	if (tables_.ss.empty()) { return std::string(); }
+	std::string want = meterSs_;
+	if (want.empty())
+	{
+		const double target = expo::brightnessStops(shotExp, tables_) - static_cast<double>(kMeterInitDropStops);
+		double best = 1e9;
+		for (const auto& e : tables_.ss)
+		{
+			hgc::exposure t = shotExp; t.ss = e.value;
+			const double d = std::fabs(expo::brightnessStops(t, tables_) - target);
+			if (d < best) { best = d; want = e.value; }
+		}
+	}
+	if (want.empty() || want == shotExp.ss) { return std::string(); }
+	// 測光ssは撮影ssより長くしない(測光ssの存在意義は「LVが積分できる短さで忠実に測る」ことだけ。
+	// 夜明けに学習値が縮まず撮影ssと5段逆転→窓切替で+4.7段の明るい1コマが撮れた 7/25実測)。
+	const double wantSec = expo::parseValue(want, expo::expoKind::ss);
+	const double shotSec = expo::parseValue(shotExp.ss, expo::expoKind::ss);
+	if (wantSec <= 0.0 || (shotSec > 0.0 && wantSec >= shotSec)) { return std::string(); }
+	return want;
+}
+
+// 測光結果から次コマの測光ssを学習し、張り付き(露出を変えても値が動かない)を判定する。
+//  短い側・忠実優先: 暗すぎる時だけ控えめに伸ばし、明るすぎたら縮め、張り付いたら天井を下げる。
+void apiCanonCCAPI::adaptMeterSs(const hgc::exposure& meterExp, double linear, bool& pinnedOut)
+{
+	pinnedOut = false;
+	if (tables_.ss.empty()) { return; }
+	const double curStops = expo::brightnessStops(meterExp, tables_);
+	const double x = (linear > 0.0) ? linear : 0.0;
+
+	if (meterPrevLin_ > 0.0 && x > 0.0)
+	{
+		const double dSs = curStops - meterPrevStops_;			// 指示した変化[段]
+		if (std::fabs(dSs) >= 0.5)
+		{
+			const double dLin = std::log2(x / meterPrevLin_);	// 実際に動いた[段]
+			if ((dLin / dSs) < kMeterRespondRatio) { pinnedOut = true; }
+		}
+	}
+	meterPrevStops_ = curStops;
+	meterPrevLin_   = x;
+
+	double wantStops;
+	if (pinnedOut)
+	{	// 張り付き=このssは長すぎてLVが積分できない。天井として記録し短い側へ後退。
+		meterCeilStops_ = curStops - kMeterPinBackoffStops;
+		wantStops = meterCeilStops_;
+	}
+	else
+	{
+		const double loLin = expo::srgbToLinear(kMeterUsableLoX);
+		const double hiLin = expo::srgbToLinear(kMeterUsableHiX);
+		if (x > 0.0 && x < loLin)
+		{	// 暗すぎ → 信号を得るため少しだけ伸ばす(pin突入を防ぐため1コマ1段まで)。
+			double d = std::log2(loLin / x);
+			if (d > kMeterMaxLenStep) { d = kMeterMaxLenStep; }
+			wantStops = curStops + d;
+		}
+		else if (x > hiLin)
+		{	// 明るすぎ(飽和寄り) → 縮める。
+			double d = std::log2(hiLin / x);
+			if (d < -3.0) { d = -3.0; }
+			wantStops = curStops + d;
+		}
+		else
+		{	// 十分な信号がある → これ以上伸ばさず短い側を維持。
+			wantStops = curStops;
+		}
+		meterCeilStops_ += kMeterCeilRelaxStops;	// 天井は毎コマ少し緩めて条件変化へ追従
+		if (wantStops > meterCeilStops_) { wantStops = meterCeilStops_; }
+	}
+	std::string pick; double best = 1e9;
+	for (const auto& e : tables_.ss)
+	{
+		hgc::exposure t = meterExp; t.ss = e.value;
+		const double d = std::fabs(expo::brightnessStops(t, tables_) - wantStops);
+		if (d < best) { best = d; pick = e.value; }
+	}
+	if (!pick.empty()) { meterSs_ = pick; }
+}
+
+// 撮影露出 shotExp を基準に測光し、露出非依存の「場面の明るさ」(sceneRef)を返す。
+//  1. 測光ssを決めて必要なら切替(失敗は ssSwitchFailed で申告=呼び出し側がssを必ず再送)
+//  2. LV反映を待って測光(meterHere)
+//  3. 場面の明るさへ割り戻し、次コマの測光ssを学習
+errCode apiCanonCCAPI::meterScene(const hgc::exposure& shotExp, meterResult& out,
+                                  const std::function<bool()>& keepGoing)
+{
+	out = meterResult{};
+	hgc::exposure meterExp = shotExp;
+
+	const std::string want = decideMeterSs(shotExp);
+	if (!want.empty())
+	{
+		if (setSS(want) != ERR_HGC_OK)
+		{
+			// 切替失敗。応答が返らないだけでカメラに遅延適用されることがある(IMG_3920事故)。
+			// 「失敗=未適用」とは仮定せず申告し、呼び出し側に次の適用でssを必ず再送させる。
+			out.ssSwitchFailed = true;
+		}
+		else
+		{
+			meterExp.ss     = want;
+			out.appliedSs   = want;
+			out.meterSsUsed = want;
+			// 反映待ち: Tv変更直後はsystemtimeが新しくても中身が変更前のことがある(実測)。上限まで待つ。
+			void* t0 = tool::startElapse();
+			meterSleep(kMeterSettleMaxMs, keepGoing);
+			out.settleMs = static_cast<int>(tool::getElapse(t0));
+		}
+	}
+
+	meterResult here;
+	const errCode e = meterHere(here, keepGoing);
+	// meterHere の診断を統合(切替系のフィールドは維持)。
+	out.linear = here.linear; out.x = here.x; out.p99 = here.p99; out.pMax = here.pMax;
+	out.histSum = here.histSum; out.lvTimeMs = here.lvTimeMs; out.staleSkip = here.staleSkip;
+	out.tries = here.tries; out.rdyMs = here.rdyMs;
+	out.meterExp = meterExp;
+	if (e != ERR_HGC_OK || here.linear <= 0.0) { out.ok = false; return (e != ERR_HGC_OK) ? e : ERR_HGC_RDY_METARING; }
+
+	out.ok       = true;
+	out.sceneRef = here.linear / std::pow(2.0, expo::brightnessStops(meterExp, tables_));
+	// 測光ssを切替えて測ったコマだけ学習する(撮影露出のまま測ったコマは従来どおり学習しない)。
+	if (!out.meterSsUsed.empty())
+	{
+		bool pinned = false;
+		adaptMeterSs(meterExp, here.linear, pinned);
+		out.pinned = pinned;
+	}
+	return ERR_HGC_OK;
+}

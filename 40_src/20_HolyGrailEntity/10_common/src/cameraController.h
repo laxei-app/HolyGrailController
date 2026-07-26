@@ -4,6 +4,8 @@
 #include "common.h"
 #include "device.h"
 #include "detectBase.h"
+#include "apiBase.h"		// 測光IF(meterResult)の中継に使う
+#include <functional>
 #include <memory>
 
 // カメラ受信の薄いアグリゲータ。カメラ種別ごとの受信バックエンド(detectBase 派生)を束ね、
@@ -37,6 +39,13 @@ public:
 	static errCode getSettings(const class device& device, cmdt::shotRange& settings);
 	static errCode rdyMetering(const class device& device);
 	static errCode alzMetering(const class device& device, cmdt::HISTOGRAM& hist);
+	// 測光(場面のリニア輝度の取得)。測り方の実装詳細はカメラ依存(apiBase実装側)。
+	static errCode meterScene(const class device& device, const hgc::exposure& shotExp,
+	                          apiBase::meterResult& out, const std::function<bool()>& keepGoing);
+	static errCode meterHere(const class device& device, apiBase::meterResult& out,
+	                         const std::function<bool()>& keepGoing);
+	static void    meterReset(const class device& device);
+	static void    setExpoTables(const class device& device, const expo::expoTables& t);
 	// 直近 alzMetering が解析したライブビューフレームのカメラ側取得時刻[ms]。0=不明。
 	static uint64_t lastLvTimeMs(const class device& device);
 	// 撮影開始時にカメラをM(ダイアル無視)に設定し、終了時に元へ戻す(仕様8/CCAPI)。

@@ -110,40 +110,20 @@ public:
 	// ライブビューに反映されるまで待つ(実測 R10 1.3〜2.1秒)→測光→撮影用露出を適用」を行うため。
 	static constexpr int    kPrepLeadMs          = 5000;	// 周期の何ms前に準備(測光→計算→設定)を始めるか
 
-	// --- 測光シャッター(仕様: 測光する露出と撮影する露出を分ける) ---
-	// ライブビューは「暗くて必要な増感が上限を超える」と張り付き、露出を変えても値が動かなくなる
-	// (2026-07-19 実写と突き合わせて実証。R10は8"で完全停止、R100も同様。止まる位置は機種で違う)。
-	// 撮影露出のまま測光すると夜間はこの張り付き領域に入り、動かない値を明るさとして読んでしまう。
-	// → 測光は「ライブビューが応答する短いシャッター」で行い、環境光はその露出から逆算する。
-	//   撮影シャッターが何秒でも(15"でも)測光の難しさは変わらない。
-	static constexpr int    kMeterSettleMaxMs    = 2600;	// Tv変更がLVに反映されるまでの待ち上限[ms]
-	static constexpr double kMeterTargetX        = 0.35;	// 測光で狙うLV中央値(黒潰れ/張り付きから最も遠い)
-	static constexpr double kMeterUsableLoX      = 0.020;	// これ未満は暗すぎて信用しない
-	static constexpr double kMeterUsableHiX      = 0.850;	// これ超は明るすぎて信用しない
-	static constexpr double kMeterRespondRatio   = 0.50;	// 「Δss段」に対しΔ測光段がこの比未満なら張り付き
-	static constexpr int    kMeterInitDropStops  = 5;	// 初回の測光ss=撮影ssから何段短くするか(以後は実測で追従)
-	// 測光ssは「明るい中央値(0.35)を狙って長秒化」せず、pin=0(LVが応答する短い側)を保つ(2026-07-24)。
-	static constexpr double kMeterPinBackoffStops = 1.0;	// 張り付き検出時、天井をこの段数だけ短く下げる
-	static constexpr double kMeterMaxLenStep      = 1.0;	// 暗すぎるとき1コマで伸ばす上限[段](pin突入を防ぐ)
-	static constexpr double kMeterCeilRelaxStops  = 0.10;	// 天井を毎コマこれだけ緩め、条件変化(明るくなる等)へ追従
+	// --- 測光 ---
+	// 「どう測るか」(LVヒストグラム・暗所での測光ss切替・張り付き検出・鮮度判定と各種定数)は
+	// カメラ依存の実装詳細として apiBase 実装側(apiCanonCCAPI)へ移設した(2026-07-27)。
+	// このクラスは cameraController::meterScene/meterHere の結果(場面のリニア輝度)だけを使う。
 	static constexpr int    kPreConvergeSec      = 30;	// 撮影窓の何秒前から初期収束(測光のみ・シャッター無し)を始めるか
-	// ③ ヒスト取得リトライ: 失敗なら kMeterRetryMs 間隔で kMeterMaxMs まで繰り返す。
-	static constexpr int    kMeterRetryMs        = 100;	// ヒスト取得リトライ間隔[ms]
-	static constexpr int    kMeterMaxMs          = 5000;	// ヒスト取得リトライ上限[ms]
 	// 露出設定リトライ: 503(busy)等で弾かれても諦めず繰り返す。設定できないまま撮り続けると
 	// アプリの露出モデルとカメラ実機がズレ、白飛び/黒潰れのまま復帰できなくなる(2026-07-16 実機で発生)。
 	static constexpr int    kApplyRetryMs        = 100;	// 露出設定リトライ間隔[ms]
 	static constexpr int    kApplyMaxMs          = 2000;	// 露出設定リトライ上限[ms]
-	// 古いライブビュー判定の許容[ms]。「LV取得時刻の進み ≥ 前回測光からの実経過 − この値」なら新鮮。
-	// LVフレームの生成周期+取得パイプラインの揺らぎぶん。固定しきい値(旧: 周期-5秒)は撮影周期前提で、
-	// 1〜2秒間隔で測光する初期収束の測光を全て誤って捨て、収束を壊した(2026-07-17夜)。実経過基準は
-	// 測光間隔に依存しないため、本撮影(15秒間隔)でも初期収束(1〜2秒間隔)でも正しく判定できる。
-	static constexpr int    kLvFreshMarginMs     = 2000;
 
 	// --- 測光値と撮影露出の「土俵合わせ」(2026-07-21 白飛び暴走の根治) ---
 	// 測光は測光シャッター(短い露出)で行うため、測光リニア値はその露出で写る明るさである。
 	// これを撮影露出の目標(ev0基準)とそのまま比べると、両露出の段差ぶん(実測で最大9段)ずれる。
-	// さらに測光ループは中央値を kMeterTargetX に貼り付けるので測光値は撮影露出を動かしても
+	// さらに旧測光ループは中央値を明るい一定値(0.35)に貼り付けるので測光値は撮影露出を動かしても
 	// 変化せず、比較結果が永久に同じ向きのまま=1/3段/コマで限界まで暴走した
 	// (2026-07-20夕方の実機: 1/60→8秒へ8.91段/27コマ=0.33段/コマ、実写は飽和85〜98%)。
 	// → 測光値から露出成分を割り戻して「場面の明るさ」にし、撮影露出で撮った場合の値へ
@@ -157,16 +137,11 @@ public:
 private:
 	errCode loop(void);								// 撮影ループ本体(別スレッド)
 	bool    establishSession(void);					// startShooting+M設定+設定値テーブル構築(開始/再接続で使用)
-	errCode rdyMeterTimed(void);					// rdyMetering を実測付きで呼ぶ(所要msは meterMs_ に退避)
-	// ③ ヒスト取得(rdyMetering+alzMetering)を最大 kMeterMaxMs まで kMeterRetryMs 間隔でリトライ。成功で hist を埋め true。
-	//    露光中は取得できないので、露光終了までの待ちは呼び出し側(ループ)の責務。tries=試行回数を返す。
-	bool    meterWithRetry(cmdt::HISTOGRAM& hist, int& tries);
-	// 測光シャッターへ切り替える。戻り値=実際に測光に使う露出(ss だけ差し替えたもの)。
-	//  ・切替が失敗/不要なら shotExp をそのまま返す(=従来動作へフォールバック)。
-	//  ・反映待ちの実測は meterSettleMs_ へ、使った ss は meterSsUsed_ へ退避(ログ用)。
-	hgc::exposure enterMeteringShutter(const hgc::exposure& shotExp);
-	// 今回の測光結果から「次コマの測光ss」を更新し、張り付きを判定する。
-	void          updateMeterShutter(const hgc::exposure& meterExp, double linear);
+	// 1コマぶんの測光(実装は apiBase::meterScene / meterHere)。結果の診断をログ用メンバへ展開し、
+	// 差分適用キャッシュ(lastSsApplied_)と実機の整合を取る。
+	//  allowSwitch=false は測光ssへ切替えない(ウォームアップ中=旧動作の維持)。
+	//  return: 測光値が得られたか(mr.ok)。
+	bool    meterFrame(const hgc::exposure& shotExp, apiBase::meterResult& mr, bool allowSwitch);
 	// 測光リニア値から露出成分を割り戻し、露出に依存しない「場面の明るさ」にする(土俵合わせ)。
 	//  測光露出が無効なら割り戻さずそのまま返す(従来動作へのフォールバック)。
 	double        sceneRefFromMetered(double linear, const hgc::exposure& meterExp) const;
@@ -206,29 +181,18 @@ private:
 	// ② ev0シグモイド設定(コマ毎に太陽高度から中心bmを算出して更新)。露出計算/初期収束で共用。
 	expo::ev0Sigmoid ev0cfg_{};
 
-	int  meterMs_  = -1;	// 直近 rdyMetering(ライブビュー取得)の実測ms。コマ毎にリセットしログへ出す(計測用)
-	bool meterOk_  = true;	// 直近 rdyMetering の成否(rdyMeterTimed が設定)。シャッター後にまとめてログ
-	int  meterTry_ = 0;	// 直近の測光試行回数(1=一発成功。>1=リトライした)。コマ毎にリセットしログへ出す
+	// --- 測光の診断(ログ用。実体は apiBase::meterResult から meterFrame が展開する) ---
+	int  meterMs_  = -1;	// 直近の測光取得(rdy+alz)の実測ms。コマ毎にリセットしログへ出す(計測用)
+	bool meterOk_  = true;	// 直近の測光の成否。シャッター後にまとめてログ
+	int  meterTry_ = 0;	// 直近の測光試行回数(1=一発成功。>1=リトライした)
 	uint64_t lvTimeMs_ = 0;	// 直近の測光フレームのカメラ側取得時刻[ms](0=不明)
-	uint64_t lvPrev_   = 0;	// 前回「採用した」測光フレームの取得時刻[ms](カメラ時計)。古いフレーム判定の基準
-	void*    lvPrevAt_ = nullptr;	// 前回採用した時点の単調時計。実経過時間との比較に使う(kLvFreshMarginMs参照)
-	int      staleSkip_ = 0;	// このコマで「古い」と判定して捨てた回数(0=無し)。ログで頻度を追う
-	uint32_t histSum_ = 0;	// 直近の測光ヒストグラムの内容チェックサム(0=測光なし)。
-							// 前コマと一致=カメラが古いフレームを返した疑い(測光値が1コマ古い)の検出用
-	// 【診断トラップ(一時)】ライブビュー・ヒストグラムの明るい側の位置(0..1, sRGB符号化)。
-	//  夜明けにライブビューが「明るい画素を捉えているか」を見るため。測光統計は変えず、既存のヒストから算出するだけ。
-	//  p99=明るい側1%点, pMax=画素のある最も明るいビン。<0=測光なし。
-	double   lvP99_  = -1.0;
-	double   lvPMax_ = -1.0;
-	// --- 測光シャッターの状態 ---
-	std::string meterSs_;					// 次に使う測光シャッター(空=未決定→撮影ssから kMeterInitDropStops 段短く)
-	std::string meterSsUsed_;				// 今コマ実際に使った測光ss(ログ用。空=撮影ssのまま測光した)
-	int         meterSettleMs_ = -1;		// 今コマの「Tv変更→LV反映」実測[ms](-1=切替なし)
-	double      meterPrevStops_ = 0.0;		// 前コマの測光ssの明るさ[段]
-	double      meterPrevLin_   = -1.0;		// 前コマの測光リニア値(<0=無し)
-	bool        lvPinned_       = false;	// ライブビューが張り付いている(測光値を信用しない)
-	bool        lvPinnedLog_    = false;	// 今コマのログ用
-	double      meterCeilStops_ = 1e9;		// 測光ssの長さ上限[段]。張り付き検出で下がる(=pin=0を保つ天井)。1e9=天井なし
+	int      staleSkip_ = 0;	// このコマで「古い」と判定して捨てられた回数(0=無し)
+	uint32_t histSum_ = 0;	// 直近の測光ヒストグラムの内容チェックサム(0=測光なし)
+	double   lvP99_  = -1.0;	// ヒストの明るい側1%点(<0=測光なし)
+	double   lvPMax_ = -1.0;	// 画素のある最も明るいビン
+	std::string meterSsUsed_;			// 今コマ実際に使った測光ss(ログ用。空=撮影ssのまま測光した)
+	int         meterSettleMs_ = -1;	// 今コマの「Tv変更→LV反映」の待ち[ms](-1=切替なし)
+	bool        lvPinnedLog_    = false;	// 張り付き判定(ログ用)
 	// 変更分のみ適用(タイマ方式tm0)の直近適用値。establishSession でクリアし次回フル適用させる。
 	std::string lastFnApplied_, lastSsApplied_, lastIsoApplied_;
 	// 露出設定に失敗したまま次のシャッターを落とすと、カメラは測光シャッターのままなので
