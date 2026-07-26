@@ -177,10 +177,15 @@ namespace
 		notify(HGE_EV_STATE, buf);
 	}
 
+	std::string jesc(const std::string& s);	// 前方宣言(定義は後方)
+
 	void notifyError(errCode code, const char* msg)
 	{
+		// msg にはHTTP応答本文(引用符・波括弧を含む)がそのまま入ることがある。エスケープせずに
+		// 連結するとJSONが壊れ、受信側(AndroidのJSONObject)が例外→アプリごと落ちて全撮影が
+		// 停止した(2026-07-26 18:15 実事故: actShutter http=503 {"message":"Device busy"})。
 		std::string j = "{\"code\":" + std::to_string(static_cast<unsigned>(code)) +
-		                ",\"msg\":\"" + (msg ? msg : "") + "\"}";
+		                ",\"msg\":\"" + jesc(msg ? msg : "") + "\"}";
 		notify(HGE_EV_ERROR, j);
 		std::string d = "code=" + std::to_string(static_cast<unsigned>(code)) +
 		                " " + (msg ? msg : "");
@@ -228,8 +233,13 @@ namespace
 		std::string o;
 		for (char c : s)
 		{
-			if (c == '"' || c == '\\') { o.push_back('\\'); }
-			o.push_back(c);
+			const unsigned char u = static_cast<unsigned char>(c);
+			if (c == '"' || c == '\\')  { o.push_back('\\'); o.push_back(c); }
+			else if (c == '\n')         { o += "\\n"; }
+			else if (c == '\r')         { o += "\\r"; }
+			else if (c == '\t')         { o += "\\t"; }
+			else if (u < 0x20)          { o.push_back(' '); }	// その他の制御文字はJSONを壊すので潰す
+			else                        { o.push_back(c); }
 		}
 		return o;
 	}

@@ -3502,7 +3502,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // --- Entity通知 ---
     override fun onHgeEvent(event: Int, json: String) {
+        // イベント1件の不正(エスケープ漏れ等で壊れたJSON)でアプリを道連れにしない。
+        // 2026-07-26 18:15 実事故: EV_ERROR のJSONが壊れて JSONException→未捕捉→アプリ死亡→全撮影停止。
+        // ネイティブ側(notifyError)もエスケープを直したが、ここは最後の防壁として残す。
         runOnUiThread {
+            try { onHgeEventUi(event, json) }
+            catch (e: Exception) { android.util.Log.e("HGC", "onHgeEvent failed ev=$event json=$json", e) }
+        }
+    }
+
+    private fun onHgeEventUi(event: Int, json: String) {
             when (event) {
                 HgeNative.EV_STATE -> {
                     val o = JSONObject(json)
@@ -3568,7 +3577,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     if (msg.isNotEmpty()) Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
                 }
             }
-        }
     }
 
     // スケジュールJSON(静的フィールド+events+windows)から両画面の表示を更新する。
