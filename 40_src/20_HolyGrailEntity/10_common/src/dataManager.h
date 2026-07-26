@@ -100,7 +100,8 @@ public:
 
 	// --- 撮影制御方法の初期値プリセット(/asset/ccmPresets.json。型ごとに複数) ---
 	// 型キー: night/sunrise/sunset/day/moon。各型は ccm の配列。
-	// 初回は撮影制御方法の初期値(ccmDefaults)から名前「標準」のプリセットを生成して種まきする。
+	// 初回は撮影制御方法の初期値(ccmDefaults)から型別名(星景/朝日/夕日/日中/月)のプリセットを
+	// 生成して種まきする。旧種まき名「標準」が残る既存データは読み込み時に型別名へ改名する。
 	static std::string ccmPresetsJson(const std::string& type);          // 指定型のプリセット配列
 	// 追加/更新(origName 一致を置換、無ければ追加)。ccmJson は ccm 1件の JSON。
 	static bool        setCcmPresetJson(const std::string& type, const std::string& origName, const std::string& ccmJson);

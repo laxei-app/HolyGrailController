@@ -957,6 +957,17 @@ namespace
 	json g_presets;
 	bool g_presetsLoaded = false;
 	const char* kPresetTypes[5] = { "night", "sunrise", "sunset", "day", "moon" };
+	// 種まきプリセットの名前(型ごと)。全型「標準」だと重複名回避で「標準1」等になり、
+	// スケジュールやログ(CCMSW)でどの制御方法か分からなかった(2026-07-26 ユーザー指示で型別名へ)。
+	const char* presetSeedName(const std::string& t)
+	{
+		if (t == "night")   { return "星景"; }
+		if (t == "sunrise") { return "朝日"; }
+		if (t == "sunset")  { return "夕日"; }
+		if (t == "day")     { return "日中"; }
+		if (t == "moon")    { return "月"; }
+		return "標準";
+	}
 
 	std::string presetsPath(void)
 	{
@@ -982,7 +993,7 @@ namespace
 		}
 		if (!g_presets.is_object()) { g_presets = json::object(); }
 
-		// 種まき: 型ごとに最低1件。撮影制御方法の初期値(ccmDefaults)から「標準」を作る。
+		// 種まき: 型ごとに最低1件。撮影制御方法の初期値(ccmDefaults)から型別名(星景/朝日/夕日/日中/月)で作る。
 		json def = json::parse(dataManager::ccmDefaultsJson(), nullptr, false);
 		ensureSettings();
 		bool changed = false, settingsChanged = false;
@@ -992,13 +1003,47 @@ namespace
 		}
 		for (const char* t : kPresetTypes)
 		{
+			const char* seedName = presetSeedName(t);
 			if (!g_presets.contains(t) || !g_presets[t].is_array() || g_presets[t].empty())
 			{
 				json one = (def.is_object() && def.contains(t)) ? def[t] : json::object();
-				one["name"] = "標準";
+				one["name"] = seedName;
 				g_presets[t] = json::array({ one });
 				changed = true;
-				if (!g_settings["preferredCcm"].contains(t)) { g_settings["preferredCcm"][t] = "標準"; settingsChanged = true; }
+				if (!g_settings["preferredCcm"].contains(t)) { g_settings["preferredCcm"][t] = seedName; settingsChanged = true; }
+			}
+			else
+			{
+				// 移行: 旧種まき名のプリセットを型別名へ改名する(既存端末のデータ)。
+				// 旧種まきは全型「標準」だったが、重複名回避で「標準1」等に化けている型もある
+				// (実機のnightがそうだった)ので「標準+数字」も種まき由来とみなす。
+				// 同型に型別名が既に在る場合は重複を避けて改名しない。最初の1件だけ改名し、
+				// 2件目以降の「標準N」はユーザーデータとみなし触らない。preferredCcm も追従する。
+				auto isOldSeedName = [](const std::string& n) -> bool
+				{
+					const std::string base = "標準";
+					if (n.compare(0, base.size(), base) != 0) { return false; }
+					for (size_t i = base.size(); i < n.size(); ++i)
+					{ if (n[i] < '0' || n[i] > '9') { return false; } }
+					return true;	// 「標準」「標準1」「標準23」…
+				};
+				bool nameTaken = false;
+				for (auto& e : g_presets[t]) { if (e.is_object() && e.value("name", "") == seedName) { nameTaken = true; break; } }
+				if (!nameTaken)
+				{
+					for (auto& e : g_presets[t])
+					{
+						const std::string old = e.is_object() ? e.value("name", "") : "";
+						if (isOldSeedName(old))
+						{
+							e["name"] = seedName;
+							changed = true;
+							if (g_settings["preferredCcm"].value(t, "") == old)
+							{ g_settings["preferredCcm"][t] = seedName; settingsChanged = true; }
+							break;	// 種まき由来は型に1つの前提
+						}
+					}
+				}
 			}
 		}
 		if (changed) { savePresets(); }
