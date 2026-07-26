@@ -36,10 +36,15 @@ namespace
 	// --- 最初の補正(仕様 4.4)の反復収束パラメータ ---
 	// 露出を変えてからライブビューが追従するまでの待ち[ms]。実機で調整可。
 	constexpr long   kMeterSettleMs        = 700;
-	// 反復回数(初回測定 + 最大3回程度の補正。仕様の手順5/6)。
-	constexpr int    kInitConvergeTries    = 4;
-	// 目標 ev への許容[段]。これ以内に入ったら収束終了して撮影に入る。
-	constexpr double kInitConvergeTolStops = 0.5;
+	// 反復回数の上限。旧4回では未収束のまま打ち切られ1.6〜3.3段外れて撮影開始していた
+	// (2026-07-24 17:05 実測)。投影方式(下記)は通常2回で収束するが、張り付き探索も含め余裕を持つ。
+	constexpr int    kInitConvergeTries    = 8;
+	// 時間予算[ms]。収束よりこちらが先に尽きたら最良推定で撮影に入る(開始を無限に遅らせない)。
+	constexpr int    kInitConvergeBudgetMs = 25000;
+	// 目標 ev への許容[段]。これ以内に入ったら収束終了して撮影に入る(=1枚目から1/3段以内)。
+	constexpr double kInitConvergeTolStops = 1.0 / 3.0;
+	// 初期収束の測光ssの上限[秒]。これより長いとLVが積分できず張り付く(実測: 0.6sはpin=0、2sで時々pin=1)。
+	constexpr double kInitMeterMaxSsSec    = 0.5;
 	// ヒストグラム中央値がこの範囲外なら明暗に張り付き(測光値を信用しない)とみなす。
 	constexpr double kPegBright = 0.99;
 	constexpr double kPegDark   = 0.01;
@@ -233,9 +238,27 @@ hgc::exposure captureRunner::enterMeteringShutter(const hgc::exposure& shotExp)
 	}
 	if (want.empty() || want == shotExp.ss) { return shotExp; }	// 変える必要が無い
 
+	// 測光ssは撮影ssより長くしない(2026-07-26)。測光ssの存在意義は「LVが積分できる短さで
+	// 忠実に測る」ことだけで、撮影ssより長い測光には意味がない(飽和したLVで測ることになり、
+	// 換算距離も伸びる)。夜明けに夜の測光ssが縮まず撮影ssと5段逆転し、窓切替で+4.7段の
+	// 明るい1コマが撮れた(7/25 05:04 実測)。撮影ss以上なら切替えず撮影露出のまま測る。
+	{
+		const double wantSec = expo::parseValue(want, expo::expoKind::ss);
+		const double shotSec = expo::parseValue(shotExp.ss, expo::expoKind::ss);
+		if (wantSec <= 0.0 || (shotSec > 0.0 && wantSec >= shotSec)) { return shotExp; }
+	}
+
 	hgc::exposure me = shotExp; me.ss = want;
 	// ss だけ送る。lastSsApplied_ を更新しておくと、後段の露出適用が「撮影ssへ戻す」を自動で送る。
-	if (cameraController::setSS(*dev_, me.ss) != ERR_HGC_OK) { return shotExp; }
+	if (cameraController::setSS(*dev_, me.ss) != ERR_HGC_OK)
+	{
+		// 切替失敗。応答が返らなかっただけでカメラには遅れて適用されることがある(7/25 03:29
+		// IMG_3920: 測光ssのままシャッターが落ちた)。「失敗=未適用」とは仮定せず、ssの適用記憶を
+		// 無効化して次の露出適用で必ずssを再送させる(遅延適用されても上書きされる)。
+		lastSsApplied_.clear();
+		if (onError_) { onError_(ERR_HGC_RDY_METARING, "meter ss switch failed → next apply resends ss"); }
+		return shotExp;
+	}
 	lastSsApplied_ = me.ss;
 
 	// 反映待ち: Tv変更直後のコマは systemtime が新しくても中身が変更前のことがある(実測)。
@@ -448,32 +471,52 @@ hgc::exposure captureRunner::nightGoalAfter(long long nowSec) const
 	return plan_.nightFixedExposure;
 }
 
-// 最初の補正(仕様 4.4)を反復収束で行う。撮影開始直後は初期露出が不定なので、
-// 基準(iso/ss/fn)から始め、ライブビューを測光して目標 ev へ寄せる。
-//  - 測光が信用できる(張り付いていない)ときは仕様 4.4 のニュートン段(目標との差ぶん移動)。
-//  - 明側/暗側に張り付いているときは測光値を信用せず、明限界〜暗限界のブラケットを
-//    方向で狭めて中央へ二分探索的に寄せる(張り付き解消後はニュートン段に戻る)。
-// 最大 kInitConvergeTries 回。許容内に入れば終了、ダメでも最良点で撮影に入る(手順5/6)。
+// 最初の補正(仕様 4.4)。撮影開始直後は初期露出が不定なので、1枚目の露出を測光で決める。
+//
+// 2026-07-26 全面改定: 旧実装は「候補露出そのもの」で測光していたため長秒でLVが張り付き、
+// 明暗限界の広いブラケット(十数段)を二分探索する羽目になり、4回打ち切りで1.6〜3.3段
+// 外れたまま撮影を始めていた(7/24 17:05 実測: 1/60で開始→5〜10コマかけて1/20へ)。
+// 新実装は定常運転と同じ土俵合わせを使う:
+//  1. LVが忠実に積分できる短いss(≤kInitMeterMaxSsSec)で測光する(張り付いたらssをずらして再測)
+//  2. 場面の明るさ sceneRef へ割り戻し、目標リニア輝度へ「一気に」投影する(二分探索不要)
+//  3. もう一度測光して誤差 ≤ kInitConvergeTolStops(1/3段) を確認できたら収束
+// 通常は測光2回(7〜8秒)で1/3段以内に入る。収束するまで撮影は始めない(時間予算内)。
 // ctl は呼び出し前に init 済みであること。戻り値=1枚目の露出(ctl もその値になる)。
 hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::exposure& initial, double evT)
 {
-	// 許容範囲を段で取り、ブラケットの初期値とする(明側=最も明るい/暗側=最も暗い)。
-	ctl.setToBrightLimit();
-	double hiB = expo::brightnessStops(ctl.current(), tables_);
-	ctl.setToDarkLimit();
-	double loB = expo::brightnessStops(ctl.current(), tables_);
-
 	// 仕様 4.4 の基準(iso/ss/fn)から開始する。
 	ctl.setCurrent(initial);
+	void* t0 = tool::startElapse();
 
-	hgc::exposure best = ctl.current();
-	double bestAbsErr = 1e9;
+	// 測光ssをテーブル上で delta 段ずらす(結果は capSec を超えない)。
+	auto shiftMeterSs = [&](hgc::exposure& me, double delta, double capSec)
+	{
+		hgc::exposure t = me;
+		const double wantStops = expo::brightnessStops(me, tables_) + delta;
+		std::string pick; double best = 1e9;
+		for (const auto& e : tables_.ss)
+		{
+			if (capSec > 0.0 && e.real > capSec) { continue; }
+			t.ss = e.value;
+			const double d = std::fabs(expo::brightnessStops(t, tables_) - wantStops);
+			if (d < best) { best = d; pick = e.value; }
+		}
+		if (!pick.empty()) { me.ss = pick; }
+	};
+
+	// 測光露出の初期値: 基準のssが長ければLV忠実上限へ短縮(iso/fnは基準のまま)。
+	hgc::exposure meterE = ctl.current();
+	if (expo::parseValue(meterE.ss, expo::expoKind::ss) > kInitMeterMaxSsSec)
+	{
+		shiftMeterSs(meterE, 0.0, kInitMeterMaxSsSec);
+	}
 
 	for (int i = 0; i < kInitConvergeTries && running_; ++i)
 	{
-		// 現在の露出をカメラへ反映し、ライブビューが追従するのを待ってから測光する。
-		hgc::exposure cur = ctl.current();
-		cmdt::shotSet shot(cur.ss, cur.fn, cur.iso);
+		if (static_cast<int>(tool::getElapse(t0)) >= kInitConvergeBudgetMs) { break; }	// 予算切れ→最良推定で開始
+
+		// 測光露出をカメラへ反映し、ライブビューが追従するのを待ってから測光する。
+		cmdt::shotSet shot(meterE.ss, meterE.fn, meterE.iso);
 		cameraController::rdyShutter(*dev_, shot);
 		interruptibleSleep(kMeterSettleMs);
 
@@ -485,41 +528,55 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 			x = expo::histMedian(hist.y, cmdt::hist_bin);
 			linear = expo::srgbToLinear(x);
 		}
+		if (linear <= 0.0) { continue; }	// 測光失敗 → 予算内で再試行
 
-		const double curB = expo::brightnessStops(cur, tables_);
-
-		if (linear <= 0.0)
-		{	// 測光失敗 → ブラケット中央へ寄せて再試行。
-			ctl.applyStops((loB + hiB) * 0.5 - curB);
+		// 張り付き(飽和/黒潰れ)は値を使わず測光ssをずらして測り直す。
+		// 飽和側は「どれだけ超えているか」の情報が無い(真昼にISO1600/0.5sだと十数段超え)ので
+		// 大股(-4段)で抜ける。-2段刻みでは真昼に時間予算内で飽和を抜けられなかった(7/26 09:00 実測)。
+		if (x >= kPegBright)
+		{
+			const double before = expo::brightnessStops(meterE, tables_);
+			shiftMeterSs(meterE, -4.0, kInitMeterMaxSsSec);
+			if (before - expo::brightnessStops(meterE, tables_) < 1.0)
+			{	// ss が最短側に達して暗くしきれない(高ISOシード×真昼) → ISO を下げて抜ける
+				hgc::exposure t = meterE;
+				const double wantB = before - 4.0;
+				std::string pick; double best = 1e9;
+				for (const auto& e : tables_.iso)
+				{
+					t.iso = e.value;
+					const double d = std::fabs(expo::brightnessStops(t, tables_) - wantB);
+					if (d < best) { best = d; pick = e.value; }
+				}
+				if (!pick.empty()) { meterE.iso = pick; }
+			}
 			continue;
 		}
+		if (x <= kPegDark && expo::parseValue(meterE.ss, expo::expoKind::ss) < kInitMeterMaxSsSec * 0.99)
+		{
+			shiftMeterSs(meterE, +2.0, kInitMeterMaxSsSec);	// 暗すぎ → 忠実上限まで伸ばして再測
+			continue;
+		}
+		// (忠実上限まで伸ばしても黒い夜はその値で進める → 投影は明側限界にクランプされ夜間露出へ落ち着く)
 
 		// ev0 のリニア輝度は環境光依存(§4.3.3/4.3.4)。測光値と測光時の露出から都度求める。
-		const double lin0 = expo::ev0LinearForMeasure(linear, cur, ev0cfg_);
-		const double linT = expo::linearFromEvBase(evT, lin0);	// 目標リニア輝度
-		const double err  = expo::evFromLinear(linT, linear);	// log2(linear/linT): + 明るすぎ / - 暗すぎ
-		if (std::fabs(err) < bestAbsErr) { bestAbsErr = std::fabs(err); best = cur; }
-		if (std::fabs(err) <= kInitConvergeTolStops) { break; }	// 目標 ev に十分近い(手順5)
+		const double lin0     = expo::ev0LinearForMeasure(linear, meterE, ev0cfg_);
+		const double linT     = expo::linearFromEvBase(evT, lin0);		// 目標リニア輝度
+		const double sceneRef = this->sceneRefFromMetered(linear, meterE);	// 露出に依存しない場面の明るさ
+		const double curB     = expo::brightnessStops(ctl.current(), tables_);
+		const double predicted = sceneRef * std::pow(2.0, curB);		// 候補露出で写る明るさ
+		if (predicted <= 0.0 || linT <= 0.0) { break; }
+		const double err = std::log2(predicted / linT);	// +:明るすぎ / -:暗すぎ
 
-		// 方向でブラケットを更新(明るすぎ→上限を現在へ / 暗すぎ→下限を現在へ)。
-		if (err > 0.0) { hiB = curB; } else { loB = curB; }
+		if (std::fabs(err) <= kInitConvergeTolStops) { break; }	// 収束(1枚目から1/3段以内)
 
-		const bool pegged = (x >= kPegBright) || (x <= kPegDark);
-		double nextB;
-		if (pegged)
-		{	// 張り付き: 測光値が信用できない → 最初の設定と今の設定の間(二分)へ寄せる(手順2/3)。
-			nextB = (loB + hiB) * 0.5;
-		}
-		else
-		{	// 仕様 4.4 のニュートン段。ブラケットの枠外に出るなら中央へ。
-			nextB = curB - err;
-			if (nextB <= loB || nextB >= hiB) { nextB = (loB + hiB) * 0.5; }
-		}
-		ctl.applyStops(nextB - curB);
+		ctl.applyStops(-err);	// 目標へ直接投影(限界・1/3段テーブルへは applyStops がクランプ)
+		const double newB = expo::brightnessStops(ctl.current(), tables_);
+		if (std::fabs(newB - curB) < 1e-6) { break; }	// 限界に当たって動けない → これ以上は無理
+		// 次の反復で新しい測光により誤差を再確認する(確認が取れたら上で break)。
 	}
 
-	ctl.setCurrent(best);	// 最良点を撮影1枚目の露出にする(手順6)。
-	return best;
+	return ctl.current();	// 最後の投影(または収束点)が最良推定=撮影1枚目の露出
 }
 
 // ライブビュー開始 + M設定(ダイアル無視/オートパワーオフ抑止) + 設定可能値テーブル構築。
@@ -635,7 +692,10 @@ errCode captureRunner::loop(void)
 	expo::exposureCtl preCtl;		// 夜間前移行用(自動露出→夜間)
 	expo::exposureCtl postCtl;		// 夜間後移行用(夜間→次の自動露出)
 	std::vector<double> avgBuf;		// リニア輝度の移動平均バッファ
-	hgc::exposure lastExp{};		// 直近の露出設定
+	hgc::exposure lastExp{};		// 直近の「測光時の」露出(ev0の逆算専用。ssが測光用に差し替わっている)
+	hgc::exposure lastShotExp{};	// 直近に実際に撮影した露出。窓切替の「直前から継続」はこちらを使う
+	// (lastExp を使うと切替直後の1コマが測光ssで撮れてしまう。7/24-25実測: 夕日/preNight/postNight
+	//  入りが数段暗く、朝の日中入りは+4.7段明るく写った。向きと大きさ=測光ssと撮影ssの差そのもの)
 	int meterFailStreak = 0;	// 連続測光失敗数(ライブビュー停止の検出/回復用)
 	int frame = 0;
 	double curEvT = 0.0;		// 実効目標ev(項目8: 自動露出→自動露出の切替で 1/3 段/枚 緩やかに移行)
@@ -818,6 +878,7 @@ errCode captureRunner::loop(void)
 		hgc::exposure meterExp = shotExp;
 		if (warmedUp) { meterExp = this->enterMeteringShutter(shotExp); }
 		if (warmedUp) { lastExp = meterExp; }	// ev0 は「測光時の露出」= 測光シャッターの露出
+		if (warmedUp) { lastShotExp = shotExp; }	// 窓切替の継続用は「実際に撮影した露出」
 
 		const hgc::ccmWindow* prevWin = curWin;
 		const bool windowChanged = (w != curWin);
@@ -866,7 +927,7 @@ errCode captureRunner::loop(void)
 				preCtl.capLongestSs(maxSsCap);	// ss は夜間ss/周期-2秒を超えない(指示3)
 				avgBuf.clear();
 				preNightConverge = false;
-				if (validExposure(lastExp)) { preCtl.setCurrent(lastExp); }	// 直前(日中/夕日)から継続
+				if (validExposure(lastShotExp)) { preCtl.setCurrent(lastShotExp); }	// 直前(日中/夕日)の撮影露出から継続
 				else
 				{
 					// 撮影開始が夜間前移行の途中: 基準から測光しながら目標evへ収束して開始する(§4.4)。
@@ -941,7 +1002,7 @@ errCode captureRunner::loop(void)
 					++meterFailStreak;
 				}
 				target = preCtl.current();
-				if (!validExposure(target)) { target = validExposure(lastExp) ? lastExp : nightExp; }
+				if (!validExposure(target)) { target = validExposure(lastShotExp) ? lastShotExp : nightExp; }
 			}
 		}
 		else if (ccm->type == hgc::ccmType::postNight)
@@ -974,7 +1035,7 @@ errCode captureRunner::loop(void)
 				             nextC ? nextC->priority : ccm->priority);
 				postCtl.capLongestSs(maxSsCap);	// ss は夜間ss/周期-2秒を超えない(指示3)
 				avgBuf.clear();
-				if (validExposure(lastExp)) { postCtl.setCurrent(lastExp); }	// 夜間から継続
+				if (validExposure(lastShotExp)) { postCtl.setCurrent(lastShotExp); }	// 夜間の撮影露出から継続
 				else
 				{
 					// 撮影開始が夜間後移行の途中: 他の自動露出と同様、開始前に露出補正(§4.4)してから入る。
@@ -1030,7 +1091,7 @@ errCode captureRunner::loop(void)
 				++meterFailStreak;
 			}
 			target = postCtl.current();
-			if (!validExposure(target)) { target = validExposure(lastExp) ? lastExp : nightExp; }
+			if (!validExposure(target)) { target = validExposure(lastShotExp) ? lastShotExp : nightExp; }
 		}
 		else if (isAuto(ccm->type))
 		{
@@ -1050,14 +1111,14 @@ errCode captureRunner::loop(void)
 				avgBuf.clear();
 				// 項目8: 自動露出→自動露出の切替で目標evが急変するとオーバーシュートするため、
 				// 実効目標evは前窓の値を保持して以降 1/3 段/枚で寄せる。不連続(開始/非自動から)は即適用。
-				if (!(validExposure(lastExp) && prevAuto)) { curEvT = evTraw; }
-				if (validExposure(lastExp))
+				if (!(validExposure(lastShotExp) && prevAuto)) { curEvT = evTraw; }
+				if (validExposure(lastShotExp))
 				{
 					// 自動露出の開始(仕様 4.8): 撮影継続中の撮影制御方法切替では不連続を避け、
-					// 基準(iso/ss/fn)の構成から始めて直前露出の APEX(明るさ)へ合わせて開始する。
+					// 基準(iso/ss/fn)の構成から始めて直前の「撮影」露出の APEX(明るさ)へ合わせて開始する。
 					if (validExposure(ccm->initial)) { autoCtl.setCurrent(ccm->initial); }
-					else                    { autoCtl.setCurrent(lastExp); }
-					double prevB = expo::brightnessStops(lastExp, tables_);
+					else                    { autoCtl.setCurrent(lastShotExp); }
+					double prevB = expo::brightnessStops(lastShotExp, tables_);
 					double curB  = expo::brightnessStops(autoCtl.current(), tables_);
 					autoCtl.applyStops(prevB - curB);
 				}
