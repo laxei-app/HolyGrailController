@@ -35,6 +35,7 @@ protected:
 		SHOOTMODE_DIAL,				// 撮影モード(ダイアル搭載機: settings/shootingmodedial)
 		SHOOTMODE,					// 撮影モード(ダイアル非搭載機: settings/shootingmode)
 		AUTOPOWEROFF,				// オートパワーオフ(functions/autopoweroff)。撮影中は disable に抑止
+		EVENT_POLL,					// イベント取得(event/polling)。撮影画像の登録通知(addedcontents)に使う
 
 		// 全体の要素数
 		NUM,
@@ -142,8 +143,14 @@ public:
 	errCode setIso(const std::string& iso) override;				// ISO を設定する
 
 	// === 測光(apiBase の CCAPI 実装。2026-07-27 captureRunner から移設) ===
-	// 「どう測るか」= LVヒストグラム中央値。暗所ではLVが積分できないため測光ssへ一時切替し、
-	// 場面の明るさへ割り戻す。測光ssの学習・張り付き検出などの適応状態もこの層が持つ。
+	// 測り方は2方式(meterScene が kUseShotThumbMetering で切り替える):
+	//  A) 撮影画像フィードバック(既定): 直前に撮れた画像のサムネイルから輝度を得る。本露光の
+	//     積分そのものなので夜間でも真値(LVは~1.6秒相当で頭打ち=7/26布かぶせ実験で実証)。
+	//     測光ssの切替が不要になり、切替PUT/settle待ち(2.6秒)も消える。
+	//  B) LVヒストグラム(旧方式・即復活可): 暗所ではLVが積分できないため測光ssへ一時切替し、
+	//     場面の明るさへ割り戻す。測光ssの学習・張り付き検出などの適応状態もこの層が持つ。
+	// meterHere(現在露出のまま測る)は常にLV方式(シャッター前の初期収束用=まだ撮影画像が無い)。
+	static constexpr bool kUseShotThumbMetering = true;	// false にすると旧LV方式へ戻る
 	errCode meterScene(const hgc::exposure& shotExp, meterResult& out,
 	                   const std::function<bool()>& keepGoing) override;
 	errCode meterHere(meterResult& out, const std::function<bool()>& keepGoing) override;
@@ -164,6 +171,17 @@ protected:
 	void        adaptMeterSs(const hgc::exposure& meterExp, double linear, bool& pinnedOut);
 	// 中断可能な待ち(keepGoing が false になったら早期に戻る)。
 	void        meterSleep(int ms, const std::function<bool()>& keepGoing) const;
+	// --- 撮影画像フィードバック測光(方式A) ---
+	// LV方式の meterScene 本体(方式B。コード温存・kUseShotThumbMetering=false で復活)。
+	errCode meterSceneLv(const hgc::exposure& shotExp, meterResult& out,
+	                     const std::function<bool()>& keepGoing);
+	// 直前に撮れた画像のサムネイルから測光する(方式A本体)。
+	errCode meterSceneShot(const hgc::exposure& shotExp, meterResult& out,
+	                       const std::function<bool()>& keepGoing);
+	// event/polling で新規画像(addedcontents)のパスを待つ。空=時間内に来なかった。
+	std::string waitAddedContents(int budgetMs, const std::function<bool()>& keepGoing, int& triesOut);
+	// funcList のURLから "http://host:port" 部分を得る(コンテンツパスの絶対URL化に使う)。
+	std::string apiHostBase(void) const;
 
 	// カメラの情報を取得する
 	errCode getDeviceDescriptor(class device& device);
@@ -233,6 +251,7 @@ protected:
 		{false, funcNum::SHOOTMODE_DIAL,	"settings/shootingmodedial"},	// 撮影モード(ダイアル機)
 		{false, funcNum::SHOOTMODE,			"settings/shootingmode"},		// 撮影モード(ダイアル無し機)
 		{false, funcNum::AUTOPOWEROFF,		"functions/autopoweroff"},		// オートパワーオフ(撮影中 disable)
+		{false, funcNum::EVENT_POLL,		"/event/polling"},				// 撮影画像の登録通知(サムネ測光)
 	};
 
 };

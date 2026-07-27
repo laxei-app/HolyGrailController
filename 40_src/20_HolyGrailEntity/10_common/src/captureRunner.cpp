@@ -824,7 +824,7 @@ errCode captureRunner::loop(void)
 				}
 				else
 				{
-					if (meterFailStreak == 0) { avgBuf.clear(); if (onError_) { onError_(ERR_HGC_RDY_METARING, "metering lost (tm0: no retry, keep exposure)"); } }
+					if (meterFailStreak == 0) { avgBuf.clear(); if (onError_) { { char eb[96]; std::snprintf(eb, sizeof(eb), "metering lost (stage=%d %dms, keep exposure)", mr.failStage, mr.rdyMs); onError_(ERR_HGC_RDY_METARING, eb); } } }
 					++meterFailStreak;
 				}
 				target = preCtl.current();
@@ -911,7 +911,7 @@ errCode captureRunner::loop(void)
 			}
 			else
 			{
-				if (meterFailStreak == 0) { avgBuf.clear(); if (onError_) { onError_(ERR_HGC_RDY_METARING, "metering lost (tm0: no retry, keep exposure)"); } }
+				if (meterFailStreak == 0) { avgBuf.clear(); if (onError_) { { char eb[96]; std::snprintf(eb, sizeof(eb), "metering lost (stage=%d %dms, keep exposure)", mr.failStage, mr.rdyMs); onError_(ERR_HGC_RDY_METARING, eb); } } }
 				++meterFailStreak;
 			}
 			target = postCtl.current();
@@ -1015,7 +1015,7 @@ errCode captureRunner::loop(void)
 					if (meterFailStreak == 0)
 					{
 						avgBuf.clear();
-						if (onError_) { onError_(ERR_HGC_RDY_METARING, "metering lost (tm0: no retry, keep exposure)"); }
+						if (onError_) { { char eb[96]; std::snprintf(eb, sizeof(eb), "metering lost (stage=%d %dms, keep exposure)", mr.failStage, mr.rdyMs); onError_(ERR_HGC_RDY_METARING, eb); } }
 					}
 					++meterFailStreak;
 				}

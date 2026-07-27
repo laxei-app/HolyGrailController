@@ -61,6 +61,7 @@ public:
 		int           settleMs  = -1;	// ss切替→LV反映の待ち[ms](-1=切替なし)
 		int           rdyMs     = -1;	// rdyMetering(取得)の実測[ms]
 		bool          pinned    = false;	// 張り付き検出(測光値は信用しない)
+		int           failStage = 0;	// 失敗した工程(0=成功/実装定義の段番号。ログで原因を特定するため)
 	};
 	// 撮影露出 shotExp を基準に測光し場面輝度を返す(測光ssの選択・切替・適応は実装側の責務)。
 	//  keepGoing: 中断判定(falseを返したら速やかに諦める)。

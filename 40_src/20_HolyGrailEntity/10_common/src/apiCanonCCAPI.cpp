@@ -2,6 +2,7 @@
 #include "apiCanonCCAPI.h"
 #include "netThread.h"
 #include "exposureMath.h"
+#include "jpegLuma.h"	// 撮影画像サムネイルの輝度ヒストグラム化(方式A測光)
 #include <json/nlohmann/json.hpp>
 #include <cmath>
 
@@ -1162,12 +1163,22 @@ void apiCanonCCAPI::adaptMeterSs(const hgc::exposure& meterExp, double linear, b
 	if (!pick.empty()) { meterSs_ = pick; }
 }
 
-// 撮影露出 shotExp を基準に測光し、露出非依存の「場面の明るさ」(sceneRef)を返す。
+// 測光の入口。方式A(撮影画像フィードバック)/方式B(LVヒスト)を切り替える。
+//  Aが失敗したときの自動フォールバックはしない(据え置き=従来の測光失敗時と同じ挙動。
+//  こっそりBへ落ちると評価が濁り、測光ss切替の副作用も混入するため)。
+errCode apiCanonCCAPI::meterScene(const hgc::exposure& shotExp, meterResult& out,
+                                  const std::function<bool()>& keepGoing)
+{
+	if (kUseShotThumbMetering) { return meterSceneShot(shotExp, out, keepGoing); }
+	return meterSceneLv(shotExp, out, keepGoing);
+}
+
+// 方式B: LVヒストグラム測光(旧方式。kUseShotThumbMetering=false で復活)。
 //  1. 測光ssを決めて必要なら切替(失敗は ssSwitchFailed で申告=呼び出し側がssを必ず再送)
 //  2. LV反映を待って測光(meterHere)
 //  3. 場面の明るさへ割り戻し、次コマの測光ssを学習
-errCode apiCanonCCAPI::meterScene(const hgc::exposure& shotExp, meterResult& out,
-                                  const std::function<bool()>& keepGoing)
+errCode apiCanonCCAPI::meterSceneLv(const hgc::exposure& shotExp, meterResult& out,
+                                    const std::function<bool()>& keepGoing)
 {
 	out = meterResult{};
 	hgc::exposure meterExp = shotExp;
@@ -1211,5 +1222,132 @@ errCode apiCanonCCAPI::meterScene(const hgc::exposure& shotExp, meterResult& out
 		adaptMeterSs(meterExp, here.linear, pinned);
 		out.pinned = pinned;
 	}
+	return ERR_HGC_OK;
+}
+
+// funcList のURL(絶対URL)から "http://host:port" を切り出す。
+std::string apiCanonCCAPI::apiHostBase(void) const
+{
+	auto it = funcList.find(funcNum::EVENT_POLL);
+	std::string url = (it != funcList.end()) ? it->second.url : std::string();
+	if (url.empty())
+	{
+		auto it2 = funcList.find(funcNum::SHOT);
+		if (it2 != funcList.end()) { url = it2->second.url; }
+	}
+	const size_t scheme = url.find("://");
+	if (scheme == std::string::npos) { return std::string(); }
+	const size_t path = url.find('/', scheme + 3);
+	return (path == std::string::npos) ? url : url.substr(0, path);
+}
+
+// event/polling で新規画像の登録(addedcontents)を待ち、最後(最新)のコンテンツパスを返す。
+//  ・撮影→現像→SD書込の完了は露光終了から実測2.0〜2.6秒(7/26 R10)。ロングポールなので
+//    既に登録済みならすぐ返り、未登録なら登録まで待つ。
+//  ・複数たまっていた場合(夜間の測光なしコマ等)は最後の1件=最新を使う。
+std::string apiCanonCCAPI::waitAddedContents(int budgetMs, const std::function<bool()>& keepGoing, int& triesOut)
+{
+	triesOut = 0;
+	if (!(funcList[funcNum::EVENT_POLL].verb == verb::GET)) { return std::string(); }
+	void* t0 = tool::startElapse();
+	std::string last;
+	while (static_cast<int>(tool::getElapse(t0)) < budgetMs)
+	{
+		if (keepGoing && !keepGoing()) { break; }
+		++triesOut;
+		std::string body;
+		if (netThread::httpGet(funcList[funcNum::EVENT_POLL].url, body) && !body.empty())
+		{
+			// {"addedcontents":["/ccapi/.../IMG_xxxx.JPG", ...], ...} を軽量に抽出(DOM化しない)。
+			const size_t key = body.find("\"addedcontents\"");
+			if (key != std::string::npos)
+			{
+				size_t p = body.find('[', key);
+				const size_t e = (p == std::string::npos) ? std::string::npos : body.find(']', p);
+				while (p != std::string::npos && e != std::string::npos)
+				{
+					const size_t q1 = body.find('"', p + 1);
+					if (q1 == std::string::npos || q1 > e) { break; }
+					const size_t q2 = body.find('"', q1 + 1);
+					if (q2 == std::string::npos || q2 > e) { break; }
+					last = body.substr(q1 + 1, q2 - q1 - 1);
+					p = q2;
+				}
+				if (!last.empty())
+				{
+					// CCAPIのJSONは "\/" とスラッシュをエスケープして返す。生抽出なので戻す
+					// (戻さないと不正URLになりサムネ取得が404で全滅する。7/27実機で発生)。
+					std::string un; un.reserve(last.size());
+					for (size_t i = 0; i < last.size(); ++i)
+					{
+						if (last[i] == '\\' && i + 1 < last.size() && last[i + 1] == '/') { continue; }
+						un.push_back(last[i]);
+					}
+					return un;
+				}
+			}
+			// イベントはあったが addedcontents 無し(設定変更等) → 続けて待つ。
+		}
+		else
+		{
+			meterSleep(200, keepGoing);	// 取得失敗(503等) → 少し置いて再試行
+		}
+	}
+	return last;
+}
+
+// 方式A: 撮影画像フィードバック測光。直前に撮れた画像のサムネイル(160x120)から輝度を得る。
+//  ・本露光の積分そのものなので、LVが頭打ちになる夜間でも真値が得られる(7/26実験: LVより約3.75段深い)。
+//  ・露出には一切触れない(ss切替なし=appliedSs空・settleなし)。
+//  ・shotExp = このサムネイルを撮った露出(呼び出し側の直前コマ)。sceneRef の割り戻しに使う。
+errCode apiCanonCCAPI::meterSceneShot(const hgc::exposure& shotExp, meterResult& out,
+                                      const std::function<bool()>& keepGoing)
+{
+	out = meterResult{};
+	out.meterExp = shotExp;
+
+	// 1. 新規画像の登録を待つ(ロングポール)。
+	void* t0 = tool::startElapse();
+	int tries = 0;
+	const std::string path = waitAddedContents(kMeterMaxMs, keepGoing, tries);
+	out.tries = tries;
+	if (path.empty()) { out.failStage = 1; out.rdyMs = static_cast<int>(tool::getElapse(t0)); return ERR_HGC_RDY_METARING; }
+
+	// 2. サムネイル取得(実測 約40〜60ms・数KB)。
+	const std::string base = apiHostBase();
+	if (base.empty()) { out.failStage = 2; return ERR_HGC_RDY_METARING; }
+	std::string jpg;
+	if (!netThread::httpGet(base + path + "?kind=thumbnail", jpg) || jpg.empty())
+	{
+		out.failStage = 3;
+		out.rdyMs = static_cast<int>(tool::getElapse(t0));
+		return ERR_HGC_RDY_METARING;
+	}
+
+	// 3. 復号→輝度ヒストグラム(レターボックス黒帯は上下6%を捨てて除去。7/26実測で中央値が約0.2段ずれる)。
+	uint16_t hist[256];
+	int w = 0, h = 0;
+	const bool dec = jpglm::lumaHistogram(reinterpret_cast<const uint8_t*>(jpg.data()), jpg.size(),
+	                                      hist, w, h, 0.06);
+	out.rdyMs = static_cast<int>(tool::getElapse(t0));
+	if (!dec) { out.failStage = 4; return ERR_HGC_API_ANALIZE; }
+
+	// 4. 中央値→リニア→場面の明るさ(LV方式と同じ土俵)。診断(p99/pMax/チェックサム)も同型で埋める。
+	uint32_t s = 0; double total = 0.0;
+	for (int i = 0; i < 256; ++i) { s = s * 31u + hist[i]; total += hist[i]; }
+	out.histSum = s;
+	if (total > 0.0)
+	{
+		const double thr = total * 0.99; double cum = 0.0; int p99i = 255, pmax = 0;
+		for (int i = 0; i < 256; ++i) { cum += hist[i]; if (cum >= thr) { p99i = i; break; } }
+		for (int i = 255; i >= 0; --i) { if (hist[i] > 0) { pmax = i; break; } }
+		out.p99  = p99i / 255.0;
+		out.pMax = pmax / 255.0;
+	}
+	out.x      = expo::histMedian(hist, 256);
+	out.linear = expo::srgbToLinear(out.x);
+	out.ok     = (out.linear > 0.0 && total > 0.0);
+	if (!out.ok) { out.failStage = 5; return ERR_HGC_API_ANALIZE; }
+	out.sceneRef = out.linear / std::pow(2.0, expo::brightnessStops(shotExp, tables_));
 	return ERR_HGC_OK;
 }

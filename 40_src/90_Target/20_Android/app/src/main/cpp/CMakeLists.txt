@@ -21,6 +21,7 @@ add_library(HolyGrailEntity SHARED
     ${ANDROID_SRC}
     ${PHONE_ROLE_SRC}
     ${ENTITY}/10_common/lib/astronomy/astronomy.c
+    ${ENTITY}/10_common/lib/jpeg/hgc_tjpgd.c
 )
 
 target_include_directories(HolyGrailEntity PRIVATE
