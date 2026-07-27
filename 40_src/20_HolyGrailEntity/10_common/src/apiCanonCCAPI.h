@@ -154,6 +154,9 @@ public:
 	errCode meterScene(const hgc::exposure& shotExp, meterResult& out,
 	                   const std::function<bool()>& keepGoing) override;
 	errCode meterHere(meterResult& out, const std::function<bool()>& keepGoing) override;
+	// 先読み(方式A用): 露光終了直後に呼ばれ、サムネイル→輝度ヒストまで済ませて保持する。
+	// 次の meterScene はこの結果を即時消費する(tm0での測光待ちがほぼゼロになる)。
+	errCode meterPrefetch(const std::function<bool()>& keepGoing, int budgetMs) override;
 	void    meterReset(void) override;
 	void    setExpoTables(const expo::expoTables& t) override { tables_ = t; }
 
@@ -178,8 +181,13 @@ protected:
 	// 直前に撮れた画像のサムネイルから測光する(方式A本体)。
 	errCode meterSceneShot(const hgc::exposure& shotExp, meterResult& out,
 	                       const std::function<bool()>& keepGoing);
+	// 方式Aの中核: 新規画像を待ち→サムネイル取得→復号→輝度ヒスト統計まで(露出非依存の部分)。
+	errCode thumbMeterCore(meterResult& out, int budgetMs, const std::function<bool()>& keepGoing);
 	// event/polling で新規画像(addedcontents)のパスを待つ。空=時間内に来なかった。
 	std::string waitAddedContents(int budgetMs, const std::function<bool()>& keepGoing, int& triesOut);
+	// 先読み結果(thumbMeterCoreの出力)。meterSceneShot が消費したら無効化する。
+	meterResult prefetch_;
+	bool        prefetchValid_ = false;
 	// funcList のURLから "http://host:port" 部分を得る(コンテンツパスの絶対URL化に使う)。
 	std::string apiHostBase(void) const;
 

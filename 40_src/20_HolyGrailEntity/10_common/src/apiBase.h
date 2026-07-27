@@ -71,6 +71,11 @@ public:
 	// カメラの現在の露出のまま測る(初期収束などシャッター前の反復用。露出には触れない)。
 	virtual errCode meterHere(meterResult& out, const std::function<bool()>& keepGoing)
 	{ (void)out; (void)keepGoing; return ERR_HGC_NOT_SUPPORTED; }
+	// 測光の先読み(任意実装)。シャッター(露光)終了直後に呼ぶと、次の meterScene で使う素材
+	// (撮影画像のサムネイル等)を先に取得しておき、meterScene の所要をほぼゼロにする。
+	// budgetMs を超えない範囲で完了できなければ何もしない(次の meterScene が従来どおり待つ)。
+	virtual errCode meterPrefetch(const std::function<bool()>& keepGoing, int budgetMs)
+	{ (void)keepGoing; (void)budgetMs; return ERR_HGC_NOT_SUPPORTED; }
 	// 測光の適応状態(測光ssの学習・張り付き天井・フレーム鮮度基準)を捨てる(セッション確立/再接続時)。
 	virtual void meterReset(void) {}
 	// 設定可能値テーブル(APEX換算)を渡す(captureRunnerが構築したものを共有)。

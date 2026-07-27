@@ -1020,6 +1020,7 @@ void apiCanonCCAPI::meterReset(void)
 	// 再接続でLVセッションが作り直されるため鮮度基準も捨てる(前セッションと比べると誤判定する)。
 	lvFreshPrevMs_  = 0;
 	lvFreshPrevAt_  = nullptr;
+	prefetchValid_  = false;
 }
 
 // カメラの現在の露出のまま、LVヒストグラムからリニア輝度(中央値)を得る。
@@ -1290,26 +1291,23 @@ std::string apiCanonCCAPI::waitAddedContents(int budgetMs, const std::function<b
 		}
 		else
 		{
-			meterSleep(200, keepGoing);	// 取得失敗(503等) → 少し置いて再試行
+			meterSleep(100, keepGoing);	// 取得失敗(503等) → 100ms置いて再試行(ユーザー指定粒度)
 		}
 	}
 	return last;
 }
 
-// 方式A: 撮影画像フィードバック測光。直前に撮れた画像のサムネイル(160x120)から輝度を得る。
-//  ・本露光の積分そのものなので、LVが頭打ちになる夜間でも真値が得られる(7/26実験: LVより約3.75段深い)。
-//  ・露出には一切触れない(ss切替なし=appliedSs空・settleなし)。
-//  ・shotExp = このサムネイルを撮った露出(呼び出し側の直前コマ)。sceneRef の割り戻しに使う。
-errCode apiCanonCCAPI::meterSceneShot(const hgc::exposure& shotExp, meterResult& out,
-                                      const std::function<bool()>& keepGoing)
+// 方式Aの中核(露出非依存の部分): 新規画像の登録を待ち、サムネイルを取得・復号して
+// 輝度ヒストグラム統計(中央値/p99/pMax/チェックサム)まで作る。
+//  meterExp/sceneRef は呼び出し側(meterSceneShot)が撮影露出で確定する。
+errCode apiCanonCCAPI::thumbMeterCore(meterResult& out, int budgetMs, const std::function<bool()>& keepGoing)
 {
 	out = meterResult{};
-	out.meterExp = shotExp;
 
-	// 1. 新規画像の登録を待つ(ロングポール)。
+	// 1. 新規画像の登録を待つ(ロングポール。失敗時のリトライは100ms周期)。
 	void* t0 = tool::startElapse();
 	int tries = 0;
-	const std::string path = waitAddedContents(kMeterMaxMs, keepGoing, tries);
+	const std::string path = waitAddedContents(budgetMs, keepGoing, tries);
 	out.tries = tries;
 	if (path.empty()) { out.failStage = 1; out.rdyMs = static_cast<int>(tool::getElapse(t0)); return ERR_HGC_RDY_METARING; }
 
@@ -1324,7 +1322,7 @@ errCode apiCanonCCAPI::meterSceneShot(const hgc::exposure& shotExp, meterResult&
 		return ERR_HGC_RDY_METARING;
 	}
 
-	// 3. 復号→輝度ヒストグラム(レターボックス黒帯は上下6%を捨てて除去。7/26実測で中央値が約0.2段ずれる)。
+	// 3. 復号→輝度ヒストグラム(レターボックス黒帯は上下6%を捨てて除去)。
 	uint16_t hist[256];
 	int w = 0, h = 0;
 	const bool dec = jpglm::lumaHistogram(reinterpret_cast<const uint8_t*>(jpg.data()), jpg.size(),
@@ -1332,7 +1330,7 @@ errCode apiCanonCCAPI::meterSceneShot(const hgc::exposure& shotExp, meterResult&
 	out.rdyMs = static_cast<int>(tool::getElapse(t0));
 	if (!dec) { out.failStage = 4; return ERR_HGC_API_ANALIZE; }
 
-	// 4. 中央値→リニア→場面の明るさ(LV方式と同じ土俵)。診断(p99/pMax/チェックサム)も同型で埋める。
+	// 4. 中央値→リニア。診断(p99/pMax/チェックサム)も同型で埋める。
 	uint32_t s = 0; double total = 0.0;
 	for (int i = 0; i < 256; ++i) { s = s * 31u + hist[i]; total += hist[i]; }
 	out.histSum = s;
@@ -1348,6 +1346,48 @@ errCode apiCanonCCAPI::meterSceneShot(const hgc::exposure& shotExp, meterResult&
 	out.linear = expo::srgbToLinear(out.x);
 	out.ok     = (out.linear > 0.0 && total > 0.0);
 	if (!out.ok) { out.failStage = 5; return ERR_HGC_API_ANALIZE; }
+	return ERR_HGC_OK;
+}
+
+// 先読み(2026-07-27 ユーザー指示): シャッター(露光)が閉じた直後に呼ばれ、サムネイル→輝度ヒストまで
+// 済ませて保持する。次の meterScene(tm0) はこれを即時消費するので測光待ちがほぼゼロになる。
+//  settleMs に先読みの所要(シャッター閉→完了)を記録する(LVHISTログの stl= で観測)。
+errCode apiCanonCCAPI::meterPrefetch(const std::function<bool()>& keepGoing, int budgetMs)
+{
+	if (!kUseShotThumbMetering) { return ERR_HGC_NOT_SUPPORTED; }
+	prefetchValid_ = false;
+	void* t0 = tool::startElapse();
+	const errCode e = thumbMeterCore(prefetch_, budgetMs, keepGoing);
+	if (e == ERR_HGC_OK && prefetch_.ok)
+	{
+		prefetch_.settleMs = static_cast<int>(tool::getElapse(t0));
+		prefetchValid_ = true;
+	}
+	return e;
+}
+
+// 方式A: 撮影画像フィードバック測光。直前に撮れた画像のサムネイルから輝度を得る。
+//  ・本露光の積分そのものなので、LVが頭打ちになる夜間でも真値が得られる(7/26実験: LVより約3.75段深い)。
+//  ・露出には一切触れない(ss切替なし=appliedSs空・settleなし)。
+//  ・先読み(meterPrefetch)済みなら即時消費し、無ければここで取得する(従来どおり待つ)。
+//  ・shotExp = このサムネイルを撮った露出(呼び出し側の直前コマ)。sceneRef の割り戻しに使う。
+errCode apiCanonCCAPI::meterSceneShot(const hgc::exposure& shotExp, meterResult& out,
+                                      const std::function<bool()>& keepGoing)
+{
+	if (prefetchValid_)
+	{	// 先読み済み → 即時消費。rdy=この場で掛かった時間(ほぼ0)/stl=先読みの所要。
+		void* t0 = tool::startElapse();
+		out = prefetch_;
+		prefetchValid_ = false;
+		out.rdyMs = static_cast<int>(tool::getElapse(t0));
+	}
+	else
+	{
+		const errCode e = thumbMeterCore(out, kMeterMaxMs, keepGoing);
+		if (e != ERR_HGC_OK) { out.meterExp = shotExp; return e; }
+	}
+	out.meterExp = shotExp;
+	if (!out.ok) { return ERR_HGC_API_ANALIZE; }
 	out.sceneRef = out.linear / std::pow(2.0, expo::brightnessStops(shotExp, tables_));
 	return ERR_HGC_OK;
 }

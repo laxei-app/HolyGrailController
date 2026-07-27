@@ -204,6 +204,12 @@ errCode cameraController::meterHere(const class device& device, apiBase::meterRe
 	return device.apiBase->meterHere(out, keepGoing);
 }
 
+errCode cameraController::meterPrefetch(const class device& device, const std::function<bool()>& keepGoing, int budgetMs)
+{
+	if (device.apiBase == nullptr) { return ERR_HGC_READY; }
+	return device.apiBase->meterPrefetch(keepGoing, budgetMs);
+}
+
 void cameraController::meterReset(const class device& device)
 {
 	if (device.apiBase != nullptr) { device.apiBase->meterReset(); }

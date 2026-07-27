@@ -44,6 +44,7 @@ public:
 	                          apiBase::meterResult& out, const std::function<bool()>& keepGoing);
 	static errCode meterHere(const class device& device, apiBase::meterResult& out,
 	                         const std::function<bool()>& keepGoing);
+	static errCode meterPrefetch(const class device& device, const std::function<bool()>& keepGoing, int budgetMs);
 	static void    meterReset(const class device& device);
 	static void    setExpoTables(const class device& device, const expo::expoTables& t);
 	// 直近 alzMetering が解析したライブビューフレームのカメラ側取得時刻[ms]。0=不明。

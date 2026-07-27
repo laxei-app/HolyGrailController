@@ -43,6 +43,9 @@ namespace
 	constexpr int    kInitConvergeBudgetMs = 25000;
 	// 目標 ev への許容[段]。これ以内に入ったら収束終了して撮影に入る(=1枚目から1/3段以内)。
 	constexpr double kInitConvergeTolStops = 1.0 / 3.0;
+	// 測光の先読み: シャッター(露光)終了からこの余裕[ms]を置いて開始する。
+	// 露光中は画像取得ができないため。閉じた後はロングポールが登録を待つので余裕は小さくてよい。
+	constexpr long   kPrefetchMarginMs     = 300;
 	// 初期収束の測光ssの上限[秒]。これより長いとLVが積分できず張り付く(実測: 0.6sはpin=0、2sで時々pin=1)。
 	constexpr double kInitMeterMaxSsSec    = 0.5;
 	// ヒストグラム中央値がこの範囲外なら明暗に張り付き(測光値を信用しない)とみなす。
@@ -676,6 +679,24 @@ errCode captureRunner::loop(void)
 			{
 				long prepAt = static_cast<long>(interval * 1000.0) - kPrepLeadMs;
 				if (prepAt < 0) { prepAt = 0; }
+				// 測光の先読み(2026-07-27): 撮影画像フィードバック測光は「直前コマの画像」を使うので、
+				// 露光が閉じ次第すぐ取得を始められる。シャッター+ss+余裕まで待ってから先読みを実行し、
+				// tm0(準備開始)では結果を即時消費するだけにする(=測光待ちがほぼゼロ)。
+				// 予算はtm0の手前まで。間に合わなければ従来どおりtm0で待つ(先読みは任意最適化)。
+				if (err == ERR_HGC_OK)
+				{
+					const double ssSec  = expo::parseValue(shotExp.ss, expo::expoKind::ss);
+					const long   fetchAt = static_cast<long>(((ssSec > 0.0) ? ssSec : 0.0) * 1000.0) + kPrefetchMarginMs;
+					if (fetchAt < prepAt)
+					{
+						sleepUntilElapse(anchorA, fetchAt);
+						const int budget = static_cast<int>(prepAt - static_cast<long>(tool::getElapse(anchorA))) - 100;
+						if (running_ && budget > 200)
+						{
+							cameraController::meterPrefetch(*dev_, [this]() { return running_.load(); }, budget);
+						}
+					}
+				}
 				sleepUntilElapse(anchorA, prepAt);
 			}
 			if (!running_) { break; }
