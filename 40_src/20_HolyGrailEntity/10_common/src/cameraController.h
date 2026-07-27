@@ -44,9 +44,9 @@ public:
 	                          apiBase::meterResult& out, const std::function<bool()>& keepGoing);
 	static errCode meterHere(const class device& device, apiBase::meterResult& out,
 	                         const std::function<bool()>& keepGoing);
-	static errCode meterPrefetch(const class device& device, const std::function<bool()>& keepGoing, int budgetMs);
+	// 測光を「いつ呼ぶか」の申告を得る(カメラ未取得時は既定値=シャッター5秒前)。
+	static apiBase::meterTiming meterTimingHint(const class device& device);
 	static void    meterReset(const class device& device);
-	static void    setExpoTables(const class device& device, const expo::expoTables& t);
 	// 直近 alzMetering が解析したライブビューフレームのカメラ側取得時刻[ms]。0=不明。
 	static uint64_t lastLvTimeMs(const class device& device);
 	// 撮影開始時にカメラをM(ダイアル無視)に設定し、終了時に元へ戻す(仕様8/CCAPI)。

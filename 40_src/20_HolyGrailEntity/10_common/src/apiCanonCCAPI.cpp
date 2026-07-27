@@ -353,6 +353,12 @@ errCode apiCanonCCAPI::getSettings(cmdt::shotRange& settings)
     build(ssRaw,  expo::expoKind::ss,  settings.ss,   ssSend_);
     build(fnRaw,  expo::expoKind::fn,  settings.fNum, fnSend_);
 
+    // 測光用のAPEX換算テーブルも自前で構築する(2026-07-27 setExpoTables廃止)。
+    // 設定可能値の中身も表記もカメラ依存なので、この層が ability から作るのが自然な置き場。
+    tables_.iso = expo::buildTable(settings.iso,  expo::expoKind::iso);
+    tables_.ss  = expo::buildTable(settings.ss,   expo::expoKind::ss);
+    tables_.fn  = expo::buildTable(settings.fNum, expo::expoKind::fn);
+
     return ERR_HGC_OK;
 }
 
@@ -1020,7 +1026,6 @@ void apiCanonCCAPI::meterReset(void)
 	// 再接続でLVセッションが作り直されるため鮮度基準も捨てる(前セッションと比べると誤判定する)。
 	lvFreshPrevMs_  = 0;
 	lvFreshPrevAt_  = nullptr;
-	prefetchValid_  = false;
 }
 
 // カメラの現在の露出のまま、LVヒストグラムからリニア輝度(中央値)を得る。
@@ -1349,44 +1354,17 @@ errCode apiCanonCCAPI::thumbMeterCore(meterResult& out, int budgetMs, const std:
 	return ERR_HGC_OK;
 }
 
-// 先読み(2026-07-27 ユーザー指示): シャッター(露光)が閉じた直後に呼ばれ、サムネイル→輝度ヒストまで
-// 済ませて保持する。次の meterScene(tm0) はこれを即時消費するので測光待ちがほぼゼロになる。
-//  settleMs に先読みの所要(シャッター閉→完了)を記録する(LVHISTログの stl= で観測)。
-errCode apiCanonCCAPI::meterPrefetch(const std::function<bool()>& keepGoing, int budgetMs)
-{
-	if (!kUseShotThumbMetering) { return ERR_HGC_NOT_SUPPORTED; }
-	prefetchValid_ = false;
-	void* t0 = tool::startElapse();
-	const errCode e = thumbMeterCore(prefetch_, budgetMs, keepGoing);
-	if (e == ERR_HGC_OK && prefetch_.ok)
-	{
-		prefetch_.settleMs = static_cast<int>(tool::getElapse(t0));
-		prefetchValid_ = true;
-	}
-	return e;
-}
-
 // 方式A: 撮影画像フィードバック測光。直前に撮れた画像のサムネイルから輝度を得る。
 //  ・本露光の積分そのものなので、LVが頭打ちになる夜間でも真値が得られる(7/26実験: LVより約3.75段深い)。
 //  ・露出には一切触れない(ss切替なし=appliedSs空・settleなし)。
-//  ・先読み(meterPrefetch)済みなら即時消費し、無ければここで取得する(従来どおり待つ)。
+//  ・呼び出しタイミングは meterTimingHint の申告どおり(露光終了直後)。captureRunner が従う。
 //  ・shotExp = このサムネイルを撮った露出(呼び出し側の直前コマ)。sceneRef の割り戻しに使う。
 errCode apiCanonCCAPI::meterSceneShot(const hgc::exposure& shotExp, meterResult& out,
                                       const std::function<bool()>& keepGoing)
 {
-	if (prefetchValid_)
-	{	// 先読み済み → 即時消費。rdy=この場で掛かった時間(ほぼ0)/stl=先読みの所要。
-		void* t0 = tool::startElapse();
-		out = prefetch_;
-		prefetchValid_ = false;
-		out.rdyMs = static_cast<int>(tool::getElapse(t0));
-	}
-	else
-	{
-		const errCode e = thumbMeterCore(out, kMeterMaxMs, keepGoing);
-		if (e != ERR_HGC_OK) { out.meterExp = shotExp; return e; }
-	}
+	const errCode e = thumbMeterCore(out, kMeterMaxMs, keepGoing);
 	out.meterExp = shotExp;
+	if (e != ERR_HGC_OK) { return e; }
 	if (!out.ok) { return ERR_HGC_API_ANALIZE; }
 	out.sceneRef = out.linear / std::pow(2.0, expo::brightnessStops(shotExp, tables_));
 	return ERR_HGC_OK;

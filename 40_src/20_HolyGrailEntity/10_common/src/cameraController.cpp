@@ -204,20 +204,15 @@ errCode cameraController::meterHere(const class device& device, apiBase::meterRe
 	return device.apiBase->meterHere(out, keepGoing);
 }
 
-errCode cameraController::meterPrefetch(const class device& device, const std::function<bool()>& keepGoing, int budgetMs)
+apiBase::meterTiming cameraController::meterTimingHint(const class device& device)
 {
-	if (device.apiBase == nullptr) { return ERR_HGC_READY; }
-	return device.apiBase->meterPrefetch(keepGoing, budgetMs);
+	if (device.apiBase == nullptr) { return apiBase::meterTiming{}; }	// 既定=シャッター5秒前
+	return device.apiBase->meterTimingHint();
 }
 
 void cameraController::meterReset(const class device& device)
 {
 	if (device.apiBase != nullptr) { device.apiBase->meterReset(); }
-}
-
-void cameraController::setExpoTables(const class device& device, const expo::expoTables& t)
-{
-	if (device.apiBase != nullptr) { device.apiBase->setExpoTables(t); }
 }
 
 errCode cameraController::setupShootingModeManual(const class device& device)

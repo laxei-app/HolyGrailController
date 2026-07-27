@@ -43,9 +43,9 @@ namespace
 	constexpr int    kInitConvergeBudgetMs = 25000;
 	// 目標 ev への許容[段]。これ以内に入ったら収束終了して撮影に入る(=1枚目から1/3段以内)。
 	constexpr double kInitConvergeTolStops = 1.0 / 3.0;
-	// 測光の先読み: シャッター(露光)終了からこの余裕[ms]を置いて開始する。
-	// 露光中は画像取得ができないため。閉じた後はロングポールが登録を待つので余裕は小さくてよい。
-	constexpr long   kPrefetchMarginMs     = 300;
+	// 「露光終了直後に測光」型(meterTimingHint.afterShutterClose)のとき、露光終了から
+	// この余裕[ms]を置いて準備を始める。露光中は画像取得ができないため。
+	constexpr long   kAfterShutterMarginMs = 300;
 	// 初期収束の測光ssの上限[秒]。これより長いとLVが積分できず張り付く(実測: 0.6sはpin=0、2sで時々pin=1)。
 	constexpr double kInitMeterMaxSsSec    = 0.5;
 	// ヒストグラム中央値がこの範囲外なら明暗に張り付き(測光値を信用しない)とみなす。
@@ -459,8 +459,6 @@ bool captureRunner::establishSession(void)
 		double fmin = (plan_.lens.fn > 0.0) ? plan_.lens.fn : 1.0;
 		tables_ = expo::standardTables(fmin, 32.0);
 	}
-	// 設定可能値テーブルをカメラ依存層(測光実装)にも共有する(測光ss選択・割り戻しに使う)。
-	cameraController::setExpoTables(*dev_, tables_);
 	return true;
 }
 
@@ -677,26 +675,24 @@ errCode captureRunner::loop(void)
 			//  周期 <= リード や 周期-リード < SS のような厳しい設定でも、遅れて実行されるだけで破綻はしない
 			//  (許可する仕様。カメラ単体のインターバル撮影と同様に周期が伸びる)。
 			{
-				long prepAt = static_cast<long>(interval * 1000.0) - kPrepLeadMs;
-				if (prepAt < 0) { prepAt = 0; }
-				// 測光の先読み(2026-07-27): 撮影画像フィードバック測光は「直前コマの画像」を使うので、
-				// 露光が閉じ次第すぐ取得を始められる。シャッター+ss+余裕まで待ってから先読みを実行し、
-				// tm0(準備開始)では結果を即時消費するだけにする(=測光待ちがほぼゼロ)。
-				// 予算はtm0の手前まで。間に合わなければ従来どおりtm0で待つ(先読みは任意最適化)。
-				if (err == ERR_HGC_OK)
+				// 準備(測光→計算→設定)の開始時刻は「測光をいつ呼んでほしいか」のカメラ実装の申告
+				// (meterTimingHint)に従う(2026-07-27。方式・メーカーごとに可変):
+				//  ・撮影画像フィードバック系: 露光終了+余裕 で最速開始(ソースは直前の撮影画像)
+				//  ・ライブビュー系: シャッターの leadMs 手前(一定時間前の輝度を見る設計)
+				const apiBase::meterTiming mt = cameraController::meterTimingHint(*dev_);
+				const long im = static_cast<long>(interval * 1000.0);
+				long prepAt;
+				if (mt.afterShutterClose)
 				{
-					const double ssSec  = expo::parseValue(shotExp.ss, expo::expoKind::ss);
-					const long   fetchAt = static_cast<long>(((ssSec > 0.0) ? ssSec : 0.0) * 1000.0) + kPrefetchMarginMs;
-					if (fetchAt < prepAt)
-					{
-						sleepUntilElapse(anchorA, fetchAt);
-						const int budget = static_cast<int>(prepAt - static_cast<long>(tool::getElapse(anchorA))) - 100;
-						if (running_ && budget > 200)
-						{
-							cameraController::meterPrefetch(*dev_, [this]() { return running_.load(); }, budget);
-						}
-					}
+					const double ssSec = expo::parseValue(shotExp.ss, expo::expoKind::ss);
+					prepAt = static_cast<long>(((ssSec > 0.0) ? ssSec : 0.0) * 1000.0) + kAfterShutterMarginMs;
 				}
+				else
+				{
+					prepAt = im - ((mt.leadMs > 0) ? mt.leadMs : kPrepLeadMs);
+				}
+				if (prepAt < 0)  { prepAt = 0; }
+				if (prepAt > im) { prepAt = im; }	// 露光が周期一杯 → 遅れ許容(従来どおり)
 				sleepUntilElapse(anchorA, prepAt);
 			}
 			if (!running_) { break; }

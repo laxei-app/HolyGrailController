@@ -154,15 +154,20 @@ public:
 	errCode meterScene(const hgc::exposure& shotExp, meterResult& out,
 	                   const std::function<bool()>& keepGoing) override;
 	errCode meterHere(meterResult& out, const std::function<bool()>& keepGoing) override;
-	// 先読み(方式A用): 露光終了直後に呼ばれ、サムネイル→輝度ヒストまで済ませて保持する。
-	// 次の meterScene はこの結果を即時消費する(tm0での測光待ちがほぼゼロになる)。
-	errCode meterPrefetch(const std::function<bool()>& keepGoing, int budgetMs) override;
+	// 測光をいつ呼んでほしいか(captureRunnerがこの申告に従う):
+	//  方式A(サムネ)=露光終了直後(ソースは直前の撮影画像なので最速で呼べる) /
+	//  方式B(LV)=シャッターの kMeterLeadLvMs 手前(一定時間前の輝度を見る設計)。
+	static constexpr int kMeterLeadLvMs = 5000;
+	meterTiming meterTimingHint(void) const override
+	{
+		return kUseShotThumbMetering ? meterTiming{ true, 0 } : meterTiming{ false, kMeterLeadLvMs };
+	}
 	void    meterReset(void) override;
-	void    setExpoTables(const expo::expoTables& t) override { tables_ = t; }
 
 protected:
 	// --- 測光の内部状態(セッション単位。meterReset で捨てる) ---
-	expo::expoTables tables_;			// 設定可能値テーブル(captureRunner から共有)
+	expo::expoTables tables_;			// 設定可能値テーブル(getSettingsでabilityから自前構築。
+										//  中身も表記もカメラ依存なのでこの層が作る。共通層は渡さない)
 	std::string      meterSs_;			// 次に使う測光ss(空=未決定→撮影ssから既定段数短く)
 	double           meterCeilStops_ = 1e9;	// 測光ssの長さ上限[段](張り付き検出で下がる天井)
 	double           meterPrevStops_ = 0.0;	// 前回測光の明るさ[段](張り付き判定用)
@@ -185,9 +190,6 @@ protected:
 	errCode thumbMeterCore(meterResult& out, int budgetMs, const std::function<bool()>& keepGoing);
 	// event/polling で新規画像(addedcontents)のパスを待つ。空=時間内に来なかった。
 	std::string waitAddedContents(int budgetMs, const std::function<bool()>& keepGoing, int& triesOut);
-	// 先読み結果(thumbMeterCoreの出力)。meterSceneShot が消費したら無効化する。
-	meterResult prefetch_;
-	bool        prefetchValid_ = false;
 	// funcList のURLから "http://host:port" 部分を得る(コンテンツパスの絶対URL化に使う)。
 	std::string apiHostBase(void) const;
 
