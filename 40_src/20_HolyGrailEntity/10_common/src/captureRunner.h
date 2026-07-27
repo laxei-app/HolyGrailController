@@ -41,7 +41,12 @@ public:
 	                      double lvPMax = -1.0;	// 【診断トラップ】画素のある最も明るいビン(0..1)。<0=測光なし
 	                      std::string meterSs;	// 測光に使ったシャッター(空=撮影露出のまま測光=従来動作)
 	                      int meterSettleMs = -1;	// 測光ss変更→LV反映の待ち[ms](-1=切替なし)
-	                      bool lvPinned = false; };	// 測光ssを変えても値が動かない=ライブビューが張り付いている
+	                      bool lvPinned = false;	// 測光ssを変えても値が動かない=ライブビューが張り付いている
+	                      // 測光所要の内訳(2026-07-28)。遅延がカメラの記録待ちか通信かを切り分ける。
+	                      int meterWaitMs = -1;	// 新しい画像の登録通知を待った時間[ms]
+	                      int meterFetchMs = -1;	// サムネイル取得(HTTP GET)の時間[ms]
+	                      int meterDecodeMs = -1;	// JPEG復号+ヒスト計算の時間[ms]
+	                      int meterFetchTries = 0; };	// サムネイル取得の試行回数
 
 	using stateCb    = std::function<void(int)>;					// hgeState 値
 	using progressCb = std::function<void(const progressInfo&)>;
@@ -193,6 +198,7 @@ private:
 	std::string meterSsUsed_;			// 今コマ実際に使った測光ss(ログ用。空=撮影ssのまま測光した)
 	int         meterSettleMs_ = -1;	// 今コマの「Tv変更→LV反映」の待ち[ms](-1=切替なし)
 	bool        lvPinnedLog_    = false;	// 張り付き判定(ログ用)
+	int         meterWaitMs_ = -1, meterFetchMs_ = -1, meterDecodeMs_ = -1, meterFetchTries_ = 0;	// 測光所要の内訳(ログ用)
 	// 変更分のみ適用(タイマ方式tm0)の直近適用値。establishSession でクリアし次回フル適用させる。
 	std::string lastFnApplied_, lastSsApplied_, lastIsoApplied_;
 	// 露出設定に失敗したまま次のシャッターを落とすと、カメラは測光シャッターのままなので

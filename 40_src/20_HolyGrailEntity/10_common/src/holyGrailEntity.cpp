@@ -1058,12 +1058,15 @@ namespace
 					// pin=1: 測光ssを変えても値が動かない=ライブビュー張り付き(測光値は信用できない)
 					// late=このコマのシャッターが撮影周期からどれだけ遅れたか[ms](0=周期ぴったり)
 					// prep=準備(測光→計算→設定)の合計[ms]。リード kPrepLeadMs=5000 に収まったかの判定。
-					char d[176];
+					// wait/fetch/dec = 測光所要の内訳(登録通知待ち/サムネ取得/復号)。ftry=取得の試行回数。
+					char d[240];
 					std::snprintf(d, sizeof(d),
-						"fr=%d Y=%.4f p99=%.3f pMx=%.3f mss=%s stl=%dms pin=%d late=%dms prep=%dms",
+						"fr=%d Y=%.4f p99=%.3f pMx=%.3f mss=%s stl=%dms pin=%d late=%dms prep=%dms"
+						" wait=%dms fetch=%dms dec=%dms ftry=%d",
 						c.frame, c.metered, c.lvP99, c.lvPMax,
 						c.meterSs.empty() ? "-" : c.meterSs.c_str(), c.meterSettleMs, c.lvPinned ? 1 : 0,
-						c.lateMs, c.prepMs);
+						c.lateMs, c.prepMs,
+						c.meterWaitMs, c.meterFetchMs, c.meterDecodeMs, c.meterFetchTries);
 					dataManager::logEvent("LVHIST", d);
 				}
 				// 撮影結果レポートの積算(1コマ=1回)。撮影終了時にまとめてファイルへ出す。

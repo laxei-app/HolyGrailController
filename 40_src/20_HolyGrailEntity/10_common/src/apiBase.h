@@ -59,7 +59,12 @@ public:
 		int           staleSkip = 0;	// 古いフレームを捨てた回数
 		int           tries     = 0;	// 取得試行回数
 		int           settleMs  = -1;	// ss切替→LV反映の待ち[ms](-1=切替なし)
-		int           rdyMs     = -1;	// rdyMetering(取得)の実測[ms]
+		int           rdyMs     = -1;	// 測光全体の実測[ms](下の内訳の合計)
+		// 内訳(2026-07-28 計測用): 遅くなっているのがカメラの記録待ちか通信かを切り分けるため。
+		int           waitMs    = -1;	// 新しい画像の登録通知を待った時間[ms]
+		int           fetchMs   = -1;	// サムネイル取得(HTTP GET)の時間[ms]
+		int           decodeMs  = -1;	// JPEG復号+ヒストグラム計算の時間[ms]
+		int           fetchTries = 0;	// サムネイル取得の試行回数(1=一発成功)
 		bool          pinned    = false;	// 張り付き検出(測光値は信用しない)
 		int           failStage = 0;	// 失敗した工程(0=成功/実装定義の段番号。ログで原因を特定するため)
 	};

@@ -161,6 +161,10 @@ bool captureRunner::meterFrame(const hgc::exposure& shotExp, apiBase::meterResul
 	meterSsUsed_   = mr.meterSsUsed;
 	meterSettleMs_ = mr.settleMs;
 	lvPinnedLog_   = mr.pinned;
+	meterWaitMs_   = mr.waitMs;
+	meterFetchMs_  = mr.fetchMs;
+	meterDecodeMs_ = mr.decodeMs;
+	meterFetchTries_ = mr.fetchTries;
 	// カメラ露出状態の整合(契約: 露出を触ったら必ず申告される)。
 	if (!mr.appliedSs.empty()) { lastSsApplied_ = mr.appliedSs; }
 	else if (mr.ssSwitchFailed)
@@ -1106,11 +1110,21 @@ errCode captureRunner::loop(void)
 			onCaptured_(capturedInfo{ frame, shotExp, lum, ccm->name, meteredLinear, meterMs_, applyMs, prepMs,
 			                          static_cast<int>(lateMs), meterOk_, (applyErr == ERR_HGC_OK),
 			                          meterTry_, applyTry, histSum_, lvTimeMs_, staleSkip_, shutterMs, lvP99_, lvPMax_,
-			                          meterSsUsed_, meterSettleMs_, lvPinnedLog_ });
+			                          meterSsUsed_, meterSettleMs_, lvPinnedLog_,
+			                          meterWaitMs_, meterFetchMs_, meterDecodeMs_, meterFetchTries_ });
 		}
 
-		// 撮影/測光が連続失敗 → 再接続。相対アンカーなので再アンカー不要(次コマが即[A]起点=overrun許容)。
-		if (shootFailStreak >= kMaxConsecutiveFail || meterFailStreak >= kMaxMeterFail)
+		// 測光の連続失敗は「接続断」ではない(2026-07-28 根治)。
+		//  実機で、シャッターは1枚も失敗していないのに測光(サムネイル取得)だけが連続失敗し、
+		//  接続断と誤判定 → 探索ループに入って撮影を完全に停止した(2時間20分の空白)。
+		//  カメラが撮れている以上つながっているので、測光失敗では露出を据え置いて撮影を続ける。
+		if (meterFailStreak >= kMaxMeterFail)
+		{
+			meterFailStreak = 0;	// 数え直すだけ。セッションは張り直さない(撮影を止めない)
+			avgBuf.clear();
+		}
+		// シャッターの連続失敗 → 再接続。相対アンカーなので再アンカー不要(次コマが即[A]起点=overrun許容)。
+		if (shootFailStreak >= kMaxConsecutiveFail)
 		{
 			bool recovered = (onReconnect_ && onReconnect_() && establishSession());
 			if (!recovered)

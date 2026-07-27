@@ -1005,6 +1005,12 @@ namespace
 	constexpr double kMeterPinBackoffStops = 1.0;	// 張り付き検出時、天井をこの段数だけ短く下げる
 	constexpr double kMeterMaxLenStep      = 1.0;	// 暗すぎるとき1コマで伸ばす上限[段](pin突入を防ぐ)
 	constexpr double kMeterCeilRelaxStops  = 0.10;	// 天井を毎コマこれだけ緩め、条件変化へ追従
+	// --- 撮影画像フィードバック測光(方式A)の予算 ---
+	// 露光終了→カメラの記録完了→サムネイル取得 までを含む総予算。記録は実測2.0〜2.6秒だが、
+	// カメラが混んでいると伸びる。取得が503等で弾かれても諦めず、この予算内でリトライする
+	// (2026-07-28: 1回で諦めていたため測光失敗→誤って接続断と判定していた)。
+	constexpr int    kThumbBudgetMs        = 10000;	// 測光全体(待ち+取得リトライ)の上限[ms]
+	constexpr int    kThumbFetchRetryMs    = 200;	// サムネイル取得のリトライ間隔[ms]
 }
 
 void apiCanonCCAPI::meterSleep(int ms, const std::function<bool()>& keepGoing) const
@@ -1308,37 +1314,49 @@ std::string apiCanonCCAPI::waitAddedContents(int budgetMs, const std::function<b
 errCode apiCanonCCAPI::thumbMeterCore(meterResult& out, int budgetMs, const std::function<bool()>& keepGoing)
 {
 	out = meterResult{};
-
-	// 1. 新規画像の登録を待つ(ロングポール。失敗時のリトライは100ms周期)。
 	void* t0 = tool::startElapse();
+
+	// ① 新しい画像の登録通知を待つ(カメラが露光後の記録を終えるまで)。
 	int tries = 0;
 	const std::string path = waitAddedContents(budgetMs, keepGoing, tries);
-	out.tries = tries;
-	if (path.empty()) { out.failStage = 1; out.rdyMs = static_cast<int>(tool::getElapse(t0)); return ERR_HGC_RDY_METARING; }
+	out.tries  = tries;
+	out.waitMs = static_cast<int>(tool::getElapse(t0));
+	if (path.empty()) { out.failStage = 1; out.rdyMs = out.waitMs; return ERR_HGC_RDY_METARING; }
 
-	// 2. サムネイル取得(実測 約40〜60ms・数KB)。
 	const std::string base = apiHostBase();
-	if (base.empty()) { out.failStage = 2; return ERR_HGC_RDY_METARING; }
-	std::string jpg;
-	if (!netThread::httpGet(base + path + "?kind=thumbnail", jpg) || jpg.empty())
-	{
-		out.failStage = 3;
-		out.rdyMs = static_cast<int>(tool::getElapse(t0));
-		return ERR_HGC_RDY_METARING;
-	}
+	if (base.empty()) { out.failStage = 2; out.rdyMs = out.waitMs; return ERR_HGC_RDY_METARING; }
 
-	// 3. 復号→輝度ヒストグラム(レターボックス黒帯は上下6%を捨てて除去)。
+	// ② サムネイル取得。記録直後のカメラは 503 で弾くことがあるので予算内でリトライする。
+	void* tf = tool::startElapse();
+	const std::string url = base + path + "?kind=thumbnail";
+	std::string jpg;
+	bool got = false;
+	while (true)
+	{
+		++out.fetchTries;
+		jpg.clear();
+		if (netThread::httpGet(url, jpg) && !jpg.empty()) { got = true; break; }
+		if (keepGoing && !keepGoing()) { break; }
+		if (static_cast<int>(tool::getElapse(t0)) >= budgetMs) { break; }	// 総予算切れ
+		meterSleep(kThumbFetchRetryMs, keepGoing);
+	}
+	out.fetchMs = static_cast<int>(tool::getElapse(tf));
+	if (!got) { out.failStage = 3; out.rdyMs = static_cast<int>(tool::getElapse(t0)); return ERR_HGC_RDY_METARING; }
+
+	// ③ 復号→輝度ヒストグラム(レターボックス黒帯は上下6%を捨てて除去)。
+	void* td = tool::startElapse();
 	uint16_t hist[256];
 	int w = 0, h = 0;
 	const bool dec = jpglm::lumaHistogram(reinterpret_cast<const uint8_t*>(jpg.data()), jpg.size(),
 	                                      hist, w, h, 0.06);
-	out.rdyMs = static_cast<int>(tool::getElapse(t0));
+	out.decodeMs = static_cast<int>(tool::getElapse(td));
+	out.rdyMs    = static_cast<int>(tool::getElapse(t0));
 	if (!dec) { out.failStage = 4; return ERR_HGC_API_ANALIZE; }
 
-	// 4. 中央値→リニア。診断(p99/pMax/チェックサム)も同型で埋める。
-	uint32_t s = 0; double total = 0.0;
-	for (int i = 0; i < 256; ++i) { s = s * 31u + hist[i]; total += hist[i]; }
-	out.histSum = s;
+	// ④ 中央値→リニア。診断(p99/pMax/チェックサム)も同型で埋める。
+	uint32_t sum = 0; double total = 0.0;
+	for (int i = 0; i < 256; ++i) { sum = sum * 31u + hist[i]; total += hist[i]; }
+	out.histSum = sum;
 	if (total > 0.0)
 	{
 		const double thr = total * 0.99; double cum = 0.0; int p99i = 255, pmax = 0;
@@ -1362,7 +1380,7 @@ errCode apiCanonCCAPI::thumbMeterCore(meterResult& out, int budgetMs, const std:
 errCode apiCanonCCAPI::meterSceneShot(const hgc::exposure& shotExp, meterResult& out,
                                       const std::function<bool()>& keepGoing)
 {
-	const errCode e = thumbMeterCore(out, kMeterMaxMs, keepGoing);
+	const errCode e = thumbMeterCore(out, kThumbBudgetMs, keepGoing);
 	out.meterExp = shotExp;
 	if (e != ERR_HGC_OK) { return e; }
 	if (!out.ok) { return ERR_HGC_API_ANALIZE; }
