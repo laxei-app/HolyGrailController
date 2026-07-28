@@ -190,6 +190,13 @@ protected:
 	errCode thumbMeterCore(meterResult& out, int budgetMs, const std::function<bool()>& keepGoing);
 	// event/polling で新規画像(addedcontents)のパスを待つ。空=時間内に来なかった。
 	std::string waitAddedContents(int budgetMs, const std::function<bool()>& keepGoing, int& triesOut);
+	// event/polling の待ち方(CCAPI Reference 4.13.1)。カメラのCCAPIバージョンで指定方法が違う:
+	//  ver110〜: ?timeout=short(約10秒待つ) / ver100: ?continue=on(100 Continueで待つ)
+	//  無指定は「待たずに即返る」が既定のため、こちらが連打してしまう(1コマ50回前後を実測)。
+	enum class pollMode : uint8_t { unknown = 0, timeoutShort = 1, continueOn = 2, immediate = 3 };
+	pollMode    pollMode_ = pollMode::unknown;
+	std::string pollUrl(pollMode m) const;	// 方式に応じたURL(クエリ付き)を作る
+	void        stopEventPolling(void);		// DELETE /event/polling(イベント取得の停止。セッション終了時)
 	// funcList のURLから "http://host:port" 部分を得る(コンテンツパスの絶対URL化に使う)。
 	std::string apiHostBase(void) const;
 

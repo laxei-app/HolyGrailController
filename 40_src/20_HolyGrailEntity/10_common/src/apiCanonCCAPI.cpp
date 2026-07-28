@@ -504,6 +504,10 @@ errCode apiCanonCCAPI::setupShootingModeManual(void)
 // setupShootingModeManual で変更した撮影モードを元に戻す。
 errCode apiCanonCCAPI::restoreShootingMode(void)
 {
+	// イベント取得(event/polling)を停止する。GETで開始したものの対(CCAPI Reference 4.13.1)。
+	// 開きっぱなしにするとカメラ側に取得状態が残る。撮影セッションの終了時に必ず送る。
+	stopEventPolling();
+
     errCode rc = ERR_HGC_OK;
 
     // 1) 変更した撮影モード値を元へ戻す(保存値が有効で M でないとき)。
@@ -1011,6 +1015,7 @@ namespace
 	// (2026-07-28: 1回で諦めていたため測光失敗→誤って接続断と判定していた)。
 	constexpr int    kThumbBudgetMs        = 10000;	// 測光全体(待ち+取得リトライ)の上限[ms]
 	constexpr int    kThumbFetchRetryMs    = 200;	// サムネイル取得のリトライ間隔[ms]
+	constexpr int    kPollGapMs            = 200;	// event/polling の再試行間隔[ms](連打防止)
 }
 
 void apiCanonCCAPI::meterSleep(int ms, const std::function<bool()>& keepGoing) const
@@ -1257,18 +1262,79 @@ std::string apiCanonCCAPI::apiHostBase(void) const
 //  ・撮影→現像→SD書込の完了は露光終了から実測2.0〜2.6秒(7/26 R10)。ロングポールなので
 //    既に登録済みならすぐ返り、未登録なら登録まで待つ。
 //  ・複数たまっていた場合(夜間の測光なしコマ等)は最後の1件=最新を使う。
+// 方式に応じた event/polling のURLを作る(CCAPI Reference 4.13.1)。
+std::string apiCanonCCAPI::pollUrl(pollMode m) const
+{
+	auto it = funcList.find(funcNum::EVENT_POLL);
+	if (it == funcList.end()) { return std::string(); }
+	const std::string& u = it->second.url;
+	switch (m)
+	{
+		case pollMode::timeoutShort: return u + "?timeout=short";	// ver110〜: 約10秒待つ
+		case pollMode::continueOn:   return u + "?continue=on";		// ver100 : 100 Continue で待つ
+		default:                     return u;						// 無指定 = 即返る
+	}
+}
+
+// イベント取得を停止する(GET で開始したものの対。セッション終了時に必ず送る)。
+void apiCanonCCAPI::stopEventPolling(void)
+{
+	auto it = funcList.find(funcNum::EVENT_POLL);
+	if (it == funcList.end() || !(it->second.verb == verb::DEL)) { return; }
+	std::string resp;
+	netThread::httpDelete(it->second.url, resp);
+	pollMode_ = pollMode::unknown;	// 次のセッションで待ち方を判定し直す
+}
+
+// event/polling で新規画像(addedcontents)のパスを待つ。空=時間内に来なかった。
+//  【2026-07-28 仕様準拠に修正 (CCAPI Reference 4.13.1)】
+//  ・無指定の polling は「待たずに即返る」のが既定。従来はそれを猛烈に叩いていた(1コマ44〜59回)。
+//    カメラのCCAPIバージョンに応じて ?timeout=short(ver110〜) / ?continue=on(ver100) を使い、
+//    1コマ1回で待てるようにする。判定はセッションで一度だけ(毎回3方式を試すと逆に連打になる)。
+//  ・GET は「イベント取得の開始」で、対の DELETE で停止する状態付きAPI。停止し忘れると以後
+//    503 {"message":"Already started"} で全て失敗する(実機R100で残存を確認)。全滅したときは
+//    一度だけ DELETE で停止してから再判定し、自力で復帰する。
 std::string apiCanonCCAPI::waitAddedContents(int budgetMs, const std::function<bool()>& keepGoing, int& triesOut)
 {
 	triesOut = 0;
 	if (!(funcList[funcNum::EVENT_POLL].verb == verb::GET)) { return std::string(); }
 	void* t0 = tool::startElapse();
 	std::string last;
+	bool triedRecover = false;	// このコマで「DELETEして再判定」を試したか(1回だけ)
+
 	while (static_cast<int>(tool::getElapse(t0)) < budgetMs)
 	{
 		if (keepGoing && !keepGoing()) { break; }
 		++triesOut;
+
 		std::string body;
-		if (netThread::httpGet(funcList[funcNum::EVENT_POLL].url, body) && !body.empty())
+		bool ok = false;
+		if (pollMode_ == pollMode::unknown)
+		{	// 待ち方の判定(セッションで一度だけ)。仕様の新しい順に試す。
+			const pollMode cand[3] = { pollMode::timeoutShort, pollMode::continueOn, pollMode::immediate };
+			for (const pollMode m : cand)
+			{
+				if (netThread::httpGet(pollUrl(m), body)) { pollMode_ = m; ok = true; break; }
+				if (keepGoing && !keepGoing()) { return last; }
+			}
+			if (!ok)
+			{	// 全滅 → イベント取得が開始済みで残っている疑い。一度だけ停止して再判定する。
+				if (!triedRecover)
+				{
+					triedRecover = true;
+					stopEventPolling();		// DELETE(内部で pollMode_ を unknown へ戻す)
+					meterSleep(kPollGapMs, keepGoing);
+					continue;
+				}
+				pollMode_ = pollMode::immediate;	// 以後は無指定で叩く(判定の繰り返しはしない)
+			}
+		}
+		else
+		{
+			ok = netThread::httpGet(pollUrl(pollMode_), body);
+		}
+
+		if (ok && !body.empty())
 		{
 			// {"addedcontents":["/ccapi/.../IMG_xxxx.JPG", ...], ...} を軽量に抽出(DOM化しない)。
 			const size_t key = body.find("\"addedcontents\"");
@@ -1287,23 +1353,21 @@ std::string apiCanonCCAPI::waitAddedContents(int budgetMs, const std::function<b
 				}
 				if (!last.empty())
 				{
-					// CCAPIのJSONは "\/" とスラッシュをエスケープして返す。生抽出なので戻す
+					// CCAPIのJSONはスラッシュを \/ とエスケープして返す。生抽出なので戻す
 					// (戻さないと不正URLになりサムネ取得が404で全滅する。7/27実機で発生)。
 					std::string un; un.reserve(last.size());
 					for (size_t i = 0; i < last.size(); ++i)
 					{
-						if (last[i] == '\\' && i + 1 < last.size() && last[i + 1] == '/') { continue; }
+						if (last[i] == 0x5C && i + 1 < last.size() && last[i + 1] == '/') { continue; }
 						un.push_back(last[i]);
 					}
 					return un;
 				}
 			}
-			// イベントはあったが addedcontents 無し(設定変更等) → 続けて待つ。
+			// イベントはあったが addedcontents 無し(設定変更等)。
 		}
-		else
-		{
-			meterSleep(100, keepGoing);	// 取得失敗(503等) → 100ms置いて再試行(ユーザー指定粒度)
-		}
+		// 見つからなかった/失敗した → 必ず間隔を空ける(連打しない)。
+		meterSleep(kPollGapMs, keepGoing);
 	}
 	return last;
 }
