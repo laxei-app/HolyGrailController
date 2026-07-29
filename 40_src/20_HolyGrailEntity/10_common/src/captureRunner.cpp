@@ -242,6 +242,48 @@ void captureRunner::meterLostMsg(const apiBase::meterResult& mr, char* buf, size
 	}
 }
 
+// ヒステリシス帯の実効値。1歩(1/3段)より狭い帯は構造的に成立しない(どう動かしても帯の
+// 内側へ入れないので、補正するたび必ず反対側へ飛び出す)。よって1歩を下限として扱う。
+// 設定そのものは書き換えない(ユーザーの値は保存されたまま、使うときだけ下限を当てる)。
+double captureRunner::effHysteresis(double raw) const
+{
+	const double lo = kMinHysteresisStops;
+	return (raw > lo) ? raw : lo;
+}
+
+// 直前に動かした向きの逆へ動いてよいか(反転の抑制)。
+//
+// 【2026-07-30 実測に基づく】露出を1歩(1/3段)変えると、同じ場面でも測光値が 0.30段 ずれる
+// (R100 夕日13回=中央0.30段 / 朝日9回=中央0.32段)。原因はサムネイルがカメラ現像のJPEGで
+// あることだが、ピクチャースタイルが auto でコマ毎にトーンカーブが変わり、ALO は CCAPI に
+// 出てこないため、こちら側では取り除けない(単一ゲインでの補正も実ログで検証して否決した)。
+// さらに移動平均は「異なる露出で測った値」を混ぜるので、1歩動かした直後の平均は最大
+// (n-1)/n × 0.30段 の偏りを持つ。
+// そこで、平均バッファが新しい露出の値で埋まり直すまでの間は、逆向きへ動くのに
+// 「帯を丸ごと超える差」を要求する。同じ向きへの追従と、急変(差が大きい)は妨げない。
+bool captureRunner::allowStep(int dir, double needStops, double bandStops) const
+{
+	if (dir == 0)                                { return false; }
+	if (lastStepDir_ == 0 || dir == lastStepDir_) { return true; }	// 同じ向き=いつでも動く
+	if (stepLock_ <= 0)                          { return true; }	// 偏りは抜けた
+	(void)bandStops;
+	return std::fabs(needStops) >= kReversalGuardStops;	// 反転は本物の急変のときだけ通す
+}
+
+// 動かした向きを記録し、反転を抑える期間を張る(長さ=移動平均のコマ数)。
+void captureRunner::noteStep(int dir)
+{
+	lastStepDir_ = dir;
+	stepLock_    = (smooth_.movingAverage > 0) ? smooth_.movingAverage : 5;
+}
+
+// 反転抑制の状態を捨てる(制御方法の切替や測光失敗で平均を捨てるときに合わせて呼ぶ)。
+void captureRunner::resetStepLock(void)
+{
+	lastStepDir_ = 0;
+	stepLock_    = 0;
+}
+
 // 踏み出すと帯の反対側へ飛び出すなら動かない(デッドバンド。2026-07-29 振動の根治)。
 //  ヒステリシス帯より1歩(1/3段)が大きいと、補正のたびに必ず反対側へ越えて往復し続ける。
 //  夕日/朝日は帯0.3段<歩幅0.333段のため必ず振動していた(日中は帯1.0段なので発動しない)。
@@ -804,7 +846,7 @@ errCode captureRunner::loop(void)
 				preCtl.init(tables_, nightExp, prevC ? prevC->limitDark : hgc::exposure{},
 				            prevC ? prevC->priority : ccm->priority);
 				preCtl.capLongestSs(maxSsCap);	// ss は夜間ss/周期-2秒を超えない(指示3)
-				avgBuf.clear();
+				avgBuf.clear(); this->resetStepLock();
 				preNightConverge = false;
 				if (validExposure(lastShotExp)) { preCtl.setCurrent(lastShotExp); }	// 直前(日中/夕日)の撮影露出から継続
 				else
@@ -846,26 +888,30 @@ errCode captureRunner::loop(void)
 				if (linear > 0.0)
 				{
 					// 測光値は測光露出で写る明るさ → 露出成分を割り戻してから平均する(土俵合わせ)。
-					avgBuf.push_back(mr.sceneRef);
+					if (stepLock_ > 0) { --stepLock_; }	// 反転抑制の残りコマ(測光できたコマだけ数える)
+	avgBuf.push_back(mr.sceneRef);
 					int n = (smooth_.movingAverage > 0) ? smooth_.movingAverage : 5;
 					while (static_cast<int>(avgBuf.size()) > n) { avgBuf.erase(avgBuf.begin()); }
 					double avg = 0.0;
 					for (double v : avgBuf) { avg += v; }
 					avg /= static_cast<double>(avgBuf.size());
 					double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : preCtl.current(), ev0cfg_);
-					double linU = expo::linearFromEvBase(preEv + smooth_.hysteresis / 2.0, lin0);
-					double linD = expo::linearFromEvBase(preEv - smooth_.hysteresis / 2.0, lin0);
+					double linU = expo::linearFromEvBase(preEv + this->effHysteresis(smooth_.hysteresis) / 2.0, lin0);
+					double linD = expo::linearFromEvBase(preEv - this->effHysteresis(smooth_.hysteresis) / 2.0, lin0);
 					// 撮影露出で撮った場合の明るさへ投影してから比べる(ループを閉じる)。
 					const double predicted = this->linearAtExposure(avg, preCtl.current());
 					if (predicted > linU || predicted < linD)
 					{
 						const double center = expo::linearFromEvBase(preEv, lin0);
 						const double need   = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;
-						// 帯の反対側へ飛び出すだけなら動かない(振動防止)。
-						if (this->wouldOvershoot(need, smooth_.hysteresis)) { meterFailStreak = 0; }
+						// 帯の反対側へ飛び出すだけなら動かない(振動防止)。反転は抑制期間中は強い証拠が要る。
+						const double band = this->effHysteresis(smooth_.hysteresis);
+						const int    dir  = (need < 0.0) ? -1 : 1;
+						if (this->wouldOvershoot(need, band) || !this->allowStep(dir, need, band)) { meterFailStreak = 0; }
 						else
 						{
 						const int    steps  = this->stepsToClose(need);
+						int          moves  = 0;
 						for (int s = 0; s < steps; ++s)
 						{
 							const double cB = expo::brightnessStops(preCtl.current(), tables_);
@@ -873,14 +919,16 @@ errCode captureRunner::loop(void)
 							if (need < 0.0) { moved = (haveHome && cB > homeB) ? preCtl.stepHome(false, nightExp) : preCtl.darken(); }
 							else            { moved = (haveHome && cB < homeB) ? preCtl.stepHome(true,  nightExp) : preCtl.brighten(); }
 							if (!moved) { break; }
+							++moves;
 						}
+						if (moves > 0) { this->noteStep(dir); }
 						}
 					}
 					meterFailStreak = 0;
 				}
 				else
 				{
-					if (meterFailStreak == 0) { avgBuf.clear(); if (onError_) { { char eb[224]; this->meterLostMsg(mr, eb, sizeof(eb)); onError_(ERR_HGC_RDY_METARING, eb); } } }
+					if (meterFailStreak == 0) { avgBuf.clear(); this->resetStepLock(); if (onError_) { { char eb[224]; this->meterLostMsg(mr, eb, sizeof(eb)); onError_(ERR_HGC_RDY_METARING, eb); } } }
 					++meterFailStreak;
 				}
 				target = preCtl.current();
@@ -916,7 +964,7 @@ errCode captureRunner::loop(void)
 				postCtl.init(tables_, nightExp, nextC ? nextC->limitDark : hgc::exposure{},
 				             nextC ? nextC->priority : ccm->priority);
 				postCtl.capLongestSs(maxSsCap);	// ss は夜間ss/周期-2秒を超えない(指示3)
-				avgBuf.clear();
+				avgBuf.clear(); this->resetStepLock();
 				if (validExposure(lastShotExp)) { postCtl.setCurrent(lastShotExp); }	// 夜間の撮影露出から継続
 				else
 				{
@@ -938,26 +986,30 @@ errCode captureRunner::loop(void)
 			{
 				// 露出補正(仕様 4.5): 移動平均・ヒステリシス。目標 ev=postEv。往復対称(home=次の基準)。
 				// 測光値は測光露出で写る明るさ → 露出成分を割り戻してから平均する(土俵合わせ)。
-				avgBuf.push_back(mr.sceneRef);
+				if (stepLock_ > 0) { --stepLock_; }	// 反転抑制の残りコマ(測光できたコマだけ数える)
+	avgBuf.push_back(mr.sceneRef);
 				int n = (smooth_.movingAverage > 0) ? smooth_.movingAverage : 5;
 				while (static_cast<int>(avgBuf.size()) > n) { avgBuf.erase(avgBuf.begin()); }
 				double avg = 0.0;
 				for (double v : avgBuf) { avg += v; }
 				avg /= static_cast<double>(avgBuf.size());
 				double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : postCtl.current(), ev0cfg_);
-				double linU = expo::linearFromEvBase(postEv + smooth_.hysteresis / 2.0, lin0);
-				double linD = expo::linearFromEvBase(postEv - smooth_.hysteresis / 2.0, lin0);
+				double linU = expo::linearFromEvBase(postEv + this->effHysteresis(smooth_.hysteresis) / 2.0, lin0);
+				double linD = expo::linearFromEvBase(postEv - this->effHysteresis(smooth_.hysteresis) / 2.0, lin0);
 				// 撮影露出で撮った場合の明るさへ投影してから比べる(ループを閉じる)。
 				const double predicted = this->linearAtExposure(avg, postCtl.current());
 				if (predicted > linU || predicted < linD)
 				{
 					const double center = expo::linearFromEvBase(postEv, lin0);
 					const double need   = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;
-					// 帯の反対側へ飛び出すだけなら動かない(振動防止)。
-					if (this->wouldOvershoot(need, smooth_.hysteresis)) { meterFailStreak = 0; }
+					// 帯の反対側へ飛び出すだけなら動かない(振動防止)。反転は抑制期間中は強い証拠が要る。
+					const double band = this->effHysteresis(smooth_.hysteresis);
+					const int    dir  = (need < 0.0) ? -1 : 1;
+					if (this->wouldOvershoot(need, band) || !this->allowStep(dir, need, band)) { meterFailStreak = 0; }
 					else
 					{
 					const int    steps  = this->stepsToClose(need);
+					int          moves  = 0;
 					for (int s = 0; s < steps; ++s)
 					{
 						const double curB = expo::brightnessStops(postCtl.current(), tables_);
@@ -965,14 +1017,16 @@ errCode captureRunner::loop(void)
 						if (need < 0.0) { moved = (haveHome && curB > homeB) ? postCtl.stepHome(false, goal) : postCtl.darken(); }
 						else            { moved = (haveHome && curB < homeB) ? postCtl.stepHome(true,  goal) : postCtl.brighten(); }
 						if (!moved) { break; }
+						++moves;
 					}
+					if (moves > 0) { this->noteStep(dir); }
 					}
 				}
 				meterFailStreak = 0;
 			}
 			else
 			{
-				if (meterFailStreak == 0) { avgBuf.clear(); if (onError_) { { char eb[224]; this->meterLostMsg(mr, eb, sizeof(eb)); onError_(ERR_HGC_RDY_METARING, eb); } } }
+				if (meterFailStreak == 0) { avgBuf.clear(); this->resetStepLock(); if (onError_) { { char eb[224]; this->meterLostMsg(mr, eb, sizeof(eb)); onError_(ERR_HGC_RDY_METARING, eb); } } }
 				++meterFailStreak;
 			}
 			target = postCtl.current();
@@ -993,7 +1047,7 @@ errCode captureRunner::loop(void)
 			{
 				autoCtl.init(tables_, ccm->limitBright, ccm->limitDark, ccm->priority);
 				autoCtl.capLongestSs(maxSsCap);	// ss は夜間ss/周期-2秒を超えない(指示3)
-				avgBuf.clear();
+				avgBuf.clear(); this->resetStepLock();
 				// 項目8: 自動露出→自動露出の切替で目標evが急変するとオーバーシュートするため、
 				// 実効目標evは前窓の値を保持して以降 1/3 段/枚で寄せる。不連続(開始/非自動から)は即適用。
 				if (!(validExposure(lastShotExp) && prevAuto)) { curEvT = evTraw; }
@@ -1039,7 +1093,8 @@ errCode captureRunner::loop(void)
 					// 露出補正(仕様 4.5): 移動平均とヒステリシス帯(項目7: ccm 個別値を優先)
 					// 測光値は「測光露出で写る明るさ」なので、露出成分を割り戻した場面の明るさを
 					// 平均する(測光ssはコマ毎に変わるため、生の測光値を平均すると別条件が混ざる)。
-					avgBuf.push_back(mr.sceneRef);
+					if (stepLock_ > 0) { --stepLock_; }	// 反転抑制の残りコマ(測光できたコマだけ数える)
+	avgBuf.push_back(mr.sceneRef);
 					int n = effMA;
 					while (static_cast<int>(avgBuf.size()) > n) { avgBuf.erase(avgBuf.begin()); }
 					double avg = 0.0;
@@ -1047,8 +1102,8 @@ errCode captureRunner::loop(void)
 					avg /= static_cast<double>(avgBuf.size());
 
 					double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : autoCtl.current(), ev0cfg_);
-					double linU = expo::linearFromEvBase(evT + effHyst / 2.0, lin0);
-					double linD = expo::linearFromEvBase(evT - effHyst / 2.0, lin0);
+					double linU = expo::linearFromEvBase(evT + this->effHysteresis(effHyst) / 2.0, lin0);
+					double linD = expo::linearFromEvBase(evT - this->effHysteresis(effHyst) / 2.0, lin0);
 					// 撮影露出で撮った場合の明るさへ投影してから比べる(土俵合わせ)。これでループが
 					// 閉じ、露出を動かすと比較結果も動く(従来は測光値が撮影露出に依存せず暴走した)。
 					const double predicted = this->linearAtExposure(avg, autoCtl.current());
@@ -1056,11 +1111,14 @@ errCode captureRunner::loop(void)
 					{
 						const double center = expo::linearFromEvBase(evT, lin0);
 						const double need   = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;	// +:明るく -:暗く
-						// 帯の反対側へ飛び出すだけなら動かない(振動防止)。
-						if (this->wouldOvershoot(need, effHyst)) { meterFailStreak = 0; }
+						// 帯の反対側へ飛び出すだけなら動かない(振動防止)。反転は抑制期間中は強い証拠が要る。
+						const double band = this->effHysteresis(effHyst);
+						const int    dir  = (need < 0.0) ? -1 : 1;
+						if (this->wouldOvershoot(need, band) || !this->allowStep(dir, need, band)) { meterFailStreak = 0; }
 						else
 						{
 						const int    steps  = this->stepsToClose(need);
+						int          moves  = 0;
 						for (int s = 0; s < steps; ++s)
 						{
 							const double curB = expo::brightnessStops(autoCtl.current(), tables_);
@@ -1068,7 +1126,9 @@ errCode captureRunner::loop(void)
 							if (need < 0.0) { moved = (haveHome && curB > homeB) ? autoCtl.stepHome(false, ccm->initial) : autoCtl.darken(); }
 							else            { moved = (haveHome && curB < homeB) ? autoCtl.stepHome(true,  ccm->initial) : autoCtl.brighten(); }
 							if (!moved) { break; }	// 限界に到達
+							++moves;
 						}
+						if (moves > 0) { this->noteStep(dir); }
 						}
 					}
 					meterFailStreak = 0;	// 測光成功
@@ -1080,7 +1140,7 @@ errCode captureRunner::loop(void)
 					// 再開して次フレームで測光を回復させる。移動平均は陳腐化するので破棄する。
 					if (meterFailStreak == 0)
 					{
-						avgBuf.clear();
+						avgBuf.clear(); this->resetStepLock();
 						if (onError_) { { char eb[224]; this->meterLostMsg(mr, eb, sizeof(eb)); onError_(ERR_HGC_RDY_METARING, eb); } }
 					}
 					++meterFailStreak;
@@ -1166,7 +1226,7 @@ errCode captureRunner::loop(void)
 		if (meterFailStreak >= kMaxMeterFail)
 		{
 			meterFailStreak = 0;	// 数え直すだけ。セッションは張り直さない(撮影を止めない)
-			avgBuf.clear();
+			avgBuf.clear(); this->resetStepLock();
 		}
 		// シャッターの連続失敗 → 再接続。相対アンカーなので再アンカー不要(次コマが即[A]起点=overrun許容)。
 		if (shootFailStreak >= kMaxConsecutiveFail)
@@ -1186,7 +1246,7 @@ errCode captureRunner::loop(void)
 			}
 			shootFailStreak = 0;
 			meterFailStreak = 0;
-			avgBuf.clear();
+			avgBuf.clear(); this->resetStepLock();
 			{	// establishでキャッシュclear済 → 次シャッター前に露出を再適用しカメラ状態を合わせる。
 				int t2 = 0;
 				const errCode ae = applyWithRetry(pending, t2);

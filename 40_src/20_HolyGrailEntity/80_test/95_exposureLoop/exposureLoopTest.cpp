@@ -152,6 +152,101 @@ int main()
 	check(stepsToClose(0.05) == 1, "小さな誤差は1ステップ(1/3段)");
 	check(stepsToClose(1.0)  == 1, "1段の誤差でも1ステップ(1/3段)に留める");
 	check(stepsToClose(9.0)  == 1, "大きな誤差でも1ステップ(1/3段)に留める(多段ジャンプ禁止)");
+	// --- 5) 夕日/朝日の振動(2026-07-29,30 実機で再現)と、帯の必要幅 ---
+	//
+	// 【実測(R100)】露出を1歩(1/3段)変えたときの測光の応答 γ = Δlog2(Y)/ΔE は
+	//   中央 1.39(日中) / 1.46(朝日) / 1.27(preNight)。ただし一定ではなく、
+	//   朝日の四分位 1.33〜1.82、単発では 0.93〜2.27 まで散る。
+	//   サムネイルがカメラ現像のJPEGで、ピクチャースタイルが auto のためコマ毎に
+	//   トーンカーブが変わる。ALO は CCAPI に出てこないので切れない。
+	//   (サムネの使い回し=古いフレームは0.0〜0.4%。原因ではないことを確認済み)
+	//
+	// 【なぜ振動するか】刻み q・応答 γ のループは、デッドバンドが γq 以上でないと静止点を
+	//   持たない。1歩動かした後の需要が再び帯を超えるため必ず引き返す。
+	//   γ が散るので、帯は「その場のγ」ではなく「起こりうるγの上側」で決める必要がある。
+	//   γ が一定ならデッドバンド(項目4の wouldOvershoot)だけで止まるが、実機は止まらなかった。
+	//   → 止まらない主因は γ の平均値ではなく **ばらつき** である。
+	{
+		const double kDrift  = 0.03;	// 場面の変化(段/コマ)。夜明けの実測相当
+		const int    kFrames = 200;
+		const int    kMovAvg = 3;		// 夕日/朝日の設定
+		const double kGuard  = 1.0;		// 反転抑制中でも通す急変[段]
+
+		auto wouldOvershoot = [](double need, double band)
+		{
+			const double a = std::fabs(need);
+			if (a >= kStep) { return false; }
+			return (kStep - a) > (band / 2.0);
+		};
+
+		// 実測の散らばりを決定的に再現する(乱数を使わないので結果は毎回同じ)。
+		// 0.93〜2.27 を中央1.46寄りに巡回させる。
+		static const double kGammaSeq[] = {
+			1.46, 1.82, 1.33, 2.27, 1.10, 1.55, 0.93, 1.68, 1.40, 1.95,
+			1.21, 1.60, 1.05, 2.05, 1.35, 1.50, 1.15, 1.75, 1.28, 1.62 };
+		const int kNG = static_cast<int>(sizeof(kGammaSeq) / sizeof(kGammaSeq[0]));
+
+		auto run = [&](double band, bool antiChatter, int& reversals, double& worstErr)
+		{
+			double scene = 0.0, expo = 0.0;
+			int lastDir = 0, lock = 0, lastMoved = 0;
+			std::vector<double> buf;
+			reversals = 0; worstErr = 0.0;
+			for (int f = 0; f < kFrames; ++f)
+			{
+				scene += kDrift;
+				const double gamma    = kGammaSeq[f % kNG];
+				const double err      = scene + expo;			// 真の露出誤差(0=適正)
+				const double sceneRef = gamma * err - expo;		// 現像で γ 倍に見える
+				buf.push_back(sceneRef);
+				while (static_cast<int>(buf.size()) > kMovAvg) { buf.erase(buf.begin()); }
+				double avg = 0.0;
+				for (double v : buf) { avg += v; }
+				avg /= static_cast<double>(buf.size());
+				if (lock > 0) { --lock; }
+				if (f > 3 * kMovAvg && std::fabs(err) > worstErr) { worstErr = std::fabs(err); }
+
+				const double need = -(avg + expo);				// +:明るく -:暗く
+				if (std::fabs(need) <= band / 2.0) { continue; }
+				const int dir = (need < 0.0) ? -1 : 1;
+				if (wouldOvershoot(need, band)) { continue; }
+				if (antiChatter && !(lastDir == 0 || dir == lastDir || lock <= 0
+				                     || std::fabs(need) >= kGuard)) { continue; }
+				expo += dir * kStep;
+				if (lastMoved != 0 && dir != lastMoved) { ++reversals; }
+				lastMoved = dir;
+				lastDir = dir; lock = kMovAvg;
+			}
+		};
+
+		int rNow = 0, rLock = 0, rWide = 0;
+		double eNow = 0.0, eLock = 0.0, eWide = 0.0;
+		run(0.300, false, rNow,  eNow);		// 実機の状態(帯0.3・デッドバンドのみ)
+		run(kStep, true,  rLock, eLock);	// 下限1歩 + 反転抑制
+		run(0.800, true,  rWide, eWide);	// 帯を γ上側×1歩 まで広げた場合
+		char d[240];
+		std::snprintf(d, sizeof(d),
+		              "(反転 実機相当=%d回 / 1歩+抑制=%d回 / 0.8段+抑制=%d回  最大誤差 %.2f / %.2f / %.2f段)",
+		              rNow, rLock, rWide, eNow, eLock, eWide);
+		check(rNow >= 5,             "γがばらつくと帯0.3段では振動する(実機の再現)", d);
+		// 帯=1歩 はしきい値 max(帯/2, 1歩-帯/2) が最小になる点なので、かえって悪化する。
+		// ここを1歩にしてはいけないことを固定する(2026-07-30 に一度この値を入れて否決した)。
+		check(rLock >= rNow,         "帯=1歩(0.333段)は現状より悪化する→採用不可", d);
+		check(rWide == 0,            "帯をγの上側(0.8段)まで広げると止まる", d);
+		check(eWide <= eNow + 0.35,  "帯を広げても追従の遅れは小さい", d);
+	}
+
+	// --- 6) ヒステリシス帯の下限(captureRunner::effHysteresis と同じ値) ---
+	{
+		const double kFloor = 0.8;		// = captureRunner::kMinHysteresisStops
+		auto effHysteresis = [&](double raw) { return (raw > kFloor) ? raw : kFloor; };
+		checkNear(effHysteresis(0.3), kFloor, 1e-9, "夕日/朝日の0.3段は下限0.8段へ引き上げられる");
+		checkNear(effHysteresis(kStep), kFloor, 1e-9, "1歩(0.333段)も下限0.8段へ引き上げられる");
+		checkNear(effHysteresis(1.0), 1.0,    1e-9, "日中の1.0段は下限より広いのでそのまま");
+		// 下限は γ_max×1歩 以上であること(静止点の存在条件)
+		check(kFloor >= 2.27 * kStep - 1e-9, "下限は実測γの上側(2.27)×1歩=0.76段以上");
+	}
+
 
 	std::printf("\n%s (fail=%d)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail);
 	return g_fail == 0 ? 0 : 1;
