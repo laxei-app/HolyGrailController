@@ -153,6 +153,9 @@ private:
 	// 「場面の明るさ」を、その露出で撮ったときのリニア輝度へ戻す(sceneRefFromMetered の逆)。
 	double        linearAtExposure(double sceneRef, const hgc::exposure& e) const;
 	// 目標との差(段)から、このコマで踏む 1/3 段ステップ数を決める(1〜kMaxCatchUpStops相当)。
+	// 1歩(1/3段)動かすとヒステリシス帯の反対側へ飛び出すなら true(=このコマは動かさない)。
+	// 帯が歩幅より狭い制御方法(夕日/朝日=0.3段)で必ず起きていた往復振動の防止。
+	bool          wouldOvershoot(double needStops, double bandStops) const;
 	int           stepsToClose(double needStops) const;
 	// 実際にカメラへ適用できている露出を返す。lastXxxApplied_ は「その軸の設定が成功したときだけ」
 	// 更新されるので、一部の軸だけ失敗した場合も含めて実機の状態を正しく表す。

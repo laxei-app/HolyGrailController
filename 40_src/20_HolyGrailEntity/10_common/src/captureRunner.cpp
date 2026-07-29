@@ -224,6 +224,18 @@ hgc::exposure captureRunner::appliedExposure(void) const
 
 // 目標との差(段)から、このコマで踏む 1/3 段ステップ数を決める。
 //  定常時は1ステップ(=1/3段)に留めてフリッカーを抑え、大きくずれているときだけ速く詰める。
+// 踏み出すと帯の反対側へ飛び出すなら動かない(デッドバンド。2026-07-29 振動の根治)。
+//  ヒステリシス帯より1歩(1/3段)が大きいと、補正のたびに必ず反対側へ越えて往復し続ける。
+//  夕日/朝日は帯0.3段<歩幅0.333段のため必ず振動していた(日中は帯1.0段なので発動しない)。
+//  need=目標までの差[段], band=ヒステリシス全幅[段]。true=このコマは動かさない。
+bool captureRunner::wouldOvershoot(double needStops, double bandStops) const
+{
+	const double a = std::fabs(needStops);
+	if (a >= kExposureStepStops) { return false; }	// 1歩以上ずれている→動かすべき
+	// 1歩動かすと |a - 1歩| だけ反対側へ出る。それが帯の外なら動かさない。
+	return (kExposureStepStops - a) > (bandStops / 2.0);
+}
+
 int captureRunner::stepsToClose(double needStops) const
 {
 	const double a = std::fabs(needStops);
@@ -831,6 +843,10 @@ errCode captureRunner::loop(void)
 					{
 						const double center = expo::linearFromEvBase(preEv, lin0);
 						const double need   = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;
+						// 帯の反対側へ飛び出すだけなら動かない(振動防止)。
+						if (this->wouldOvershoot(need, smooth_.hysteresis)) { meterFailStreak = 0; }
+						else
+						{
 						const int    steps  = this->stepsToClose(need);
 						for (int s = 0; s < steps; ++s)
 						{
@@ -839,6 +855,7 @@ errCode captureRunner::loop(void)
 							if (need < 0.0) { moved = (haveHome && cB > homeB) ? preCtl.stepHome(false, nightExp) : preCtl.darken(); }
 							else            { moved = (haveHome && cB < homeB) ? preCtl.stepHome(true,  nightExp) : preCtl.brighten(); }
 							if (!moved) { break; }
+						}
 						}
 					}
 					meterFailStreak = 0;
@@ -918,6 +935,10 @@ errCode captureRunner::loop(void)
 				{
 					const double center = expo::linearFromEvBase(postEv, lin0);
 					const double need   = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;
+					// 帯の反対側へ飛び出すだけなら動かない(振動防止)。
+					if (this->wouldOvershoot(need, smooth_.hysteresis)) { meterFailStreak = 0; }
+					else
+					{
 					const int    steps  = this->stepsToClose(need);
 					for (int s = 0; s < steps; ++s)
 					{
@@ -926,6 +947,7 @@ errCode captureRunner::loop(void)
 						if (need < 0.0) { moved = (haveHome && curB > homeB) ? postCtl.stepHome(false, goal) : postCtl.darken(); }
 						else            { moved = (haveHome && curB < homeB) ? postCtl.stepHome(true,  goal) : postCtl.brighten(); }
 						if (!moved) { break; }
+					}
 					}
 				}
 				meterFailStreak = 0;
@@ -1016,6 +1038,10 @@ errCode captureRunner::loop(void)
 					{
 						const double center = expo::linearFromEvBase(evT, lin0);
 						const double need   = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;	// +:明るく -:暗く
+						// 帯の反対側へ飛び出すだけなら動かない(振動防止)。
+						if (this->wouldOvershoot(need, effHyst)) { meterFailStreak = 0; }
+						else
+						{
 						const int    steps  = this->stepsToClose(need);
 						for (int s = 0; s < steps; ++s)
 						{
@@ -1024,6 +1050,7 @@ errCode captureRunner::loop(void)
 							if (need < 0.0) { moved = (haveHome && curB > homeB) ? autoCtl.stepHome(false, ccm->initial) : autoCtl.darken(); }
 							else            { moved = (haveHome && curB < homeB) ? autoCtl.stepHome(true,  ccm->initial) : autoCtl.brighten(); }
 							if (!moved) { break; }	// 限界に到達
+						}
 						}
 					}
 					meterFailStreak = 0;	// 測光成功
