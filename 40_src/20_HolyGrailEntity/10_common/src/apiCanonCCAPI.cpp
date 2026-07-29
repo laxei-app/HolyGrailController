@@ -1037,6 +1037,8 @@ void apiCanonCCAPI::meterReset(void)
 	// 再接続でLVセッションが作り直されるため鮮度基準も捨てる(前セッションと比べると誤判定する)。
 	lvFreshPrevMs_  = 0;
 	lvFreshPrevAt_  = nullptr;
+	contentsBase_   = 0xFFFFFFFFu;	// 新規画像検知の基準も取り直す
+	contentsDir_.clear();			// 保存先も取り直す
 }
 
 // カメラの現在の露出のまま、LVヒストグラムからリニア輝度(中央値)を得る。
@@ -1282,94 +1284,135 @@ void apiCanonCCAPI::stopEventPolling(void)
 	auto it = funcList.find(funcNum::EVENT_POLL);
 	if (it == funcList.end() || !(it->second.verb == verb::DEL)) { return; }
 	std::string resp;
-	netThread::httpDelete(it->second.url, resp);
+	netThread::httpDelete(it->second.url, resp);	// 旧方式の残骸掃除(念のため)
 	pollMode_ = pollMode::unknown;	// 次のセッションで待ち方を判定し直す
 }
 
-// event/polling で新規画像(addedcontents)のパスを待つ。空=時間内に来なかった。
-//  【2026-07-28 仕様準拠に修正 (CCAPI Reference 4.13.1)】
-//  ・無指定の polling は「待たずに即返る」のが既定。従来はそれを猛烈に叩いていた(1コマ44〜59回)。
-//    カメラのCCAPIバージョンに応じて ?timeout=short(ver110〜) / ?continue=on(ver100) を使い、
-//    1コマ1回で待てるようにする。判定はセッションで一度だけ(毎回3方式を試すと逆に連打になる)。
-//  ・GET は「イベント取得の開始」で、対の DELETE で停止する状態付きAPI。停止し忘れると以後
-//    503 {"message":"Already started"} で全て失敗する(実機R100で残存を確認)。全滅したときは
-//    一度だけ DELETE で停止してから再判定し、自力で復帰する。
+// 撮影画像が記録されるディレクトリ(絶対URL)を得る。セッション中は変わらないので覚えておく。
+//  /contents → カード → ディレクトリ、と辿る(実験6で両機の動作を確認した経路)。
+//  devicestatus/currentstorage は使わない。R10 は「ホスト無しの相対パス」を返し、
+//  R100 はエンドポイント自体を持たない(ver110非搭載)ため、どちらでも当てにならない。
+std::string apiCanonCCAPI::contentsDirUrl(void)
+{
+	if (!contentsDir_.empty()) { return contentsDir_; }
+	if (!(funcList[funcNum::L_FILE].verb == verb::GET)) { return std::string(); }
+	const std::string host = this->apiHostBase();
+
+	// path 配列の最後の要素を得る(相対で返ってきたらホストを補って絶対URLにする)。
+	auto lastPath = [&](const std::string& url, std::string& out) -> bool
+	{
+		std::string body;
+		if (!netThread::httpGet(url, body) || body.empty()) { return false; }
+		try
+		{
+			auto j = json::parse(body);
+			if (!j.contains("path") || !j.at("path").is_array() || j.at("path").empty()) { return false; }
+			out = j.at("path").back().get<std::string>();
+		}
+		catch (json::exception&) { return false; }
+		if (!out.empty() && out[0] == '/') { out = host + out; }
+		return !out.empty();
+	};
+
+	std::string card, dir;
+	if (!lastPath(funcList[funcNum::L_FILE].url, card)) { return std::string(); }
+	if (!lastPath(card, dir)) { return std::string(); }
+	contentsDir_ = dir;
+	return contentsDir_;
+}
+
+// 新しい画像が記録されるのを待ち、そのパス(ホスト無しの相対パス)を返す。空=時間内に現れなかった。
+//
+// 【2026-07-29 event/polling を使わない方式へ変更(実験で原因を特定)】
+//  event/polling と画像取得(contents)を併用すると R10 が 29〜48回で応答不能になり、
+//  電源を入れ直すまで復帰しなくなる。実験で以下を確認した(いずれも8秒露光・15秒周期):
+//    polling のみ(取得なし)      48コマ 正常
+//    取得のみ(polling不使用)     64コマ 正常  ← 本方式
+//    polling + 取得(毎コマ)      29〜48回目で破綻
+//  そこで polling をやめ、コンテンツ総数の増加で新規画像を検知する。
+//  総数取得は 37バイト/約25〜43ms と軽く(実測 R10/R100)、ファイル数が増えても変わらない。
+//  副次効果: ?timeout の非対応(HTTP400)、continue=on の長時間ブロック、
+//            DELETE 忘れによる 503 "Already started" もすべて発生しなくなる。
 std::string apiCanonCCAPI::waitAddedContents(int budgetMs, const std::function<bool()>& keepGoing, int& triesOut)
 {
 	triesOut = 0;
-	if (!(funcList[funcNum::EVENT_POLL].verb == verb::GET)) { return std::string(); }
-	void* t0 = tool::startElapse();
-	std::string last;
-	bool triedRecover = false;	// このコマで「DELETEして再判定」を試したか(1回だけ)
+	const std::string dir = this->contentsDirUrl();
+	if (dir.empty()) { return std::string(); }
 
+	// 総数とページ数を得る(37バイト程度の軽い応答)。
+	uint32_t lastNum = 0;
+	auto countOf = [&](uint32_t& num, uint32_t& page) -> bool
+	{
+		std::string body;
+		if (!netThread::httpGet(dir + "?type=all&kind=number", body) || body.empty()) { return false; }
+		try
+		{
+			auto j = json::parse(body);
+			if (!j.contains("contentsnumber")) { return false; }
+			num  = j.at("contentsnumber").get<uint32_t>();
+			page = j.contains("pagenumber") ? j.at("pagenumber").get<uint32_t>() : 1;
+		}
+		catch (json::exception&) { return false; }
+		lastNum = num;
+		return true;
+	};
+
+	// 最新の1件(最終ページの末尾)のパスを得る。呼び出し側がホストを足すので相対に揃える。
+	auto newestPath = [&](uint32_t page) -> std::string
+	{
+		std::string body;
+		char q[64];
+		std::snprintf(q, sizeof(q), "?type=all&kind=list&page=%u", static_cast<unsigned>(page));
+		if (!netThread::httpGet(dir + q, body) || body.empty()) { return std::string(); }
+		try
+		{
+			auto j = json::parse(body);
+			const char* key = j.contains("url") ? "url" : "path";	// バージョンで名前が違う
+			if (!j.contains(key) || !j.at(key).is_array() || j.at(key).empty()) { return std::string(); }
+			std::string p = j.at(key).back().get<std::string>();
+			if (p.compare(0, 4, "http") == 0)
+			{	// 絶対URLで返ってきたらホスト部を落とす
+				const size_t h = p.find("//");
+				const size_t s = (h == std::string::npos) ? std::string::npos : p.find('/', h + 2);
+				if (s != std::string::npos) { p = p.substr(s); }
+			}
+			const size_t qm = p.find('?');
+			if (qm != std::string::npos) { p = p.substr(0, qm); }	// クエリは落とす
+			return p;
+		}
+		catch (json::exception&) { return std::string(); }
+	};
+
+	// 基準の総数。未取得(セッション最初のコマ)なら待たずに「今の最新」を直前の撮影画像とみなす。
+	uint32_t base = contentsBase_;
+	if (base == 0xFFFFFFFFu)
+	{
+		uint32_t page = 1;
+		if (!countOf(base, page)) { return std::string(); }
+		contentsBase_ = base;
+		++triesOut;
+		return newestPath(page);
+	}
+
+	void* t0 = tool::startElapse();
 	while (static_cast<int>(tool::getElapse(t0)) < budgetMs)
 	{
 		if (keepGoing && !keepGoing()) { break; }
 		++triesOut;
-
-		std::string body;
-		bool ok = false;
-		if (pollMode_ == pollMode::unknown)
-		{	// 待ち方の判定(セッションで一度だけ)。仕様の新しい順に試す。
-			const pollMode cand[3] = { pollMode::timeoutShort, pollMode::continueOn, pollMode::immediate };
-			for (const pollMode m : cand)
-			{
-				if (netThread::httpGet(pollUrl(m), body)) { pollMode_ = m; ok = true; break; }
-				if (keepGoing && !keepGoing()) { return last; }
-			}
-			if (!ok)
-			{	// 全滅 → イベント取得が開始済みで残っている疑い。一度だけ停止して再判定する。
-				if (!triedRecover)
-				{
-					triedRecover = true;
-					stopEventPolling();		// DELETE(内部で pollMode_ を unknown へ戻す)
-					meterSleep(kPollGapMs, keepGoing);
-					continue;
-				}
-				pollMode_ = pollMode::immediate;	// 以後は無指定で叩く(判定の繰り返しはしない)
-			}
-		}
-		else
+		uint32_t now = 0, page = 1;
+		if (countOf(now, page) && now > base)
 		{
-			ok = netThread::httpGet(pollUrl(pollMode_), body);
+			contentsBase_ = now;	// 次コマの基準
+			return newestPath(page);
 		}
-
-		if (ok && !body.empty())
-		{
-			// {"addedcontents":["/ccapi/.../IMG_xxxx.JPG", ...], ...} を軽量に抽出(DOM化しない)。
-			const size_t key = body.find("\"addedcontents\"");
-			if (key != std::string::npos)
-			{
-				size_t p = body.find('[', key);
-				const size_t e = (p == std::string::npos) ? std::string::npos : body.find(']', p);
-				while (p != std::string::npos && e != std::string::npos)
-				{
-					const size_t q1 = body.find('"', p + 1);
-					if (q1 == std::string::npos || q1 > e) { break; }
-					const size_t q2 = body.find('"', q1 + 1);
-					if (q2 == std::string::npos || q2 > e) { break; }
-					last = body.substr(q1 + 1, q2 - q1 - 1);
-					p = q2;
-				}
-				if (!last.empty())
-				{
-					// CCAPIのJSONはスラッシュを \/ とエスケープして返す。生抽出なので戻す
-					// (戻さないと不正URLになりサムネ取得が404で全滅する。7/27実機で発生)。
-					std::string un; un.reserve(last.size());
-					for (size_t i = 0; i < last.size(); ++i)
-					{
-						if (last[i] == 0x5C && i + 1 < last.size() && last[i + 1] == '/') { continue; }
-						un.push_back(last[i]);
-					}
-					return un;
-				}
-			}
-			// イベントはあったが addedcontents 無し(設定変更等)。
-		}
-		// 見つからなかった/失敗した → 必ず間隔を空ける(連打しない)。
 		meterSleep(kPollGapMs, keepGoing);
 	}
-	return last;
+	// 時間内に増えなかった。ディレクトリが変わった(100CANON→101CANON等)可能性があるので
+	// 覚えた保存先と基準を捨て、次コマで取り直す。
+	contentsDir_.clear();
+	contentsBase_ = 0xFFFFFFFFu;
+	(void)lastNum;
+	return std::string();
 }
 
 // 方式Aの中核(露出非依存の部分): 新規画像の登録を待ち、サムネイルを取得・復号して

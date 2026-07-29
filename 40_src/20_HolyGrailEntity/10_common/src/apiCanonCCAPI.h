@@ -195,6 +195,9 @@ protected:
 	//  無指定は「待たずに即返る」が既定のため、こちらが連打してしまう(1コマ50回前後を実測)。
 	enum class pollMode : uint8_t { unknown = 0, timeoutShort = 1, continueOn = 2, immediate = 3 };
 	pollMode    pollMode_ = pollMode::unknown;
+	std::string contentsDir_;	// 撮影画像の保存先(絶対URL。セッション中は使い回す)
+	std::string contentsDirUrl(void);	// 保存先を /contents から辿って得る(キャッシュ付き)
+	uint32_t    contentsBase_ = 0xFFFFFFFFu;	// 新規画像検知の基準となる総数(0xFFFFFFFF=未取得)
 	std::string pollUrl(pollMode m) const;	// 方式に応じたURL(クエリ付き)を作る
 	void        stopEventPolling(void);		// DELETE /event/polling(イベント取得の停止。セッション終了時)
 	// funcList のURLから "http://host:port" 部分を得る(コンテンツパスの絶対URL化に使う)。
