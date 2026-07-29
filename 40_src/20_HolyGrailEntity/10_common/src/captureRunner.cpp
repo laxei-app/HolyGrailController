@@ -224,6 +224,24 @@ hgc::exposure captureRunner::appliedExposure(void) const
 
 // 目標との差(段)から、このコマで踏む 1/3 段ステップ数を決める。
 //  定常時は1ステップ(=1/3段)に留めてフリッカーを抑え、大きくずれているときだけ速く詰める。
+// 測光失敗のログ文を作る。原因を後から特定できるよう、待ちのどこでつまずいたかまで残す。
+//  step 1=/contents が取れない 2=カード配下が取れない 3=総数が取れない
+//       4=時間内に総数が増えない 5=最新パスが取れない
+//  http 0=応答なし(届いていない) 正数=カメラが断った(その番号) -1=応答の中身が想定外 -2=JSONとして壊れている
+void captureRunner::meterLostMsg(const apiBase::meterResult& mr, char* buf, size_t len) const
+{
+	static const char* kStep[] = { "-", "contents", "dirlist", "number", "nogrow", "list" };
+	const char* st = (mr.waitStep >= 0 && mr.waitStep <= 5) ? kStep[mr.waitStep] : "?";
+	int n = std::snprintf(buf, len, "metering lost (stage=%d %dms try=%d, keep exposure)",
+	                     mr.failStage, mr.rdyMs, mr.tries);
+	if (mr.waitStep != 0 && n > 0 && static_cast<size_t>(n) < len)
+	{
+		n += std::snprintf(buf + n, len - n, " where=%s(%d) http=%d", st, mr.waitStep, mr.waitHttp);
+		if (!mr.waitBody.empty() && n > 0 && static_cast<size_t>(n) < len)
+		{	std::snprintf(buf + n, len - n, " resp=%s", mr.waitBody.c_str()); }
+	}
+}
+
 // 踏み出すと帯の反対側へ飛び出すなら動かない(デッドバンド。2026-07-29 振動の根治)。
 //  ヒステリシス帯より1歩(1/3段)が大きいと、補正のたびに必ず反対側へ越えて往復し続ける。
 //  夕日/朝日は帯0.3段<歩幅0.333段のため必ず振動していた(日中は帯1.0段なので発動しない)。
@@ -862,7 +880,7 @@ errCode captureRunner::loop(void)
 				}
 				else
 				{
-					if (meterFailStreak == 0) { avgBuf.clear(); if (onError_) { { char eb[96]; std::snprintf(eb, sizeof(eb), "metering lost (stage=%d %dms, keep exposure)", mr.failStage, mr.rdyMs); onError_(ERR_HGC_RDY_METARING, eb); } } }
+					if (meterFailStreak == 0) { avgBuf.clear(); if (onError_) { { char eb[224]; this->meterLostMsg(mr, eb, sizeof(eb)); onError_(ERR_HGC_RDY_METARING, eb); } } }
 					++meterFailStreak;
 				}
 				target = preCtl.current();
@@ -954,7 +972,7 @@ errCode captureRunner::loop(void)
 			}
 			else
 			{
-				if (meterFailStreak == 0) { avgBuf.clear(); if (onError_) { { char eb[96]; std::snprintf(eb, sizeof(eb), "metering lost (stage=%d %dms, keep exposure)", mr.failStage, mr.rdyMs); onError_(ERR_HGC_RDY_METARING, eb); } } }
+				if (meterFailStreak == 0) { avgBuf.clear(); if (onError_) { { char eb[224]; this->meterLostMsg(mr, eb, sizeof(eb)); onError_(ERR_HGC_RDY_METARING, eb); } } }
 				++meterFailStreak;
 			}
 			target = postCtl.current();
@@ -1063,7 +1081,7 @@ errCode captureRunner::loop(void)
 					if (meterFailStreak == 0)
 					{
 						avgBuf.clear();
-						if (onError_) { { char eb[96]; std::snprintf(eb, sizeof(eb), "metering lost (stage=%d %dms, keep exposure)", mr.failStage, mr.rdyMs); onError_(ERR_HGC_RDY_METARING, eb); } }
+						if (onError_) { { char eb[224]; this->meterLostMsg(mr, eb, sizeof(eb)); onError_(ERR_HGC_RDY_METARING, eb); } }
 					}
 					++meterFailStreak;
 				}

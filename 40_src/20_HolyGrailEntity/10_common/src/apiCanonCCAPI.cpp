@@ -1292,31 +1292,37 @@ void apiCanonCCAPI::stopEventPolling(void)
 //  /contents → カード → ディレクトリ、と辿る(実験6で両機の動作を確認した経路)。
 //  devicestatus/currentstorage は使わない。R10 は「ホスト無しの相対パス」を返し、
 //  R100 はエンドポイント自体を持たない(ver110非搭載)ため、どちらでも当てにならない。
-std::string apiCanonCCAPI::contentsDirUrl(void)
+std::string apiCanonCCAPI::contentsDirUrl(int& step, int& http, std::string& body)
 {
+	step = 0; http = 0; body.clear();
 	if (!contentsDir_.empty()) { return contentsDir_; }
-	if (!(funcList[funcNum::L_FILE].verb == verb::GET)) { return std::string(); }
+	if (!(funcList[funcNum::L_FILE].verb == verb::GET)) { step = 1; return std::string(); }
 	const std::string host = this->apiHostBase();
 
 	// path 配列の最後の要素を得る(相対で返ってきたらホストを補って絶対URLにする)。
 	auto lastPath = [&](const std::string& url, std::string& out) -> bool
 	{
-		std::string body;
-		if (!netThread::httpGet(url, body) || body.empty()) { return false; }
+		std::string resp;
+		if (!netThread::httpGet(url, resp) || resp.empty())
+		{	// 断られたのか届かなかったのかをログに残す(status=0 は応答なし)
+			netThread::lastHttpFailure(http, body);
+			return false;
+		}
 		try
 		{
-			auto j = json::parse(body);
-			if (!j.contains("path") || !j.at("path").is_array() || j.at("path").empty()) { return false; }
+			auto j = json::parse(resp);
+			if (!j.contains("path") || !j.at("path").is_array() || j.at("path").empty())
+			{	http = -1; body = resp.substr(0, 60); return false; }	// 中身が想定外(-1=解析できた応答だが path が無い)
 			out = j.at("path").back().get<std::string>();
 		}
-		catch (json::exception&) { return false; }
+		catch (json::exception&) { http = -2; body = resp.substr(0, 60); return false; }
 		if (!out.empty() && out[0] == '/') { out = host + out; }
 		return !out.empty();
 	};
 
 	std::string card, dir;
-	if (!lastPath(funcList[funcNum::L_FILE].url, card)) { return std::string(); }
-	if (!lastPath(card, dir)) { return std::string(); }
+	if (!lastPath(funcList[funcNum::L_FILE].url, card)) { step = 1; return std::string(); }
+	if (!lastPath(card, dir))                          { step = 2; return std::string(); }
 	contentsDir_ = dir;
 	return contentsDir_;
 }
@@ -1333,10 +1339,12 @@ std::string apiCanonCCAPI::contentsDirUrl(void)
 //  総数取得は 37バイト/約25〜43ms と軽く(実測 R10/R100)、ファイル数が増えても変わらない。
 //  副次効果: ?timeout の非対応(HTTP400)、continue=on の長時間ブロック、
 //            DELETE 忘れによる 503 "Already started" もすべて発生しなくなる。
-std::string apiCanonCCAPI::waitAddedContents(int budgetMs, const std::function<bool()>& keepGoing, int& triesOut)
+std::string apiCanonCCAPI::waitAddedContents(int budgetMs, const std::function<bool()>& keepGoing,
+                                             int& triesOut, waitDiag& diag)
 {
 	triesOut = 0;
-	const std::string dir = this->contentsDirUrl();
+	diag = waitDiag{};
+	const std::string dir = this->contentsDirUrl(diag.step, diag.http, diag.body);
 	if (dir.empty()) { return std::string(); }
 
 	// 総数とページ数を得る(37バイト程度の軽い応答)。
@@ -1344,15 +1352,16 @@ std::string apiCanonCCAPI::waitAddedContents(int budgetMs, const std::function<b
 	auto countOf = [&](uint32_t& num, uint32_t& page) -> bool
 	{
 		std::string body;
-		if (!netThread::httpGet(dir + "?type=all&kind=number", body) || body.empty()) { return false; }
+		if (!netThread::httpGet(dir + "?type=all&kind=number", body) || body.empty())
+		{	diag.step = 3; netThread::lastHttpFailure(diag.http, diag.body); return false; }
 		try
 		{
 			auto j = json::parse(body);
-			if (!j.contains("contentsnumber")) { return false; }
+			if (!j.contains("contentsnumber")) { diag.step = 3; diag.http = -1; diag.body = body.substr(0, 60); return false; }
 			num  = j.at("contentsnumber").get<uint32_t>();
 			page = j.contains("pagenumber") ? j.at("pagenumber").get<uint32_t>() : 1;
 		}
-		catch (json::exception&) { return false; }
+		catch (json::exception&) { diag.step = 3; diag.http = -2; diag.body = body.substr(0, 60); return false; }
 		lastNum = num;
 		return true;
 	};
@@ -1363,12 +1372,14 @@ std::string apiCanonCCAPI::waitAddedContents(int budgetMs, const std::function<b
 		std::string body;
 		char q[64];
 		std::snprintf(q, sizeof(q), "?type=all&kind=list&page=%u", static_cast<unsigned>(page));
-		if (!netThread::httpGet(dir + q, body) || body.empty()) { return std::string(); }
+		if (!netThread::httpGet(dir + q, body) || body.empty())
+		{	diag.step = 5; netThread::lastHttpFailure(diag.http, diag.body); return std::string(); }
 		try
 		{
 			auto j = json::parse(body);
 			const char* key = j.contains("url") ? "url" : "path";	// バージョンで名前が違う
-			if (!j.contains(key) || !j.at(key).is_array() || j.at(key).empty()) { return std::string(); }
+			if (!j.contains(key) || !j.at(key).is_array() || j.at(key).empty())
+			{	diag.step = 5; diag.http = -1; diag.body = body.substr(0, 60); return std::string(); }
 			std::string p = j.at(key).back().get<std::string>();
 			if (p.compare(0, 4, "http") == 0)
 			{	// 絶対URLで返ってきたらホスト部を落とす
@@ -1380,7 +1391,7 @@ std::string apiCanonCCAPI::waitAddedContents(int budgetMs, const std::function<b
 			if (qm != std::string::npos) { p = p.substr(0, qm); }	// クエリは落とす
 			return p;
 		}
-		catch (json::exception&) { return std::string(); }
+		catch (json::exception&) { diag.step = 5; diag.http = -2; diag.body = body.substr(0, 60); return std::string(); }
 	};
 
 	// 基準の総数。未取得(セッション最初のコマ)なら待たずに「今の最新」を直前の撮影画像とみなす。
@@ -1411,6 +1422,7 @@ std::string apiCanonCCAPI::waitAddedContents(int budgetMs, const std::function<b
 	// 覚えた保存先と基準を捨て、次コマで取り直す。
 	contentsDir_.clear();
 	contentsBase_ = 0xFFFFFFFFu;
+	if (diag.step == 0) { diag.step = 4; diag.http = 0; }	// 通信は通ったが総数が増えなかった
 	(void)lastNum;
 	return std::string();
 }
@@ -1425,7 +1437,11 @@ errCode apiCanonCCAPI::thumbMeterCore(meterResult& out, int budgetMs, const std:
 
 	// ① 新しい画像の登録通知を待つ(カメラが露光後の記録を終えるまで)。
 	int tries = 0;
-	const std::string path = waitAddedContents(budgetMs, keepGoing, tries);
+	waitDiag diag;
+	const std::string path = waitAddedContents(budgetMs, keepGoing, tries, diag);
+	out.waitStep = diag.step;
+	out.waitHttp = diag.http;
+	out.waitBody = diag.body;
 	out.tries  = tries;
 	out.waitMs = static_cast<int>(tool::getElapse(t0));
 	if (path.empty()) { out.failStage = 1; out.rdyMs = out.waitMs; return ERR_HGC_RDY_METARING; }

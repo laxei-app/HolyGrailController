@@ -267,7 +267,8 @@ namespace netThread
         http_t req(url, dummyBody, answer);
         req.type = queType::HTTP_GET;
         auto result = execRequest(&req);            // 実行
-        if (result != ERR_HGC_OK) { return false; }
+        if (result != ERR_HGC_OK) { noteHttpFailure(0, ""); return false; }
+        if (!req.result) { noteHttpFailure(req.status, answer); }	// GET も理由を残す(測光の原因究明用)
         return req.result;                          // 成功
     }
 

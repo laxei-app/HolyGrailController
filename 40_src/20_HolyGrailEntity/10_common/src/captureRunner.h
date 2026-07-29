@@ -155,6 +155,8 @@ private:
 	// 目標との差(段)から、このコマで踏む 1/3 段ステップ数を決める(1〜kMaxCatchUpStops相当)。
 	// 1歩(1/3段)動かすとヒステリシス帯の反対側へ飛び出すなら true(=このコマは動かさない)。
 	// 帯が歩幅より狭い制御方法(夕日/朝日=0.3段)で必ず起きていた往復振動の防止。
+	// 測光失敗のログ文を作る(待ちのどの通信でつまずいたかを含める。2026-07-30 診断)。
+	void          meterLostMsg(const apiBase::meterResult& mr, char* buf, size_t len) const;
 	bool          wouldOvershoot(double needStops, double bandStops) const;
 	int           stepsToClose(double needStops) const;
 	// 実際にカメラへ適用できている露出を返す。lastXxxApplied_ は「その軸の設定が成功したときだけ」
