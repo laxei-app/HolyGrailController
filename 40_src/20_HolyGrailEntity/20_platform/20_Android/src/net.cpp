@@ -100,53 +100,135 @@ namespace net
 			return true;
 		}
 
-		// レスポンスを受信する。Content-Length / chunked を解析し本文完了時点で読み終える。
-		// カメラが Connection: close を無視して keep-alive を保つ場合でも、
-		// 受信タイムアウト(数秒)待ちにならず素早く返す。
-		bool recvResponse(int fd, std::string& raw)
+		// --- HTTP接続の使い回し(keep-alive) ---
+		//
+		// 【2026-07-30】従来はリクエストごとに接続して切っていた(Connection: close + close(fd))。
+		//  カメラ側にTIME_WAITのソケットが溜まり続ける。実機のR10は最後に、
+		//    ping応答あり / UPnP(49152)は開くが3ms→1331msに劣化 / CCAPI(8080)はSYNに無応答
+		//  という状態になった。「拒否」ではなく「無応答」= 待ち受けキューが埋まっている signature。
+		//  そこで1本を張りっぱなしにして使い回す。
+		//  net の HTTP は netThread の単一ワーカーからしか呼ばれないので排他は不要。
+		//
+		// 【1度目の実装(4ae8473)で入れた不具合と、その対策】
+		//  応答を1つ分きっかり取り出せておらず、読み残しを次の応答として読んでしまい、
+		//  別のリクエストの応答が返る事故を起こした(測光失敗 0%→15%)。今回は
+		//   ・応答の切り出しを readOneResponse に一本化し、使った分だけバッファから消す
+		//   ・100 Continue 等の中間応答(1xx)は読み飛ばして本応答を待つ
+		//   ・chunked は先頭からチャンク長を辿って終端を確定する(本文中の "0CRLFCRLF" を
+		//     誤検出しない。サムネイルはバイナリなので必須)
+		//   ・長さが確定しなかった応答を受けたら接続を捨てる(従来動作に落ちるだけ)
+		//  として直した。
+		int         g_kaFd   = -1;
+		std::string g_kaHost;
+		int         g_kaPort = 0;
+		std::string g_kaBuf;	// 受信の持ち越し(接続に紐づく。kaCloseで捨てる)
+
+		void kaClose(void)
 		{
-			raw.clear();
-			char buf[4096];
-			size_t    headerEnd = std::string::npos;
-			long long contentLen = -1;	// -1: 不明
-			bool      chunked = false;
+			if (g_kaFd >= 0) { close(g_kaFd); g_kaFd = -1; }
+			g_kaHost.clear();
+			g_kaPort = 0;
+			g_kaBuf.clear();
+		}
+
+		// 使い回せる接続を返す(無ければ張る)。reused=true なら既存の接続。
+		int kaGet(const std::string& host, int port, bool& reused)
+		{
+			if (g_kaFd >= 0 && g_kaHost == host && g_kaPort == port) { reused = true; return g_kaFd; }
+			kaClose();
+			reused = false;
+			const int fd = tcpConnect(host, port);
+			if (fd >= 0) { g_kaFd = fd; g_kaHost = host; g_kaPort = port; }
+			return fd;
+		}
+
+		// chunked 本文の終端位置を求める。先頭からチャンク長を辿るので、本文の中身が
+		// 終端パターンと同じバイト列でも誤検出しない。
+		//  return : true=終端まで揃っている(endOut=応答全体の終端位置) / false=まだ足りない
+		bool chunkedEnd(const std::string& b, size_t pos, size_t& endOut)
+		{
 			for (;;)
 			{
-				if (g_break.load()) { g_break.store(false); return false; }
+				const size_t eol = b.find("\r\n", pos);
+				if (eol == std::string::npos) { return false; }
+				const size_t sz = static_cast<size_t>(std::strtoul(b.substr(pos, eol - pos).c_str(), nullptr, 16));
+				const size_t dataStart = eol + 2;
+				if (sz == 0)
+				{	// 終端チャンク。トレーラを読み飛ばして最後の CRLF まで
+					const size_t e = b.find("\r\n", dataStart);
+					if (e == std::string::npos) { return false; }
+					endOut = e + 2;
+					return true;
+				}
+				if (b.size() < dataStart + sz + 2) { return false; }
+				pos = dataStart + sz + 2;
+			}
+		}
 
-				// ヘッダ受信後、完了したか判定する
+		// 応答をちょうど1つ取り出す。使った分だけ buf から消し、残りは次の応答のために残す。
+		//  framed : Content-Length / chunked で本文の終わりが確定したか(false=接続は使い回せない)
+		//  return : ステータスコード(0=取り出せなかった)
+		int readOneResponse(int fd, std::string& buf, std::string& header, std::string& body, bool& framed)
+		{
+			framed = false;
+			header.clear();
+			body.clear();
+			size_t    headerEnd = std::string::npos;
+			long long contentLen = -1;
+			bool      chunked = false;
+			size_t    total = 0;
+
+			for (;;)
+			{
+				if (g_break.load()) { g_break.store(false); return 0; }
+
 				if (headerEnd == std::string::npos)
 				{
-					headerEnd = raw.find("\r\n\r\n");
+					headerEnd = buf.find("\r\n\r\n");
 					if (headerEnd != std::string::npos)
 					{
-						std::string h = raw.substr(0, headerEnd);
+						std::string h = buf.substr(0, headerEnd);
 						for (auto& c : h) { c = static_cast<char>(::tolower(c)); }
 						if (h.find("transfer-encoding: chunked") != std::string::npos) { chunked = true; }
-						size_t cl = h.find("content-length:");
+						const size_t cl = h.find("content-length:");
 						if (cl != std::string::npos) { contentLen = std::atoll(h.c_str() + cl + 15); }
 					}
 				}
 				if (headerEnd != std::string::npos)
 				{
-					size_t bodyStart = headerEnd + 4;
+					const size_t bodyStart = headerEnd + 4;
 					if (chunked)
-					{	// 終端チャンク "0\r\n\r\n" を受信したら完了
-						if (raw.find("\r\n0\r\n\r\n", bodyStart) != std::string::npos ||
-						    raw.compare(bodyStart, 5, "0\r\n\r\n") == 0) { break; }
+					{
+						size_t e = 0;
+						if (chunkedEnd(buf, bodyStart, e)) { total = e; framed = true; break; }
 					}
 					else if (contentLen >= 0)
-					{	// Content-Length 分受信したら完了
-						if (static_cast<long long>(raw.size() - bodyStart) >= contentLen) { break; }
+					{
+						if (buf.size() - bodyStart >= static_cast<size_t>(contentLen))
+						{ total = bodyStart + static_cast<size_t>(contentLen); framed = true; break; }
 					}
-					// 長さ不明(Content-Lengthもchunkedも無い)時は EOF まで読む
+					// 長さ不明(Content-Lengthもchunkedも無い) → EOF まで読む
 				}
 
-				ssize_t n = recv(fd, buf, sizeof(buf), 0);
-				if (n > 0) { raw.append(buf, static_cast<size_t>(n)); }
-				else       { break; }	// EOF / エラー / タイムアウト
+				char tmp[4096];
+				const ssize_t n = recv(fd, tmp, sizeof(tmp), 0);
+				if (n > 0) { buf.append(tmp, static_cast<size_t>(n)); continue; }
+
+				// EOF / タイムアウト / エラー
+				if (headerEnd == std::string::npos) { return 0; }	// ヘッダすら揃っていない
+				total  = buf.size();
+				framed = false;
+				break;
 			}
-			return true;
+
+			header = buf.substr(0, headerEnd);
+			body   = buf.substr(headerEnd + 4, total - (headerEnd + 4));
+			buf.erase(0, total);	// 使った分だけ消す。残りは次の応答
+
+			int code = 0;
+			const size_t sp = header.find(' ');
+			if (sp != std::string::npos) { code = std::atoi(header.substr(sp + 1, 3).c_str()); }
+			return code;
 		}
 
 		// chunked 転送をデコードする。
@@ -183,52 +265,68 @@ namespace net
 			int port = 80;
 			if (!parseUrl(url, host, port, path)) { return 0; }
 
-			int fd = tcpConnect(host, port);
-			if (fd < 0)
+			// keep-alive で1本を使い回す。相手が既に閉じていたら張り直して1回だけやり直す。
+			for (int attempt = 0; attempt < 2; ++attempt)
 			{
-				__android_log_print(ANDROID_LOG_WARN, HGE_LOG_TAG,
-				                    "net: connect failed host=%s port=%d errno=%d(%s)",
-				                    host.c_str(), port, errno, std::strerror(errno));
-				return 0;
+				bool reused = false;
+				const int fd = kaGet(host, port, reused);
+				if (fd < 0)
+				{
+					__android_log_print(ANDROID_LOG_WARN, HGE_LOG_TAG,
+					                    "net: connect failed host=%s port=%d errno=%d(%s)",
+					                    host.c_str(), port, errno, std::strerror(errno));
+					return 0;
+				}
+
+				std::string req = method + " " + path + " HTTP/1.1\r\n";
+				req += "Host: " + host + ":" + std::to_string(port) + "\r\n";
+				req += "Connection: keep-alive\r\n";
+				if (hasBody)
+				{
+					req += "Content-Type: application/json\r\n";
+					req += "Content-Length: " + std::to_string(body.size()) + "\r\n";
+				}
+				req += "\r\n";
+				if (hasBody) { req += body; }
+
+				if (!sendAll(fd, req.c_str(), req.size()))
+				{	// 使い回した接続が既に閉じられていた → 張り直して1回だけやり直す
+					kaClose();
+					if (reused) { continue; }
+					return 0;
+				}
+
+				// 100 Continue 等の中間応答(1xx)は読み飛ばして本応答を待つ。
+				std::string header, content;
+				bool framed = false;
+				int  code   = 0;
+				for (int guard = 0; guard < 4; ++guard)
+				{
+					code = readOneResponse(fd, g_kaBuf, header, content, framed);
+					if (code < 100 || code >= 200) { break; }
+				}
+				if (code == 0)
+				{
+					kaClose();
+					if (reused) { continue; }	// 閉じられていた可能性 → 張り直す
+					return 0;
+				}
+
+				std::string lower = header;
+				for (auto& c : lower) { c = static_cast<char>(::tolower(c)); }
+				if (lower.find("transfer-encoding: chunked") != std::string::npos)
+				{
+					content = dechunk(content);
+				}
+
+				// 本文の終わりが確定していない、または相手が閉じると言っているときは使い回せない。
+				if (!framed || lower.find("connection: close") != std::string::npos) { kaClose(); }
+
+				response = content;
+				g_lastHttpStatus = code;
+				return code;
 			}
-
-			std::string req = method + " " + path + " HTTP/1.1\r\n";
-			req += "Host: " + host + ":" + std::to_string(port) + "\r\n";
-			req += "Connection: close\r\n";
-			if (hasBody)
-			{
-				req += "Content-Type: application/json\r\n";
-				req += "Content-Length: " + std::to_string(body.size()) + "\r\n";
-			}
-			req += "\r\n";
-			if (hasBody) { req += body; }
-
-			if (!sendAll(fd, req.c_str(), req.size())) { close(fd); return 0; }
-
-			std::string raw;
-			recvResponse(fd, raw);
-			close(fd);
-
-			// ヘッダと本体を分離
-			size_t he = raw.find("\r\n\r\n");
-			std::string header = (he == std::string::npos) ? raw : raw.substr(0, he);
-			std::string content = (he == std::string::npos) ? std::string() : raw.substr(he + 4);
-
-			// ステータスコード
-			int code = 0;
-			size_t sp = header.find(' ');
-			if (sp != std::string::npos) { code = std::atoi(header.substr(sp + 1, 3).c_str()); }
-
-			// chunked 判定(ヘッダを小文字化して検査)
-			std::string lower = header;
-			for (auto& c : lower) { c = static_cast<char>(::tolower(c)); }
-			if (lower.find("transfer-encoding: chunked") != std::string::npos)
-			{
-				content = dechunk(content);
-			}
-			response = content;
-			g_lastHttpStatus = code;
-			return code;
+			return 0;
 		}
 	} // anonymous namespace
 
