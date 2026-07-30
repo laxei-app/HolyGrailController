@@ -203,6 +203,11 @@ protected:
 	enum class newImageDetect : uint8_t { contentsCount = 0, eventPolling = 1 };
 	static constexpr newImageDetect kNewImageDetect = newImageDetect::contentsCount;
 
+	// 露光終了からカードを触り始めるまでの待ち[ms](2026-07-30 の実験)。
+	// カメラが記録中(busy)の間にこちらからアクセスするのが不具合の引き金か確かめるため。
+	// 0 にすると従来どおり露光終了直後から取りに行く。測光の予算(kThumbBudgetMs)から引かれる。
+	static constexpr int kCardSettleMs = 3000;
+
 	// 新規画像が記録されるのを待ってそのパスを返す。空=時間内に現れなかった(理由は diag)。
 	std::string waitAddedContents(int budgetMs, const std::function<bool()>& keepGoing,
 	                              int& triesOut, waitDiag& diag);

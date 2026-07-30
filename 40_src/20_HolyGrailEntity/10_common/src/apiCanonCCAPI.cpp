@@ -1361,6 +1361,13 @@ std::string apiCanonCCAPI::waitAddedByCount(int budgetMs, const std::function<bo
 {
 	triesOut = 0;
 	diag = waitDiag{};
+
+	// 露光が終わってもカメラはまだ記録中(RAWで約25MB)。その最中にカードを叩くのが
+	// 引き金ではないかを確かめるため、kCardSettleMs だけ待ってから触りに行く
+	// (2026-07-30 の実験。実測の書き込み完了は露光終了から中央2.0〜2.6秒)。
+	// 待つぶん総数ポーリングの回数も減る(実測10〜13回 → 1〜2回になる見込み)。
+	this->meterSleep(kCardSettleMs, keepGoing);
+
 	const std::string dir = this->contentsDirUrl(diag.step, diag.http, diag.body);
 	if (dir.empty()) { return std::string(); }
 
