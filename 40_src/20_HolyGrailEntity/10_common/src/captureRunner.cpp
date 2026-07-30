@@ -224,6 +224,53 @@ hgc::exposure captureRunner::appliedExposure(void) const
 
 // 目標との差(段)から、このコマで踏む 1/3 段ステップ数を決める。
 //  定常時は1ステップ(=1/3段)に留めてフリッカーを抑え、大きくずれているときだけ速く詰める。
+// シャッターを切る。カメラが「記録中(503 Device busy)」を返している間は、そのコマの
+// 締め切りまで粘る。
+//
+// 【2026-07-30 R10 実機で判明】RAW記録中のカメラは actShutter に 503 {"message":"Device busy"}
+//  を返す。従来は POST 2回を間髪入れず投げて即失敗扱い(待ち実質0秒)、それが3コマ連続すると
+//  切断と判定していた。実測では 10:09:34 に 503 が返った次のコマ(10:09:37)は正常に撮れており、
+//  数秒粘れば1コマも落とさずに済んでいた。30秒で「カメラが見つかりません」になっていた。
+//
+//  もう一点、503 は「カメラが応答している」証拠なので接続断に数えてはいけない。従来は数えて
+//  いたため、つながっているカメラを切断と判定していた(直後のログに「再接続成功」が並ぶ)。
+//  接続断として数えるのは応答が返らなかった場合(status<=0)だけにする。
+errCode captureRunner::fireShutter(const hgc::exposure& shotExp, double intervalSec, int& failStreak)
+{
+	// そのコマに使える時間 = 周期 - 露光 - 余裕。次のコマの時刻を追い越さないための上限。
+	double ssSec = expo::parseValue(shotExp.ss, expo::expoKind::ss);
+	if (!(ssSec > 0.0)) { ssSec = 0.0; }
+	int budgetMs = static_cast<int>(intervalSec * 1000.0 - ssSec * 1000.0) - kShutterMarginMs;
+	if (budgetMs > kShutterBusyMaxMs) { budgetMs = kShutterBusyMaxMs; }
+	if (budgetMs < 0)                 { budgetMs = 0; }
+
+	void*   t0     = tool::startElapse();
+	errCode err    = ERR_HGC_OK;
+	int     status = 0;
+	int     tries  = 0;
+	std::string body;
+	for (;;)
+	{
+		++tries;
+		err = cameraController::actShutter(*dev_);
+		if (err == ERR_HGC_OK) { failStreak = 0; return err; }
+		netThread::lastHttpFailure(status, body);
+		if (!running_.load())                                 { break; }
+		if (static_cast<int>(tool::getElapse(t0)) >= budgetMs) { break; }
+		this->interruptibleSleep(kShutterRetryMs);
+	}
+	if (onError_)
+	{
+		char eb[240];
+		std::snprintf(eb, sizeof(eb), "%s (try=%d %dms budget=%dms)",
+		              this->withHttpDetail("actShutter").c_str(), tries,
+		              static_cast<int>(tool::getElapse(t0)), budgetMs);
+		onError_(err, eb);
+	}
+	if (status <= 0) { ++failStreak; }	// 応答なし=本当に届いていない。503等は接続断ではない
+	return err;
+}
+
 // 測光失敗のログ文を作る。原因を後から特定できるよう、待ちのどこでつまずいたかまで残す。
 //  step 1=/contents が取れない 2=カード配下が取れない 3=総数が取れない
 //       4=時間内に総数が増えない 5=最新パスが取れない
@@ -741,10 +788,7 @@ errCode captureRunner::loop(void)
 			}
 			shotExp = pending;
 			shutterMs = tool::epochMs();	// シャッター投下直前の壁時計(ms精度)
-			err = cameraController::actShutter(*dev_);
-			if (err != ERR_HGC_OK) { err = cameraController::actShutter(*dev_); }	// シャッター失敗は1回だけリトライ
-			if (err != ERR_HGC_OK) { if (onError_) { onError_(err, this->withHttpDetail("actShutter")); } ++shootFailStreak; }
-			else { shootFailStreak = 0; }
+			err = this->fireShutter(shotExp, interval, shootFailStreak);
 			++frame;
 			if (onProgress_) { onProgress_(progressInfo{ frame, total, static_cast<int>(endSec - now), static_cast<int>(now - startSec) }); }
 			// 周期-リードまで待つ。ここまで待てば露光は終わりカメラは記録も終えている(=設定が通る)。

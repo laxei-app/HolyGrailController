@@ -242,7 +242,24 @@ errCode apiCanonCCAPI::startShooting(void)
             return ERR_HGC_OK;
         }
     }
+    // 全部断られた。ただし「既に開始済み」なだけなら成功として扱う。
+    //
+    // 【2026-07-30 R10 実機】開始済みの liveview へ再度 POST すると 503 {"message":"Device busy"}
+    //  を返す(event/polling の "Already started" と同じ構図)。従来はここで失敗として返し、
+    //  撮影中の再接続がこの一手だけで完全に塞がれていた(カメラは生きていて、同時刻に
+    //  再接続自体は成功しているのにシャッターへ進めない)。
+    //  推測で握りつぶすのではなく、ライブビューが実際に流れているかをカメラに聞いて判断する。
+    if (this->liveViewAlive()) { return ERR_HGC_OK; }
     return ERR_HGC_HTTP_POST;
+}
+
+// ライブビューが実際に動いているか(軽い ?kind=info で確認する)。
+bool apiCanonCCAPI::liveViewAlive(void)
+{
+    if (!(funcList[funcNum::LIVE_DETAIL].verb == verb::GET)) { return false; }
+    std::string body;
+    if (!netThread::httpGet(funcList[funcNum::LIVE_DETAIL].url + "?kind=info", body)) { return false; }
+    return !body.empty();
 }
 
 // シャッターを切る準備

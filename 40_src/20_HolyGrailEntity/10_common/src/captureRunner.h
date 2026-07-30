@@ -94,6 +94,11 @@ public:
 	// --- 接続維持・再接続のパラメータ ---
 	static constexpr int  kKeepAliveSec        = 60;	// 撮影窓まで待機中、無害なGETを送る周期[秒]
 	static constexpr int  kWaitMaxFail         = 2;		// 待機中keepAliveがこの回数連続失敗で先回り再接続(健全性チェック)
+	// シャッターが 503(記録中)で断られたときの粘り方(2026-07-30)。カメラが応答している間は
+	// そのコマの締め切りまで再試行する。締め切り = 周期 - 露光 - 余裕(上限あり)。
+	static constexpr int  kShutterRetryMs     = 300;	// 再試行の間隔
+	static constexpr int  kShutterMarginMs    = 1000;	// 次コマへ食い込まないための余裕
+	static constexpr int  kShutterBusyMaxMs   = 8000;	// 粘る上限(長周期でも延々待たない)
 	static constexpr int  kMaxConsecutiveFail  = 3;		// 撮影(シャッター)失敗が連続したら再接続を試みる回数
 	static constexpr int  kMaxMeterFail        = 5;		// 測光(ライブビュー)が連続失敗したら再establishする回数。
 														// シャッターは通るがライブビューだけ死ぬと、従来は露出が固定のまま復帰しなかった(その対策)。
@@ -174,6 +179,8 @@ private:
 	// 1歩(1/3段)動かすとヒステリシス帯の反対側へ飛び出すなら true(=このコマは動かさない)。
 	// 帯が歩幅より狭い制御方法(夕日/朝日=0.3段)で必ず起きていた往復振動の防止。
 	// 測光失敗のログ文を作る(待ちのどの通信でつまずいたかを含める。2026-07-30 診断)。
+	// シャッターを切る(503の間は締め切りまで粘る。503は接続断に数えない)。
+	errCode       fireShutter(const hgc::exposure& shotExp, double intervalSec, int& failStreak);
 	void          meterLostMsg(const apiBase::meterResult& mr, char* buf, size_t len) const;
 	// ヒステリシス帯の実効値(1歩=1/3段を下限とする。設定は書き換えない)。
 	double        effHysteresis(double raw) const;
