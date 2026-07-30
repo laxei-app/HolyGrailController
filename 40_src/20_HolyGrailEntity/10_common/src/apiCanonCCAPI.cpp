@@ -1356,8 +1356,8 @@ std::string apiCanonCCAPI::contentsDirUrl(int& step, int& http, std::string& bod
 //  総数取得は 37バイト/約25〜43ms と軽く(実測 R10/R100)、ファイル数が増えても変わらない。
 //  副次効果: ?timeout の非対応(HTTP400)、continue=on の長時間ブロック、
 //            DELETE 忘れによる 503 "Already started" もすべて発生しなくなる。
-std::string apiCanonCCAPI::waitAddedContents(int budgetMs, const std::function<bool()>& keepGoing,
-                                             int& triesOut, waitDiag& diag)
+std::string apiCanonCCAPI::waitAddedByCount(int budgetMs, const std::function<bool()>& keepGoing,
+                                           int& triesOut, waitDiag& diag)
 {
 	triesOut = 0;
 	diag = waitDiag{};
@@ -1442,6 +1442,112 @@ std::string apiCanonCCAPI::waitAddedContents(int budgetMs, const std::function<b
 	if (diag.step == 0) { diag.step = 4; diag.http = 0; }	// 通信は通ったが総数が増えなかった
 	(void)lastNum;
 	return std::string();
+}
+
+// 新規画像の検知。方式は kNewImageDetect で切り替える(両方式ともコードを残してある)。
+std::string apiCanonCCAPI::waitAddedContents(int budgetMs, const std::function<bool()>& keepGoing,
+                                            int& triesOut, waitDiag& diag)
+{
+	triesOut = 0;
+	diag = waitDiag{};
+	return (kNewImageDetect == newImageDetect::eventPolling)
+	     ? this->waitAddedByEvent(budgetMs, keepGoing, triesOut, diag)
+	     : this->waitAddedByCount(budgetMs, keepGoing, triesOut, diag);
+}
+
+// 【方式B】event/polling で新規画像(addedcontents)のパスを待つ。空=時間内に来なかった。
+//
+// 2026-07-29 に一度廃止した方式だが、2026-07-30 のカメラFW更新を受けて再評価するため復活させた。
+// 廃止の理由は「event/polling と contents 取得の併用で R10 が 29〜48コマで応答不能になる」と
+// いう実験結果(旧FW)。一方この方式には利点がある: **ディレクトリを一切読まない**。
+// 総数ポーリング方式は1コマあたり 10〜13回 ディレクトリを読みに行くため、RAW(約25MB)の書き込み中の
+// カードを繰り返し叩く。2026-07-30 に R10 が書き出しを止めた事象(250コマ目で突然、劣化の前兆なし、
+// 無負荷で1分放置しても復帰せず)の引き金として、このカード接触が疑われている。
+//
+// 仕様(CCAPI Reference 4.13.1):
+//  ・GET は「イベント取得の開始」で、対の DELETE で停止する状態付きAPI。停止し忘れると以後
+//    503 {"message":"Already started"} で全滅する(旧FWのR100で残存を実機確認)。
+//  ・待ち方は ver110〜 ?timeout=short / ver100 ?continue=on。無指定は「待たずに即返る」ため
+//    指定しないと連打になる(旧実装は1コマ44〜59回叩いていた)。判定はセッションで一度だけ。
+std::string apiCanonCCAPI::waitAddedByEvent(int budgetMs, const std::function<bool()>& keepGoing,
+                                           int& triesOut, waitDiag& diag)
+{
+	if (!(funcList[funcNum::EVENT_POLL].verb == verb::GET)) { diag.step = 1; return std::string(); }
+	void* t0 = tool::startElapse();
+	std::string last;
+	bool triedRecover = false;	// このコマで「DELETEして再判定」を試したか(1回だけ)
+
+	while (static_cast<int>(tool::getElapse(t0)) < budgetMs)
+	{
+		if (keepGoing && !keepGoing()) { break; }
+		++triesOut;
+
+		std::string body;
+		bool ok = false;
+		if (pollMode_ == pollMode::unknown)
+		{	// 待ち方の判定(セッションで一度だけ)。仕様の新しい順に試す。
+			const pollMode cand[3] = { pollMode::timeoutShort, pollMode::continueOn, pollMode::immediate };
+			for (const pollMode m : cand)
+			{
+				if (netThread::httpGet(pollUrl(m), body)) { pollMode_ = m; ok = true; break; }
+				if (keepGoing && !keepGoing()) { return last; }
+			}
+			if (!ok)
+			{	// 全滅 → イベント取得が開始済みで残っている疑い。一度だけ停止して再判定する。
+				if (!triedRecover)
+				{
+					triedRecover = true;
+					stopEventPolling();		// DELETE(内部で pollMode_ を unknown へ戻す)
+					meterSleep(kPollGapMs, keepGoing);
+					continue;
+				}
+				pollMode_ = pollMode::immediate;	// 以後は無指定で叩く(判定の繰り返しはしない)
+			}
+		}
+		else
+		{
+			ok = netThread::httpGet(pollUrl(pollMode_), body);
+		}
+
+		if (!ok) { netThread::lastHttpFailure(diag.http, diag.body); diag.step = 6; }
+		if (ok && !body.empty())
+		{
+			// {"addedcontents":["/ccapi/.../IMG_xxxx.CR3", ...], ...} を軽量に抽出(DOM化しない)。
+			const size_t key = body.find("\"addedcontents\"");
+			if (key != std::string::npos)
+			{
+				size_t p = body.find('[', key);
+				const size_t e = (p == std::string::npos) ? std::string::npos : body.find(']', p);
+				while (p != std::string::npos && e != std::string::npos)
+				{
+					const size_t q1 = body.find('"', p + 1);
+					if (q1 == std::string::npos || q1 > e) { break; }
+					const size_t q2 = body.find('"', q1 + 1);
+					if (q2 == std::string::npos || q2 > e) { break; }
+					last = body.substr(q1 + 1, q2 - q1 - 1);
+					p = q2;
+				}
+				if (!last.empty())
+				{
+					// CCAPIのJSONはスラッシュを \/ とエスケープして返す。生抽出なので戻す
+					// (戻さないと不正URLになりサムネ取得が404で全滅する。7/27実機で発生)。
+					std::string un; un.reserve(last.size());
+					for (size_t i = 0; i < last.size(); ++i)
+					{
+						if (last[i] == 0x5C && i + 1 < last.size() && last[i + 1] == '/') { continue; }
+						un.push_back(last[i]);
+					}
+					diag = waitDiag{};	// 成功
+					return un;
+				}
+			}
+			// イベントはあったが addedcontents 無し(設定変更等)。
+		}
+		// 見つからなかった/失敗した → 必ず間隔を空ける(連打しない)。
+		meterSleep(kPollGapMs, keepGoing);
+	}
+	if (diag.step == 0) { diag.step = 7; }	// 時間内に通知が来なかった
+	return last;
 }
 
 // 方式Aの中核(露出非依存の部分): 新規画像の登録を待ち、サムネイルを取得・復号して

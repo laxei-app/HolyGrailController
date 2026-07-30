@@ -191,9 +191,24 @@ protected:
 	errCode thumbMeterCore(meterResult& out, int budgetMs, const std::function<bool()>& keepGoing);
 	// 新規画像待ちの診断(どの通信でつまずいたか)。meterResult へそのまま載せる。
 	struct waitDiag { int step = 0; int http = 0; std::string body; };
+	// 新規画像の検知方式(2026-07-30 切り替え式に戻した。両方のコードを残してある)。
+	//  contentsCount: コンテンツ総数の増加で検知。ディレクトリを1コマ10〜13回読む。
+	//  eventPolling : カメラからの登録通知を待つ。**ディレクトリを一切読まない**。
+	// RAW(約25MB)の書き込み中にカードを繰り返し叩くのが R10 の書き出し停止(2026-07-30)の
+	// 引き金ではないか、という仮説の検証のため eventPolling を選択中。
+	// 戻すときはここを contentsCount にするだけでよい。
+	enum class newImageDetect : uint8_t { contentsCount = 0, eventPolling = 1 };
+	static constexpr newImageDetect kNewImageDetect = newImageDetect::eventPolling;
+
 	// 新規画像が記録されるのを待ってそのパスを返す。空=時間内に現れなかった(理由は diag)。
 	std::string waitAddedContents(int budgetMs, const std::function<bool()>& keepGoing,
 	                              int& triesOut, waitDiag& diag);
+	// 方式A: コンテンツ総数の増加で検知する
+	std::string waitAddedByCount(int budgetMs, const std::function<bool()>& keepGoing,
+	                             int& triesOut, waitDiag& diag);
+	// 方式B: event/polling の登録通知で検知する
+	std::string waitAddedByEvent(int budgetMs, const std::function<bool()>& keepGoing,
+	                             int& triesOut, waitDiag& diag);
 	// event/polling の待ち方(CCAPI Reference 4.13.1)。カメラのCCAPIバージョンで指定方法が違う:
 	//  ver110〜: ?timeout=short(約10秒待つ) / ver100: ?continue=on(100 Continueで待つ)
 	//  無指定は「待たずに即返る」が既定のため、こちらが連打してしまう(1コマ50回前後を実測)。
