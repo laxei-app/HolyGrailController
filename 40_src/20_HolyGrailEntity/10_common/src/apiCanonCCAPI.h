@@ -194,11 +194,14 @@ protected:
 	// 新規画像の検知方式(2026-07-30 切り替え式に戻した。両方のコードを残してある)。
 	//  contentsCount: コンテンツ総数の増加で検知。ディレクトリを1コマ10〜13回読む。
 	//  eventPolling : カメラからの登録通知を待つ。**ディレクトリを一切読まない**。
-	// RAW(約25MB)の書き込み中にカードを繰り返し叩くのが R10 の書き出し停止(2026-07-30)の
-	// 引き金ではないか、という仮説の検証のため eventPolling を選択中。
-	// 戻すときはここを contentsCount にするだけでよい。
+	// 【2026-07-30 実機結果】eventPolling を試したところ症状が変わった:
+	//  ・Canon の Err70(撮影処理の異常。電源かバッテリの入れ直しを促す表示)が一瞬出た
+	//  ・「カメラが見つかりません」も出た。どちらもシャッターボタンで復帰したが、
+	//    アプリからは復帰できず、元の症状と別物になった。
+	// カード接触は減るはずだが改善しなかったので contentsCount へ戻す。
+	// 切り替えはこの定数1つ。両方式のコードは残してある。
 	enum class newImageDetect : uint8_t { contentsCount = 0, eventPolling = 1 };
-	static constexpr newImageDetect kNewImageDetect = newImageDetect::eventPolling;
+	static constexpr newImageDetect kNewImageDetect = newImageDetect::contentsCount;
 
 	// 新規画像が記録されるのを待ってそのパスを返す。空=時間内に現れなかった(理由は diag)。
 	std::string waitAddedContents(int budgetMs, const std::function<bool()>& keepGoing,

@@ -1437,10 +1437,20 @@ std::string apiCanonCCAPI::waitAddedByCount(int budgetMs, const std::function<bo
 	}
 	// 時間内に増えなかった。ディレクトリが変わった(100CANON→101CANON等)可能性があるので
 	// 覚えた保存先と基準を捨て、次コマで取り直す。
-	contentsDir_.clear();
-	contentsBase_ = 0xFFFFFFFFu;
+	// 総数が一度でも読めていたなら、その値を次コマの基準にする。
+	// 【2026-07-30 実機】ここで基準を捨てると、次コマは「基準未取得」の近道に入り
+	//  待たずに“今の最新”を返してしまう。カメラが書き出しを止めていた間、同じ画像を
+	//  何度も測光していた(hs=2a831284 が繰り返し出る)。古い画像で露出が動くので直す。
+	if (lastNum != 0)
+	{
+		contentsBase_ = lastNum;
+	}
+	else
+	{	// 一度も読めていない = 保存先そのものが怪しい。取り直させる。
+		contentsDir_.clear();
+		contentsBase_ = 0xFFFFFFFFu;
+	}
 	if (diag.step == 0) { diag.step = 4; diag.http = 0; }	// 通信は通ったが総数が増えなかった
-	(void)lastNum;
 	return std::string();
 }
 
