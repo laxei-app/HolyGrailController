@@ -88,6 +88,37 @@ namespace net
 			return fd;
 		}
 
+		// --- HTTP接続の使い回し(keep-alive) ---
+		//
+		// 【2026-07-30】従来はリクエストごとに接続して切っていた(Connection: close + close(fd))。
+		//  1コマ数本 × 毎分4コマで、カメラ側に TIME_WAIT のソケットが溜まり続ける。組み込みの
+		//  TCPスタックはソケット数が少ないので、枯渇すると新規接続を受けられなくなり、TIME_WAIT が
+		//  解放される数分後に復活する。R10 が「無応答になり約2分半で自然復帰する」挙動と整合する。
+		//  そこで1本を張りっぱなしにして使い回す。
+		//  net の HTTP は netThread の単一ワーカーからしか呼ばれないので排他は不要。
+		//  相手が閉じていた場合(keep-alive の競合)は張り直して1回だけやり直す。
+		int         g_kaFd   = -1;
+		std::string g_kaHost;
+		int         g_kaPort = 0;
+
+		void kaClose(void)
+		{
+			if (g_kaFd >= 0) { close(g_kaFd); g_kaFd = -1; }
+			g_kaHost.clear();
+			g_kaPort = 0;
+		}
+
+		// 使い回せる接続を返す(無ければ張る)。reused=true なら既存の接続。
+		int kaGet(const std::string& host, int port, bool& reused)
+		{
+			if (g_kaFd >= 0 && g_kaHost == host && g_kaPort == port) { reused = true; return g_kaFd; }
+			kaClose();
+			reused = false;
+			const int fd = tcpConnect(host, port);
+			if (fd >= 0) { g_kaFd = fd; g_kaHost = host; g_kaPort = port; }
+			return fd;
+		}
+
 		bool sendAll(int fd, const char* data, size_t len)
 		{
 			size_t sent = 0;
@@ -103,9 +134,12 @@ namespace net
 		// レスポンスを受信する。Content-Length / chunked を解析し本文完了時点で読み終える。
 		// カメラが Connection: close を無視して keep-alive を保つ場合でも、
 		// 受信タイムアウト(数秒)待ちにならず素早く返す。
-		bool recvResponse(int fd, std::string& raw)
+		// framed: Content-Length / chunked で本文の終わりが確定して読み終えたか。
+		//  false は EOF まで読んだ(=その接続はもう使えない)ことを意味する。
+		bool recvResponse(int fd, std::string& raw, bool& framed)
 		{
 			raw.clear();
+			framed = false;
 			char buf[4096];
 			size_t    headerEnd = std::string::npos;
 			long long contentLen = -1;	// -1: 不明
@@ -133,11 +167,11 @@ namespace net
 					if (chunked)
 					{	// 終端チャンク "0\r\n\r\n" を受信したら完了
 						if (raw.find("\r\n0\r\n\r\n", bodyStart) != std::string::npos ||
-						    raw.compare(bodyStart, 5, "0\r\n\r\n") == 0) { break; }
+						    raw.compare(bodyStart, 5, "0\r\n\r\n") == 0) { framed = true; break; }
 					}
 					else if (contentLen >= 0)
 					{	// Content-Length 分受信したら完了
-						if (static_cast<long long>(raw.size() - bodyStart) >= contentLen) { break; }
+						if (static_cast<long long>(raw.size() - bodyStart) >= contentLen) { framed = true; break; }
 					}
 					// 長さ不明(Content-Lengthもchunkedも無い)時は EOF まで読む
 				}
@@ -183,52 +217,74 @@ namespace net
 			int port = 80;
 			if (!parseUrl(url, host, port, path)) { return 0; }
 
-			int fd = tcpConnect(host, port);
-			if (fd < 0)
+			// keep-alive で1本を使い回す。相手が既に閉じていたら張り直して1回だけやり直す。
+			for (int attempt = 0; attempt < 2; ++attempt)
 			{
-				__android_log_print(ANDROID_LOG_WARN, HGE_LOG_TAG,
-				                    "net: connect failed host=%s port=%d errno=%d(%s)",
-				                    host.c_str(), port, errno, std::strerror(errno));
-				return 0;
+				bool reused = false;
+				const int fd = kaGet(host, port, reused);
+				if (fd < 0)
+				{
+					__android_log_print(ANDROID_LOG_WARN, HGE_LOG_TAG,
+					                    "net: connect failed host=%s port=%d errno=%d(%s)",
+					                    host.c_str(), port, errno, std::strerror(errno));
+					return 0;
+				}
+
+				std::string req = method + " " + path + " HTTP/1.1\r\n";
+				req += "Host: " + host + ":" + std::to_string(port) + "\r\n";
+				req += "Connection: keep-alive\r\n";
+				if (hasBody)
+				{
+					req += "Content-Type: application/json\r\n";
+					req += "Content-Length: " + std::to_string(body.size()) + "\r\n";
+				}
+				req += "\r\n";
+				if (hasBody) { req += body; }
+
+				if (!sendAll(fd, req.c_str(), req.size()))
+				{	// 使い回した接続が既に閉じられていた → 張り直して1回だけやり直す
+					kaClose();
+					if (reused) { continue; }
+					return 0;
+				}
+
+				std::string raw;
+				bool framed = false;
+				recvResponse(fd, raw, framed);
+				if (raw.empty())
+				{
+					kaClose();
+					if (reused) { continue; }	// 応答ゼロ = 閉じられていた可能性。張り直す
+					return 0;
+				}
+
+				// ヘッダと本体を分離
+				const size_t he = raw.find("\r\n\r\n");
+				const std::string header = (he == std::string::npos) ? raw : raw.substr(0, he);
+				std::string content = (he == std::string::npos) ? std::string() : raw.substr(he + 4);
+
+				// ステータスコード
+				int code = 0;
+				const size_t sp = header.find(' ');
+				if (sp != std::string::npos) { code = std::atoi(header.substr(sp + 1, 3).c_str()); }
+
+				// chunked 判定(ヘッダを小文字化して検査)
+				std::string lower = header;
+				for (auto& c : lower) { c = static_cast<char>(::tolower(c)); }
+				if (lower.find("transfer-encoding: chunked") != std::string::npos)
+				{
+					content = dechunk(content);
+				}
+
+				// 本文の終わりが確定していない(EOFまで読んだ)、または相手が閉じると言っている
+				// ときは使い回せない。次回は張り直す。
+				if (!framed || lower.find("connection: close") != std::string::npos) { kaClose(); }
+
+				response = content;
+				g_lastHttpStatus = code;
+				return code;
 			}
-
-			std::string req = method + " " + path + " HTTP/1.1\r\n";
-			req += "Host: " + host + ":" + std::to_string(port) + "\r\n";
-			req += "Connection: close\r\n";
-			if (hasBody)
-			{
-				req += "Content-Type: application/json\r\n";
-				req += "Content-Length: " + std::to_string(body.size()) + "\r\n";
-			}
-			req += "\r\n";
-			if (hasBody) { req += body; }
-
-			if (!sendAll(fd, req.c_str(), req.size())) { close(fd); return 0; }
-
-			std::string raw;
-			recvResponse(fd, raw);
-			close(fd);
-
-			// ヘッダと本体を分離
-			size_t he = raw.find("\r\n\r\n");
-			std::string header = (he == std::string::npos) ? raw : raw.substr(0, he);
-			std::string content = (he == std::string::npos) ? std::string() : raw.substr(he + 4);
-
-			// ステータスコード
-			int code = 0;
-			size_t sp = header.find(' ');
-			if (sp != std::string::npos) { code = std::atoi(header.substr(sp + 1, 3).c_str()); }
-
-			// chunked 判定(ヘッダを小文字化して検査)
-			std::string lower = header;
-			for (auto& c : lower) { c = static_cast<char>(::tolower(c)); }
-			if (lower.find("transfer-encoding: chunked") != std::string::npos)
-			{
-				content = dechunk(content);
-			}
-			response = content;
-			g_lastHttpStatus = code;
-			return code;
+			return 0;
 		}
 	} // anonymous namespace
 
