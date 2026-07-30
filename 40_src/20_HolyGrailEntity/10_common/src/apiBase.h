@@ -97,6 +97,10 @@ public:
 	virtual meterTiming meterTimingHint(void) const { return meterTiming{}; }
 	// 測光の適応状態(測光ssの学習・張り付き天井・フレーム鮮度基準)を捨てる(セッション確立/再接続時)。
 	virtual void meterReset(void) {}
+	// ライブビューを止める(既定は何もしない)。撮影ループ中に掴み続けないため。
+	virtual errCode stopLiveView(void) { return ERR_HGC_NOT_SUPPORTED; }
+	// 撮影ループ中にライブビューが必要か(既定は必要=従来動作)。
+	virtual bool liveViewNeededWhileCapturing(void) const { return true; }
 
 };
 

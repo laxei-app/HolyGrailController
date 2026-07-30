@@ -242,3 +242,17 @@ errCode cameraController::startShooting(const class device& device)
 	if (device.apiBase == nullptr) { return ERR_HGC_READY; }
 	return device.apiBase->startShooting();
 }
+
+// ライブビューを止める(撮影ループ中は掴まない。2026-07-30)。
+errCode cameraController::stopLiveView(const class device& device)
+{
+	if (device.apiBase == nullptr) { return ERR_HGC_NOT_SUPPORTED; }
+	return device.apiBase->stopLiveView();
+}
+
+// 撮影ループ中にライブビューが必要か(カメラ実装の申告に従う)。
+bool cameraController::liveViewNeededWhileCapturing(const class device& device)
+{
+	if (device.apiBase == nullptr) { return true; }
+	return device.apiBase->liveViewNeededWhileCapturing();
+}

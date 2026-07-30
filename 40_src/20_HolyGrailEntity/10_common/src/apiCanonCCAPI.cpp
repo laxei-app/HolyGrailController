@@ -253,6 +253,27 @@ errCode apiCanonCCAPI::startShooting(void)
     return ERR_HGC_HTTP_POST;
 }
 
+// ライブビューを止める。
+//
+// 【2026-07-30】従来は撮影開始時に開始したまま、撮影が終わるまで一度も止めていなかった。
+//  ライブビュー中はカメラ本体のMenu操作が busy で弾かれる = こちらがカメラを占有している
+//  直接の証拠。しかもサムネ測光では撮影ループ中にライブビューを一切使っていない
+//  (使うのは撮影前の初期収束だけ)。占有し続ける理由が無いので離す。
+errCode apiCanonCCAPI::stopLiveView(void)
+{
+    if (!(funcList[funcNum::LIVE_SET].verb == verb::POS)) { return ERR_HGC_NOT_SUPPORTED; }
+    if (!this->liveViewAlive()) { return ERR_HGC_OK; }	// 既に止まっている
+    std::string response;
+    json request_json;
+    request_json["liveviewsize"]  = "off";
+    request_json["cameradisplay"] = "on";	// 背面表示は戻す(撮影自体には影響しない)
+    if (netThread::httpPost(funcList[funcNum::LIVE_SET].url, request_json.dump(), response))
+    {
+        return ERR_HGC_OK;
+    }
+    return ERR_HGC_HTTP_POST;
+}
+
 // ライブビューが実際に動いているか(軽い ?kind=info で確認する)。
 bool apiCanonCCAPI::liveViewAlive(void)
 {

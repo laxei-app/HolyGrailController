@@ -198,6 +198,8 @@ private:
 	hgc::exposure appliedExposure(void) const;
 	// HTTPを伴うカメラ操作の失敗メッセージに、直近のHTTPステータスと応答本文を添える。
 	//  "actShutter http=503 During shooting or recording" / "actShutter http=応答なし"
+	// 撮影ループ中はライブビューを掴まない(不要な方式のときだけ離す)。
+	void          releaseLiveView(void);
 	std::string   withHttpDetail(const char* what) const;
 	errCode applyExposureChanged(const hgc::exposure& exp);	// 変更のあった ss/iso/fn だけを適用
 	// 露出設定を最大 kApplyMaxMs まで kApplyRetryMs 間隔でリトライ。tries=試行回数を返す。

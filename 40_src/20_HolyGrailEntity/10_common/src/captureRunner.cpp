@@ -199,6 +199,18 @@ double captureRunner::linearAtExposure(double sceneRef, const hgc::exposure& e) 
 //  status>0 = カメラが断った(理由は応答本文に出る) / status=0 = そもそも届かなかった。
 //  この区別が無いために 2026-07-21 の actShutter 失敗(code=3)の原因を特定できなかった。
 //  失敗した呼び出しの直後に使うこと(それが直近の失敗である前提)。
+// 撮影ループ中はライブビューを掴まない(2026-07-30 実験1)。
+//
+// ライブビューを開始したままだと、カメラ本体のMenu操作が busy で弾かれる = カメラを
+// 占有し続けている。サムネ測光ではループ中にライブビューを使わない(必要なのは撮影前の
+// 初期収束だけ)ので、用が済んだら離す。R10 が数十分で無応答になる件の切り分けを兼ねる。
+void captureRunner::releaseLiveView(void)
+{
+	if (dev_ == nullptr || dev_->apiBase == nullptr) { return; }
+	if (cameraController::liveViewNeededWhileCapturing(*dev_)) { return; }	// LV方式なら掴んだまま
+	cameraController::stopLiveView(*dev_);	// 失敗しても撮影は続ける(次コマで測光できる方式なので)
+}
+
 std::string captureRunner::withHttpDetail(const char* what) const
 {
 	int status = 0;
@@ -442,6 +454,8 @@ hgc::exposure captureRunner::nightGoalAfter(long long nowSec) const
 hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::exposure& initial, double evT)
 {
 	// 仕様 4.4 の基準(iso/ss/fn)から開始する。
+	//  初期収束はライブビューで測るので、離してあれば張り直す(2026-07-30)。
+	if (!cameraController::liveViewNeededWhileCapturing(*dev_)) { cameraController::startShooting(*dev_); }
 	ctl.setCurrent(initial);
 	void* t0 = tool::startElapse();
 
@@ -552,6 +566,7 @@ bool captureRunner::establishSession(void)
 
 	// 撮影モードに入る(ライブビュー開始)
 	errCode err = cameraController::startShooting(*dev_);
+	if (err == ERR_HGC_OK) { this->releaseLiveView(); }	// 初期収束が要るときは中で張り直す
 	if (err != ERR_HGC_OK)
 	{
 		if (onError_) { onError_(err, this->withHttpDetail("startShooting")); }
@@ -899,6 +914,7 @@ errCode captureRunner::loop(void)
 					hgc::exposure seed = (prevC && validExposure(prevC->initial)) ? prevC->initial
 					                   : (validExposure(nightExp) ? nightExp : ccm->initial);
 					initialConverge(preCtl, seed, preEv);
+					this->releaseLiveView();	// 初期収束が済んだらライブビューは離す
 				}
 			}
 
@@ -1015,6 +1031,7 @@ errCode captureRunner::loop(void)
 					// 撮影開始が夜間後移行の途中: 他の自動露出と同様、開始前に露出補正(§4.4)してから入る。
 					hgc::exposure seed = (nextC && validExposure(nextC->initial)) ? nextC->initial : nightExp;
 					initialConverge(postCtl, seed, postEv);	// 測光しながら目標ev=postEv へ収束
+					this->releaseLiveView();	// 初期収束が済んだらライブビューは離す
 				}
 			}
 			// home(往復対称の基準)=次ccmの基準(=goal)。
@@ -1110,6 +1127,7 @@ errCode captureRunner::loop(void)
 					// 最初の補正(仕様 4.4): 撮影開始直後は初期露出が不定。基準から測光しながら
 					// 目標 ev へ反復収束させて 1 枚目の露出を決める(張り付き時は二分探索)。
 					target = initialConverge(autoCtl, ccm->initial, evTraw);
+					this->releaseLiveView();	// 初期収束が済んだらライブビューは離す
 					didInitConverge = true;
 				}
 			}

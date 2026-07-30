@@ -30,6 +30,8 @@ public:
 
 	// カメラへのアクセス
 	static errCode startShooting(const class device& device);
+	static errCode stopLiveView(const class device& device);			// ライブビュー停止
+	static bool    liveViewNeededWhileCapturing(const class device& device);
 	static errCode rdyShutter(const class device& device, const cmdt::shotSet& shotSet);
 	// 露出を1項目ずつ設定(タイマ方式で変更のあった項目だけ適用するため)。上位が種別非依存に呼ぶ。
 	static errCode setFNumber(const class device& device, const std::string& fNumber);
