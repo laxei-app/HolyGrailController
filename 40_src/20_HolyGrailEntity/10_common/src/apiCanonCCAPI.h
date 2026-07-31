@@ -154,7 +154,11 @@ public:
 	//  B) LVヒストグラム(旧方式・即復活可): 暗所ではLVが積分できないため測光ssへ一時切替し、
 	//     場面の明るさへ割り戻す。測光ssの学習・張り付き検出などの適応状態もこの層が持つ。
 	// meterHere(現在露出のまま測る)は常にLV方式(シャッター前の初期収束用=まだ撮影画像が無い)。
-	static constexpr bool kUseShotThumbMetering = true;	// false にすると旧LV方式へ戻る
+	// 2026-07-31: サムネ測光は採用を取り下げた。R10 で撮影と併用すると数十分で撮影エンジンが
+	//  固まり、バッテリを抜くまで戻らない(カード交換・接続方式・LV解放をすべて試して否定済み。
+	//  読み出しのみ1000回4時間は完走したので、書き込みとの競合が原因と切り分けた)。
+	//  速度面の利点も出ていない(サムネ取得に15秒かかることがある)。LV方式へ戻す。
+	static constexpr bool kUseShotThumbMetering = false;	// true でサムネ方式(採用しない)
 	errCode meterScene(const hgc::exposure& shotExp, meterResult& out,
 	                   const std::function<bool()>& keepGoing) override;
 	errCode meterHere(meterResult& out, const std::function<bool()>& keepGoing) override;
@@ -173,6 +177,10 @@ protected:
 	expo::expoTables tables_;			// 設定可能値テーブル(getSettingsでabilityから自前構築。
 										//  中身も表記もカメラ依存なのでこの層が作る。共通層は渡さない)
 	std::string      meterSs_;			// 次に使う測光ss(空=未決定→撮影ssから既定段数短く)
+	bool             lvNeedSwitch_ = false;	// 撮影ssのままでは測れない(測光ssへ切替が要る)
+	int              lvAsIsWait_   = 0;		// 切替なしを再試行するまでの残りコマ数
+	// 撮影露出のままLV測光して使えるか(リニア輝度が使える範囲に入っているか)。
+	bool             lvUsableAsIs(double linear) const;
 	double           meterCeilStops_ = 1e9;	// 測光ssの長さ上限[段](張り付き検出で下がる天井)
 	double           meterPrevStops_ = 0.0;	// 前回測光の明るさ[段](張り付き判定用)
 	double           meterPrevLin_   = -1.0;	// 前回測光のリニア値(<0=無し)

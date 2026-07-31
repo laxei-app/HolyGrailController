@@ -1045,7 +1045,8 @@ namespace
 	constexpr int    kMeterMaxMs          = 5000;	// ヒスト取得リトライ上限[ms]
 	constexpr int    kLvFreshMarginMs     = 2000;	// 古いLVフレーム判定の許容[ms](生成周期+揺らぎ)
 	constexpr double kMeterPinBackoffStops = 1.0;	// 張り付き検出時、天井をこの段数だけ短く下げる
-	constexpr double kMeterMaxLenStep      = 1.0;	// 暗すぎるとき1コマで伸ばす上限[段](pin突入を防ぐ)
+	constexpr double kMeterMaxLenStep      = 1.0;
+	constexpr int    kLvRetryAsIsFrames    = 20;	// 切替なしを再試行するまでの間隔[コマ]	// 暗すぎるとき1コマで伸ばす上限[段](pin突入を防ぐ)
 	constexpr double kMeterCeilRelaxStops  = 0.10;	// 天井を毎コマこれだけ緩め、条件変化へ追従
 	// --- 撮影画像フィードバック測光(方式A)の予算 ---
 	// 露光終了→カメラの記録完了→サムネイル取得 までを含む総予算。記録は実測2.0〜2.6秒だが、
@@ -1077,6 +1078,8 @@ void apiCanonCCAPI::meterReset(void)
 	lvFreshPrevAt_  = nullptr;
 	contentsBase_   = 0xFFFFFFFFu;	// 新規画像検知の基準も取り直す
 	contentsDir_.clear();			// 保存先も取り直す
+	lvNeedSwitch_   = false;	// 撮影ssのままでいけるか、次コマでまた試す
+	lvAsIsWait_     = 0;
 }
 
 // カメラの現在の露出のまま、LVヒストグラムからリニア輝度(中央値)を得る。
@@ -1230,16 +1233,65 @@ errCode apiCanonCCAPI::meterScene(const hgc::exposure& shotExp, meterResult& out
 	return meterSceneLv(shotExp, out, keepGoing);
 }
 
+// 撮影露出のままLV測光して使えるか(リニア輝度が「使える範囲」に入っているか)。
+//  判定の土俵は adaptMeterSs と同じ: リニア値 vs srgbToLinear(しきい値)。
+//  中央値がどこにあるかを見るので「明るすぎて動かない」「暗すぎて動かない」
+//  「積分上限で動かない」を取り違えない(張り付きそのものの判定は adaptMeterSs が持つ)。
+bool apiCanonCCAPI::lvUsableAsIs(double linear) const
+{
+	if (!(linear > 0.0)) { return false; }
+	return (linear >= expo::srgbToLinear(kMeterUsableLoX))
+	    && (linear <= expo::srgbToLinear(kMeterUsableHiX));
+}
+
 // 方式B: LVヒストグラム測光(旧方式。kUseShotThumbMetering=false で復活)。
-//  1. 測光ssを決めて必要なら切替(失敗は ssSwitchFailed で申告=呼び出し側がssを必ず再送)
-//  2. LV反映を待って測光(meterHere)
-//  3. 場面の明るさへ割り戻し、次コマの測光ssを学習
+//
+// 【2026-07-31 変更】従来は毎コマ必ず測光ssへ切替えてから測っていた。切替の PUT と
+//  LV反映待ち(kMeterSettleMaxMs=2.6秒)が毎コマ乗るため、SSと撮影周期を近づけられない。
+//  撮影ssのままLVで測れるなら切替は要らないので、まず切替なしで測って中央値を見る。
+//   ・使える範囲に入っていた → そのまま採用(PUTなし・待ちなし)
+//   ・範囲外だった           → 従来どおり測光ssへ切替えて測り直す
+//  カメラがLVで何秒まで積分できるかは機種で違う(R10/R100は約1.6秒相当で頭打ち=7/26実測)。
+//  機種名で分岐しないので、8秒でも積分できる機種なら自動で切替なしのまま回る。
+//
+//  切替が要ると分かったら lvNeedSwitch_ を立て、以後は最初から切替える(明るさは急に変わらない
+//  ので、無駄な1回目をほぼ出さない)。ただし明るさは1日で大きく動くため、
+//   ・切替後の測光値から「撮影ssならどう写るか」を予測し、使える範囲に入る見込みが立ち、
+//   ・かつ前回の試行から kLvRetryAsIsFrames コマ以上あいている
+//  ときだけ、切替なしをもう一度試す。予測はLVが忠実に積分できる前提の上限値なので、
+//  「予測が範囲外＝撮影ssでは絶対に無理」は確実に弾ける。逆は試してみないと分からない。
 errCode apiCanonCCAPI::meterSceneLv(const hgc::exposure& shotExp, meterResult& out,
                                     const std::function<bool()>& keepGoing)
 {
 	out = meterResult{};
 	hgc::exposure meterExp = shotExp;
 
+	if (lvAsIsWait_ > 0) { --lvAsIsWait_; }
+
+	// --- ① 切替なしで測ってみる ---
+	if (!lvNeedSwitch_ || lvAsIsWait_ == 0)
+	{
+		meterResult asIs;
+		const errCode e0 = meterHere(asIs, keepGoing);
+		out.tries += asIs.tries;
+		if (e0 == ERR_HGC_OK && this->lvUsableAsIs(asIs.linear))
+		{	// 撮影露出のまま使えた。切替の PUT も反映待ちも発生しない。
+			out.linear = asIs.linear; out.x = asIs.x; out.p99 = asIs.p99; out.pMax = asIs.pMax;
+			out.histSum = asIs.histSum; out.lvTimeMs = asIs.lvTimeMs; out.staleSkip = asIs.staleSkip;
+			out.rdyMs = asIs.rdyMs;
+			out.meterExp = meterExp;
+			out.meterSsUsed.clear();	// 切替なし(ログの mss= が "-" になる)
+			out.settleMs = -1;
+			out.ok = true;
+			out.sceneRef = asIs.linear / std::pow(2.0, expo::brightnessStops(meterExp, tables_));
+			lvNeedSwitch_ = false;
+			return ERR_HGC_OK;
+		}
+		lvNeedSwitch_ = true;			// 切替が要る
+		lvAsIsWait_   = kLvRetryAsIsFrames;	// 次に試すまで間を空ける
+	}
+
+	// --- ② 測光ssへ切替えて測る(従来の経路) ---
 	const std::string want = decideMeterSs(shotExp);
 	if (!want.empty())
 	{
@@ -1260,13 +1312,17 @@ errCode apiCanonCCAPI::meterSceneLv(const hgc::exposure& shotExp, meterResult& o
 			out.settleMs = static_cast<int>(tool::getElapse(t0));
 		}
 	}
+	else
+	{	// 切替不要(測光ss=撮影ss)。次コマは切替なしから入ってよい。
+		lvNeedSwitch_ = false;
+	}
 
 	meterResult here;
 	const errCode e = meterHere(here, keepGoing);
 	// meterHere の診断を統合(切替系のフィールドは維持)。
 	out.linear = here.linear; out.x = here.x; out.p99 = here.p99; out.pMax = here.pMax;
 	out.histSum = here.histSum; out.lvTimeMs = here.lvTimeMs; out.staleSkip = here.staleSkip;
-	out.tries = here.tries; out.rdyMs = here.rdyMs;
+	out.tries += here.tries; out.rdyMs = here.rdyMs;
 	out.meterExp = meterExp;
 	if (e != ERR_HGC_OK || here.linear <= 0.0) { out.ok = false; return (e != ERR_HGC_OK) ? e : ERR_HGC_RDY_METARING; }
 
@@ -1278,6 +1334,11 @@ errCode apiCanonCCAPI::meterSceneLv(const hgc::exposure& shotExp, meterResult& o
 		bool pinned = false;
 		adaptMeterSs(meterExp, here.linear, pinned);
 		out.pinned = pinned;
+
+		// 撮影ssならどう写るかを予測する。LVが忠実に積分できる前提の上限値なので、
+		// これが範囲外なら撮影ssでは確実に無理。範囲内なら試す価値がある。
+		const double predicted = out.sceneRef * std::pow(2.0, expo::brightnessStops(shotExp, tables_));
+		if (!this->lvUsableAsIs(predicted)) { lvAsIsWait_ = kLvRetryAsIsFrames; }
 	}
 	return ERR_HGC_OK;
 }
