@@ -154,6 +154,13 @@ public:
 	// 追従の代償は小さい: 動き出すしきい値 0.183段 → 0.400段。ただし現状は振動そのもので
 	// ±0.28段ぶれているので、実際の絵の安定性は改善する(テストの最大誤差 0.28→0.34段)。
 	static constexpr double kMinHysteresisStops = 0.8;
+	// 移動平均の遅れを補う外挿量の上限[段]。
+	// 必要な補正量 = 変化速度[段/コマ] × (n-1)/2 で、実測の夜明け(0.46段/コマ・5点平均)では
+	// 0.92段。0.5段では半分しか補正できないので、実測に余裕を持たせて 1.5段 とする。
+	// 傾きは差分の中央値なので、一過性の光(1コマだけの外れ値)や段差では 0 に落ちる。
+	// つまりこの上限は「素性の悪いデータで暴走させない」ための保険であって、
+	// 正常な変化を頭打ちにするためのものではない。
+	static constexpr double kSceneLeadMaxStops = 1.5;
 	// 反転抑制中でも「本物の急変」は通す差[段]。1歩正しく動かした直後に測光がでっち上げる
 	// 見かけの逆向き需要は最大 γ×1歩 - 帯/2 ≒ 0.47段(実測γ≒1.9)。その約2倍を境にする。
 	static constexpr double kReversalGuardStops = 1.0;
@@ -183,6 +190,8 @@ private:
 	errCode       fireShutter(const hgc::exposure& shotExp, double intervalSec, int& failStreak);
 	void          meterLostMsg(const apiBase::meterResult& mr, char* buf, size_t len) const;
 	// ヒステリシス帯の実効値(1歩=1/3段を下限とする。設定は書き換えない)。
+	// 移動平均バッファから「いまの場面の明るさ」を推定する(平均の遅れを傾きで補う)。
+	double        sceneNowFromBuf(const std::vector<double>& buf) const;
 	double        effHysteresis(double raw) const;
 	// 反転の抑制(2026-07-30): 露出を1歩変えると測光値が0.30段ずれ、移動平均が異なる露出の
 	// 値を混ぜるため、直後の逆向きは信用できない。抑制中の反転には帯を超える差を要求する。

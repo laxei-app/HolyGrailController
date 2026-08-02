@@ -301,6 +301,55 @@ void captureRunner::meterLostMsg(const apiBase::meterResult& mr, char* buf, size
 	}
 }
 
+// 移動平均バッファから「いまの場面の明るさ」を推定する(2026-08-02)。
+//
+// 【なぜ単純平均ではいけないか】n点の単純平均は (n-1)/2 コマ分だけ遅れた値になる。
+//  遅れ[段] = 場面の変化速度[段/コマ] × (n-1)/2 なので、変化が速いほど大きく膨らむ。
+//  実測(2026-08-01 postNight): 空が 0.09段/コマ の間は遅れ 0.18段 で目立たないが、
+//  夜明けが加速して 0.46段/コマ になると遅れは 0.92段 になり、写真は目標より 1.45段
+//  明るくなった(IMG_4627)。「一部の時間帯だけ明るくずれる」のはこれが原因で、
+//  ヒステリシス帯(一定の +0.5段)だけでは説明できない。
+//
+// 【対策】平均に「傾き × (n-1)/2」を足し戻して現在値を推定する。
+//  傾きは最小二乗ではなく **隣り合う差分の中央値** で求める。理由は一過性の光への強さ:
+//    1コマだけ2段明るくなった場合(車のライト等)の推定値
+//      単純平均      +0.40段
+//      最小二乗の傾き +1.20段 … 3倍に過剰反応し、光が消えた後 -0.40段 へ逆振れする
+//      差分の中央値  +0.40段 … 外れ値は4つの差分のうち2つにしか効かないので無視できる
+//  夜明けのような一定速度の変化には、どちらの傾きでも遅れ 0 になる。
+//
+// 計算は段(log2)で行う。場面の明るさは掛け算で変化するので、log空間なら一定速度の
+// 変化が直線になり外挿が正確になる(線形空間で外挿すると加速側で行き過ぎる)。
+//
+// 【残る弱点】変化が折り返す瞬間は直前の傾きを外挿し続けるので少し行き過ぎる
+//  (夜明けが平坦に転じる場面で +0.18段 程度)。外挿量は kSceneLeadMaxStops で頭打ちにする。
+//  return : 推定した場面の明るさ(リニア)。有効な値が無ければ -1
+double captureRunner::sceneNowFromBuf(const std::vector<double>& buf) const
+{
+	std::vector<double> l;
+	l.reserve(buf.size());
+	for (double v : buf) { if (v > 0.0) { l.push_back(std::log2(v)); } }
+	if (l.empty()) { return -1.0; }
+
+	double mean = 0.0;
+	for (double v : l) { mean += v; }
+	mean /= static_cast<double>(l.size());
+	// 差分が2つ未満だと中央値が外れ値に耐えられない。傾きは使わず平均のまま返す。
+	if (l.size() < 3) { return std::pow(2.0, mean); }
+
+	std::vector<double> d;
+	d.reserve(l.size() - 1);
+	for (size_t i = 1; i < l.size(); ++i) { d.push_back(l[i] - l[i - 1]); }
+	std::sort(d.begin(), d.end());
+	const size_t m = d.size() / 2;
+	const double slope = (d.size() % 2 != 0) ? d[m] : (d[m - 1] + d[m]) / 2.0;
+
+	double lead = slope * (static_cast<double>(l.size()) - 1.0) / 2.0;
+	if (lead >  kSceneLeadMaxStops) { lead =  kSceneLeadMaxStops; }
+	if (lead < -kSceneLeadMaxStops) { lead = -kSceneLeadMaxStops; }
+	return std::pow(2.0, mean + lead);
+}
+
 // ヒステリシス帯の実効値。1歩(1/3段)より狭い帯は構造的に成立しない(どう動かしても帯の
 // 内側へ入れないので、補正するたび必ず反対側へ飛び出す)。よって1歩を下限として扱う。
 // 設定そのものは書き換えない(ユーザーの値は保存されたまま、使うときだけ下限を当てる)。
@@ -952,9 +1001,7 @@ errCode captureRunner::loop(void)
 	avgBuf.push_back(mr.sceneRef);
 					int n = (smooth_.movingAverage > 0) ? smooth_.movingAverage : 5;
 					while (static_cast<int>(avgBuf.size()) > n) { avgBuf.erase(avgBuf.begin()); }
-					double avg = 0.0;
-					for (double v : avgBuf) { avg += v; }
-					avg /= static_cast<double>(avgBuf.size());
+					const double avg = this->sceneNowFromBuf(avgBuf);	// 遅れを補った現在値の推定
 					double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : preCtl.current(), ev0cfg_);
 					double linU = expo::linearFromEvBase(preEv + this->effHysteresis(smooth_.hysteresis) / 2.0, lin0);
 					double linD = expo::linearFromEvBase(preEv - this->effHysteresis(smooth_.hysteresis) / 2.0, lin0);
@@ -1051,9 +1098,7 @@ errCode captureRunner::loop(void)
 	avgBuf.push_back(mr.sceneRef);
 				int n = (smooth_.movingAverage > 0) ? smooth_.movingAverage : 5;
 				while (static_cast<int>(avgBuf.size()) > n) { avgBuf.erase(avgBuf.begin()); }
-				double avg = 0.0;
-				for (double v : avgBuf) { avg += v; }
-				avg /= static_cast<double>(avgBuf.size());
+				const double avg = this->sceneNowFromBuf(avgBuf);	// 遅れを補った現在値の推定
 				double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : postCtl.current(), ev0cfg_);
 				double linU = expo::linearFromEvBase(postEv + this->effHysteresis(smooth_.hysteresis) / 2.0, lin0);
 				double linD = expo::linearFromEvBase(postEv - this->effHysteresis(smooth_.hysteresis) / 2.0, lin0);
@@ -1159,9 +1204,7 @@ errCode captureRunner::loop(void)
 	avgBuf.push_back(mr.sceneRef);
 					int n = effMA;
 					while (static_cast<int>(avgBuf.size()) > n) { avgBuf.erase(avgBuf.begin()); }
-					double avg = 0.0;
-					for (double v : avgBuf) { avg += v; }
-					avg /= static_cast<double>(avgBuf.size());
+					const double avg = this->sceneNowFromBuf(avgBuf);	// 遅れを補った現在値の推定
 
 					double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : autoCtl.current(), ev0cfg_);
 					double linU = expo::linearFromEvBase(evT + this->effHysteresis(effHyst) / 2.0, lin0);

@@ -17,6 +17,7 @@
 
 #include "exposureMath.h"
 #include <cstdio>
+#include <algorithm>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -245,6 +246,100 @@ int main()
 		checkNear(effHysteresis(1.0), 1.0,    1e-9, "日中の1.0段は下限より広いのでそのまま");
 		// 下限は γ_max×1歩 以上であること(静止点の存在条件)
 		check(kFloor >= 2.27 * kStep - 1e-9, "下限は実測γの上側(2.27)×1歩=0.76段以上");
+	}
+
+	// --- 7) 移動平均の遅れを傾きで補う(2026-08-02 案C')。captureRunner::sceneNowFromBuf と同じ式 ---
+	//
+	// 【背景】2026-08-01 の postNight で、写真が目標より最大 1.45段 明るくなった(IMG_4627)。
+	//  内訳は ヒステリシス帯 +0.50段 と 移動平均の遅れ +0.92段 で、主犯は後者。
+	//  n点平均は (n-1)/2 コマ遅れた値になり、遅れ[段] = 変化速度[段/コマ] × (n-1)/2。
+	//  空が 0.09段/コマ の間は 0.18段 だが、夜明けが 0.46段/コマ に加速すると 0.92段 に膨らむ。
+	//  「一部の時間帯だけ明るくずれる」のはこれが理由で、一定量のヒステリシスでは説明できない。
+	//
+	// 【このテストが固定する仕様】
+	//  ・一定速度の変化では遅れが 0 になること
+	//  ・1コマだけの外れ値(車のライト等)に対し、単純平均と同程度にしか反応しないこと
+	//    (最小二乗の傾きだと3倍に過剰反応し、消えた後に逆振れする。だから差分の中央値を使う)
+	//  ・外挿量は上限で頭打ちになること
+	{
+		const double kLeadMax = 1.5;	// = captureRunner::kSceneLeadMaxStops
+
+		// 実装と同じ: 段(log2)で平均し、差分の中央値を傾きとして (n-1)/2 コマ分だけ外挿する
+		auto sceneNow = [&](const std::vector<double>& buf)
+		{
+			std::vector<double> l;
+			for (double v : buf) { if (v > 0.0) { l.push_back(std::log2(v)); } }
+			if (l.empty()) { return -1.0; }
+			double mean = 0.0;
+			for (double v : l) { mean += v; }
+			mean /= static_cast<double>(l.size());
+			if (l.size() < 3) { return std::pow(2.0, mean); }
+			std::vector<double> d;
+			for (size_t i = 1; i < l.size(); ++i) { d.push_back(l[i] - l[i - 1]); }
+			std::sort(d.begin(), d.end());
+			const size_t m = d.size() / 2;
+			const double slope = (d.size() % 2 != 0) ? d[m] : (d[m - 1] + d[m]) / 2.0;
+			double lead = slope * (static_cast<double>(l.size()) - 1.0) / 2.0;
+			if (lead >  kLeadMax) { lead =  kLeadMax; }
+			if (lead < -kLeadMax) { lead = -kLeadMax; }
+			return std::pow(2.0, mean + lead);
+		};
+		auto plainAvg = [](const std::vector<double>& buf)
+		{
+			double a = 0.0;
+			for (double v : buf) { a += v; }
+			return a / static_cast<double>(buf.size());
+		};
+		auto stops = [](double a, double b) { return std::log2(a / b); };
+
+		// ① 一定速度で明るくなる(夜明け 0.30段/コマ。上限0.5段に当たらない範囲で見る)
+		{
+			const double rate = 0.46;	// 実測の夜明けの最速(2026-08-01)
+			std::vector<double> buf;
+			for (int i = 0; i < 5; ++i) { buf.push_back(std::pow(2.0, rate * i)); }
+			const double truth = std::pow(2.0, rate * 4);	// 最新コマの真値
+			checkNear(stops(sceneNow(buf), truth), 0.0, 0.02, "一定速度の変化で遅れが消える");
+			// 単純平均は (n-1)/2 コマ分だけ遅れる
+			checkNear(stops(truth, plainAvg(buf)), rate * 2.0, 0.20, "単純平均は2コマ分遅れる(比較)");
+		}
+
+		// ② 1コマだけ2段明るい(車のライト)。単純平均と同程度までしか反応しないこと
+		{
+			std::vector<double> buf = { 1.0, 1.0, 4.0, 1.0, 1.0 };	// 中央のコマだけ +2段
+			const double got   = stops(sceneNow(buf),  1.0);
+			const double plain = stops(plainAvg(buf), 1.0);
+			char d[160];
+			std::snprintf(d, sizeof(d), "(推定=%+.2f段 単純平均=%+.2f段)", got, plain);
+			check(got <= plain + 0.05, "一過性の光に過剰反応しない(単純平均以下)", d);
+			check(got > 0.0, "一過性の光を完全に無視はしない", d);
+		}
+
+		// ③ 光が消えた後に逆振れしない(外れ値がバッファから抜ける途中)
+		{
+			std::vector<double> buf = { 4.0, 1.0, 1.0, 1.0, 1.0 };	// 古い側に外れ値
+			const double got = stops(sceneNow(buf), 1.0);
+			char d[120];
+			std::snprintf(d, sizeof(d), "(推定=%+.2f段)", got);
+			check(got > -0.10, "外れ値が抜けるときに暗い側へ逆振れしない", d);
+		}
+
+		// ④ 外挿量の頭打ち(急変時に行き過ぎない)
+		{
+			const double rate = 2.0;	// 2段/コマ の極端な変化
+			std::vector<double> buf;
+			for (int i = 0; i < 5; ++i) { buf.push_back(std::pow(2.0, rate * i)); }
+			double mean = 0.0;
+			for (double v : buf) { mean += std::log2(v); }
+			mean /= 5.0;
+			checkNear(stops(sceneNow(buf), std::pow(2.0, mean)), kLeadMax, 1e-6,
+			          "外挿量は上限(1.5段)で頭打ちになる");
+		}
+
+		// ⑤ 有効な値が無ければ -1(測光失敗が続いた場合に壊れない)
+		{
+			std::vector<double> buf = { -1.0, 0.0, -1.0 };
+			check(sceneNow(buf) < 0.0, "有効な測光値が無ければ無効を返す");
+		}
 	}
 
 
