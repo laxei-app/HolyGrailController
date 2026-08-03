@@ -179,6 +179,7 @@ protected:
 	std::string      meterSs_;			// 次に使う測光ss(空=未決定→撮影ssから既定段数短く)
 	bool             lvNeedSwitch_ = false;	// 撮影ssのままでは測れない(測光ssへ切替が要る)
 	int              lvAsIsWait_   = 0;		// 切替なしを再試行するまでの残りコマ数
+	int              lvPinStreak_  = 0;		// 切替なし経路で応答が無かった連続回数(張り付き確定用)
 	// 撮影露出のままLV測光して使えるか(リニア輝度が使える範囲に入っているか)。
 	bool             lvUsableAsIs(double linear) const;
 	double           meterCeilStops_ = 1e9;	// 測光ssの長さ上限[段](張り付き検出で下がる天井)

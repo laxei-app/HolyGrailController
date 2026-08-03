@@ -1040,6 +1040,11 @@ namespace
 	constexpr double kMeterUsableLoX      = 0.020;	// 中央値がこれ未満は暗すぎて信用しない(sRGB)
 	constexpr double kMeterUsableHiX      = 0.850;	// これ超は明るすぎ(飽和寄り)
 	constexpr double kMeterRespondRatio   = 0.50;	// 「Δss段」に対しΔ測光段がこの比未満なら張り付き
+	// 応答比を判定するのに必要な最小の露出変化[段]。従来は 0.5 固定だったため、
+	// 撮影中の 1歩=1/3段(0.333) では張り付き判定が一度も働かなかった(2026-08-03 判明)。
+	constexpr double kMeterRespondMinStops = 0.30;
+	// 張り付きと確定するまでの連続回数。1コマのノイズで切替へ落ちないようにする。
+	constexpr int    kMeterPinConfirm      = 2;
 	constexpr int    kMeterInitDropStops  = 5;		// 初回の測光ss=撮影ssから何段短くするか
 	constexpr int    kMeterRetryMs        = 100;	// ヒスト取得リトライ間隔[ms]
 	constexpr int    kMeterMaxMs          = 5000;	// ヒスト取得リトライ上限[ms]
@@ -1175,7 +1180,7 @@ void apiCanonCCAPI::adaptMeterSs(const hgc::exposure& meterExp, double linear, b
 	if (meterPrevLin_ > 0.0 && x > 0.0)
 	{
 		const double dSs = curStops - meterPrevStops_;			// 指示した変化[段]
-		if (std::fabs(dSs) >= 0.5)
+		if (std::fabs(dSs) >= kMeterRespondMinStops)
 		{
 			const double dLin = std::log2(x / meterPrevLin_);	// 実際に動いた[段]
 			if ((dLin / dSs) < kMeterRespondRatio) { pinnedOut = true; }
@@ -1275,17 +1280,45 @@ errCode apiCanonCCAPI::meterSceneLv(const hgc::exposure& shotExp, meterResult& o
 		const errCode e0 = meterHere(asIs, keepGoing);
 		out.tries += asIs.tries;
 		if (e0 == ERR_HGC_OK && this->lvUsableAsIs(asIs.linear))
-		{	// 撮影露出のまま使えた。切替の PUT も反映待ちも発生しない。
-			out.linear = asIs.linear; out.x = asIs.x; out.p99 = asIs.p99; out.pMax = asIs.pMax;
-			out.histSum = asIs.histSum; out.lvTimeMs = asIs.lvTimeMs; out.staleSkip = asIs.staleSkip;
-			out.rdyMs = asIs.rdyMs;
-			out.meterExp = meterExp;
-			out.meterSsUsed.clear();	// 切替なし(ログの mss= が "-" になる)
-			out.settleMs = -1;
-			out.ok = true;
-			out.sceneRef = asIs.linear / std::pow(2.0, expo::brightnessStops(meterExp, tables_));
-			lvNeedSwitch_ = false;
-			return ERR_HGC_OK;
+		{
+			// 【2026-08-03 追加】中央値が使える範囲にあることと、露出変更に反応することは別物。
+			//  暗所ではカメラがライブビューに自動でゲインをかけ、設定した露出と表示の明るさが
+			//  切り離される(張り付き)。この状態で切替なし経路を使い続けると、絞っても測光値が
+			//  下がらないため「まだ明るい」と判断し続け、限界まで絞り続ける開ループになる。
+			//  実測(postNight 04:11〜04:12): ISO1250→320 と7コマ絞る間ずっと応答比 -0.2、
+			//  写真は4.2段暗くなった。値の範囲だけを見ていたので気づけなかった。
+			//  応答比 = Δ測光値[段] / Δ露出[段]。1.0 が正常、kMeterRespondRatio 未満で張り付き。
+			const double curStops = expo::brightnessStops(meterExp, tables_);
+			bool pinned = false;
+			if (meterPrevLin_ > 0.0 && asIs.linear > 0.0)
+			{
+				const double dSs = curStops - meterPrevStops_;
+				if (std::fabs(dSs) >= kMeterRespondMinStops)
+				{
+					const double dLin = std::log2(asIs.linear / meterPrevLin_);
+					if ((dLin / dSs) < kMeterRespondRatio) { ++lvPinStreak_; }
+					else                                   { lvPinStreak_ = 0; }
+					pinned = (lvPinStreak_ >= kMeterPinConfirm);
+				}
+			}
+			meterPrevStops_ = curStops;
+			meterPrevLin_   = asIs.linear;
+
+			if (!pinned)
+			{	// 撮影露出のまま使えた。切替の PUT も反映待ちも発生しない。
+				out.linear = asIs.linear; out.x = asIs.x; out.p99 = asIs.p99; out.pMax = asIs.pMax;
+				out.histSum = asIs.histSum; out.lvTimeMs = asIs.lvTimeMs; out.staleSkip = asIs.staleSkip;
+				out.rdyMs = asIs.rdyMs;
+				out.meterExp = meterExp;
+				out.meterSsUsed.clear();	// 切替なし(ログの mss= が "-" になる)
+				out.settleMs = -1;
+				out.ok = true;
+				out.sceneRef = asIs.linear / std::pow(2.0, expo::brightnessStops(meterExp, tables_));
+				lvNeedSwitch_ = false;
+				return ERR_HGC_OK;
+			}
+			out.pinned  = true;		// 張り付き → 測光ssへ切替えて測り直す
+			lvPinStreak_ = 0;
 		}
 		lvNeedSwitch_ = true;			// 切替が要る
 		lvAsIsWait_   = kLvRetryAsIsFrames;	// 次に試すまで間を空ける

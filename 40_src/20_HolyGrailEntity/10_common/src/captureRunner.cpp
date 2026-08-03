@@ -710,6 +710,7 @@ errCode captureRunner::loop(void)
 	expo::exposureCtl preCtl;		// 夜間前移行用(自動露出→夜間)
 	expo::exposureCtl postCtl;		// 夜間後移行用(夜間→次の自動露出)
 	std::vector<double> avgBuf;		// リニア輝度の移動平均バッファ
+	bool pinPrev = false;			// 前コマでライブビューの張り付きを検出していたか
 	hgc::exposure lastExp{};		// 直近の「測光時の」露出(ev0の逆算専用。ssが測光用に差し替わっている)
 	hgc::exposure lastShotExp{};	// 直近に実際に撮影した露出。窓切替の「直前から継続」はこちらを使う
 	// (lastExp を使うと切替直後の1コマが測光ssで撮れてしまう。7/24-25実測: 夕日/preNight/postNight
@@ -998,7 +999,12 @@ errCode captureRunner::loop(void)
 				{
 					// 測光値は測光露出で写る明るさ → 露出成分を割り戻してから平均する(土俵合わせ)。
 					if (stepLock_ > 0) { --stepLock_; }	// 反転抑制の残りコマ(測光できたコマだけ数える)
-	avgBuf.push_back(mr.sceneRef);
+					// 張り付きを検出したコマでは、それまでのバッファは「露出変更に反応しないLV」で測った値。
+					// そのまま傾きを外挿すると偽のトレンド(絞っているのに明るくなり続ける)を増幅してしまう。
+					// 立ち上がりで捨てて積み直す(張り付きが続く間は毎コマ捨てない=平均の平滑化は残す)。
+					if (mr.pinned && !pinPrev) { avgBuf.clear(); this->resetStepLock(); }
+					pinPrev = mr.pinned;
+					avgBuf.push_back(mr.sceneRef);
 					int n = (smooth_.movingAverage > 0) ? smooth_.movingAverage : 5;
 					while (static_cast<int>(avgBuf.size()) > n) { avgBuf.erase(avgBuf.begin()); }
 					const double avg = this->sceneNowFromBuf(avgBuf);	// 遅れを補った現在値の推定
@@ -1095,7 +1101,12 @@ errCode captureRunner::loop(void)
 				// 露出補正(仕様 4.5): 移動平均・ヒステリシス。目標 ev=postEv。往復対称(home=次の基準)。
 				// 測光値は測光露出で写る明るさ → 露出成分を割り戻してから平均する(土俵合わせ)。
 				if (stepLock_ > 0) { --stepLock_; }	// 反転抑制の残りコマ(測光できたコマだけ数える)
-	avgBuf.push_back(mr.sceneRef);
+				// 張り付きを検出したコマでは、それまでのバッファは「露出変更に反応しないLV」で測った値。
+				// そのまま傾きを外挿すると偽のトレンド(絞っているのに明るくなり続ける)を増幅してしまう。
+				// 立ち上がりで捨てて積み直す(張り付きが続く間は毎コマ捨てない=平均の平滑化は残す)。
+				if (mr.pinned && !pinPrev) { avgBuf.clear(); this->resetStepLock(); }
+				pinPrev = mr.pinned;
+				avgBuf.push_back(mr.sceneRef);
 				int n = (smooth_.movingAverage > 0) ? smooth_.movingAverage : 5;
 				while (static_cast<int>(avgBuf.size()) > n) { avgBuf.erase(avgBuf.begin()); }
 				const double avg = this->sceneNowFromBuf(avgBuf);	// 遅れを補った現在値の推定
@@ -1201,7 +1212,12 @@ errCode captureRunner::loop(void)
 					// 測光値は「測光露出で写る明るさ」なので、露出成分を割り戻した場面の明るさを
 					// 平均する(測光ssはコマ毎に変わるため、生の測光値を平均すると別条件が混ざる)。
 					if (stepLock_ > 0) { --stepLock_; }	// 反転抑制の残りコマ(測光できたコマだけ数える)
-	avgBuf.push_back(mr.sceneRef);
+					// 張り付きを検出したコマでは、それまでのバッファは「露出変更に反応しないLV」で測った値。
+					// そのまま傾きを外挿すると偽のトレンド(絞っているのに明るくなり続ける)を増幅してしまう。
+					// 立ち上がりで捨てて積み直す(張り付きが続く間は毎コマ捨てない=平均の平滑化は残す)。
+					if (mr.pinned && !pinPrev) { avgBuf.clear(); this->resetStepLock(); }
+					pinPrev = mr.pinned;
+					avgBuf.push_back(mr.sceneRef);
 					int n = effMA;
 					while (static_cast<int>(avgBuf.size()) > n) { avgBuf.erase(avgBuf.begin()); }
 					const double avg = this->sceneNowFromBuf(avgBuf);	// 遅れを補った現在値の推定

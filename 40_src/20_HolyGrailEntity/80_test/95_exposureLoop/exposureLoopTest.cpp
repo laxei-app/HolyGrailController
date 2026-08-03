@@ -46,6 +46,27 @@ static double linearAtExposure(double sceneRef, const hgc::exposure& e, const ex
 	if (sceneRef <= 0.0) { return -1.0; }
 	return sceneRef * std::pow(2.0, expo::brightnessStops(e, t));
 }
+// 移動平均の遅れを傾きで補う式(= captureRunner::sceneNowFromBuf)。項目7と項目8で共有する。
+static const double kSceneLeadMaxStops = 1.5;	// = captureRunner::kSceneLeadMaxStops
+static double sceneNowFromBufRef(const std::vector<double>& buf)
+{
+	std::vector<double> l;
+	for (double v : buf) { if (v > 0.0) { l.push_back(std::log2(v)); } }
+	if (l.empty()) { return -1.0; }
+	double mean = 0.0;
+	for (double v : l) { mean += v; }
+	mean /= static_cast<double>(l.size());
+	if (l.size() < 3) { return std::pow(2.0, mean); }
+	std::vector<double> d;
+	for (size_t i = 1; i < l.size(); ++i) { d.push_back(l[i] - l[i - 1]); }
+	std::sort(d.begin(), d.end());
+	const size_t m = d.size() / 2;
+	const double slope = (d.size() % 2 != 0) ? d[m] : (d[m - 1] + d[m]) / 2.0;
+	double lead = slope * (static_cast<double>(l.size()) - 1.0) / 2.0;
+	if (lead >  kSceneLeadMaxStops) { lead =  kSceneLeadMaxStops; }
+	if (lead < -kSceneLeadMaxStops) { lead = -kSceneLeadMaxStops; }
+	return std::pow(2.0, mean + lead);
+}
 static const double kStep = 1.0 / 3.0;
 // 撮影中は必ず1ステップ(=1/3段)に留める(2026-07-24: 境目の多段ジャンプ禁止)。captureRunner と同値。
 static const double kMaxCatchUp = 1.0 / 3.0;
@@ -262,28 +283,10 @@ int main()
 	//    (最小二乗の傾きだと3倍に過剰反応し、消えた後に逆振れする。だから差分の中央値を使う)
 	//  ・外挿量は上限で頭打ちになること
 	{
-		const double kLeadMax = 1.5;	// = captureRunner::kSceneLeadMaxStops
+		const double kLeadMax = kSceneLeadMaxStops;
 
 		// 実装と同じ: 段(log2)で平均し、差分の中央値を傾きとして (n-1)/2 コマ分だけ外挿する
-		auto sceneNow = [&](const std::vector<double>& buf)
-		{
-			std::vector<double> l;
-			for (double v : buf) { if (v > 0.0) { l.push_back(std::log2(v)); } }
-			if (l.empty()) { return -1.0; }
-			double mean = 0.0;
-			for (double v : l) { mean += v; }
-			mean /= static_cast<double>(l.size());
-			if (l.size() < 3) { return std::pow(2.0, mean); }
-			std::vector<double> d;
-			for (size_t i = 1; i < l.size(); ++i) { d.push_back(l[i] - l[i - 1]); }
-			std::sort(d.begin(), d.end());
-			const size_t m = d.size() / 2;
-			const double slope = (d.size() % 2 != 0) ? d[m] : (d[m - 1] + d[m]) / 2.0;
-			double lead = slope * (static_cast<double>(l.size()) - 1.0) / 2.0;
-			if (lead >  kLeadMax) { lead =  kLeadMax; }
-			if (lead < -kLeadMax) { lead = -kLeadMax; }
-			return std::pow(2.0, mean + lead);
-		};
+		auto sceneNow = [](const std::vector<double>& buf) { return sceneNowFromBufRef(buf); };
 		auto plainAvg = [](const std::vector<double>& buf)
 		{
 			double a = 0.0;
@@ -339,6 +342,113 @@ int main()
 		{
 			std::vector<double> buf = { -1.0, 0.0, -1.0 };
 			check(sceneNow(buf) < 0.0, "有効な測光値が無ければ無効を返す");
+		}
+	}
+
+
+	// --- 8) ライブビューの張り付き検出(2026-08-03 実機の暴走から) ---
+	//
+	// 【何が起きたか】postNight 04:11 の R10。暗所でカメラがライブビューに自動ゲインをかけ、
+	//  露出を絞っても測光値が下がらなくなった(張り付き)。制御は「まだ明るい」と読み続け、
+	//  ISO1250→125 まで11コマ連続で絞り続けた。写真は13コマで 4.2段 暗くなり
+	//  (IMG_0566 +1.57段 → IMG_0579 -2.61段)、測光値は実際の写真より最大 2.88段 暗かった。
+	//
+	// 【なぜ検出できなかったか】張り付き判定は adaptMeterSs にしか無く、そこは
+	//  「測光ssへ切替えたコマ」でしか呼ばれない。7/31 に入れた「撮影ssのまま測る」経路は
+	//  その手前で return していたので、判定ごと無効になっていた。
+	//  さらに判定条件が「露出が0.5段以上動いたとき」だったため、撮影中の 1歩=1/3段(0.333)
+	//  では **切替経路でも一度も働かない**。値の範囲(lvUsableAsIs)は正常なままなので気づけない。
+	//
+	// 【このテストが固定する仕様】応答比 = Δ測光値[段] / Δ露出[段]。正常なら 1.0。
+	//  ・1歩(1/3段)の変化でも判定が働くこと(最小変化量 ≦ 1/3段)
+	//  ・実測の張り付き列(応答比 -0.2 前後)を張り付きと判定すること
+	//  ・実測の正常列(応答比 +1.5)を張り付きと判定しないこと
+	//  ・場面自体の変化が乗った通常コマを誤検出しないこと
+	//  ・1コマのノイズでは確定せず、連続 kMeterPinConfirm 回で確定すること
+	{
+		const double kRatio    = 0.50;	// = apiCanonCCAPI kMeterRespondRatio
+		const double kMinStops = 0.30;	// = apiCanonCCAPI kMeterRespondMinStops
+		const int    kConfirm  = 2;		// = apiCanonCCAPI kMeterPinConfirm
+
+		check(kMinStops <= 1.0 / 3.0 + 1e-9, "1歩(1/3段)でも応答比の判定が働く最小変化量である");
+
+		// 実装と同じ判定器。dSs=露出の変化[段]、dLin=測光値の変化[段]
+		struct detector
+		{
+			double ratio; double minStops; int confirm; int streak = 0;
+			bool feed(double dSs, double dLin)
+			{
+				if (std::fabs(dSs) < minStops) { return false; }	// 判定できるだけ動いていない
+				if ((dLin / dSs) < ratio) { ++streak; } else { streak = 0; }
+				return streak >= confirm;
+			}
+		};
+
+		// ① 実測の暴走列(04:11:00〜04:13:15)。露出を1歩(-0.333段)ずつ絞ったときの測光値の変化[段]。
+		//    ISO1250→320 の間、測光値は下がるどころか上がっていた。
+		{
+			const double dLin[] = { -0.22 * -1.0 / 3.0, -0.25 * -1.0 / 3.0, -0.24 * -1.0 / 3.0,
+			                        -0.17 * -1.0 / 3.0, -0.22 * -1.0 / 3.0, -0.22 * -1.0 / 3.0 };
+			detector d{ kRatio, kMinStops, kConfirm };
+			int at = -1;
+			for (int i = 0; i < 6; ++i)
+			{
+				if (d.feed(-1.0 / 3.0, dLin[i]) && at < 0) { at = i; }
+			}
+			char note[96];
+			std::snprintf(note, sizeof(note), "(%dコマ目で検出)", at + 1);
+			check(at >= 0, "実測の張り付き列(応答比-0.2前後)を張り付きと判定する", note);
+			check(at == kConfirm - 1, "確定は連続2コマ目。それ以上は引っ張らない", note);
+		}
+
+		// ② 実測の回復列(ISO250→160)。応答比 +1.5 は正常。張り付きと判定してはいけない。
+		{
+			detector d{ kRatio, kMinStops, kConfirm };
+			const double r[] = { 1.51, 1.55 };
+			bool pinned = false;
+			for (int i = 0; i < 2; ++i) { if (d.feed(-1.0 / 3.0, r[i] * -1.0 / 3.0)) { pinned = true; } }
+			check(!pinned, "応答比+1.5の正常な測光を張り付きと誤判定しない");
+		}
+
+		// ③ 通常コマ: 1歩絞る間に場面が 0.08段 明るくなった。応答比 0.76 で正常側。
+		{
+			detector d{ kRatio, kMinStops, kConfirm };
+			bool pinned = false;
+			for (int i = 0; i < 5; ++i) { if (d.feed(-1.0 / 3.0, -1.0 / 3.0 + 0.08)) { pinned = true; } }
+			check(!pinned, "場面変化が乗った通常コマを誤検出しない(応答比0.76)");
+		}
+
+		// ④ 1コマだけの外れ値では確定しない(測光ノイズで切替経路へ落とさない)
+		{
+			detector d{ kRatio, kMinStops, kConfirm };
+			check(!d.feed(-1.0 / 3.0, +0.10), "1コマ目の異常では確定しない");
+			check(!d.feed(-1.0 / 3.0, -1.0 / 3.0 + 0.08), "正常コマが挟まれば連続回数はリセットされる");
+		}
+
+		// ⑤ 露出を動かしていないコマは判定材料にならない(ゼロ割・誤検出を出さない)
+		{
+			detector d{ kRatio, kMinStops, kConfirm };
+			bool pinned = false;
+			for (int i = 0; i < 5; ++i) { if (d.feed(0.0, -0.5)) { pinned = true; } }
+			check(!pinned, "露出が動いていないコマでは張り付きと判定しない");
+		}
+
+		// ⑥ 張り付き中は外挿しないこと。captureRunner は検出コマでバッファを捨てるので、
+		//    偽のトレンド(絞っているのに明るくなり続ける)を増幅しない。
+		{
+			// 暴走中の測光値: 絞っているのに毎コマ +0.07段 ずつ上がっていた
+			std::vector<double> bad;
+			for (int i = 0; i < 5; ++i) { bad.push_back(std::pow(2.0, 0.07 * i)); }
+			double mean = 0.0;
+			for (double v : bad) { mean += std::log2(v); }
+			mean /= 5.0;
+			// 捨てずに外挿すると平均より 0.14段 明るい側へ行き過ぎる(=さらに絞る方向)
+			const double leaked = std::log2(sceneNowFromBufRef(bad)) - mean;
+			check(leaked > 0.10, "張り付き列をそのまま渡すと外挿が上振れする(捨てる根拠)");
+			// 検出コマで捨てた後は1点だけ。傾きは使われない。
+			std::vector<double> one = { bad.back() };
+			checkNear(std::log2(sceneNowFromBufRef(one)), std::log2(bad.back()), 1e-9,
+			          "捨てた直後は1点のみ=外挿されない");
 		}
 	}
 
