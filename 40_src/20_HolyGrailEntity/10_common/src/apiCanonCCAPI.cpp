@@ -1050,8 +1050,10 @@ namespace
 	constexpr int    kMeterMaxMs          = 5000;	// ヒスト取得リトライ上限[ms]
 	constexpr int    kLvFreshMarginMs     = 2000;	// 古いLVフレーム判定の許容[ms](生成周期+揺らぎ)
 	constexpr double kMeterPinBackoffStops = 1.0;	// 張り付き検出時、天井をこの段数だけ短く下げる
-	constexpr double kMeterMaxLenStep      = 1.0;
-	constexpr int    kLvRetryAsIsFrames    = 20;	// 切替なしを再試行するまでの間隔[コマ]	// 暗すぎるとき1コマで伸ばす上限[段](pin突入を防ぐ)
+	constexpr double kMeterMaxLenStep      = 1.0;	// 暗すぎるとき1コマで伸ばす上限[段](pin突入を防ぐ)
+	// 切替なし経路でLVが取れなかったコマの段番号(ログ stage=)。方式Aの 1〜5 と区別する。
+	constexpr int    kLvFailAsIsStage      = 10;
+	constexpr int    kLvRetryAsIsFrames    = 20;	// 切替なしを再試行するまでの間隔[コマ]
 	constexpr double kMeterCeilRelaxStops  = 0.10;	// 天井を毎コマこれだけ緩め、条件変化へ追従
 	// --- 撮影画像フィードバック測光(方式A)の予算 ---
 	// 露光終了→カメラの記録完了→サムネイル取得 までを含む総予算。記録は実測2.0〜2.6秒だが、
@@ -1279,7 +1281,32 @@ errCode apiCanonCCAPI::meterSceneLv(const hgc::exposure& shotExp, meterResult& o
 		meterResult asIs;
 		const errCode e0 = meterHere(asIs, keepGoing);
 		out.tries += asIs.tries;
-		if (e0 == ERR_HGC_OK && this->lvUsableAsIs(asIs.linear))
+
+		// 【2026-08-04 追加】「測れなかった」と「測れたが撮影ssでは測光に向かない」を分ける。
+		//  測光ssへの切替は「撮影ssではLVが忠実に積分できない場面」への対処であって、
+		//  通信やLVの一過性の失敗に効く手ではない。失敗を切替の合図にすると害しかない:
+		//   ・測光ssが未学習だと初期値は撮影ss-5段。日中に当てると真っ黒な測光になる
+		//   ・詰まっている最中に setSS の PUT を投げる(応答が返らず遅延適用される危険が最も高い場面)
+		//   ・lvAsIsWait_ が立ち、以後 kLvRetryAsIsFrames コマのあいだ切替経路に固定される
+		//  実測(2026-08-03 17:28 夕R10): 通信のスタールでこの経路へ落ち、19コマ 1/16000 に居座った。
+		//  切替なしへ戻った瞬間の実測は 1/16000 の測光からの予測より 1.50段 明るく、写真は最大
+		//  1.3段 明るくなっていた。真っ暗になって切替が要る場合は測光値が下限を大きく割るので
+		//  adaptMeterSs が1段/コマ伸ばして数コマで復帰する。失敗を切替に混ぜる必要はない。
+		//  測光できなかったコマは露出据え置きが既定の方針(呼び出し側が露出を動かさない)。
+		//  lvNeedSwitch_/lvAsIsWait_ を触らないので、次コマでまた切替なしから判断し直す。
+		//  なお meterHere はヒストグラムが空でも ERR_HGC_OK を返す(ok=false/linear<=0 になるだけ)。
+		//  戻り値だけでは判別できないので、linear<=0 も「測れなかった」に含める。
+		if (e0 != ERR_HGC_OK || !(asIs.linear > 0.0))
+		{
+			out.linear = asIs.linear; out.x = asIs.x; out.p99 = asIs.p99; out.pMax = asIs.pMax;
+			out.histSum = asIs.histSum; out.lvTimeMs = asIs.lvTimeMs; out.staleSkip = asIs.staleSkip;
+			out.rdyMs    = asIs.rdyMs;
+			out.meterExp = meterExp;
+			out.failStage = kLvFailAsIsStage;	// ログで「切替なし経路のLV取得失敗」と分かるようにする
+			out.ok = false;
+			return (e0 != ERR_HGC_OK) ? e0 : ERR_HGC_RDY_METARING;
+		}
+		if (this->lvUsableAsIs(asIs.linear))
 		{
 			// 【2026-08-03 追加】中央値が使える範囲にあることと、露出変更に反応することは別物。
 			//  暗所ではカメラがライブビューに自動でゲインをかけ、設定した露出と表示の明るさが

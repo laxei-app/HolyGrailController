@@ -453,6 +453,82 @@ int main()
 	}
 
 
+	// --- 9) 測光ss切替の入口(2026-08-04)。「測れなかった」と「撮影ssでは測光に向かない」を分ける ---
+	//
+	// 【背景】切替なし経路は、LV取得の失敗も「値が範囲外」も同じ扱いで測光ss切替へ落としていた。
+	//  切替は「撮影ssではLVが忠実に積分できない場面」への対処であって、通信やLVの一過性の失敗に
+	//  効く手ではない。混ぜたために 2026-08-03 17:28 の夕R10 で次が起きた:
+	//   ・通信のスタールで切替経路に落ちる
+	//   ・測光ssが未学習なので初期値=撮影ss-5段。1/500 → 1/16000 という日中では真っ黒な値
+	//   ・その測光値 0.0017 は下限 0.001548 のわずか 0.13段上。adaptMeterSs は
+	//     「信号は足りている→現状維持」を選び、1/16000 に居座る
+	//   ・抜けたのは lvAsIsWait_ が尽きた19コマ後。その間 写真は最大1.3段 明るくなった
+	//
+	// 【このテストが固定する仕様】
+	//  ・LVが取れなかった(戻り値NG、またはヒストが空で linear<=0)→ 切替へ落とさない。据え置き
+	//  ・取れて値が範囲外 → 従来どおり切替へ
+	//  ・本当に真っ暗で切替に入った場合は、adaptMeterSs の伸長で数コマで撮影ssへ戻れること
+	{
+		const double kLoX = 0.020, kHiX = 0.850;	// = kMeterUsableLoX / kMeterUsableHiX
+		const double loLin = expo::srgbToLinear(kLoX);
+		const double hiLin = expo::srgbToLinear(kHiX);
+
+		// 実装と同じ判定: 取得できたか / 使える範囲か
+		auto acquired   = [](bool rcOk, double linear) { return rcOk && (linear > 0.0); };
+		auto usableAsIs = [&](double linear)
+		{
+			if (!(linear > 0.0)) { return false; }
+			return (linear >= loLin) && (linear <= hiLin);
+		};
+		// 入口の行き先。0=そのまま採用 / 1=測光ss切替へ / 2=据え置き(切替へ落とさない)
+		auto route = [&](bool rcOk, double linear)
+		{
+			if (!acquired(rcOk, linear)) { return 2; }
+			return usableAsIs(linear) ? 0 : 1;
+		};
+
+		check(route(false, -1.0) == 2, "LV取得が失敗(戻り値NG) → 据え置き。切替へ落とさない");
+		check(route(true,   0.0) == 2, "ヒストが空(linear=0でも戻り値はOK) → 据え置き。切替へ落とさない");
+		check(route(true, loLin * 0.25) == 1, "取れて暗すぎ(真っ暗) → 従来どおり切替へ");
+		check(route(true, hiLin * 4.00) == 1, "取れて明るすぎ(飽和) → 従来どおり切替へ");
+		check(route(true, 0.05)         == 0, "取れて範囲内 → 撮影ssのまま採用");
+
+		// 17:28 の実測値が「切替へ落とす側」ではなく「据え置き側」に分類されること。
+		// (as-is が返したのは失敗か空データ。0.0017 という値は切替後の測光で得たもの)
+		check(route(true, 0.0) == 2, "17:28の入口(空データ)は据え置きへ分類される");
+
+		// 本当に真っ暗で切替に入った場合の復帰: adaptMeterSs は下限に届くまで1コマ1段伸ばす。
+		// 撮影ssに追いつけば decideMeterSs が空を返し、切替なしへ戻る。
+		{
+			const double kMaxLenStep = 1.0;			// = kMeterMaxLenStep
+			const double kInitDrop   = 5.0;			// = kMeterInitDropStops
+			double atMeterSs = -kInitDrop;			// 撮影ss基準の測光ss[段]。初期値は5段短い
+			double x = loLin * std::pow(2.0, atMeterSs + kInitDrop) / 64.0;	// 真っ暗(下限を大きく割る)
+			int n = 0;
+			while (atMeterSs < 0.0 && n < 20)
+			{
+				if (x >= loLin) { break; }			// 信号が足りたら伸ばすのをやめる
+				double d = std::log2(loLin / x);
+				if (d > kMaxLenStep) { d = kMaxLenStep; }
+				atMeterSs += d; x *= std::pow(2.0, d);
+				++n;
+			}
+			char note[96];
+			std::snprintf(note, sizeof(note), "(%dコマで測光ss %+.1f段)", n, atMeterSs);
+			check(n <= 6, "真っ暗で切替に入っても数コマで撮影ssへ戻れる(固まらない)", note);
+		}
+
+		// 一方、17:28 の値は下限のすぐ上にあり「現状維持」に落ちる=自力では抜けられない。
+		// これが「失敗を切替に混ぜてはいけない」根拠。
+		{
+			const double stuck = 0.0017;			// 実測(1/16000での測光値)
+			char note[120];
+			std::snprintf(note, sizeof(note), "(下限 %.6f の %+.2f段上)", loLin, std::log2(stuck / loLin));
+			check(stuck > loLin && stuck < hiLin,
+			      "17:28の測光値は『信号は足りている』に分類され、伸長が働かない", note);
+		}
+	}
+
 	std::printf("\n%s (fail=%d)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail);
 	return g_fail == 0 ? 0 : 1;
 }
