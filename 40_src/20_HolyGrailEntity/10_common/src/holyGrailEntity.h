@@ -237,6 +237,14 @@ int32_t hge_setSmoothingJson(const char* json);
 // 起動時のログ整理(当日以外が5件以上なら古い順に削除、最新4件まで残す)。offMin=ローカルTZ[分]。
 int32_t hge_pruneOldLogs(int32_t offMin);
 
+// --- 撮影レポート(撮影1回=1件。設定→「撮影レポート」画面で表示する) ---
+// 一覧(新しい順): [{"name","plan","camera","shotAt","frames","noteCount"},...]
+int32_t hge_reportListJson(char* buf, int32_t* inoutLen);
+// 1件の中身(保存した JSON をそのまま)。name は一覧の "name"(ファイル名)。
+int32_t hge_reportJson(const char* name, char* buf, int32_t* inoutLen);
+// 1件削除する。
+int32_t hge_removeReport(const char* name);
+
 // 撮影制御方法の初期値プリセット(型ごとに複数)。型: night/sunrise/sunset/day/moon。
 int32_t hge_getCcmPresetsJson(const char* type, char* buf, int32_t* inoutLen);  // 型のプリセット配列
 int32_t hge_setCcmPreset(const char* type, const char* origName, const char* json); // 追加/更新

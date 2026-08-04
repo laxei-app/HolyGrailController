@@ -604,6 +604,34 @@ JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativePruneOldLogs(JNIEnv* /*env*/, jobject /*thiz*/, jint offMin)
 { return hge_pruneOldLogs(offMin); }
 
+// --- 撮影レポート ---
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeReportList(JNIEnv* env, jobject /*thiz*/)
+{ return callBufGetter(env, hge_reportListJson); }
+
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeReportJson(JNIEnv* env, jobject /*thiz*/, jstring name)
+{
+	if (name == nullptr) { return env->NewStringUTF(""); }
+	const char* n = env->GetStringUTFChars(name, nullptr);
+	int32_t len = 0;
+	hge_reportJson(n ? n : "", nullptr, &len);
+	std::string out;
+	if (len > 0) { std::vector<char> buf(static_cast<size_t>(len)); if (hge_reportJson(n ? n : "", buf.data(), &len) == 0) { out = buf.data(); } }
+	env->ReleaseStringUTFChars(name, n);
+	return env->NewStringUTF(out.c_str());
+}
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeRemoveReport(JNIEnv* env, jobject /*thiz*/, jstring name)
+{
+	if (name == nullptr) { return -1; }
+	const char* n = env->GetStringUTFChars(name, nullptr);
+	jint r = hge_removeReport(n ? n : "");
+	env->ReleaseStringUTFChars(name, n);
+	return r;
+}
+
 JNIEXPORT jstring JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeGetCcmPresets(JNIEnv* env, jobject /*thiz*/, jstring type)
 {

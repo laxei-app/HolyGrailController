@@ -193,15 +193,29 @@ public:
 	static void logShot(int frame, const hgc::exposure& e, double lumStops, const char* ccmName,
 	                    double meteredLinear = -1.0, int rdyMeteringMs = -1, int rdyShutterMs = -1, int prepMs = -1,
 	                    int lateMs = -1, bool rdyOk = true, bool setOk = true, int meterTry = 0, int applyTry = 0,
-	                    uint32_t histSum = 0, uint64_t lvTimeMs = 0, int staleSkip = 0, uint64_t shutterEpochMs = 0);
+	                    uint32_t histSum = 0, uint64_t lvTimeMs = 0, int staleSkip = 0, uint64_t shutterEpochMs = 0,
+	                    int busyMs = -1);
 
 	// 現在の(本日の)ログファイルのフルパスを返す(検証・ログ転送用)。
 	static std::string currentLogPath(void);
 
-	// --- 撮影結果レポート(1撮影=1ファイル。ログと同じディレクトリへ出す) ---
-	// 撮影中に1コマずつ積算し、撮影終了時に人が読める要約をファイルへ書く。
+	// --- 撮影結果レポート(1撮影=1ファイル。ログと同じディレクトリへ JSON で出す) ---
+	// 撮影中に1コマずつ積算し、撮影終了時に要約を書く。
 	// 目的: 「この機材/設定で無理が無かったか」をユーザーが自分で判断できる材料を残す。
 	//  例) stale が多い=撮影周期がカメラのライブビュー更新に追いつかれていない → 周期を伸ばす判断ができる。
+	// 所見は「文言」ではなく noteCode の数値で残し、表示する文言は UI 側が持つ(多言語化・
+	// 文言変更をファイル形式から切り離すため)。
+	enum noteCode : int
+	{
+		NOTE_SET_FAIL       = 1,	// 露出設定に失敗したコマがある(実機とアプリの露出がズレる)
+		NOTE_STALE_MANY     = 2,	// ライブビューの更新が撮影周期に追いついていない
+		NOTE_LATE_MANY      = 3,	// 撮影周期を守れないコマが多い
+		NOTE_METER_FAIL     = 4,	// 測光できないコマが多い(明るさが追従しない)
+		NOTE_BUSY_STUCK     = 5,	// 記録が明けないまま準備開始に至ったコマがある
+		NOTE_INTERVAL_TIGHT = 6,	// 目安の最短周期に対して設定周期の余裕がない
+		NOTE_INTERVAL_ROOM  = 7,	// 周期にまだ余裕がある(もっと詰められる)
+		NOTE_BUSY_NO_DATA   = 8,	// busy を1コマも測れなかった(周期が露光で埋まっている等)
+	};
 	struct captureReport
 	{
 		int      frames    = 0;		// 撮影したコマ数
@@ -222,10 +236,33 @@ public:
 		int      prepOver  = 0;		// 準備がリードに収まらなかったコマ数
 		uint64_t firstShutterMs = 0;	// 最初/最後のシャッター(実周期の算出用)
 		uint64_t lastShutterMs  = 0;
+		// --- busy と準備の内訳(2026-08-05。「周期をどこまで SS へ詰められるか」を知るため) ---
+		// busy = 露光が終わってからカメラが測光を受け付けるまで。撮影周期の下限を決める本体。
+		// 従来は SS が速いコマほど busy が明けてから測光していたので一度も測れていなかった。
+		int      busyCnt    = 0;	// busy を計測できたコマ数
+		long     busySumMs  = 0;	// その合計[ms]
+		int      busyMaxMs  = 0;	// その最大[ms]
+		int      busyStuck  = 0;	// 準備開始までに明けなかったコマ数(下限しか分からない)
+		int      meterCnt   = 0;	// 測光時間を計測できたコマ数
+		long     meterSumMs = 0;	// 測光の合計[ms]
+		int      meterMaxMs = 0;	// 測光の最大[ms]
+		int      applyCnt   = 0;	// 露出設定の時間を計測できたコマ数
+		long     applySumMs = 0;	// 露出設定の合計[ms]
+		int      applyMaxMs = 0;	// 露出設定の最大[ms]
+		double   maxSsSec   = 0.0;	// この撮影で使った最長シャッター[秒](最短周期の目安に使う)
+		int      leadMs     = 0;	// 準備に与えられていたリード[ms](0=不明。測光が間に合ったかの基準)
 	};
-	// レポートをファイルへ書く。planName/planId/カメラ名と窓・周期は呼び出し側から渡す。
+	// レポートをファイルへ書く(JSON)。planName/planId/カメラ名と窓・周期は呼び出し側から渡す。
 	// return: 書けたファイルのパス(空=失敗)。
 	static std::string writeCaptureReport(const captureReport& r, const hgc::cs& plan, const char* planId);
+
+	// --- 撮影レポートの取り出し(UI表示用) ---
+	// 一覧の JSON。新しい順。[{"name","plan","camera","shotAt","frames","noteCount"},...]
+	static std::string reportListJson(void);
+	// 1件の中身(保存した JSON をそのまま)。空=読めない。
+	static std::string reportJson(const std::string& name);
+	// 1件削除する。return: 成功。
+	static bool removeReport(const std::string& name);
 };
 
 #endif // _DATA_MANAGER_H_

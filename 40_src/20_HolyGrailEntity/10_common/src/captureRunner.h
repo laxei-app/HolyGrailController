@@ -46,7 +46,14 @@ public:
 	                      int meterWaitMs = -1;	// 新しい画像の登録通知を待った時間[ms]
 	                      int meterFetchMs = -1;	// サムネイル取得(HTTP GET)の時間[ms]
 	                      int meterDecodeMs = -1;	// JPEG復号+ヒスト計算の時間[ms]
-	                      int meterFetchTries = 0; };	// サムネイル取得の試行回数
+	                      int meterFetchTries = 0;	// サムネイル取得の試行回数
+	                      // 露光終了から「測光できる」までカメラが記録で塞がっていた時間[ms](2026-08-05)。
+	                      //  >=0 : 実測値(0=待ちなし)  kBusyNotMeasured : 計測できなかった
+	                      //  kBusyNotCleared : 空白の間に明けなかった(下限しか分からない)
+	                      int busyMs = -1;
+	                      // このコマで準備に与えられたリード[ms](=周期 - 準備開始時刻)。測光が
+	                      // 間に合っているかを判断する基準。0=不明(ウォームアップ等)。
+	                      int leadMs = 0; };
 
 	using stateCb    = std::function<void(int)>;					// hgeState 値
 	using progressCb = std::function<void(const progressInfo&)>;
@@ -120,6 +127,18 @@ public:
 	// ライブビューに反映されるまで待つ(実測 R10 1.3〜2.1秒)→測光→撮影用露出を適用」を行うため。
 	static constexpr int    kPrepLeadMs          = 5000;	// 周期の何ms前に準備(測光→計算→設定)を始めるか
 
+	// --- busy計測(2026-08-05) ---
+	// 「シャッターを切ってから測光できるようになるまで」を毎コマ測る。撮影周期をどこまで
+	// SS へ近づけられるかはこの時間が決めるので、機種ごとに実測して撮影レポートへ残す。
+	// 今のループは露光終了から準備開始(リード手前)まで一切通信していない。その空白だけを
+	// 使うので、シャッター時刻・測光・露出設定のどれにも影響しない。
+	//  ・プローブは apiBase::meterReadyProbe(CCAPI では LV の ?kind=info)。カード非接触。
+	//  ・明けたら即やめる。明るい場面では数回で終わる。
+	static constexpr int kBusyProbeMs     = 200;	// プローブ間隔[ms](0=計測しない)
+	static constexpr int kBusyProbeMaxTry = 60;		// 1コマのプローブ上限(明けないとき延々叩かない)
+	static constexpr int kBusyNotMeasured = -1;		// 計測できなかった(非対応/空白が無い/中断)
+	static constexpr int kBusyNotCleared  = -2;		// 空白の間に測光可にならなかった
+
 	// --- 測光 ---
 	// 「どう測るか」(LVヒストグラム・暗所での測光ss切替・張り付き検出・鮮度判定と各種定数)は
 	// カメラ依存の実装詳細として apiBase 実装側(apiCanonCCAPI)へ移設した(2026-07-27)。
@@ -188,6 +207,9 @@ private:
 	// 測光失敗のログ文を作る(待ちのどの通信でつまずいたかを含める。2026-07-30 診断)。
 	// シャッターを切る(503の間は締め切りまで粘る。503は接続断に数えない)。
 	errCode       fireShutter(const hgc::exposure& shotExp, double intervalSec, int& failStreak);
+	// 露光終了→測光可 までの ms を測る(空白区間だけを使う。戻り値は capturedInfo::busyMs と同じ規約)。
+	//  anchorA=このコマの起点[A] / ssSec=撮ったコマの露光[秒] / prepAt=[A]から準備開始までの[ms]
+	int           measureBusy(void* anchorA, double ssSec, long prepAt);
 	void          meterLostMsg(const apiBase::meterResult& mr, char* buf, size_t len) const;
 	// ヒステリシス帯の実効値(1歩=1/3段を下限とする。設定は書き換えない)。
 	// 移動平均バッファから「いまの場面の明るさ」を推定する(平均の遅れを傾きで補う)。

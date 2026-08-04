@@ -1049,7 +1049,7 @@ namespace
 				              S->planId.c_str(), c.frame, c.exp.iso.c_str(), c.exp.ss.c_str(), c.exp.fn.c_str(), c.luminance);
 				notify(HGE_EV_CAPTURED, b);
 				if (c.ccm != S->lastCcm) { std::string d = (S->lastCcm.empty() ? "" : S->lastCcm + " -> ") + c.ccm; dataManager::logEvent("CCMSW", d.c_str()); S->lastCcm = c.ccm; }
-				dataManager::logShot(c.frame, c.exp, c.luminance, c.ccm.c_str(), c.metered, c.rdyMeteringMs, c.rdyShutterMs, c.prepMs, c.lateMs, c.rdyOk, c.setOk, c.meterTry, c.applyTry, c.histSum, c.lvTimeMs, c.staleSkip, c.shutterMs);
+				dataManager::logShot(c.frame, c.exp, c.luminance, c.ccm.c_str(), c.metered, c.rdyMeteringMs, c.rdyShutterMs, c.prepMs, c.lateMs, c.rdyOk, c.setOk, c.meterTry, c.applyTry, c.histSum, c.lvTimeMs, c.staleSkip, c.shutterMs, c.busyMs);
 				// 【診断トラップ(一時)】測光ヒストの明るい側をSHOTと別行で記録。夜明けにライブビューが
 				// 明るい画素を捉えているか(p99/最大ビン)を後で実写と突き合わせるため。測光時のみ・タイミング不変。
 				if (c.metered >= 0.0 && c.lvP99 >= 0.0)
@@ -1101,6 +1101,30 @@ namespace
 						if (R.firstShutterMs == 0) { R.firstShutterMs = c.shutterMs; }
 						R.lastShutterMs = c.shutterMs;
 					}
+					// busy(露光終了→測光可)。>=0 が実測、-2 は空白のあいだ明けなかったコマ。
+					if (c.busyMs >= 0)
+					{
+						++R.busyCnt; R.busySumMs += c.busyMs;
+						if (c.busyMs > R.busyMaxMs) { R.busyMaxMs = c.busyMs; }
+					}
+					else if (c.busyMs == captureRunner::kBusyNotCleared) { ++R.busyStuck; }
+					// 準備の内訳。測光と露出設定を分けて持つ(どちらがリードを食っているかを見るため)。
+					if (c.rdyMeteringMs >= 0)
+					{
+						++R.meterCnt; R.meterSumMs += c.rdyMeteringMs;
+						if (c.rdyMeteringMs > R.meterMaxMs) { R.meterMaxMs = c.rdyMeteringMs; }
+					}
+					if (c.rdyShutterMs >= 0)
+					{
+						++R.applyCnt; R.applySumMs += c.rdyShutterMs;
+						if (c.rdyShutterMs > R.applyMaxMs) { R.applyMaxMs = c.rdyShutterMs; }
+					}
+					// 最長ss。最短周期の目安(ss + busy + 準備 + 余裕)の第1項になる。
+					{
+						const double ss = expo::parseValue(c.exp.ss, expo::expoKind::ss);
+						if (ss > R.maxSsSec) { R.maxSsSec = ss; }
+					}
+					if (c.leadMs > 0) { R.leadMs = c.leadMs; }
 				}
 			},
 			[S](errCode e, const std::string& m) {
@@ -2130,6 +2154,23 @@ int32_t hge_setSmoothingJson(const char* json)
 int32_t hge_pruneOldLogs(int32_t offMin)
 {
 	return dataManager::pruneOldLogs(offMin);
+}
+
+int32_t hge_reportListJson(char* buf, int32_t* inoutLen)
+{
+	return copyOut(dataManager::reportListJson(), buf, inoutLen);
+}
+
+int32_t hge_reportJson(const char* name, char* buf, int32_t* inoutLen)
+{
+	if (name == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return copyOut(dataManager::reportJson(std::string(name)), buf, inoutLen);
+}
+
+int32_t hge_removeReport(const char* name)
+{
+	if (name == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return dataManager::removeReport(std::string(name)) ? ERR_HGC_OK : ERR_HGC_NO_ELEMENT;
 }
 
 int32_t hge_getCcmPresetsJson(const char* type, char* buf, int32_t* inoutLen)

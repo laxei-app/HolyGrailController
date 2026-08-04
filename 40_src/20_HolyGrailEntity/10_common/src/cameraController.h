@@ -48,6 +48,8 @@ public:
 	                         const std::function<bool()>& keepGoing);
 	// 測光を「いつ呼ぶか」の申告を得る(カメラ未取得時は既定値=シャッター5秒前)。
 	static apiBase::meterTiming meterTimingHint(const class device& device);
+	// 「いま測光を始められるか」の軽い問い合わせ(busy計測)。1=可 / 0=まだ / -1=計測しない。
+	static int     meterReadyProbe(const class device& device);
 	static void    meterReset(const class device& device);
 	// 直近 alzMetering が解析したライブビューフレームのカメラ側取得時刻[ms]。0=不明。
 	static uint64_t lastLvTimeMs(const class device& device);

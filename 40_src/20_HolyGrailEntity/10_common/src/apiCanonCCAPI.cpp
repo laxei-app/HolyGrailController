@@ -274,6 +274,19 @@ errCode apiCanonCCAPI::stopLiveView(void)
     return ERR_HGC_HTTP_POST;
 }
 
+// 「いま測光を始められるか」(busy計測用。2026-08-05)。
+//  LV方式(現行)の測光はライブビューが流れていることが前提なので、その一点だけを見る。
+//  露光と記録の間 CCAPI はライブビューを止めるため、これが戻る時刻 = 記録が明けた時刻。
+//  ・?kind=info の GET 1往復だけ。カードには一切触らない(記録中のカード接触は
+//    R10 の撮影エンジン固着を招いた。計測でその踏み方を再現しない)。
+//  ・サムネ方式では測光元が撮影画像でこの尺度が当てはまらないので計測しない。
+int apiCanonCCAPI::meterReadyProbe(void)
+{
+	if (kUseShotThumbMetering) { return -1; }
+	if (!(funcList[funcNum::LIVE_DETAIL].verb == verb::GET)) { return -1; }
+	return this->liveViewAlive() ? 1 : 0;
+}
+
 // ライブビューが実際に動いているか(軽い ?kind=info で確認する)。
 bool apiCanonCCAPI::liveViewAlive(void)
 {

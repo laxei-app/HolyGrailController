@@ -20,4 +20,5 @@
     <include layout="@layout/screen_places" />
     <include layout="@layout/screen_reserve" />
     <include layout="@layout/screen_history" />
+    <include layout="@layout/screen_report" />
 </ViewFlipper>

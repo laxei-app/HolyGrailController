@@ -283,6 +283,41 @@ errCode captureRunner::fireShutter(const hgc::exposure& shotExp, double interval
 	return err;
 }
 
+// シャッター後、カメラが記録で塞がっている時間を測る(2026-08-05)。
+//
+// 【なぜ要るか】撮影周期をどこまで SS へ近づけられるかは、露光が終わってからカメラが
+//  次の測光を受け付けるまでの時間で決まる。これが機種ごとにどれだけ違うかを知りたい。
+//  従来この時間は測れていなかった: SS が速いコマほど露光は早く終わるのに、準備開始は
+//  常に「周期 - リード」に固定されているため、busy はとうに明けてから測光していた。
+//
+// 【どこで測るか】露光終了 〜 準備開始(prepAt) の空白。ここは従来まったく通信していない
+//  区間なので、プローブを入れてもシャッター時刻・測光・露出設定のどれも動かない。
+//  露光中は必ず塞がっていて情報が増えないので、露光が閉じるまでは黙って待つ。
+//
+// return: 露光終了から測光可までの ms(0=待ちなし)。測れない場合は kBusyNotMeasured、
+//         空白を使い切っても明けなければ kBusyNotCleared。
+int captureRunner::measureBusy(void* anchorA, double ssSec, long prepAt)
+{
+	if (anchorA == nullptr || kBusyProbeMs <= 0 || dev_ == nullptr) { return kBusyNotMeasured; }
+	const long endExp = static_cast<long>(((ssSec > 0.0) ? ssSec : 0.0) * 1000.0);	// [A]起点の露光終了
+	if (endExp >= prepAt) { return kBusyNotMeasured; }	// 空白が無い(周期が露光で埋まっている)
+	this->sleepUntilElapse(anchorA, endExp);				// 露光が閉じるまで待つ
+	if (!running_) { return kBusyNotMeasured; }
+	for (int i = 0; i < kBusyProbeMaxTry; ++i)
+	{
+		// 「その時刻にカメラが受け付けたか」を記録したいので、問い合わせの前に時刻を採る
+		// (プローブ1往復ぶんだけ実際より小さめに出るが、遅れを水増ししない側へ倒す)。
+		const long at = static_cast<long>(tool::getElapse(anchorA));
+		if (at >= prepAt) { break; }						// 空白を使い切った
+		const int r = cameraController::meterReadyProbe(*dev_);
+		if (r < 0)  { return kBusyNotMeasured; }			// このカメラ実装は計測に対応しない
+		if (r == 1) { return static_cast<int>(at - endExp); }
+		this->interruptibleSleep(kBusyProbeMs);
+		if (!running_) { return kBusyNotMeasured; }
+	}
+	return kBusyNotCleared;
+}
+
 // 測光失敗のログ文を作る。原因を後から特定できるよう、待ちのどこでつまずいたかまで残す。
 //  step 1=/contents が取れない 2=カード配下が取れない 3=総数が取れない
 //       4=時間内に総数が増えない 5=最新パスが取れない
@@ -780,6 +815,8 @@ errCode captureRunner::loop(void)
 		void*         anchorA   = nullptr;		// [A] このコマの周期基準(準備開始/次シャッター算出に使用)
 		uint64_t      shutterMs = 0;
 		long          lateMs    = -1;			// このコマのシャッターの周期からの遅れ[ms](0=ぴったり。-1=計測なし)
+		int           busyMs    = kBusyNotMeasured;	// 露光終了→測光可(カメラが記録で塞がっていた時間)
+		int           leadUsed  = 0;			// このコマで準備に与えたリード[ms](周期 - 準備開始)
 
 		if (!warmedUp)
 		{
@@ -878,6 +915,9 @@ errCode captureRunner::loop(void)
 				}
 				if (prepAt < 0)  { prepAt = 0; }
 				if (prepAt > im) { prepAt = im; }	// 露光が周期一杯 → 遅れ許容(従来どおり)
+				leadUsed = static_cast<int>(im - prepAt);	// 実際に準備へ与えたリード(方式で変わる)
+				// 空白のあいだにカメラの busy 明けを測る(毎コマ)。撮影の進行には触れない。
+				busyMs = this->measureBusy(anchorA, expo::parseValue(shotExp.ss, expo::expoKind::ss), prepAt);
 				sleepUntilElapse(anchorA, prepAt);
 			}
 			if (!running_) { break; }
@@ -1337,7 +1377,7 @@ errCode captureRunner::loop(void)
 			                          static_cast<int>(lateMs), meterOk_, (applyErr == ERR_HGC_OK),
 			                          meterTry_, applyTry, histSum_, lvTimeMs_, staleSkip_, shutterMs, lvP99_, lvPMax_,
 			                          meterSsUsed_, meterSettleMs_, lvPinnedLog_,
-			                          meterWaitMs_, meterFetchMs_, meterDecodeMs_, meterFetchTries_ });
+			                          meterWaitMs_, meterFetchMs_, meterDecodeMs_, meterFetchTries_, busyMs, leadUsed });
 		}
 
 		// 測光の連続失敗は「接続断」ではない(2026-07-28 根治)。

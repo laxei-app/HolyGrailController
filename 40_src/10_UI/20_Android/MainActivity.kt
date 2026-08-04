@@ -541,6 +541,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 660 操作履歴(項目9)
         findViewById<ImageView>(R.id.history_back).setOnClickListener { flipper.displayedChild = 5; buildGearMenu() }
         findViewById<ImageView>(R.id.history_menu).setOnClickListener { flipper.displayedChild = 5; buildGearMenu() }
+        // 670 撮影レポート。読むだけの画面なので離脱時に保存するものは無い。
+        findViewById<ImageView>(R.id.report_back).setOnClickListener { flipper.displayedChild = 5; buildGearMenu() }
+        findViewById<ImageView>(R.id.report_menu).setOnClickListener { flipper.displayedChild = 5; buildGearMenu() }
+        setupDivider(R.id.report_divider, R.id.report_listScroll)
         findViewById<Button>(R.id.history_clear).setOnClickListener {
             AlertDialog.Builder(this)
                 .setTitle("履歴削除")
@@ -782,6 +786,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         gearItem(box, "撮影場所") { openPlacesList() }
         gearItem(box, "カメラ予約表") { openReserveTable() }   // 項目17
         gearItem(box, "操作履歴") { openHistory() }            // 項目9
+        gearItem(box, "撮影レポート") { openReportList() }     // 670: 撮影1回ぶんの結果と所見
         gearBand(box, "撮影制御方法 初期値")
         // 項目3: 「月の影響への対処」は撮影制御方法初期値から削除。
         gearItem(box, "夜間撮影") { openPresetScreen("night") }
@@ -4031,6 +4036,202 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 typeface = Typeface.MONOSPACE          // 桁を揃えて読みやすくする
                 setTextColor(Color.DKGRAY)
                 setPadding(dp(8), dp(5), dp(8), dp(5))
+            })
+        }
+    }
+
+    // ============================================================
+    //  670 撮影レポート(撮影1回=1件)
+    // ============================================================
+    // Entity が撮影終了時に /log へ書いた report_*.json を読んで見せるだけの画面。集計は
+    // すべて Entity 側で済んでいる。所見は JSON にコード(dataManager::noteCode)で入っており、
+    // 表示する文言はこの画面が持つ(文言を変えても保存ファイルの形式に影響しない)。
+    private var selectedReport: String? = null
+
+    private fun openReportList() {
+        buildReportList(); buildReportDetail()
+        setInitialSplit(R.id.report_listScroll, R.id.report_container)
+        flipper.displayedChild = 15
+    }
+
+    // 所見コード → 表示文言(dataManager::noteCode と対応)。
+    private fun reportNoteText(code: Int): String = when (code) {
+        1 -> "露出設定に失敗したコマがあります。カメラの露出がアプリの意図とズレている可能性があります。"
+        2 -> "ライブビューの更新が撮影周期に追いついていません。撮影周期を長くすると安定します。"
+        3 -> "撮影周期を守れないコマが多いです。シャッター速度に対して周期が短い可能性があります。"
+        4 -> "測光できないコマが多いです。露出が据え置かれるため明るさが追従しません。"
+        5 -> "カメラの記録が明けないまま準備開始に至ったコマがあります。周期に対して記録が遅いか、ライブビューが止まっています。"
+        6 -> "撮影周期に余裕がありません。目安の最短周期を下回ると、遅れやコマ落ちが出ます。"
+        7 -> "撮影周期にはまだ余裕があります。周期を短くすると滑らかな微速度になります。"
+        8 -> "busy を1コマも測れませんでした。周期が露光でほぼ埋まっています。"
+        else -> "(不明な所見 $code)"
+    }
+
+    private fun buildReportList() {
+        val box = findViewById<LinearLayout>(R.id.report_container)
+        box.removeAllViews()
+        val arr = try { JSONArray(HgeNative.nativeReportList()) } catch (_: Exception) { JSONArray() }
+        if (arr.length() == 0) {
+            box.addView(TextView(this).apply { text = "(撮影レポートはありません)"; setTextColor(Color.GRAY) })
+            selectedReport = null
+            return
+        }
+        // 一覧は新しい順。選択が無い/消えたときは一番新しいものを開く。
+        val names = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("name") }
+        if (selectedReport == null || selectedReport !in names) { selectedReport = names.firstOrNull() }
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val name = o.optString("name")
+            val notes = o.optInt("noteCount")
+            val sub = "%s / %s  %d枚%s".format(
+                o.optString("plan"), o.optString("camera"), o.optInt("frames"),
+                if (notes > 0) "   所見 ${notes}件" else "")
+            val menu: List<Pair<String, () -> Unit>> = listOf("削除" to { confirmDeleteReport(name) })
+            box.addView(listRow(o.optString("shotAt").ifEmpty { name }, sub, name == selectedReport,
+                { selectedReport = name; buildReportList(); buildReportDetail() }, menu))
+            box.addView(thinDivider())
+        }
+    }
+
+    private fun confirmDeleteReport(name: String) {
+        AlertDialog.Builder(this)
+            .setTitle("撮影レポートの削除")
+            .setMessage("このレポートを削除しますか？\n$name")
+            .setPositiveButton("削除する") { _, _ ->
+                HgeNative.nativeRemoveReport(name)
+                if (selectedReport == name) { selectedReport = null }
+                buildReportList(); buildReportDetail()
+            }
+            .setNegativeButton("やめる", null)
+            .show()
+    }
+
+    private fun buildReportDetail() {
+        val box = findViewById<LinearLayout>(R.id.report_detail)
+        box.removeAllViews()
+        val name = selectedReport
+        if (name.isNullOrEmpty()) { return }
+        val o = try { JSONObject(HgeNative.nativeReportJson(name)) } catch (_: Exception) { null }
+        if (o == null) {
+            box.addView(TextView(this).apply { text = "(このレポートは読めませんでした)"; setTextColor(Color.RED) })
+            return
+        }
+        val win = o.optJSONObject("window") ?: JSONObject()
+        val cap = o.optJSONObject("capture") ?: JSONObject()
+        val exp = o.optJSONObject("exposure") ?: JSONObject()
+        val itv = o.optJSONObject("interval") ?: JSONObject()
+        val tim = o.optJSONObject("timing") ?: JSONObject()
+        val bsy = o.optJSONObject("busy") ?: JSONObject()
+        val met = o.optJSONObject("meter") ?: JSONObject()
+        val apl = o.optJSONObject("apply") ?: JSONObject()
+        val lvw = o.optJSONObject("liveview") ?: JSONObject()
+        val lim = o.optJSONObject("limit") ?: JSONObject()
+
+        repHead(box, o.optString("plan"))
+        repRow(box, "カメラ", o.optString("camera"))
+        repRow(box, "レンズ", o.optString("lens"))
+        repRow(box, "撮影窓", win.optString("start") + " 〜 " + win.optString("end"))
+        repRow(box, "出力日時", o.optString("shotAt"))
+
+        repBand(box, "撮影")
+        repRow(box, "コマ数", "${cap.optInt("frames")}")
+        repRow(box, "シャッター失敗", "%d (%.1f%%)".format(cap.optInt("shootFail"), cap.optDouble("shootFailPct")))
+
+        repBand(box, "露出")
+        repRow(box, "測光したコマ", "${exp.optInt("meterTried")}", "夜間の固定露出は測光しないので含まない")
+        repRow(box, "測光できなかった", "%d (%.1f%%)".format(exp.optInt("meterFail"), exp.optDouble("meterFailPct")),
+               "測光したコマ中。露出は据え置き")
+        repRow(box, "露出設定できず", "%d (%.1f%%)".format(exp.optInt("setFail"), exp.optDouble("setFailPct")),
+               "0%でないとアプリとカメラの露出がズレる")
+        repRow(box, "測光リトライ", "${exp.optInt("meterRetryFrames")} コマ")
+        repRow(box, "露出設定リトライ", "${exp.optInt("applyRetryFrames")} コマ")
+
+        repBand(box, "撮影周期")
+        repRow(box, "設定 / 実測", "%.1f / %.2f 秒".format(itv.optDouble("setSec"), itv.optDouble("actualSec")))
+        repRow(box, "周期どおり", "%d / %d (%.1f%%)".format(tim.optInt("lateOk"), tim.optInt("lateCnt"), tim.optDouble("lateOkPct")),
+               "遅れ100ms以内")
+        repRow(box, "遅れ 平均/最大", "%.0f / %d ms".format(tim.optDouble("lateAvgMs"), tim.optInt("lateMaxMs")))
+        repRow(box, "準備 平均/最大", "%.0f / %d ms".format(tim.optDouble("prepAvgMs"), tim.optInt("prepMaxMs")),
+               "測光→露出計算→露出設定")
+        repRow(box, "準備が間に合わず", "${tim.optInt("prepOver")} コマ",
+               "リード %.1f 秒以内に終える必要がある".format(tim.optInt("leadMs") / 1000.0))
+
+        // ここが「撮影周期をどこまでシャッター速度へ近づけられるか」の答えになる部分。
+        repBand(box, "カメラの busy と周期の余裕")
+        val busyCnt = bsy.optInt("cnt")
+        if (busyCnt > 0) {
+            repRow(box, "露光終了→測光可", "平均 %.2f / 最大 %.2f 秒".format(bsy.optDouble("avgMs") / 1000.0, bsy.optInt("maxMs") / 1000.0),
+                   "${busyCnt}コマで実測。カメラが記録で塞がっている時間")
+        } else {
+            repRow(box, "露光終了→測光可", "計測なし", "周期が露光で埋まっていて測る空きが無かった")
+        }
+        if (bsy.optInt("stuck") > 0) { repRow(box, "明けなかったコマ", "${bsy.optInt("stuck")} コマ") }
+        repRow(box, "測光の所要", "平均 %.2f / 最大 %.2f 秒".format(met.optDouble("avgMs") / 1000.0, met.optInt("maxMs") / 1000.0))
+        repRow(box, "露出設定の所要", "平均 %.2f / 最大 %.2f 秒".format(apl.optDouble("avgMs") / 1000.0, apl.optInt("maxMs") / 1000.0))
+        repRow(box, "この撮影の最長ss", "%.2f 秒".format(lim.optDouble("maxSsSec")))
+        val minItv = lim.optDouble("minIntervalSec", -1.0)
+        if (minItv >= 0.0) {
+            repRow(box, "目安の最短周期", "%.1f 秒".format(minItv),
+                   "最長ss + busy最大 + 準備最大 + 余裕1秒。設定周期との差 %.1f 秒".format(lim.optDouble("marginSec")))
+        }
+
+        repBand(box, "ライブビュー")
+        repRow(box, "古い映像を破棄", "%d コマ (延べ %d 回)".format(lvw.optInt("staleFrames"), lvw.optInt("staleTotal")))
+
+        val notes = o.optJSONArray("notes")
+        if (notes != null && notes.length() > 0) {
+            repBand(box, "所見")
+            for (i in 0 until notes.length()) {
+                box.addView(TextView(this).apply {
+                    text = "・" + reportNoteText(notes.optInt(i))
+                    textSize = 14f
+                    setTextColor(0xFFB71C1C.toInt())
+                    setPadding(dp(4), dp(6), dp(4), dp(6))
+                })
+            }
+        }
+    }
+
+    private fun repHead(box: LinearLayout, title: String) {
+        box.addView(TextView(this).apply {
+            text = title.ifEmpty { "(名称なし)" }
+            textSize = 19f; setTypeface(null, Typeface.BOLD); setTextColor(Color.BLACK)
+            setPadding(0, 0, 0, dp(6))
+        })
+    }
+
+    private fun repBand(box: LinearLayout, title: String) {
+        box.addView(TextView(this).apply {
+            text = title
+            setTypeface(null, Typeface.BOLD); setTextColor(Color.WHITE)
+            setBackgroundColor(0xFF455A64.toInt())
+            setPadding(dp(8), dp(6), dp(8), dp(6))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(0, dp(12), 0, dp(4)) }
+        })
+    }
+
+    // 1行 = 見出し / 値。数字の読み方(hint)は小さく灰色で値の下へ添える。
+    private fun repRow(box: LinearLayout, label: String, value: String, hint: String = "") {
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.setPadding(dp(4), dp(4), dp(4), dp(4))
+        row.addView(TextView(this).apply {
+            text = label; textSize = 14f; setTextColor(Color.DKGRAY)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        row.addView(TextView(this).apply {
+            text = value; textSize = 14f; setTextColor(Color.BLACK)
+            setTypeface(Typeface.MONOSPACE, Typeface.BOLD)
+            gravity = Gravity.END
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.3f)
+        })
+        box.addView(row)
+        if (hint.isNotEmpty()) {
+            box.addView(TextView(this).apply {
+                text = hint; textSize = 11f; setTextColor(Color.parseColor("#888888"))
+                setPadding(dp(4), 0, dp(4), dp(6))
             })
         }
     }

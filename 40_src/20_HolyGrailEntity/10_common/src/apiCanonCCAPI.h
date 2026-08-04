@@ -171,6 +171,9 @@ public:
 		return kUseShotThumbMetering ? meterTiming{ true, 0 } : meterTiming{ false, kMeterLeadLvMs };
 	}
 	void    meterReset(void) override;
+	// busy計測(2026-08-05): LV方式の測光はライブビューが流れていることが前提なので、
+	// その一点だけを ?kind=info の1往復で見る(カードには触らない)。
+	int     meterReadyProbe(void) override;
 
 protected:
 	// --- 測光の内部状態(セッション単位。meterReset で捨てる) ---

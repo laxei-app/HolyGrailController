@@ -210,6 +210,12 @@ apiBase::meterTiming cameraController::meterTimingHint(const class device& devic
 	return device.apiBase->meterTimingHint();
 }
 
+int cameraController::meterReadyProbe(const class device& device)
+{
+	if (device.apiBase == nullptr) { return -1; }	// カメラ未取得=計測しない
+	return device.apiBase->meterReadyProbe();
+}
+
 void cameraController::meterReset(const class device& device)
 {
 	if (device.apiBase != nullptr) { device.apiBase->meterReset(); }

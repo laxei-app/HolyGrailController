@@ -1308,89 +1308,154 @@ void dataManager::logEvent(const char* event, const char* detail, bool error)
 	writeRecord(error ? "ERR" : "INF", event ? event : "", detail ? detail : "");
 }
 
-// 撮影結果レポートをログと同じディレクトリへ書く(1撮影=1ファイル。UIには出さない=ファイルのみ)。
-// 人が読んで「この機材/設定で無理が無かったか」を判断できることを狙う。数値の意味は本文に併記する。
+// 撮影結果レポートをログと同じディレクトリへ JSON で書く(1撮影=1ファイル)。
+//
+// JSON にしたのは、UI(撮影レポート画面)がそのまま読んで表示するため。所見は文言ではなく
+// noteCode の数値で残す(表示する日本語は UI 側が持つ)。ファイル形式を文言変更から切り離す。
+//
+// この撮影で「機材/設定に無理が無かったか」を判断する材料を残すことが目的で、要は
+//  ・撮れなかった/露出を当てられなかったコマがどれだけあったか
+//  ・撮影周期をどこまでシャッター速度へ近づけられるか(busy と準備の実測)
+// の2点である。
 std::string dataManager::writeCaptureReport(const captureReport& r, const hgc::cs& plan, const char* planId)
 {
 	std::string dir = osfile::logDir();
 	if (dir.empty()) { return ""; }
 	char timeStr[20], dateStr[11];
 	nowLocal(timeStr, dateStr);	// timeStr は "YYYY-MM-DD HH:MM:SS"(日付込み19文字)、dateStr は "YYYY-MM-DD"
-	// report_<planId>_<日付>_<HHMMSS>.txt。同じ計画を撮り直しても上書きしないよう時刻まで入れる。
+	// report_<planId>_<日付>_<HHMMSS>.json。同じ計画を撮り直しても上書きしないよう時刻まで入れる。
 	// ファイル名に空白や ':' を入れない(取り出し・スクリプトでの扱いを楽にする)。
 	char hhmmss[7] = {0};
 	std::snprintf(hhmmss, sizeof(hhmmss), "%c%c%c%c%c%c",
 	              timeStr[11], timeStr[12], timeStr[14], timeStr[15], timeStr[17], timeStr[18]);
-	std::string path = dir + "/report_" + (planId ? planId : "plan") + "_" + dateStr + "_" + hhmmss + ".txt";
+	std::string path = dir + "/report_" + (planId ? planId : "plan") + "_" + dateStr + "_" + hhmmss + ".json";
 
 	auto pct = [](long n, long d) { return (d > 0) ? (100.0 * static_cast<double>(n) / static_cast<double>(d)) : 0.0; };
+	auto avg = [](long sum, int cnt) { return (cnt > 0) ? (static_cast<double>(sum) / cnt) : 0.0; };
 	// 実周期 = 最初〜最後のシャッター間隔 ÷ (コマ数-1)。設定周期と比べれば伸びたかが分かる。
 	double actual = 0.0;
 	if (r.frames > 1 && r.lastShutterMs > r.firstShutterMs)
 	{ actual = static_cast<double>(r.lastShutterMs - r.firstShutterMs) / 1000.0 / static_cast<double>(r.frames - 1); }
 
-	char b[2048];
-	int n = std::snprintf(b, sizeof(b),
-		"=== 撮影結果レポート ===\n"
-		"計画      : %s (id=%s)\n"
-		"カメラ    : %s %s / %s\n"
-		"撮影窓    : %04d-%02d-%02d %02d:%02d ~ %04d-%02d-%02d %02d:%02d\n"
-		"出力日時  : %s\n"
-		"\n"
-		"[撮影]\n"
-		"  コマ数            : %d\n"
-		"  シャッター失敗    : %d (%.1f%%)\n"
-		"\n"
-		"[露出]\n"
-		"  測光したコマ      : %d (夜間の固定露出は測光しないので含まない)\n"
-		"  測光できなかった  : %d (%.1f%%)   ← 測光したコマ中。露出は据え置き\n"
-		"  露出設定できず    : %d (%.1f%%)   ← 0%%でないとアプリとカメラの露出がズレる\n"
-		"  測光リトライ      : %d コマ\n"
-		"  露出設定リトライ  : %d コマ\n"
-		"\n"
-		"[撮影周期]  設定 %.1f 秒 / 実測 %.2f 秒\n"
-		"  周期どおり        : %d / %d (%.1f%%)   ← 遅れ100ms以内\n"
-		"  遅れ 平均/最大    : %.0f / %d ms\n"
-		"  準備 平均/最大    : %.0f / %d ms      ← 測光→露出計算→露出設定\n"
-		"  準備が間に合わず  : %d コマ\n"
-		"\n"
-		"[ライブビュー]\n"
-		"  古い映像を破棄    : %d コマ (延べ %ld 回)\n",
-		plan.name.c_str(), (planId ? planId : ""),
-		plan.camera.maker.c_str(), plan.camera.model.c_str(), plan.lens.name.c_str(),
-		plan.start.year, plan.start.month, plan.start.day, plan.start.hour, plan.start.min,
-		plan.end.year, plan.end.month, plan.end.day, plan.end.hour, plan.end.min,
-		timeStr,
-		r.frames,
-		r.shootFail, pct(r.shootFail, r.frames),
-		r.meterTried,
-		r.meterFail, pct(r.meterFail, r.meterTried),
-		r.setFail,   pct(r.setFail, r.frames),
-		r.meterRetryFrames, r.applyRetryFrames,
-		plan.interval, actual,
-		r.lateOk, r.lateCnt, pct(r.lateOk, r.lateCnt),
-		(r.lateCnt > 0 ? static_cast<double>(r.lateSum) / r.lateCnt : 0.0), r.lateMax,
-		(r.frames > 0 ? static_cast<double>(r.prepSum) / r.frames : 0.0), r.prepMax,
-		r.prepOver,
-		r.staleFrames, r.staleTotal);
+	// 目安の最短周期 = 最長ss + busyの最大 + 準備の最大 + 余裕1秒。
+	// 1コマは「シャッター→露光→記録が明ける→測光→露出設定→次のシャッター」の順で進むので、
+	// この4つを足した値より短い周期は原理的に守れない。最大値で見るのは安全側に倒すため。
+	// busy を1コマも測れていないときは目安を出さない(-1)。憶測の数字を出さない。
+	char timeBuf[24];
+	std::snprintf(timeBuf, sizeof(timeBuf), "%s", timeStr);
+	double minInterval = -1.0;
+	if (r.busyCnt > 0)
+	{ minInterval = r.maxSsSec + (r.busyMaxMs / 1000.0) + (r.prepMax / 1000.0) + 1.0; }
 
-	// 所見: 数字だけでは判断しにくいので、閾値を超えたものだけ日本語で添える。
-	if (n > 0 && n < static_cast<int>(sizeof(b)))
+	json j;
+	j["version"] = 1;
+	j["plan"]    = plan.name;
+	j["planId"]  = (planId ? planId : "");
+	j["camera"]  = plan.camera.maker + " " + plan.camera.model;
+	j["lens"]    = plan.lens.name;
 	{
-		std::string note;
-		if (r.setFail > 0)
-		{ note += "  ・露出設定に失敗したコマがあります。カメラの露出がアプリの意図とズレている可能性があります。\n"; }
-		if (r.staleFrames > 0 && pct(r.staleFrames, r.frames) > 10.0)
-		{ note += "  ・ライブビューの更新が撮影周期に追いついていません。撮影周期を長くすると安定します。\n"; }
-		if (r.lateCnt > 0 && pct(r.lateOk, r.lateCnt) < 90.0)
-		{ note += "  ・撮影周期を守れないコマが多いです。シャッター速度に対して周期が短い可能性があります。\n"; }
-		if (r.meterFail > 0 && pct(r.meterFail, r.meterTried) > 5.0)
-		{ note += "  ・測光できないコマが多いです。露出が据え置かれるため明るさが追従しません。\n"; }
-		if (!note.empty()) { n += std::snprintf(b + n, sizeof(b) - n, "\n[所見]\n%s", note.c_str()); }
+		char ws[20], we[20];
+		std::snprintf(ws, sizeof(ws), "%04d-%02d-%02d %02d:%02d",
+		              plan.start.year, plan.start.month, plan.start.day, plan.start.hour, plan.start.min);
+		std::snprintf(we, sizeof(we), "%04d-%02d-%02d %02d:%02d",
+		              plan.end.year, plan.end.month, plan.end.day, plan.end.hour, plan.end.min);
+		j["window"] = { { "start", ws }, { "end", we } };
 	}
-	if (n <= 0) { return ""; }
-	if (!osfile::writeAll(path, b, static_cast<size_t>(n))) { return ""; }
+	j["shotAt"] = timeBuf;	// レポートを書いた(=撮影を終えた)日時
+
+	j["capture"] = { { "frames", r.frames }, { "shootFail", r.shootFail },
+	                 { "shootFailPct", pct(r.shootFail, r.frames) } };
+
+	// 測光の分母は「測光を試みたコマ」。夜間の固定露出は測光しないので混ぜると失敗率が過大に見える。
+	j["exposure"] = { { "meterTried", r.meterTried },
+	                  { "meterFail", r.meterFail }, { "meterFailPct", pct(r.meterFail, r.meterTried) },
+	                  { "setFail", r.setFail },     { "setFailPct", pct(r.setFail, r.frames) },
+	                  { "meterRetryFrames", r.meterRetryFrames },
+	                  { "applyRetryFrames", r.applyRetryFrames } };
+
+	j["interval"] = { { "setSec", plan.interval }, { "actualSec", actual } };
+	j["timing"]   = { { "lateOk", r.lateOk }, { "lateCnt", r.lateCnt }, { "lateOkPct", pct(r.lateOk, r.lateCnt) },
+	                  { "lateAvgMs", avg(r.lateSum, r.lateCnt) }, { "lateMaxMs", r.lateMax },
+	                  { "prepAvgMs", avg(r.prepSum, r.frames) },  { "prepMaxMs", r.prepMax },
+	                  { "prepOver", r.prepOver }, { "leadMs", r.leadMs } };
+
+	// busy = 露光終了からカメラが測光を受け付けるまで。周期の下限を決めている本体。
+	j["busy"]  = { { "cnt", r.busyCnt }, { "avgMs", avg(r.busySumMs, r.busyCnt) },
+	               { "maxMs", r.busyMaxMs }, { "stuck", r.busyStuck } };
+	j["meter"] = { { "cnt", r.meterCnt }, { "avgMs", avg(r.meterSumMs, r.meterCnt) }, { "maxMs", r.meterMaxMs } };
+	j["apply"] = { { "cnt", r.applyCnt }, { "avgMs", avg(r.applySumMs, r.applyCnt) }, { "maxMs", r.applyMaxMs } };
+	j["liveview"] = { { "staleFrames", r.staleFrames }, { "staleTotal", r.staleTotal } };
+	j["limit"] = { { "maxSsSec", r.maxSsSec }, { "minIntervalSec", minInterval },
+	               { "marginSec", (minInterval >= 0.0) ? (plan.interval - minInterval) : 0.0 } };
+
+	// 所見はコード(noteCode)で残す。閾値を超えたものだけ入れる。表示文言は UI が持つ。
+	json notes = json::array();
+	if (r.setFail > 0)                                            { notes.push_back(static_cast<int>(NOTE_SET_FAIL)); }
+	if (r.staleFrames > 0 && pct(r.staleFrames, r.frames) > 10.0) { notes.push_back(static_cast<int>(NOTE_STALE_MANY)); }
+	if (r.lateCnt > 0 && pct(r.lateOk, r.lateCnt) < 90.0)         { notes.push_back(static_cast<int>(NOTE_LATE_MANY)); }
+	if (r.meterFail > 0 && pct(r.meterFail, r.meterTried) > 5.0)  { notes.push_back(static_cast<int>(NOTE_METER_FAIL)); }
+	if (r.busyStuck > 0)                                          { notes.push_back(static_cast<int>(NOTE_BUSY_STUCK)); }
+	if (r.busyCnt == 0)                                           { notes.push_back(static_cast<int>(NOTE_BUSY_NO_DATA)); }
+	else if (minInterval >= 0.0)
+	{
+		// 余裕が1秒未満なら詰まりすぎ、5秒以上あるならまだ詰められる、という目安。
+		const double margin = plan.interval - minInterval;
+		if (margin < 1.0)      { notes.push_back(static_cast<int>(NOTE_INTERVAL_TIGHT)); }
+		else if (margin > 5.0) { notes.push_back(static_cast<int>(NOTE_INTERVAL_ROOM)); }
+	}
+	j["notes"] = notes;
+
+	const std::string out = j.dump(1, '\t');
+	if (out.empty()) { return ""; }
+	if (!osfile::writeAll(path, out.c_str(), out.size())) { return ""; }
 	return path;
+}
+
+// 撮影レポートの一覧(新しい順)。ファイル名に日付+時刻が入っているので名前の降順で新しい順になる。
+std::string dataManager::reportListJson(void)
+{
+	std::vector<std::string> names = osfile::listFiles("log", "report_", ".json");
+	std::sort(names.begin(), names.end(), [](const std::string& a, const std::string& b) { return a > b; });
+	std::string dir = osfile::logDir();
+	json arr = json::array();
+	for (const auto& nm : names)
+	{
+		// 一覧に出す最小限だけ中身から拾う。壊れたファイルは名前だけで出す(消せるように)。
+		json e;
+		e["name"] = nm;
+		std::string body;
+		if (!dir.empty() && osfile::readAll(dir + "/" + nm, body))
+		{
+			json f = json::parse(body, nullptr, false);
+			if (!f.is_discarded() && f.is_object())
+			{
+				e["plan"]      = f.value("plan", std::string());
+				e["camera"]    = f.value("camera", std::string());
+				e["shotAt"]    = f.value("shotAt", std::string());
+				e["frames"]    = f.contains("capture") ? f["capture"].value("frames", 0) : 0;
+				e["noteCount"] = f.contains("notes") && f["notes"].is_array() ? static_cast<int>(f["notes"].size()) : 0;
+			}
+		}
+		arr.push_back(e);
+	}
+	return arr.dump();
+}
+
+std::string dataManager::reportJson(const std::string& name)
+{
+	// 名前はファイル名のみを受け取る(パス区切りを含むものは弾く=ディレクトリ外へ出さない)。
+	if (name.empty() || name.find('/') != std::string::npos || name.find('\\') != std::string::npos) { return ""; }
+	std::string dir = osfile::logDir();
+	if (dir.empty()) { return ""; }
+	std::string body;
+	if (!osfile::readAll(dir + "/" + name, body)) { return ""; }
+	return body;
+}
+
+bool dataManager::removeReport(const std::string& name)
+{
+	if (name.empty() || name.find('/') != std::string::npos || name.find('\\') != std::string::npos) { return false; }
+	return osfile::removeFile("log", name);
 }
 
 std::string dataManager::currentLogPath(void)
@@ -1405,7 +1470,8 @@ std::string dataManager::currentLogPath(void)
 void dataManager::logShot(int frame, const hgc::exposure& e, double lumStops, const char* ccmName,
                           double meteredLinear, int rdyMeteringMs, int rdyShutterMs, int prepMs,
                           int lateMs, bool rdyOk, bool setOk, int meterTry, int applyTry,
-                          uint32_t histSum, uint64_t lvTimeMs, int staleSkip, uint64_t shutterEpochMs)
+                          uint32_t histSum, uint64_t lvTimeMs, int staleSkip, uint64_t shutterEpochMs,
+                          int busyMs)
 {
 	char lumStr[12];
 	std::snprintf(lumStr, sizeof(lumStr), "%+.3f", lumStops);
@@ -1435,6 +1501,10 @@ void dataManager::logShot(int frame, const hgc::exposure& e, double lumStops, co
 		{	dn += std::snprintf(detail + dn, sizeof(detail) - dn, " set=%dms(%s,try%d)", rdyShutterMs, setOk ? "OK" : "NG", applyTry); }
 		if (prepMs >= 0 && dn < static_cast<int>(sizeof(detail)))  { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " prep=%dms", prepMs); }
 		if (lateMs >= 0 && dn < static_cast<int>(sizeof(detail)))  { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " late=%dms", lateMs); }
+		// busy=露光終了からカメラが測光を受け付けるまで[ms]。撮影周期をどこまでSSへ詰められるかの実測値。
+		//  stuck = 準備開始までの空白のあいだ明けなかった(下限しか分からない)。
+		if (busyMs >= 0 && dn < static_cast<int>(sizeof(detail)))   { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " busy=%dms", busyMs); }
+		else if (busyMs == -2 && dn < static_cast<int>(sizeof(detail))) { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " busy=stuck"); }
 		// hs=測光ヒストグラムの内容チェックサム。前コマと同値なら「カメラが古いフレームを返した
 		// (=測光値が1コマ古い)」疑い。alzMetering は中身の鮮度を判別できないのでログで突き合わせる。
 		if (histSum != 0 && dn < static_cast<int>(sizeof(detail))) { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " hs=%08x", histSum); }

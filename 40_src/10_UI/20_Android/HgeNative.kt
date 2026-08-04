@@ -122,6 +122,10 @@ object HgeNative {
     external fun nativeGetSmoothing(): String              // 露出平滑化 {"hysteresis":double,"movingAverage":int}
     external fun nativeSetSmoothing(json: String): Int
     external fun nativePruneOldLogs(offMin: Int): Int     // 起動時ログ整理(当日以外5件以上で古い順に削除)
+    // --- 撮影レポート(撮影1回=1件) ---
+    external fun nativeReportList(): String               // [{"name","plan","camera","shotAt","frames","noteCount"},...] 新しい順
+    external fun nativeReportJson(name: String): String   // 1件の中身(JSON)。空=読めない
+    external fun nativeRemoveReport(name: String): Int
     // 撮影制御方法の初期値プリセット(型ごとに複数)
     external fun nativeGetCcmPresets(type: String): String  // [ccm,...]
     external fun nativeSetCcmPreset(type: String, origName: String, json: String): Int
