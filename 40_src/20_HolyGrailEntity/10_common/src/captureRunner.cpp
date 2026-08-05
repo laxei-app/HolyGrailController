@@ -552,10 +552,15 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 	// 失敗しても気づかず「設定したつもりの露出」で測るので、答えが静かに狂う。さらに
 	// 「収束中も失敗し続けているのか、最後の1回だけなのか」が分からず原因を切り分けられない。
 	// 毎回ログへ出すと溢れるので、何回目で失敗したかを溜めてループの後に1行だけ出す。
+	// 【診断 2026-08-05 追加】各回の所要時間も測る。失敗が毎回「2回目」に出るため、
+	// 「1回目は速く2回目だけ突出して遅い」のか「回を追うごとに伸びる」のかで原因が分かれる:
+	//  ・2回目だけ遅い → 直前の接続の後始末待ち(TCPのクローズ処理/PCBの解放)
+	//  ・だんだん伸びる → 積み上がり(資源の枯渇)
+	// 例 "適用ms=118,1520!,96,105" ('!'=その回は失敗)。
 	int     applyNg     = 0;			// 収束中に露出適用が失敗した回数
 	errCode applyNgLast = ERR_HGC_OK;	// 最後に失敗したときのコード
-	char    applyNgAt[48] = {0};		// 失敗した回(例 "1,2,5")
-	int     applyNgLen  = 0;
+	char    applyMs[112] = {0};			// 各回の所要[ms](失敗は '!' 付き)
+	int     applyMsLen  = 0;
 
 	// 測光ssをテーブル上で delta 段ずらす(結果は capSec を超えない)。
 	auto shiftMeterSs = [&](hgc::exposure& me, double delta, double capSec)
@@ -586,16 +591,17 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 
 		// 測光露出をカメラへ反映し、ライブビューが追従するのを待ってから測光する。
 		cmdt::shotSet shot(meterE.ss, meterE.fn, meterE.iso);
+		void*         ta = tool::startElapse();
 		const errCode re = cameraController::rdyShutter(*dev_, shot);
-		if (re != ERR_HGC_OK)
-		{	// 適用できていない=このあとの測光は「別の露出」を測ることになる(答えが狂う)。
-			// ここでは動作を変えず、後でまとめて出すために記録だけする。
-			++applyNg; applyNgLast = re;
-			if (applyNgLen < static_cast<int>(sizeof(applyNgAt)) - 5)
-			{
-				applyNgLen += std::snprintf(applyNgAt + applyNgLen, sizeof(applyNgAt) - applyNgLen,
-				                            "%s%d", (applyNgLen > 0) ? "," : "", i + 1);
-			}
+		const long    ms = static_cast<long>(tool::getElapse(ta));
+		// 適用できていないと、このあとの測光は「別の露出」を測ることになる(答えが狂う)。
+		// ここでは動作を変えず、後でまとめて出すために記録だけする。
+		if (re != ERR_HGC_OK) { ++applyNg; applyNgLast = re; }
+		if (applyMsLen < static_cast<int>(sizeof(applyMs)) - 12)
+		{
+			applyMsLen += std::snprintf(applyMs + applyMsLen, sizeof(applyMs) - applyMsLen,
+			                            "%s%ld%s", (applyMsLen > 0) ? "," : "", ms,
+			                            (re != ERR_HGC_OK) ? "!" : "");
 		}
 		interruptibleSleep(kMeterSettleMs);
 
@@ -655,11 +661,20 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 	//  ・回が散らばる/序盤から出る → 通信の使い方そのものが怪しい(接続の張り直し等)
 	//  ・失敗0で最後の1回だけ落ちる → 収束の直後だけに起きる別の要因
 	// どちらなのかがこの1行で決まる。動作は変えていない(従来どおり結果を返して撮影へ進む)。
-	if (applyNg > 0 && onError_)
+	// 失敗が無くても所要は毎回出す。冷えた状態(放置後)と温まった状態(連続実行)を
+	// 同じ物差しで比べたいので、正常時の値が無いと比較にならない。
+	if (onError_)
 	{
-		char eb[240];
-		std::snprintf(eb, sizeof(eb), "%s (収束中の露出適用 %d回失敗 回=%s)",
-		              this->withHttpDetail("初期収束").c_str(), applyNg, applyNgAt);
+		char eb[280];
+		if (applyNg > 0)
+		{
+			std::snprintf(eb, sizeof(eb), "%s (収束中の露出適用 %d回失敗 適用ms=%s)",
+			              this->withHttpDetail("初期収束").c_str(), applyNg, applyMs);
+		}
+		else
+		{
+			std::snprintf(eb, sizeof(eb), "初期収束 適用ms=%s", applyMs);
+		}
 		onError_(applyNgLast, eb);
 	}
 	// 収束中の露出変更(rdyShutter直)は差分適用キャッシュを通らない。ここで無効化して次の適用に

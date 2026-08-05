@@ -223,103 +223,140 @@ static void noteHttpError(int code, std::string& response)
              + " errno=" + std::to_string(errno);
 }
 
-//#define     USE_KEEP_ALIVE
+// TCP接続を使い回す(keep-alive)。戻すときはこの行をコメントアウトするだけでよい。
+//
+// 【なぜ使い回すか(2026-08-05 実測)】リクエストごとに接続を張り直していたため、初期収束の
+//  9秒間に約40本の接続を開閉していた。その密度だと connect() が 1.5秒(setConnectTimeout)
+//  経っても完了しない回が繰り返し出る:
+//    適用ms = 1504!, 311, 1504!, 259, 1504!   ('!'=失敗。1504=接続タイムアウト満了)
+//  失敗しているのは常に接続の段階で、送受信そのものは健全(成功回は259〜311ms)。
+//  接続が1回で済めば、失敗しうる箇所が40個から1個に減る。
+//  撮影が始まると周期15秒に数本なので元々起きない(撮影中の set= は常に高速)。
+#define     USE_KEEP_ALIVE
 #if defined(USE_KEEP_ALIVE)
     ///////////////////////////////////////////////////////////////
-    // keep-alive を使う http通信。セッションは切れない。
+    // keep-alive を使う http通信。応答を読んでもソケットを閉じず、次の要求で使い回す。
+    //  ・HTTP関連はすべて netThread の単一ワーカーから呼ばれるので、静的インスタンス1本で足りる。
+    //  ・使い回しているソケットを相手が黙って閉じていることがある。失敗したら1度だけ
+    //    張り直して再送する(スマホ側 edgeClient の firstReq と同じ考え方)。
     #include <HTTPClient.h>
     #include <WiFi.h>
 
-    static HTTPClient http_;
-    static bool request_with_body(const std::string& url, const std::string& method, const std::string& body, std::string& response);
-    static void prepare_request(const std::string& url);
+    static HTTPClient  g_http;
+    static std::string g_endpoint;		// 直近に繋いだ "http://host:port"
+    static bool        g_open = false;
+
+    // "http://host:port/..." から host:port までを取り出す(接続先が変わったかの判定用)。
+    static std::string endpointOf(const std::string& url)
+    {
+        const size_t p = url.find("://");
+        if (p == std::string::npos) { return url; }
+        const size_t s = url.find('/', p + 3);
+        return url.substr(0, (s == std::string::npos) ? url.size() : s);
+    }
+
+    static void closeConn(void)
+    {
+        g_http.end();
+        g_endpoint.clear();
+        g_open = false;
+    }
+
+    static bool prepare(const std::string& url)
+    {
+        // HTTPClient は接続先を見ず connected() だけで使い回すため、宛先が変わったのに
+        // 繋ぎっぱなしだと前の相手へ投げてしまう。1エッジ複数カメラで実際に起きるので必ず切る。
+        const std::string ep = endpointOf(url);
+        if (g_open && ep != g_endpoint) { closeConn(); }
+        if (!g_http.begin(url.c_str())) { return false; }
+        g_http.setReuse(true);				// 応答後もソケットを閉じない
+        g_http.setConnectTimeout(1500);		// 不達時に接続で長時間ブロックしない
+        g_http.setTimeout(3000);
+        g_endpoint = ep; g_open = true;
+        return true;
+    }
 
     void httpInit(void){}
-    void httpDeInit(void)
+    void httpDeInit(void){ closeConn(); }
+
+    // ボディを伴う要求(POST/PUT/DELETE)。返り値=HTTPステータス(0=応答なし)。
+    static int requestWithBody(const char* method, const std::string& url,
+                               const std::string* body, std::string& response)
     {
-        http_.end();
-    };
-
-    // 5. HTTP GET (Device Description取得用)
-    std::string httpGet(const std::string& url) {
-        if (WiFi.status() != WL_CONNECTED) return "";
-
-        prepare_request(url);
-        int httpCode = http_.GET();
-
-        std::string response;
-        if (httpCode == HTTP_CODE_OK) {
-            response = http_.getString().c_str();
-        } else {
-            // シリアル出力でエラーログ（Windows版のDBGLN相当）
-            Serial.printf("HTTP GET failed, error: %s\n", http_.errorToString(httpCode).c_str());
-            Serial.printf("url : %s\n", url.c_str());
+        int code = 0;
+        for (int attempt = 0; attempt < 2; ++attempt)
+        {
+            if (!prepare(url)) { code = 0; break; }
+            if (body != nullptr) { g_http.addHeader("Content-Type", "application/json"); }
+            code = (body != nullptr)
+                 ? g_http.sendRequest(method, reinterpret_cast<uint8_t*>(const_cast<char*>(body->c_str())),
+                                      body->length())
+                 : g_http.sendRequest(method);
+            if (code > 0) { response = g_http.getString().c_str(); break; }
+            closeConn();	// 使い回しが死んでいたかもしれない → 張り直して1度だけ再送
         }
-        // http_.end() は呼ばず、接続を維持する（Keep-Alive）
-        return response;
+        noteHttpStatus(code);
+        noteHttpError(code, response);	// 失敗なら理由(接続不可か無返答か)を残す
+        return code;
     }
 
-    // 6. HTTP POST (カメラコマンド実行用)
-    bool httpPost(const std::string& url, const std::string& body, std::string& response) {
-        return request_with_body(url, "POST", body, response);
-    }
-
-    // HTTP PUT (リソース更新用)
-    bool httpPut(const std::string& url, const std::string& body, std::string& response) {
-        return request_with_body(url, "PUT", body, response);
-    }
-
-    // HTTP DELETE (リソース削除用)
-    bool httpDelete(const std::string& url, std::string& response) {
-        if (WiFi.status() != WL_CONNECTED) return false;
-
-        prepare_request(url);
-        int httpCode = http_.sendRequest("DELETE");
-
-        if (httpCode > 0) {
-            response = http_.getString().c_str();
-            // 200, 202, 204 を成功とする
-            return (httpCode == 200 || httpCode == 202 || httpCode == 204);
+    // null を含むデータ(ライブビュー等)を扱うため、GET は本文をストリームから長さ分だけ読む。
+    // 使い回すソケットでは「Content-Length ぶん読み切る」ことが必須(読み残すと次の要求が壊れる)。
+    bool httpGet(const std::string& url, std::string& answer)
+    {
+        int code = 0;
+        for (int attempt = 0; attempt < 2; ++attempt)
+        {
+            if (!prepare(url)) { code = 0; break; }
+            code = g_http.GET();
+            if (code > 0) { break; }
+            closeConn();	// 張り直して1度だけ再送
         }
-        return false;
-    }
-
-    // 共通のリクエスト準備
-    void prepare_request(const std::string& url) 
-    {
-        // 接続を開始（既存の接続があれば再利用される）
-        http_.begin(url.c_str());
-        
-        // ★重要：Keep-Aliveを有効にする
-        http_.setReuse(true); 
-        
-        // タイムアウト設定（3秒の壁を意識して3000ms程度）
-        http_.setConnectTimeout(1500);   // ②不達時に接続で長時間ブロックしない
-        http_.setTimeout(3000);
-
-        // JSON用のヘッダーを追加
-        http_.addHeader("Content-Type", "application/json");
-    }
-
-    // POST/PUT 共通処理
-    bool request_with_body(const std::string& url, const std::string& method, const std::string& body, std::string& response) 
-    {
-        if (WiFi.status() != WL_CONNECTED) return false;
-
-        prepare_request(url);
-        int httpCode = http_.sendRequest(method.c_str(), (uint8_t*)body.c_str(), body.length());
-
+        noteHttpStatus(code);
         bool success = false;
-        if (httpCode > 0) {
-            response = http_.getString().c_str();
-            // 200～204 を成功とする
-            if (httpCode >= 200 && httpCode <= 204) success = true;
-        } else {
-            Serial.printf("HTTP %s failed, error: %s\n", method.c_str(), http_.errorToString(httpCode).c_str());
+        if (code == 200)
+        {
+            const int len = g_http.getSize();
+            if (len >= 0)
+            {
+                answer.resize(static_cast<size_t>(len));
+                WiFiClient* stream = g_http.getStreamPtr();
+                const int recvd = (stream != nullptr) ? stream->readBytes(answer.data(), len) : 0;
+                success = (recvd >= len);
+                if (!success) { closeConn(); }	// 読み残しは次の要求を壊すので切る
+            }
+            else
+            {	// 長さ不明(chunked等)。使い回せないので読み切って閉じる。
+                answer = g_http.getString().c_str();
+                success = true;
+                closeConn();
+            }
         }
-
+        else
+        {
+            DBGLN(col::RED,"%s:url?(%s).",__func__, url.c_str());
+        }
         return success;
     }
+
+    bool httpPost(const std::string& url, const std::string& body, std::string& response)
+    {
+        const int code = requestWithBody("POST", url, &body, response);
+        return (code == 200 || code == 204);
+    }
+
+    bool httpPut(const std::string& url, const std::string& body, std::string& response)
+    {
+        const int code = requestWithBody("PUT", url, &body, response);
+        return (code >= 200 && code <= 204);
+    }
+
+    bool httpDelete(const std::string& url, std::string& response)
+    {
+        const int code = requestWithBody("DELETE", url, nullptr, response);
+        return (code == 200 || code == 202 || code == 204);
+    }
+
 #else
     ///////////////////////////////////////////////////////////////
     // 標準的な http 通信。毎回セッションをつなぎなおす。
