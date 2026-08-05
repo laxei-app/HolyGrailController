@@ -1484,7 +1484,7 @@ void dataManager::logShot(int frame, const hgc::exposure& e, double lumStops, co
                           double meteredLinear, int rdyMeteringMs, int rdyShutterMs, int prepMs,
                           int lateMs, bool rdyOk, bool setOk, int meterTry, int applyTry,
                           uint32_t histSum, uint64_t lvTimeMs, int staleSkip, uint64_t shutterEpochMs,
-                          int busyMs)
+                          int busyMs, int firstApplyTries)
 {
 	char lumStr[12];
 	std::snprintf(lumStr, sizeof(lumStr), "%+.3f", lumStops);
@@ -1518,6 +1518,9 @@ void dataManager::logShot(int frame, const hgc::exposure& e, double lumStops, co
 		//  stuck = 準備開始までの空白のあいだ明けなかった(下限しか分からない)。
 		if (busyMs >= 0 && dn < static_cast<int>(sizeof(detail)))   { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " busy=%dms", busyMs); }
 		else if (busyMs == -2 && dn < static_cast<int>(sizeof(detail))) { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " busy=stuck"); }
+		// fa=1枚目の露出を何回目でカメラへ適用できたか。1回で通ったときは出さない(常時付くと冗長)。
+		// >1 = 適用が一度失敗したが待って乗った(=放置後の初回に出る事象を吸収できた証拠)。
+		if (firstApplyTries > 1 && dn < static_cast<int>(sizeof(detail))) { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " fa=%d", firstApplyTries); }
 		// hs=測光ヒストグラムの内容チェックサム。前コマと同値なら「カメラが古いフレームを返した
 		// (=測光値が1コマ古い)」疑い。alzMetering は中身の鮮度を判別できないのでログで突き合わせる。
 		if (histSum != 0 && dn < static_cast<int>(sizeof(detail))) { dn += std::snprintf(detail + dn, sizeof(detail) - dn, " hs=%08x", histSum); }

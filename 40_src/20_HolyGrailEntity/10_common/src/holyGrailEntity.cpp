@@ -1049,7 +1049,7 @@ namespace
 				              S->planId.c_str(), c.frame, c.exp.iso.c_str(), c.exp.ss.c_str(), c.exp.fn.c_str(), c.luminance);
 				notify(HGE_EV_CAPTURED, b);
 				if (c.ccm != S->lastCcm) { std::string d = (S->lastCcm.empty() ? "" : S->lastCcm + " -> ") + c.ccm; dataManager::logEvent("CCMSW", d.c_str()); S->lastCcm = c.ccm; }
-				dataManager::logShot(c.frame, c.exp, c.luminance, c.ccm.c_str(), c.metered, c.rdyMeteringMs, c.rdyShutterMs, c.prepMs, c.lateMs, c.rdyOk, c.setOk, c.meterTry, c.applyTry, c.histSum, c.lvTimeMs, c.staleSkip, c.shutterMs, c.busyMs);
+				dataManager::logShot(c.frame, c.exp, c.luminance, c.ccm.c_str(), c.metered, c.rdyMeteringMs, c.rdyShutterMs, c.prepMs, c.lateMs, c.rdyOk, c.setOk, c.meterTry, c.applyTry, c.histSum, c.lvTimeMs, c.staleSkip, c.shutterMs, c.busyMs, c.firstApplyTries);
 				// 【診断トラップ(一時)】測光ヒストの明るい側をSHOTと別行で記録。夜明けにライブビューが
 				// 明るい画素を捉えているか(p99/最大ビン)を後で実写と突き合わせるため。測光時のみ・タイミング不変。
 				if (c.metered >= 0.0 && c.lvP99 >= 0.0)

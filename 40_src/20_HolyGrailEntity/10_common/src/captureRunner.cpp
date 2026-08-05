@@ -1339,6 +1339,10 @@ errCode captureRunner::loop(void)
 			{
 				int t1 = 0;
 				const errCode ae = applyWithRetry(pending, t1, kFirstApplyMaxMs);
+				// 何回目で乗ったかを残す(SHOTログの fa=)。この事象は放置後の初回にしか出ないので、
+				// 「そもそも失敗しなかった」のか「失敗したが待って乗った」のかを後から区別する。
+				// onError_ は UI へトーストも出すので、情報の記録には使わない。
+				firstApplyTries_ = t1;
 				if (ae != ERR_HGC_OK)
 				{
 					if (onError_)
@@ -1404,7 +1408,7 @@ errCode captureRunner::loop(void)
 			                          meterTry_, applyTry, histSum_, lvTimeMs_, staleSkip_, shutterMs, lvP99_, lvPMax_,
 			                          meterSsUsed_, meterSettleMs_, lvPinnedLog_,
 			                          meterWaitMs_, meterFetchMs_, meterDecodeMs_, meterFetchTries_, busyMs, leadUsed,
-			                          asIsLinear_ });
+			                          asIsLinear_, firstApplyTries_ });
 		}
 
 		// 測光の連続失敗は「接続断」ではない(2026-07-28 根治)。

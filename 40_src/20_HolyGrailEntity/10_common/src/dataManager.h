@@ -194,7 +194,7 @@ public:
 	                    double meteredLinear = -1.0, int rdyMeteringMs = -1, int rdyShutterMs = -1, int prepMs = -1,
 	                    int lateMs = -1, bool rdyOk = true, bool setOk = true, int meterTry = 0, int applyTry = 0,
 	                    uint32_t histSum = 0, uint64_t lvTimeMs = 0, int staleSkip = 0, uint64_t shutterEpochMs = 0,
-	                    int busyMs = -1);
+	                    int busyMs = -1, int firstApplyTries = 0);
 
 	// 現在の(本日の)ログファイルのフルパスを返す(検証・ログ転送用)。
 	static std::string currentLogPath(void);

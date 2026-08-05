@@ -56,7 +56,11 @@ public:
 	                      int leadMs = 0;
 	                      // 切替なしで測ったリニア値(-1=その経路を通らず)。測光ssへ切替えた
 	                      // コマでは「なぜ切替えたか」の判断材料そのもの(2026-08-05 診断)。
-	                      double asIsLinear = -1.0; };
+	                      double asIsLinear = -1.0;
+	                      // このセッションで1枚目の露出をカメラへ適用するのに要した回数
+	                      // (1=一発で乗った / >1=待って乗った / 0=不明)。放置後の初回にだけ
+	                      // 起きる適用失敗を、後から「起きたが吸収した」と確認するための記録。
+	                      int firstApplyTries = 0; };
 
 	using stateCb    = std::function<void(int)>;					// hgeState 値
 	using progressCb = std::function<void(const progressInfo&)>;
@@ -282,6 +286,7 @@ private:
 	bool        lvPinnedLog_    = false;	// 張り付き判定(ログ用)
 	int         meterWaitMs_ = -1, meterFetchMs_ = -1, meterDecodeMs_ = -1, meterFetchTries_ = 0;	// 測光所要の内訳(ログ用)
 	double      asIsLinear_ = -1.0;		// 切替なしで測ったリニア値(ログ用。切替判断の材料そのもの)
+	int         firstApplyTries_ = 0;	// 1枚目の露出適用に要した回数(ログ用。セッション単位)
 	// 変更分のみ適用(タイマ方式tm0)の直近適用値。establishSession でクリアし次回フル適用させる。
 	std::string lastFnApplied_, lastSsApplied_, lastIsoApplied_;
 	// 露出設定に失敗したまま次のシャッターを落とすと、カメラは測光シャッターのままなので
