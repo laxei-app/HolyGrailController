@@ -557,7 +557,8 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 	//  ・2回目だけ遅い → 直前の接続の後始末待ち(TCPのクローズ処理/PCBの解放)
 	//  ・だんだん伸びる → 積み上がり(資源の枯渇)
 	// 例 "適用ms=118,1520!,96,105" ('!'=その回は失敗)。
-	int     applyNg     = 0;			// 収束中に露出適用が失敗した回数
+	int     applyNg     = 0;			// 収束中に露出適用が失敗した回数(その回は測らずやり直す)
+	int     meterNg     = 0;			// 収束中に測光が失敗した回数(その値は使わずやり直す)
 	errCode applyNgLast = ERR_HGC_OK;	// 最後に失敗したときのコード
 	char    applyMs[112] = {0};			// 各回の所要[ms](失敗は '!' 付き)
 	int     applyMsLen  = 0;
@@ -585,7 +586,10 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 		shiftMeterSs(meterE, 0.0, kInitMeterMaxSsSec);
 	}
 
-	for (int i = 0; i < kInitConvergeTries && running_; ++i)
+	// 収束の試行回数(measure できた回だけ数える)。露出を適用できなかった回は「やり直し」であって
+	// 収束の1歩ではないので、通信の失敗で収束の機会を奪わない。全体は時間予算で頭打ちにする。
+	int step = 0;
+	while (step < kInitConvergeTries && running_)
 	{
 		if (static_cast<int>(tool::getElapse(t0)) >= kInitConvergeBudgetMs) { break; }	// 予算切れ→最良推定で開始
 
@@ -594,21 +598,32 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 		void*         ta = tool::startElapse();
 		const errCode re = cameraController::rdyShutter(*dev_, shot);
 		const long    ms = static_cast<long>(tool::getElapse(ta));
-		// 適用できていないと、このあとの測光は「別の露出」を測ることになる(答えが狂う)。
-		// ここでは動作を変えず、後でまとめて出すために記録だけする。
-		if (re != ERR_HGC_OK) { ++applyNg; applyNgLast = re; }
 		if (applyMsLen < static_cast<int>(sizeof(applyMs)) - 12)
 		{
 			applyMsLen += std::snprintf(applyMs + applyMsLen, sizeof(applyMs) - applyMsLen,
 			                            "%s%ld%s", (applyMsLen > 0) ? "," : "", ms,
 			                            (re != ERR_HGC_OK) ? "!" : "");
 		}
+		if (re != ERR_HGC_OK)
+		{
+			// 【2026-08-06】適用できていない=カメラは別の露出のまま。ここで測ると
+			//  「設定したつもりの露出で測った」ことになり、露出成分を割り戻す分母が嘘になって
+			//  場面の明るさを取り違える。誤差もその上で計算されるので、答えが静かに狂う。
+			//  従来はこの失敗を検知せず(戻り値を捨てていた)そのまま測って進めていた。
+			//  測らずにやり直す。少し置いてから再試行する(連打しない)。
+			++applyNg; applyNgLast = re;
+			interruptibleSleep(kApplyRetryMs);
+			continue;	// step は増やさない(収束の1歩として数えない)
+		}
+		++step;
 		interruptibleSleep(kMeterSettleMs);
 
 		apiBase::meterResult mr;
-		cameraController::meterHere(*dev_, mr, [this]() { return running_.load(); });	// 現在の露出のまま測る
+		// 測光も戻り値を見る(従来は捨てていた)。失敗した回の値は使わず、予算内でやり直す。
+		//  meterHere はヒストグラムが空でも ERR_HGC_OK を返すことがあるので linear<=0 も失敗に含める。
+		const errCode me = cameraController::meterHere(*dev_, mr, [this]() { return running_.load(); });
 		const double x = mr.x, linear = mr.linear;
-		if (linear <= 0.0) { continue; }	// 測光失敗 → 予算内で再試行
+		if (me != ERR_HGC_OK || linear <= 0.0) { ++meterNg; continue; }	// 測光失敗 → 予算内で再試行
 
 		// 張り付き(飽和/黒潰れ)は値を使わず測光ssをずらして測り直す。
 		// 飽和側は「どれだけ超えているか」の情報が無い(真昼にISO1600/0.5sだと十数段超え)ので
@@ -666,14 +681,16 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 	if (onError_)
 	{
 		char eb[280];
-		if (applyNg > 0)
+		if (applyNg > 0 || meterNg > 0)
 		{
-			std::snprintf(eb, sizeof(eb), "%s (収束中の露出適用 %d回失敗 適用ms=%s)",
-			              this->withHttpDetail("初期収束").c_str(), applyNg, applyMs);
+			// 失敗した回は測光値を採用せずやり直している。step=実際に収束へ使えた回数。
+			// step=0 は「一度も測れなかった」= 露出は基準値のまま撮り始めることを意味する。
+			std::snprintf(eb, sizeof(eb), "%s (収束: 有効%d回 適用失敗%d 測光失敗%d 適用ms=%s)",
+			              this->withHttpDetail("初期収束").c_str(), step, applyNg, meterNg, applyMs);
 		}
 		else
 		{
-			std::snprintf(eb, sizeof(eb), "初期収束 適用ms=%s", applyMs);
+			std::snprintf(eb, sizeof(eb), "初期収束 有効%d回 適用ms=%s", step, applyMs);
 		}
 		onError_(applyNgLast, eb);
 	}
