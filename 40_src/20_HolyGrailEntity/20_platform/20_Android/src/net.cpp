@@ -174,6 +174,33 @@ namespace net
 		//  失敗が「カメラが 503 等で断った」のか「そもそも届かなかった」のかをログで区別するため。
 		int g_lastHttpStatus = 0;
 
+		// --- TCP接続の使い回し(keep-alive。2026-08-05 エッジと同じ方式に揃える) ---
+		// リクエストごとに接続を張り直すと、初期収束のように短時間へ通信が集中する場面で
+		// connect() が詰まる(エッジで実測: 9秒に約40本 → 1.5秒経っても繋がらない回が頻発)。
+		// 接続を1本に保てば、失敗しうる箇所がその1本だけになる。
+		// HTTP関連は netThread の単一ワーカーからのみ呼ばれるので、静的1本で足りる。
+		int         g_keepFd  = -1;			// 使い回している接続(-1=無し)
+		std::string g_keepEp;				// その接続先 "host:port"
+
+		void keepClose(void)
+		{
+			if (g_keepFd >= 0) { close(g_keepFd); g_keepFd = -1; }
+			g_keepEp.clear();
+		}
+
+		// 使える接続を返す(無ければ張る)。fresh=張りたてか(=失敗しても再試行の価値が無い)。
+		int keepConn(const std::string& host, int port, bool& fresh)
+		{
+			const std::string ep = host + ":" + std::to_string(port);
+			// 宛先が変わったら使い回せない(前の相手へ投げてしまう)。1スマホ2カメラで実際に起きる。
+			if (g_keepFd >= 0 && g_keepEp != ep) { keepClose(); }
+			if (g_keepFd >= 0) { fresh = false; return g_keepFd; }
+			fresh = true;
+			g_keepFd = tcpConnect(host, port);
+			if (g_keepFd >= 0) { g_keepEp = ep; }
+			return g_keepFd;
+		}
+
 		int httpRequest(const std::string& method, const std::string& url,
 		                const std::string& body, bool hasBody, std::string& response)
 		{
@@ -183,18 +210,9 @@ namespace net
 			int port = 80;
 			if (!parseUrl(url, host, port, path)) { return 0; }
 
-			int fd = tcpConnect(host, port);
-			if (fd < 0)
-			{
-				__android_log_print(ANDROID_LOG_WARN, HGE_LOG_TAG,
-				                    "net: connect failed host=%s port=%d errno=%d(%s)",
-				                    host.c_str(), port, errno, std::strerror(errno));
-				return 0;
-			}
-
 			std::string req = method + " " + path + " HTTP/1.1\r\n";
 			req += "Host: " + host + ":" + std::to_string(port) + "\r\n";
-			req += "Connection: close\r\n";
+			req += "Connection: keep-alive\r\n";
 			if (hasBody)
 			{
 				req += "Content-Type: application/json\r\n";
@@ -203,11 +221,27 @@ namespace net
 			req += "\r\n";
 			if (hasBody) { req += body; }
 
-			if (!sendAll(fd, req.c_str(), req.size())) { close(fd); return 0; }
-
+			// 使い回している接続を相手が黙って閉じていることがある。その場合は送信か受信が
+			// 空振りするので、張り直して1度だけ再送する(張りたてで失敗したなら諦める)。
 			std::string raw;
-			recvResponse(fd, raw);
-			close(fd);
+			for (int attempt = 0; attempt < 2; ++attempt)
+			{
+				bool fresh = false;
+				int fd = keepConn(host, port, fresh);
+				if (fd < 0)
+				{
+					__android_log_print(ANDROID_LOG_WARN, HGE_LOG_TAG,
+					                    "net: connect failed host=%s port=%d errno=%d(%s)",
+					                    host.c_str(), port, errno, std::strerror(errno));
+					return 0;
+				}
+				raw.clear();
+				const bool sent = sendAll(fd, req.c_str(), req.size());
+				if (sent && recvResponse(fd, raw) && !raw.empty()) { break; }
+				keepClose();				// 死んでいた接続を捨てる
+				if (fresh) { return 0; }	// 張りたてで駄目ならこちらの問題ではない
+			}
+			if (raw.empty()) { return 0; }
 
 			// ヘッダと本体を分離
 			size_t he = raw.find("\r\n\r\n");
@@ -226,6 +260,15 @@ namespace net
 			{
 				content = dechunk(content);
 			}
+			// この接続を次も使ってよいか。使ってはいけないのは次の2つ:
+			//  ・相手が Connection: close と言ってきた(相手はもう閉じる)
+			//  ・本文の長さが分からず EOF まで読んだ(境界が取れず、次の応答と混ざる)
+			// どちらも残すと次のリクエストが壊れるので、ここで捨てる。
+			const bool wantClose = (lower.find("connection: close") != std::string::npos);
+			const bool noLength  = (lower.find("content-length:") == std::string::npos) &&
+			                       (lower.find("transfer-encoding: chunked") == std::string::npos);
+			if (wantClose || noLength) { keepClose(); }
+
 			response = content;
 			g_lastHttpStatus = code;
 			return code;
@@ -237,11 +280,13 @@ namespace net
 	bool init()
 	{
 		g_break = false;
+		keepClose();	// 使い回している接続を残さない
 		return true;
 	}
 
 	bool deInit()
 	{
+		keepClose();
 		return true;
 	}
 
@@ -382,7 +427,10 @@ namespace net
 
 	void httpBreak(void)
 	{
+		// 受信の途中で打ち切ると、その接続には読み残しが残る。使い回すと次の応答と
+		// 混ざるので、中断したら必ず捨てる。
 		g_break = true;
+		keepClose();
 	}
 
 	bool httpGet(const std::string& url, std::string& response)
