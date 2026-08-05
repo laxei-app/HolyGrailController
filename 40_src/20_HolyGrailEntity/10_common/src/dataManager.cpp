@@ -1384,6 +1384,9 @@ std::string dataManager::writeCaptureReport(const captureReport& r, const hgc::c
 	               { "maxMs", r.busyMaxMs }, { "stuck", r.busyStuck } };
 	j["meter"] = { { "cnt", r.meterCnt }, { "avgMs", avg(r.meterSumMs, r.meterCnt) }, { "maxMs", r.meterMaxMs } };
 	j["apply"] = { { "cnt", r.applyCnt }, { "avgMs", avg(r.applySumMs, r.applyCnt) }, { "maxMs", r.applyMaxMs } };
+	// 撮影開始前の初期収束が、うまくいったのか失敗したのか。ここが済んでいないと1枚目から露出が外れる。
+	j["converge"] = { { "outcome", r.cvOutcome }, { "steps", r.cvSteps },
+	                  { "applyNg", r.cvApplyNg }, { "meterNg", r.cvMeterNg } };
 	j["liveview"] = { { "staleFrames", r.staleFrames }, { "staleTotal", r.staleTotal } };
 	j["limit"] = { { "maxSsSec", r.maxSsSec }, { "minIntervalSec", minInterval },
 	               { "marginSec", (minInterval >= 0.0) ? (plan.interval - minInterval) : 0.0 } };
@@ -1395,6 +1398,8 @@ std::string dataManager::writeCaptureReport(const captureReport& r, const hgc::c
 	if (r.lateCnt > 0 && pct(r.lateOk, r.lateCnt) < 90.0)         { notes.push_back(static_cast<int>(NOTE_LATE_MANY)); }
 	if (r.meterFail > 0 && pct(r.meterFail, r.meterTried) > 5.0)  { notes.push_back(static_cast<int>(NOTE_METER_FAIL)); }
 	if (r.busyStuck > 0)                                          { notes.push_back(static_cast<int>(NOTE_BUSY_STUCK)); }
+	if (r.cvOutcome == 2)                                         { notes.push_back(static_cast<int>(NOTE_CONVERGE_NONE)); }
+	else if (r.cvOutcome == 1)                                    { notes.push_back(static_cast<int>(NOTE_CONVERGE_PART)); }
 	if (r.busyCnt == 0)                                           { notes.push_back(static_cast<int>(NOTE_BUSY_NO_DATA)); }
 	else if (minInterval >= 0.0)
 	{

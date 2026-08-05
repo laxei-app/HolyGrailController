@@ -559,6 +559,7 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 	// 例 "適用ms=118,1520!,96,105" ('!'=その回は失敗)。
 	int     applyNg     = 0;			// 収束中に露出適用が失敗した回数(その回は測らずやり直す)
 	int     meterNg     = 0;			// 収束中に測光が失敗した回数(その値は使わずやり直す)
+	bool    converged   = false;		// 目標へ収まった(または露出限界に到達した)か
 	errCode applyNgLast = ERR_HGC_OK;	// 最後に失敗したときのコード
 	char    applyMs[112] = {0};			// 各回の所要[ms](失敗は '!' 付き)
 	int     applyMsLen  = 0;
@@ -663,11 +664,13 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 		if (predicted <= 0.0 || linT <= 0.0) { break; }
 		const double err = std::log2(predicted / linT);	// +:明るすぎ / -:暗すぎ
 
-		if (std::fabs(err) <= kInitConvergeTolStops) { break; }	// 収束(1枚目から1/3段以内)
+		if (std::fabs(err) <= kInitConvergeTolStops) { converged = true; break; }	// 収束(1枚目から1/3段以内)
 
 		ctl.applyStops(-err);	// 目標へ直接投影(限界・1/3段テーブルへは applyStops がクランプ)
 		const double newB = expo::brightnessStops(ctl.current(), tables_);
-		if (std::fabs(newB - curB) < 1e-6) { break; }	// 限界に当たって動けない → これ以上は無理
+		// 露出限界に当たって動けない=これ以上詰められない。狙いには届かないが「出せる最良」に
+		// 到達しているので、収束できなかった(時間切れ)とは区別して扱う。
+		if (std::fabs(newB - curB) < 1e-6) { converged = true; break; }
 		// 次の反復で新しい測光により誤差を再確認する(確認が取れたら上で break)。
 	}
 
@@ -678,6 +681,12 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 	// どちらなのかがこの1行で決まる。動作は変えていない(従来どおり結果を返して撮影へ進む)。
 	// 失敗が無くても所要は毎回出す。冷えた状態(放置後)と温まった状態(連続実行)を
 	// 同じ物差しで比べたいので、正常時の値が無いと比較にならない。
+	// 撮影レポート用に結果を残す。「収束できたのか、できないまま撮り始めたのか」が要点。
+	converge_.steps   = step;
+	converge_.applyNg = applyNg;
+	converge_.meterNg = meterNg;
+	converge_.outcome = (step == 0) ? 2 : (converged ? 0 : 1);
+
 	if (onError_)
 	{
 		char eb[280];
@@ -1470,7 +1479,7 @@ errCode captureRunner::loop(void)
 			                          meterTry_, applyTry, histSum_, lvTimeMs_, staleSkip_, shutterMs, lvP99_, lvPMax_,
 			                          meterSsUsed_, meterSettleMs_, lvPinnedLog_,
 			                          meterWaitMs_, meterFetchMs_, meterDecodeMs_, meterFetchTries_, busyMs, leadUsed,
-			                          asIsLinear_, firstApplyTries_ });
+			                          asIsLinear_, firstApplyTries_, converge_ });
 		}
 
 		// 測光の連続失敗は「接続断」ではない(2026-07-28 根治)。

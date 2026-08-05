@@ -4064,6 +4064,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         6 -> "撮影周期に余裕がありません。目安の最短周期を下回ると、遅れやコマ落ちが出ます。"
         7 -> "撮影周期にはまだ余裕があります。周期を短くすると滑らかな微速度になります。"
         8 -> "busy を1コマも測れませんでした。周期が露光でほぼ埋まっています。"
+        9 -> "撮影前の露出合わせで一度も測光できず、基準値のまま撮り始めました。最初の数コマは露出が大きく外れています。"
+        10 -> "撮影前の露出合わせが終わりきらないまま撮り始めました。最初の数コマは露出が合っていない可能性があります。"
         else -> "(不明な所見 $code)"
     }
 
@@ -4205,6 +4207,25 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (minItv >= 0.0) {
             repRow(box, "目安の最短周期", "%.1f 秒".format(minItv),
                    "最長ss + busy最大 + 準備最大 + 余裕1秒。設定周期との差 %.1f 秒".format(lim.optDouble("marginSec")))
+        }
+
+        // 撮影開始前の露出合わせ(初期収束)がうまくいったか。ここが済んでいないと1枚目から露出が外れる。
+        repBand(box, "撮影前の露出合わせ")
+        val cvw = o.optJSONObject("converge") ?: JSONObject()
+        val cvOutcome = cvw.optInt("outcome", 2)
+        repRow(box, "結果", when (cvOutcome) {
+            0 -> "合わせられた"
+            1 -> "合わせきれず開始"
+            else -> "測光できず開始"
+        }, when (cvOutcome) {
+            0 -> "目標の範囲に入った(または露出限界に到達した)"
+            1 -> "時間内に目標へ届かず、その時点の最良推定で撮り始めた"
+            else -> "一度も測光できず、撮影制御方法の基準値のまま撮り始めた"
+        })
+        repRow(box, "測れた回数", "${cvw.optInt("steps")} 回")
+        if (cvw.optInt("applyNg") > 0 || cvw.optInt("meterNg") > 0) {
+            repRow(box, "やり直した回数", "露出設定 ${cvw.optInt("applyNg")} / 測光 ${cvw.optInt("meterNg")}",
+                   "失敗した回の値は使わずやり直している")
         }
 
         repBand(box, "ライブビュー")

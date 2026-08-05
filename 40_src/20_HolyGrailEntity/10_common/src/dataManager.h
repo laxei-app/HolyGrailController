@@ -215,6 +215,8 @@ public:
 		NOTE_INTERVAL_TIGHT = 6,	// 目安の最短周期に対して設定周期の余裕がない
 		NOTE_INTERVAL_ROOM  = 7,	// 周期にまだ余裕がある(もっと詰められる)
 		NOTE_BUSY_NO_DATA   = 8,	// busy を1コマも測れなかった(周期が露光で埋まっている等)
+		NOTE_CONVERGE_NONE  = 9,	// 撮影前の初期収束で一度も測れず、基準値のまま撮り始めた
+		NOTE_CONVERGE_PART  = 10,	// 初期収束が終わりきらないまま撮り始めた(最良推定)
 	};
 	struct captureReport
 	{
@@ -251,6 +253,11 @@ public:
 		int      applyMaxMs = 0;	// 露出設定の最大[ms]
 		double   maxSsSec   = 0.0;	// この撮影で使った最長シャッター[秒](最短周期の目安に使う)
 		int      leadMs     = 0;	// 準備に与えられていたリード[ms](0=不明。測光が間に合ったかの基準)
+		// 撮影開始前の初期収束の結果(セッション単位)。ここが済んでいないと1枚目から露出が外れる。
+		int      cvSteps    = 0;	// 測光値を採用できた回数(0=一度も測れていない)
+		int      cvApplyNg  = 0;	// 露出を適用できずやり直した回数
+		int      cvMeterNg  = 0;	// 測光できずやり直した回数
+		int      cvOutcome  = 2;	// 0=収束 / 1=収束しきらず最良推定 / 2=一度も測れず基準値のまま
 	};
 	// レポートをファイルへ書く(JSON)。planName/planId/カメラ名と窓・周期は呼び出し側から渡す。
 	// return: 書けたファイルのパス(空=失敗)。

@@ -1128,6 +1128,9 @@ namespace
 						if (ss > R.maxSsSec) { R.maxSsSec = ss; }
 					}
 					if (c.leadMs > 0) { R.leadMs = c.leadMs; }
+					// 初期収束の結果はセッション単位。毎コマ同じ値が来るのでそのまま写す。
+					R.cvSteps = c.converge.steps; R.cvApplyNg = c.converge.applyNg;
+					R.cvMeterNg = c.converge.meterNg; R.cvOutcome = c.converge.outcome;
 				}
 			},
 			[S](errCode e, const std::string& m) {

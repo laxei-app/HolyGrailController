@@ -29,6 +29,18 @@ public:
 	// prepMs=準備(測光→露出計算→露出設定)の合計ms。リード(kPrepLeadMs)に収まったかの判定に使う。
 	// lateMs=このコマのシャッターが「前コマ+撮影周期」からどれだけ遅れたか[ms](0=周期ぴったり。-1=計測なし)。
 	//   準備がリードに収まらなかったコマだけ >0 になる=周期を守れたかが1数値で分かる(計測の主指標)。
+	// 撮影開始前の初期収束が、うまくいったのか失敗したのか(セッション単位)。撮影レポートへ載せる。
+	// 収束が済んでいないまま撮り始めると露出が最初から外れるので、後から判断できるようにする。
+	struct convergeInfo
+	{
+		int steps   = 0;	// 測光値を採用できた回数。0=一度も測れていない
+		int applyNg = 0;	// 露出をカメラへ適用できず、やり直した回数
+		int meterNg = 0;	// 測光できず、やり直した回数
+		// 0=収束した(目標±1/3段以内 か 露出限界に到達) / 1=収束しきらず最良推定で開始
+		// 2=一度も測れず基準値のまま開始(最悪。露出が最初から大きく外れる)
+		int outcome = 2;
+	};
+
 	struct capturedInfo { int frame; hgc::exposure exp; double luminance; std::string ccm; double metered = -1.0;
 	                      int rdyMeteringMs = -1; int rdyShutterMs = -1; int prepMs = -1; int lateMs = -1;
 	                      bool rdyOk = true; bool setOk = true;
@@ -60,7 +72,8 @@ public:
 	                      // このセッションで1枚目の露出をカメラへ適用するのに要した回数
 	                      // (1=一発で乗った / >1=待って乗った / 0=不明)。放置後の初回にだけ
 	                      // 起きる適用失敗を、後から「起きたが吸収した」と確認するための記録。
-	                      int firstApplyTries = 0; };
+	                      int firstApplyTries = 0;
+	                      convergeInfo converge{}; };	// 撮影開始前の初期収束の結果(セッション単位)
 
 	using stateCb    = std::function<void(int)>;					// hgeState 値
 	using progressCb = std::function<void(const progressInfo&)>;
@@ -287,6 +300,7 @@ private:
 	int         meterWaitMs_ = -1, meterFetchMs_ = -1, meterDecodeMs_ = -1, meterFetchTries_ = 0;	// 測光所要の内訳(ログ用)
 	double      asIsLinear_ = -1.0;		// 切替なしで測ったリニア値(ログ用。切替判断の材料そのもの)
 	int         firstApplyTries_ = 0;	// 1枚目の露出適用に要した回数(ログ用。セッション単位)
+	convergeInfo converge_{};			// 初期収束の結果(レポート用。セッション単位)
 	// 変更分のみ適用(タイマ方式tm0)の直近適用値。establishSession でクリアし次回フル適用させる。
 	std::string lastFnApplied_, lastSsApplied_, lastIsoApplied_;
 	// 露出設定に失敗したまま次のシャッターを落とすと、カメラは測光シャッターのままなので
