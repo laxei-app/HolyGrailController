@@ -2161,6 +2161,11 @@ int32_t hge_reportListJson(char* buf, int32_t* inoutLen)
 	return copyOut(dataManager::reportListJson(), buf, inoutLen);
 }
 
+int32_t hge_reportCount(void)
+{
+	return static_cast<int32_t>(dataManager::reportNames().size());
+}
+
 int32_t hge_reportJson(const char* name, char* buf, int32_t* inoutLen)
 {
 	if (name == nullptr) { return ERR_HGC_INVALID_ARG; }

@@ -450,4 +450,57 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeLogRead(JNIEnv* env, jobject, jstri
 	return arr;
 }
 
+// --- 撮影レポートの回収(2026-08-05) ---
+// エッジで撮った撮影のレポートはエッジ側に溜まる。スマホの常時スイープ(30秒)が検索応答の
+// "reports" を見て、1件以上あるときだけこの3本を使って引き取る。
+// 引き取り→保存できたことを確認→削除、の順で進めるので、途中で切れても失われない。
+
+// レポート一覧(JSON配列)。失敗時 "[]"。
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeEdgeReportList(JNIEnv* env, jobject, jstring host_, jint port)
+{
+	const char* host = env->GetStringUTFChars(host_, nullptr);
+	std::string hostS = host ? host : "";
+	env->ReleaseStringUTFChars(host_, host);
+
+	std::lock_guard<std::mutex> lk(g_connMtx);
+	std::string rd;
+	int m = firstReq(hostS, port, etp::C_REPORT_LIST, etp::M_GET, "", rd);
+	return env->NewStringUTF((m == etp::M_ACK) ? rd.c_str() : "[]");
+}
+
+// レポート1件の中身(JSON)。失敗時 ""(空)。空なら保存も削除もしない。
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeEdgeReportRead(JNIEnv* env, jobject, jstring host_, jint port, jstring name_)
+{
+	const char* host = env->GetStringUTFChars(host_, nullptr);
+	const char* name = name_ ? env->GetStringUTFChars(name_, nullptr) : nullptr;
+	std::string hostS = host ? host : "";
+	std::string nameS = name ? name : "";
+	env->ReleaseStringUTFChars(host_, host);
+	if (name) { env->ReleaseStringUTFChars(name_, name); }
+
+	std::lock_guard<std::mutex> lk(g_connMtx);
+	std::string rd;
+	int m = firstReq(hostS, port, etp::C_REPORT_READ, etp::M_GET, nameS, rd);
+	return env->NewStringUTF((m == etp::M_ACK) ? rd.c_str() : "");
+}
+
+// 受領済みレポートの削除を指示する。0=削除された / -2=断られた(次のスイープでまた拾う)。
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeEdgeReportDelete(JNIEnv* env, jobject, jstring host_, jint port, jstring name_)
+{
+	const char* host = env->GetStringUTFChars(host_, nullptr);
+	const char* name = name_ ? env->GetStringUTFChars(name_, nullptr) : nullptr;
+	std::string hostS = host ? host : "";
+	std::string nameS = name ? name : "";
+	env->ReleaseStringUTFChars(host_, host);
+	if (name) { env->ReleaseStringUTFChars(name_, name); }
+
+	std::lock_guard<std::mutex> lk(g_connMtx);
+	std::string rd;
+	int m = firstReq(hostS, port, etp::C_REPORT_DELETE, etp::M_DELETE, nameS, rd);
+	return (m == etp::M_ACK) ? 0 : -2;
+}
+
 } // extern "C"

@@ -144,6 +144,11 @@ object HgeNative {
     external fun nativeEdgeProgress(host: String, port: Int, planId: String): String // progress の JSON。planId 指定=計画別状態(空=集約)
     external fun nativeEdgeLogList(host: String, port: Int): String   // ログファイル名一覧の JSON 配列 ["hg_....log",...]
     external fun nativeEdgeLogRead(host: String, port: Int, name: String, offset: Int): ByteArray // ログの1チャンク(最大4KB)。空=EOF/失敗
+    // 撮影レポートの回収。30秒スイープが edgeInfo.reports>0 のときだけ使う。
+    // 取得→保存できたら削除、の順(取得だけで消さない)。
+    external fun nativeEdgeReportList(host: String, port: Int): String            // [{"name",...},...]。失敗="[]"
+    external fun nativeEdgeReportRead(host: String, port: Int, name: String): String // 1件のJSON本文。失敗=""
+    external fun nativeEdgeReportDelete(host: String, port: Int, name: String): Int  // 0=削除済み
 
     fun stateName(s: Int): String = when (s) {
         ST_IDLE -> "IDLE"

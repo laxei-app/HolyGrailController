@@ -142,6 +142,13 @@ namespace
 				if (!s.is_discarded()) { j["sessions"] = s; }
 			}
 		}
+		// 溜まっている撮影レポートの件数(2026-08-05)。スマホの常時スイープはこれが1件以上のときだけ
+		// C_REPORT_LIST/READ を投げる。件数はファイル名を数えるだけで中身は読まないので、
+		// 30秒ごとに毎回聞かれても負荷にならない。
+		{
+			const int32_t rc = hge_reportCount();
+			if (rc > 0) { j["reports"] = rc; }
+		}
 		// 項目6: 保有計画ロスター(走行中に限らずエッジが持つ全計画id)。スマホは自分のエッジ担当割り当てと
 		//  突き合わせ、ここに無い=エッジ側で削除された計画のロックを解除する。
 		{
@@ -253,6 +260,36 @@ namespace
 			rd = chunk; rd.push_back('\x01');	// 空チャンク(=EOF)でも rd="\x01" となり ACK で返る
 			break;
 		}
+		// --- 撮影レポートの回収(2026-08-05) ---
+		// エッジで撮った撮影のレポートを、スマホの30秒スイープが吸い上げて持って行く。
+		// 削除はスマホが「保存できた」と言ってきたとき(C_REPORT_DELETE)だけ行う。取得しただけで
+		// 消すと、途中で通信が切れたぶんが永久に失われるため。
+		case etp::C_REPORT_LIST:
+		{
+			char b[1024];
+			int32_t len = sizeof(b);
+			if (hge_reportListJson(b, &len) == ERR_HGC_OK) { rd = b; }
+			else                                           { rd = "[]"; }
+			break;
+		}
+		case etp::C_REPORT_READ:	// data=ファイル名。中身(JSON)をそのまま返す
+		{
+			// レポート1件は約1KB。想定外に大きいものはエッジのRAMを守るため読まずに断る
+			// (スマホ側は受け取れなかった=削除しないので、後からログ取得で回収できる)。
+			constexpr size_t MAX_REPORT = 8192;
+			// パストラバーサル防止: 区切り文字を含む名前は拒否(logDir 直下のみ許可。C_LOG_READ と同じ)。
+			if (pk.data.empty() || pk.data.find('/') != std::string::npos ||
+			    pk.data.find("..") != std::string::npos) { rm = etp::M_NAK; break; }
+			std::string body;
+			if (!osfile::readRange(osfile::logDir() + "/" + pk.data, 0, MAX_REPORT, body) || body.empty())
+			{ rm = etp::M_NAK; break; }
+			if (body.size() >= MAX_REPORT) { rm = etp::M_NAK; break; }	// 途中で切れている疑い
+			rd = body;
+			break;
+		}
+		case etp::C_REPORT_DELETE:	// data=ファイル名。スマホが保存できたものだけを消す
+			if (pk.data.empty() || hge_removeReport(pk.data.c_str()) != ERR_HGC_OK) { rm = etp::M_NAK; }
+			break;
 		default:
 			rm = etp::M_NAK;
 			break;

@@ -1411,11 +1411,18 @@ std::string dataManager::writeCaptureReport(const captureReport& r, const hgc::c
 	return path;
 }
 
-// 撮影レポートの一覧(新しい順)。ファイル名に日付+時刻が入っているので名前の降順で新しい順になる。
+// 撮影レポートのファイル名一覧(中身は読まない)。件数を返すだけの用途でも使うので軽く保つ。
+std::vector<std::string> dataManager::reportNames(void)
+{
+	return osfile::listFiles("log", "report_", ".json");
+}
+
+// 撮影レポートの一覧。並びは撮影日時(shotAt)の降順=本当に新しい順。
+// ファイル名は report_<planId>_<日付>_<時刻>.json なので、名前で並べると planId が先に効いてしまい
+// 計画をまたぐと日時順にならない。中身の shotAt で並べる。
 std::string dataManager::reportListJson(void)
 {
-	std::vector<std::string> names = osfile::listFiles("log", "report_", ".json");
-	std::sort(names.begin(), names.end(), [](const std::string& a, const std::string& b) { return a > b; });
+	std::vector<std::string> names = reportNames();
 	std::string dir = osfile::logDir();
 	json arr = json::array();
 	for (const auto& nm : names)
@@ -1431,6 +1438,7 @@ std::string dataManager::reportListJson(void)
 			{
 				e["plan"]      = f.value("plan", std::string());
 				e["camera"]    = f.value("camera", std::string());
+				e["edge"]      = f.value("edge", std::string());	// エッジから回収したものだけ入る(空=スマホ直結)
 				e["shotAt"]    = f.value("shotAt", std::string());
 				e["frames"]    = f.contains("capture") ? f["capture"].value("frames", 0) : 0;
 				e["noteCount"] = f.contains("notes") && f["notes"].is_array() ? static_cast<int>(f["notes"].size()) : 0;
@@ -1438,6 +1446,11 @@ std::string dataManager::reportListJson(void)
 		}
 		arr.push_back(e);
 	}
+	// shotAt は "YYYY-MM-DD HH:MM:SS" の固定書式なので文字列比較でそのまま時系列になる。
+	// 読めなかったファイル(shotAt 無し)は末尾へ落とす。
+	std::sort(arr.begin(), arr.end(), [](const json& a, const json& b) {
+		return a.value("shotAt", std::string()) > b.value("shotAt", std::string());
+	});
 	return arr.dump();
 }
 

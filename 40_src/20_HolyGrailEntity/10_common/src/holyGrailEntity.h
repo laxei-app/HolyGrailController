@@ -240,6 +240,9 @@ int32_t hge_pruneOldLogs(int32_t offMin);
 // --- 撮影レポート(撮影1回=1件。設定→「撮影レポート」画面で表示する) ---
 // 一覧(新しい順): [{"name","plan","camera","shotAt","frames","noteCount"},...]
 int32_t hge_reportListJson(char* buf, int32_t* inoutLen);
+// 溜まっているレポートの件数だけを返す(中身は読まない)。エッジ役が検索応答へ載せ、スマホの
+// 常時スイープが「取りに行く必要があるか」をこれ1つで判断する。負値=エラー。
+int32_t hge_reportCount(void);
 // 1件の中身(保存した JSON をそのまま)。name は一覧の "name"(ファイル名)。
 int32_t hge_reportJson(const char* name, char* buf, int32_t* inoutLen);
 // 1件削除する。

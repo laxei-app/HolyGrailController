@@ -4083,13 +4083,43 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val o = arr.optJSONObject(i) ?: continue
             val name = o.optString("name")
             val notes = o.optInt("noteCount")
-            val sub = "%s / %s  %d枚%s".format(
+            val edge = o.optString("edge")
+            val sub = "%s / %s  %d枚%s%s".format(
                 o.optString("plan"), o.optString("camera"), o.optInt("frames"),
+                if (edge.isNotEmpty()) "   $edge" else "",
                 if (notes > 0) "   所見 ${notes}件" else "")
             val menu: List<Pair<String, () -> Unit>> = listOf("削除" to { confirmDeleteReport(name) })
             box.addView(listRow(o.optString("shotAt").ifEmpty { name }, sub, name == selectedReport,
                 { selectedReport = name; buildReportList(); buildReportDetail() }, menu))
             box.addView(thinDivider())
+        }
+    }
+
+    // エッジに溜まった撮影レポートを引き取る(edgeSweep のワーカースレッドから呼ぶ)。
+    // 取得 → レポートとして読めることを確認 → スマホへ保存 → そこで初めてエッジへ削除を指示する。
+    // 取得しただけで消すと、保存に失敗したぶんが永久に失われる。削除まで届かなかったものは
+    // 次のスイープでまた拾う(同名で上書きするだけなので重複しない)。
+    private fun collectEdgeReports(edge: Edge) {
+        val arr = try { JSONArray(HgeNative.nativeEdgeReportList(edge.ip, edge.port)) } catch (_: Exception) { JSONArray() }
+        val dir = java.io.File(getExternalFilesDir(null), "log")
+        if (!dir.exists() && !dir.mkdirs()) return
+        var got = 0
+        for (i in 0 until arr.length()) {
+            val name = arr.optJSONObject(i)?.optString("name").orEmpty()
+            if (!name.startsWith("report_") || !name.endsWith(".json")) continue
+            val body = try { HgeNative.nativeEdgeReportRead(edge.ip, edge.port, name) } catch (_: Exception) { "" }
+            if (body.isEmpty()) continue
+            // 途中で切れたものを保存して消させないため、中身を検査してから書く。
+            val o = try { JSONObject(body) } catch (_: Exception) { null } ?: continue
+            if (!o.has("capture")) continue
+            o.put("edge", edge.name)   // どの端末で撮ったかを一覧と内容に出せるようにする
+            try { java.io.File(dir, name).writeText(o.toString()) } catch (_: Exception) { continue }
+            try { HgeNative.nativeEdgeReportDelete(edge.ip, edge.port, name) } catch (_: Exception) {}
+            got++
+        }
+        if (got > 0) runOnUiThread {
+            Toast.makeText(this, "エッジ「${edge.name}」の撮影レポート ${got}件を取得しました", Toast.LENGTH_SHORT).show()
+            if (flipper.displayedChild == 15) { buildReportList(); buildReportDetail() }   // 開いていれば即反映
         }
     }
 
@@ -4130,6 +4160,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         repHead(box, o.optString("plan"))
         repRow(box, "カメラ", o.optString("camera"))
         repRow(box, "レンズ", o.optString("lens"))
+        // エッジから回収したものだけ端末名が入る(空=スマホ直結で撮った)。
+        o.optString("edge").takeIf { it.isNotEmpty() }?.let { repRow(box, "撮影した端末", it) }
         repRow(box, "撮影窓", win.optString("start") + " 〜 " + win.optString("end"))
         repRow(box, "出力日時", o.optString("shotAt"))
 
@@ -5334,7 +5366,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 val js = try { HgeNative.nativeEdgeSearch(2000) } catch (_: Exception) { "[]" }
                 // name → (edge, sessionsフィールド有無, sessions{planId→state}, heldPlansフィールド有無, 保有ロスター)
                 data class Found(val edge: Edge, val hasSessions: Boolean, val sessions: Map<String, Int>,
-                                 val hasHeld: Boolean, val heldPlans: Set<String>)
+                                 val hasHeld: Boolean, val heldPlans: Set<String>, val reports: Int)
                 val found = HashMap<String, Found>()
                 try {
                     val arr = JSONArray(js)
@@ -5357,7 +5389,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
                             val ha = o.optJSONArray("heldPlans") ?: JSONArray()
                             for (k in 0 until ha.length()) { ha.optString(k)?.takeIf { it.isNotEmpty() }?.let { held.add(it) } }
                         }
-                        found[nm] = Found(Edge(nm, o.optString("ip"), o.optInt("port", 50506)), has, sess, hasHeld, held)
+                        // 溜まっている撮影レポートの件数(新FWのみ)。>0 のときだけ引き取りに行く。
+                        found[nm] = Found(Edge(nm, o.optString("ip"), o.optInt("port", 50506)), has, sess, hasHeld, held,
+                                          o.optInt("reports", 0))
                     }
                 } catch (_: Exception) {}
                 // UDP無応答の登録エッジ: 連続2回でTCP生存確認(取りこぼし救済)→それも不応答ならオフライン。
@@ -5384,6 +5418,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     for (nm in offline)   { if (edgeOnline[nm] != false) { edgeOnline[nm] = false; uiDirty = true } }
                     if (uiDirty) refreshEdgeSpinner()
                 }
+                // エッジに溜まった撮影レポートを引き取る。件数が入っているときだけ通信するので、
+                // 定常(レポート0件)ではこのスイープの通信量は従来と変わらない。
+                for (f in found.values) { if (f.reports > 0 && f.edge.ip.isNotEmpty()) collectEdgeReports(f.edge) }
             }.start()
             handler.postDelayed(this, 30000)   // 30秒ごと(常時)
         }

@@ -256,8 +256,10 @@ public:
 	// return: 書けたファイルのパス(空=失敗)。
 	static std::string writeCaptureReport(const captureReport& r, const hgc::cs& plan, const char* planId);
 
-	// --- 撮影レポートの取り出し(UI表示用) ---
-	// 一覧の JSON。新しい順。[{"name","plan","camera","shotAt","frames","noteCount"},...]
+	// --- 撮影レポートの取り出し(UI表示用 / エッジからの回収用) ---
+	// レポートのファイル名一覧(中身は読まない)。件数だけ知りたいエッジの30秒応答でも使う。
+	static std::vector<std::string> reportNames(void);
+	// 一覧の JSON。撮影日時の新しい順。[{"name","plan","camera","shotAt","frames","noteCount"},...]
 	static std::string reportListJson(void);
 	// 1件の中身(保存した JSON をそのまま)。空=読めない。
 	static std::string reportJson(const std::string& name);
