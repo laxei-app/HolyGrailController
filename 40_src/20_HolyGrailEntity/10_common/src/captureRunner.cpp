@@ -460,7 +460,7 @@ int captureRunner::stepsToClose(double needStops) const
 //  ここで諦めるとカメラは古い露出のまま撮り続け、アプリの露出モデルと実機がズレたまま復帰できない
 //  (2026-07-16 の通し撮影で露出設定の90%が失敗し夜明けが白飛びした)。通るまで粘る。
 //  applyExposureChanged は失敗した項目の lastXxxApplied_ を更新しないので、リトライは自然に未適用分だけを再送する。
-errCode captureRunner::applyWithRetry(const hgc::exposure& exp, int& tries)
+errCode captureRunner::applyWithRetry(const hgc::exposure& exp, int& tries, int budgetMs)
 {
 	void*   t0 = tool::startElapse();
 	tries = 0;
@@ -471,7 +471,7 @@ errCode captureRunner::applyWithRetry(const hgc::exposure& exp, int& tries)
 		e = this->applyExposureChanged(exp);
 		if (e == ERR_HGC_OK) { return ERR_HGC_OK; }
 		if (!running_.load()) { return e; }							// 中止
-		if (static_cast<int>(tool::getElapse(t0)) >= kApplyMaxMs) { return e; }		// 上限で諦め
+		if (static_cast<int>(tool::getElapse(t0)) >= budgetMs) { return e; }		// 上限で諦め
 		interruptibleSleep(kApplyRetryMs);
 	}
 }
@@ -1327,12 +1327,33 @@ errCode captureRunner::loop(void)
 			else                             { pending = ccm->limitBright; }
 			warmedUp = true;
 			// 1枚目だけは「前コマの準備」が存在しないので、ここでカメラへ適用しておく。
-			// これを省くと1枚目が pending と違う露出(初期収束の最後の試行値)で撮れてしまう。
-			// まだ一度もシャッターを切っていない=カメラは暇なので設定は通る。
+			// これを省くと1枚目が pending と違う露出(初期収束の最後の試行値=測光露出)で撮れてしまう。
+			//
+			// 【2026-08-05 実測で判明】ここが失敗したまま撮り始めると、被害は1枚目に留まらない:
+			//  カメラは初期収束で最後に使った測光露出のまま1枚目を撮り、その露出でライブビューを
+			//  測るので飽和する(実測 ai=0.987 / 使える上限は 0.692)。すると「撮影ssでは測れない」と
+			//  判断して測光ssへ切替える経路に落ち、以後20コマのあいだ毎コマ2.6秒の反映待ちを払う。
+			//  実測では準備が 0.15秒 → 3.0秒 に化けた。露出調整が済んでいないのに撮り始めたことが
+			//  すべての起点なので、乗るまで待つ。
+			// 撮影中の適用と違い、ここは次コマの締め切りが無いので長く待てる(kFirstApplyMaxMs)。
 			{
 				int t1 = 0;
-				const errCode ae = applyWithRetry(pending, t1);
-				if (ae != ERR_HGC_OK && onError_) { onError_(ae, this->withHttpDetail("setExposure failed after retry (1st frame)")); }
+				const errCode ae = applyWithRetry(pending, t1, kFirstApplyMaxMs);
+				if (ae != ERR_HGC_OK)
+				{
+					if (onError_)
+					{
+						char eb[240];
+						std::snprintf(eb, sizeof(eb), "%s (try=%d %dms)",
+						              this->withHttpDetail("1枚目の露出をカメラへ適用できない").c_str(),
+						              t1, kFirstApplyMaxMs);
+						onError_(ae, eb);
+					}
+					// 乗らなかった。カメラの露出は不明なので、シャッター直前の再適用へ託す
+					// (ループ先頭の applyFailed_ 経路が1回だけ試し直す)。ここで撮った気にならない。
+					applyFailed_ = true;
+					wantExp_     = pending;
+				}
 			}
 			// 収束が撮影窓より早く終わった余り時間は keepAlive で待つ。窓開始で CAPTURING。
 			while (running_ && static_cast<long long>(std::time(nullptr)) < startSec)

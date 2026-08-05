@@ -151,6 +151,13 @@ public:
 	// アプリの露出モデルとカメラ実機がズレ、白飛び/黒潰れのまま復帰できなくなる(2026-07-16 実機で発生)。
 	static constexpr int    kApplyRetryMs        = 100;	// 露出設定リトライ間隔[ms]
 	static constexpr int    kApplyMaxMs          = 2000;	// 露出設定リトライ上限[ms]
+	// 1枚目だけは上限を大きく取る(2026-08-05)。撮影中の適用は次コマに間に合わせる必要があるので
+	// 2秒で打ち切るが、1枚目は撮影窓の前(または開始直後)なので待てる。ここで諦めて撮り始めると
+	// カメラは初期収束で最後に使った測光露出のままになり、その露出でライブビューを測って飽和し、
+	// 以後20コマ測光ss切替(毎コマ2.6秒の反映待ち)に落ちる。実測で確認した経路なので待って直す。
+	// エッジのHTTP PUTは無返答時に既定5秒ブロックするため、1回の試行に5秒かかりうる。
+	// 2秒では1回も再試行できていなかった(メッセージは "after retry" だが実際は1回だけ)。
+	static constexpr int    kFirstApplyMaxMs     = 20000;	// 1枚目の露出設定リトライ上限[ms]
 
 	// --- 測光値と撮影露出の「土俵合わせ」(2026-07-21 白飛び暴走の根治) ---
 	// 測光は測光シャッター(短い露出)で行うため、測光リニア値はその露出で写る明るさである。
@@ -236,8 +243,8 @@ private:
 	void          releaseLiveView(void);
 	std::string   withHttpDetail(const char* what) const;
 	errCode applyExposureChanged(const hgc::exposure& exp);	// 変更のあった ss/iso/fn だけを適用
-	// 露出設定を最大 kApplyMaxMs まで kApplyRetryMs 間隔でリトライ。tries=試行回数を返す。
-	errCode applyWithRetry(const hgc::exposure& exp, int& tries);
+	// 露出設定を budgetMs まで kApplyRetryMs 間隔でリトライ。tries=試行回数を返す。
+	errCode applyWithRetry(const hgc::exposure& exp, int& tries, int budgetMs = kApplyMaxMs);
 	void    sleepUntilElapse(void* mono, long targetMs);	// monotonic基準(mono)で targetMs 経過まで待つ(中断可)
 	const hgc::ccmWindow* activeWindow(long long nowSec) const;
 	hgc::exposure nightGoalAfter(long long nowSec) const;	// 次の夜間固定露出
