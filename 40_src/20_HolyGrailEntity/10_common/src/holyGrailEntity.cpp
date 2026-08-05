@@ -1059,14 +1059,17 @@ namespace
 					// late=このコマのシャッターが撮影周期からどれだけ遅れたか[ms](0=周期ぴったり)
 					// prep=準備(測光→計算→設定)の合計[ms]。リード kPrepLeadMs=5000 に収まったかの判定。
 					// wait/fetch/dec = 測光所要の内訳(登録通知待ち/サムネ取得/復号)。ftry=取得の試行回数。
-					char d[240];
+					// ai=切替なしで測ったリニア値。測光ssへ切替えた(mss≠-)コマでは、この値が
+					// 使える範囲を外れたことが切替の理由。2.6秒の反映待ちを毎コマ payする
+					// 原因がここでしか分からない(2026-08-05 追加)。-1=切替なし経路を通らず。
+					char d[256];
 					std::snprintf(d, sizeof(d),
 						"fr=%d Y=%.4f p99=%.3f pMx=%.3f mss=%s stl=%dms pin=%d late=%dms prep=%dms"
-						" wait=%dms fetch=%dms dec=%dms ftry=%d",
+						" wait=%dms fetch=%dms dec=%dms ftry=%d ai=%.5f",
 						c.frame, c.metered, c.lvP99, c.lvPMax,
 						c.meterSs.empty() ? "-" : c.meterSs.c_str(), c.meterSettleMs, c.lvPinned ? 1 : 0,
 						c.lateMs, c.prepMs,
-						c.meterWaitMs, c.meterFetchMs, c.meterDecodeMs, c.meterFetchTries);
+						c.meterWaitMs, c.meterFetchMs, c.meterDecodeMs, c.meterFetchTries, c.asIsLinear);
 					dataManager::logEvent("LVHIST", d);
 				}
 				// 撮影結果レポートの積算(1コマ=1回)。撮影終了時にまとめてファイルへ出す。

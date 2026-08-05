@@ -1319,6 +1319,7 @@ errCode apiCanonCCAPI::meterSceneLv(const hgc::exposure& shotExp, meterResult& o
 			out.ok = false;
 			return (e0 != ERR_HGC_OK) ? e0 : ERR_HGC_RDY_METARING;
 		}
+		out.asIsLinear = asIs.linear;	// 切替の可否を決めた値(ログ ai=)。切替えた理由の追跡用
 		if (this->lvUsableAsIs(asIs.linear))
 		{
 			// 【2026-08-03 追加】中央値が使える範囲にあることと、露出変更に反応することは別物。

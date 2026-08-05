@@ -165,6 +165,7 @@ bool captureRunner::meterFrame(const hgc::exposure& shotExp, apiBase::meterResul
 	meterFetchMs_  = mr.fetchMs;
 	meterDecodeMs_ = mr.decodeMs;
 	meterFetchTries_ = mr.fetchTries;
+	asIsLinear_    = mr.asIsLinear;
 	// カメラ露出状態の整合(契約: 露出を触ったら必ず申告される)。
 	if (!mr.appliedSs.empty()) { lastSsApplied_ = mr.appliedSs; }
 	else if (mr.ssSwitchFailed)
@@ -1377,7 +1378,8 @@ errCode captureRunner::loop(void)
 			                          static_cast<int>(lateMs), meterOk_, (applyErr == ERR_HGC_OK),
 			                          meterTry_, applyTry, histSum_, lvTimeMs_, staleSkip_, shutterMs, lvP99_, lvPMax_,
 			                          meterSsUsed_, meterSettleMs_, lvPinnedLog_,
-			                          meterWaitMs_, meterFetchMs_, meterDecodeMs_, meterFetchTries_, busyMs, leadUsed });
+			                          meterWaitMs_, meterFetchMs_, meterDecodeMs_, meterFetchTries_, busyMs, leadUsed,
+			                          asIsLinear_ });
 		}
 
 		// 測光の連続失敗は「接続断」ではない(2026-07-28 根治)。
