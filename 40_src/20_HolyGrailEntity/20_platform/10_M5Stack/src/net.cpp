@@ -203,6 +203,19 @@ static int g_lastHttpStatus = 0;
 static inline int noteHttpStatus(int code) { g_lastHttpStatus = (code > 0) ? code : 0; return code; }
 int lastHttpStatus(void) { return g_lastHttpStatus; }
 
+// 失敗(code<=0)の理由を呼び出し側の response へ載せる(2026-08-05 診断)。
+// status は 0 に丸められるため、上位では「応答なし」としか分からず、
+//  ・TCP接続そのものができていない(エッジのソケット枯渇など、こちら側の問題)
+//  ・接続はできたがカメラが返してこない(カメラ側の問題)
+// を区別できなかった。HTTPClient の生の負値を残せばこれが分かる。
+//  例) -1=CONNECTION_REFUSED(接続できず) / -11=READ_TIMEOUT(繋がったが無返答)
+static void noteHttpError(int code, std::string& response)
+{
+    if (code > 0) { return; }
+    HTTPClient tmp;	// errorToString は静的な文字列表を引くだけ
+    response = "err=" + std::to_string(code) + " " + std::string(tmp.errorToString(code).c_str());
+}
+
 //#define     USE_KEEP_ALIVE
 #if defined(USE_KEEP_ALIVE)
     ///////////////////////////////////////////////////////////////
@@ -346,6 +359,7 @@ int lastHttpStatus(void) { return g_lastHttpStatus; }
         http.setConnectTimeout(1500);   // ②不達時に接続で長時間ブロックしない
         int code = noteHttpStatus(http.POST(body.c_str()));
         if (code > 0) response = http.getString().c_str();
+        noteHttpError(code, response);	// 失敗なら理由(接続不可か無返答か)を残す
         http.end();
         return (code == 200 || code == 204);
     }
@@ -366,6 +380,7 @@ int lastHttpStatus(void) { return g_lastHttpStatus; }
         if (code > 0) {
             response = http.getString().c_str();
         }
+        noteHttpError(code, response);	// 失敗なら理由(接続不可か無返答か)を残す
 
         http.end();
         // 200 (OK), 201 (Created), 204 (No Content) を成功と判定

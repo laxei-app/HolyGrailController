@@ -219,8 +219,12 @@ std::string captureRunner::withHttpDetail(const char* what) const
 	netThread::lastHttpFailure(status, body);
 	for (auto& c : body) { if (c == '\r' || c == '\n' || c == '\t') { c = ' '; } }	// ログは1行
 	char buf[220];
-	if (status > 0) { std::snprintf(buf, sizeof(buf), "%s http=%d %s", what, status, body.c_str()); }
-	else            { std::snprintf(buf, sizeof(buf), "%s http=応答なし", what); }
+	// status==0(応答なし)のときこそ理由が要る。従来はここで body を捨てていたため、
+	// 「TCPが繋がらない(こちら側)」のか「繋がったがカメラが返さない(カメラ側)」のかを
+	// 区別できなかった(2026-08-05)。プラットフォーム層が body に理由を載せる。
+	if (status > 0)        { std::snprintf(buf, sizeof(buf), "%s http=%d %s", what, status, body.c_str()); }
+	else if (!body.empty()){ std::snprintf(buf, sizeof(buf), "%s http=応答なし %s", what, body.c_str()); }
+	else                   { std::snprintf(buf, sizeof(buf), "%s http=応答なし", what); }
 	return std::string(buf);
 }
 
