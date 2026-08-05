@@ -1045,6 +1045,18 @@ void loop(void)
 			              WiFi.localIP().toString().c_str(), (int)g_edgeUp, g_scrW, g_scrH, (int)g_spriteOk);
 		}
 		else if (c == 'F') { Serial.printf("[FS] backend=%s\n", osfile::backendName()); }
+		else if (c == 'R')	// 保守用: 旧形式(テキスト)の撮影レポートを削除する
+		{
+			// 撮影レポートは 2026-08-05 に JSON へ移行した。旧 .txt はスマホの回収対象外
+			// (C_REPORT_* は .json のみ扱う)なので、エッジに残ったままになる。消す手段がここだけ。
+			int n = 0, ng = 0;
+			for (const auto& nm : osfile::listFiles("log", "report_", ".txt"))
+			{
+				if (osfile::removeFile("log", nm)) { ++n; Serial.printf("[REPT] removed %s\n", nm.c_str()); }
+				else                               { ++ng; Serial.printf("[REPT] FAILED  %s\n", nm.c_str()); }
+			}
+			Serial.printf("[REPT] old(.txt) removed=%d failed=%d\n", n, ng);
+		}
 		else if (c == 'b')	// 検証用: 電源(バッテリ)の読み値を確認する。
 		{
 			// StickS3 は M5.begin にボードを認識させていない(ブートループ回避)ので M5.Power が
