@@ -208,12 +208,19 @@ int lastHttpStatus(void) { return g_lastHttpStatus; }
 //  ・TCP接続そのものができていない(エッジのソケット枯渇など、こちら側の問題)
 //  ・接続はできたがカメラが返してこない(カメラ側の問題)
 // を区別できなかった。HTTPClient の生の負値を残せばこれが分かる。
-//  例) -1=CONNECTION_REFUSED(接続できず) / -11=READ_TIMEOUT(繋がったが無返答)
+//  例) -1=CONNECTION_REFUSED / -11=READ_TIMEOUT(繋がったが無返答)
+//
+// 【重要】-1 は「相手が拒否した」とは限らない。Arduino の HTTPClient は
+//  WiFiClient::connect() が false を返しただけで -1 にするので、こちら側で
+//  ソケットや lwIP の資源が取れなかった場合も同じ -1 になる。区別するために errno も残す:
+//   ECONNREFUSED(111)=相手が拒否(カメラ側) / ENOMEM・ENOBUFS・EMFILE・EADDRNOTAVAIL=こちら側の枯渇
+//  errno は connect 失敗直後なら意味を持つ(それ以外では前の値が残っていることがある)。
 static void noteHttpError(int code, std::string& response)
 {
     if (code > 0) { return; }
     HTTPClient tmp;	// errorToString は静的な文字列表を引くだけ
-    response = "err=" + std::to_string(code) + " " + std::string(tmp.errorToString(code).c_str());
+    response = "err=" + std::to_string(code) + " " + std::string(tmp.errorToString(code).c_str())
+             + " errno=" + std::to_string(errno);
 }
 
 //#define     USE_KEEP_ALIVE

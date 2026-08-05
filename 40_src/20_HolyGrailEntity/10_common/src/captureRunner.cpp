@@ -548,6 +548,15 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 	ctl.setCurrent(initial);
 	void* t0 = tool::startElapse();
 
+	// 【診断 2026-08-05】収束中の露出適用(rdyShutter)は従来まったく戻り値を見ていなかった。
+	// 失敗しても気づかず「設定したつもりの露出」で測るので、答えが静かに狂う。さらに
+	// 「収束中も失敗し続けているのか、最後の1回だけなのか」が分からず原因を切り分けられない。
+	// 毎回ログへ出すと溢れるので、何回目で失敗したかを溜めてループの後に1行だけ出す。
+	int     applyNg     = 0;			// 収束中に露出適用が失敗した回数
+	errCode applyNgLast = ERR_HGC_OK;	// 最後に失敗したときのコード
+	char    applyNgAt[48] = {0};		// 失敗した回(例 "1,2,5")
+	int     applyNgLen  = 0;
+
 	// 測光ssをテーブル上で delta 段ずらす(結果は capSec を超えない)。
 	auto shiftMeterSs = [&](hgc::exposure& me, double delta, double capSec)
 	{
@@ -577,7 +586,17 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 
 		// 測光露出をカメラへ反映し、ライブビューが追従するのを待ってから測光する。
 		cmdt::shotSet shot(meterE.ss, meterE.fn, meterE.iso);
-		cameraController::rdyShutter(*dev_, shot);
+		const errCode re = cameraController::rdyShutter(*dev_, shot);
+		if (re != ERR_HGC_OK)
+		{	// 適用できていない=このあとの測光は「別の露出」を測ることになる(答えが狂う)。
+			// ここでは動作を変えず、後でまとめて出すために記録だけする。
+			++applyNg; applyNgLast = re;
+			if (applyNgLen < static_cast<int>(sizeof(applyNgAt)) - 5)
+			{
+				applyNgLen += std::snprintf(applyNgAt + applyNgLen, sizeof(applyNgAt) - applyNgLen,
+				                            "%s%d", (applyNgLen > 0) ? "," : "", i + 1);
+			}
+		}
 		interruptibleSleep(kMeterSettleMs);
 
 		apiBase::meterResult mr;
@@ -632,6 +651,17 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 	}
 
 
+	// 【診断】収束中に露出適用が1回でも失敗していたら、その回数と「何回目か」を1行残す。
+	//  ・回が散らばる/序盤から出る → 通信の使い方そのものが怪しい(接続の張り直し等)
+	//  ・失敗0で最後の1回だけ落ちる → 収束の直後だけに起きる別の要因
+	// どちらなのかがこの1行で決まる。動作は変えていない(従来どおり結果を返して撮影へ進む)。
+	if (applyNg > 0 && onError_)
+	{
+		char eb[240];
+		std::snprintf(eb, sizeof(eb), "%s (収束中の露出適用 %d回失敗 回=%s)",
+		              this->withHttpDetail("初期収束").c_str(), applyNg, applyNgAt);
+		onError_(applyNgLast, eb);
+	}
 	// 収束中の露出変更(rdyShutter直)は差分適用キャッシュを通らない。ここで無効化して次の適用に
 	// 全軸を必ず送らせる(キャッシュと実機がズレたまま1枚目を撮る事故の防止)。
 	lastFnApplied_.clear(); lastSsApplied_.clear(); lastIsoApplied_.clear();
