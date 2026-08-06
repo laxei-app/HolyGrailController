@@ -1059,6 +1059,17 @@ namespace
 	constexpr double kMeterReflectMinStops = 1.0;	// これ未満の指示量では判定しない(ノイズと区別できない)
 	constexpr double kMeterUsableLoX      = 0.020;	// 中央値がこれ未満は暗すぎて信用しない(sRGB)
 	constexpr double kMeterUsableHiX      = 0.850;	// これ超は明るすぎ(飽和寄り)
+	// --- 測光ssを選ぶときの狙い(2026-08-06) ---
+	// 上の「使える帯」は測光値を信用してよいかの判定で、8.8段幅もある。その端に着地しても
+	// 「内側」なので従来は直さなかった。実測では 5段の決め打ち切替で 0.0016(下限の3%上)に
+	// 張り付き、ヒストグラム中央値が256ビン中の5番目=ほぼ真っ黒のまま測り続けていた。
+	// 隣のビンへ1つずれるだけで0.8段動く位置で、量子化とノイズが支配的になる。
+	// そこで「測光値の採否」とは別に「測光ssをどこへ置きたいか」を持ち、端に寄ったら寄せ直す。
+	// 狙いの範囲に入っている間は動かさないので、安定しているときは1段も動かない。
+	constexpr double kMeterAimLoX         = 0.10;	// これ未満なら明るい側へ寄せる(sRGB。256ビン中26番目)
+	constexpr double kMeterAimHiX         = 0.70;	// これ超なら暗い側へ寄せる
+	constexpr double kMeterAimX           = 0.40;	// 寄せ先(実測で良好だった 0.44〜0.54 の少し下)
+	constexpr double kMeterAimMaxStep     = 1.0;	// 寄せは1コマ1段まで(急に動かして振動させない)
 	constexpr double kMeterRespondRatio   = 0.50;	// 「Δss段」に対しΔ測光段がこの比未満なら張り付き
 	// 応答比を判定するのに必要な最小の露出変化[段]。従来は 0.5 固定だったため、
 	// 撮影中の 1歩=1/3段(0.333) では張り付き判定が一度も働かなかった(2026-08-03 判明)。
@@ -1270,8 +1281,19 @@ void apiCanonCCAPI::adaptMeterSs(const hgc::exposure& meterExp, double linear, b
 			wantStops = curStops + d;
 		}
 		else
-		{	// 十分な信号がある → これ以上伸ばさず短い側を維持。
-			wantStops = curStops;
+		{	// 帯の内側。ただし端に寄りすぎていると測定点として悪い(下端は256ビン中の数番目で
+			// 量子化とノイズが支配的、上端は飽和寄り)。狙いの範囲を外れていたら中心へ寄せる。
+			// 範囲内なら従来どおり動かさない(安定しているときに毎コマ動かして振動させない)。
+			const double aimLoLin = expo::srgbToLinear(kMeterAimLoX);
+			const double aimHiLin = expo::srgbToLinear(kMeterAimHiX);
+			if (x < aimLoLin || x > aimHiLin)
+			{
+				double d = std::log2(expo::srgbToLinear(kMeterAimX) / x);	// +=明るく(伸ばす) -=暗く(縮める)
+				if (d >  kMeterAimMaxStep) { d =  kMeterAimMaxStep; }
+				if (d < -kMeterAimMaxStep) { d = -kMeterAimMaxStep; }
+				wantStops = curStops + d;
+			}
+			else { wantStops = curStops; }
 		}
 		meterCeilStops_ += kMeterCeilRelaxStops;	// 天井は毎コマ少し緩めて条件変化へ追従
 		if (wantStops > meterCeilStops_) { wantStops = meterCeilStops_; }
