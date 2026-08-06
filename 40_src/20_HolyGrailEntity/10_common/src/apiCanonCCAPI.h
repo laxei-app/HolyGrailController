@@ -129,7 +129,8 @@ public:
 	errCode stopLiveView(void) override;				// ライブビュー停止(撮影ループ中は掴まない)
 	// 撮影ループ中にライブビューが要るか。サムネ測光では不要(初期収束のときだけ使う)。
 	bool    liveViewNeededWhileCapturing(void) const override { return !kUseShotThumbMetering; }
-	bool    liveViewAlive(void);						// ライブビューが実際に流れているか(?kind=info)
+	bool    liveViewAlive(void);						// ライブビューが実際に流れているか(?kind=info。接続の生存確認)
+	bool    liveViewMeterReady(void);					// いま測光できるか(?kind=info の体裁まで見る。busy計測用)
 	errCode setupShootingModeManual(void) override;		// 撮影モードをM(ダイアル無視ON)へ。元値を保存
 	errCode restoreShootingMode(void) override;			// 保存した撮影モードへ戻す(ダイアル無視OFF)
 	errCode keepAlive(void) override;					// 接続維持用の無害なGET(/ccapi カタログ取得)

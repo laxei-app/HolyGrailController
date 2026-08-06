@@ -280,20 +280,62 @@ errCode apiCanonCCAPI::stopLiveView(void)
 //  ・?kind=info の GET 1往復だけ。カードには一切触らない(記録中のカード接触は
 //    R10 の撮影エンジン固着を招いた。計測でその踏み方を再現しない)。
 //  ・サムネ方式では測光元が撮影画像でこの尺度が当てはまらないので計測しない。
+namespace
+{
+	// ライブビュー付帯情報(?kind=info)の体裁チェック。中身(ヒストグラム)は解析しない。
+	//  return 0=正常 / 1=マーカ不一致(付帯情報ではない) / 2=長さフィールドが本文に収まらない
+	// 「いま測光できるか」(liveViewMeterReady)と「ヒストを解析してよいか」(alzMetering)で
+	// 同じ物差しを使うための共通化。従来 alzMetering は先頭3バイトを長さ確認なしで読んで
+	// いたので、その境界検査もここへ寄せた。
+	int checkLiveViewInfo(const std::string& body)
+	{
+		if (body.size() < 10) { return 1; }
+		if (static_cast<uint8_t>(body[0]) != 0xff
+		 || static_cast<uint8_t>(body[1]) != 0x00
+		 || static_cast<uint8_t>(body[2]) != 0x01) { return 1; }
+		const uint32_t len = (static_cast<uint32_t>(static_cast<uint8_t>(body[3])) << 24)
+		                   | (static_cast<uint32_t>(static_cast<uint8_t>(body[4])) << 16)
+		                   | (static_cast<uint32_t>(static_cast<uint8_t>(body[5])) <<  8)
+		                   |  static_cast<uint32_t>(static_cast<uint8_t>(body[6]));
+		return (len > static_cast<uint32_t>(body.size() - 9)) ? 2 : 0;
+	}
+}
+
 int apiCanonCCAPI::meterReadyProbe(void)
 {
 	if (kUseShotThumbMetering) { return -1; }
 	if (!(funcList[funcNum::LIVE_DETAIL].verb == verb::GET)) { return -1; }
-	return this->liveViewAlive() ? 1 : 0;
+	return this->liveViewMeterReady() ? 1 : 0;
 }
 
 // ライブビューが実際に動いているか(軽い ?kind=info で確認する)。
+//  これは「接続の生存確認」で、撮影中の再接続判断(startLiveView の『既に開始済み』/
+//  stopLiveView の『既に止まっている』)に使う。中身の体裁までは見ない。
 bool apiCanonCCAPI::liveViewAlive(void)
 {
     if (!(funcList[funcNum::LIVE_DETAIL].verb == verb::GET)) { return false; }
     std::string body;
     if (!netThread::httpGet(funcList[funcNum::LIVE_DETAIL].url + "?kind=info", body)) { return false; }
     return !body.empty();
+}
+
+// いま測光できるか(ヒストグラムが取れる体裁で ?kind=info が返るか)。
+//
+// 【なぜ liveViewAlive と分けるか(2026-08-07)】busy(露光終了→測光可)の計測に
+//  liveViewAlive を使っていたが、あちらは「本文が空でない」だけで真を返す。EOS R100 は
+//  8秒露光の後 約2.2秒のあいだ、HTTPには応答するが LV付帯情報の体裁になっていないものを
+//  返す。そのため busy=0ms と記録される一方、meterHere は12〜17回リトライして 2.3秒 を
+//  費やしていた(2026-08-06 通し: R100 の ss=8s 566コマすべて。R10 は同条件で try=1)。
+//  busy が過小報告されると撮影レポートの最小周期が誤る(R100 で約2.2秒ぶん短く出る)。
+//  一方 liveViewAlive を厳しくすると startLiveView の「既に開始済み」判定を巻き込み、
+//  撮影中の再接続を塞ぐ恐れがある(2026-07-30 に塞がって撮影が止まった実績がある)。
+//  聞いている質問が違うので、関数を分ける。
+bool apiCanonCCAPI::liveViewMeterReady(void)
+{
+    if (!(funcList[funcNum::LIVE_DETAIL].verb == verb::GET)) { return false; }
+    std::string body;
+    if (!netThread::httpGet(funcList[funcNum::LIVE_DETAIL].url + "?kind=info", body)) { return false; }
+    return checkLiveViewInfo(body) == 0;
 }
 
 // シャッターを切る準備
@@ -967,9 +1009,10 @@ errCode apiCanonCCAPI::alzMetering(cmdt::HISTOGRAM& histoOut)
     if (liveViewInfo.length() == 0) { return ERR_HGC_API_ANALIZE; }
     try
     {
-        if (    (static_cast<uint8_t>(liveViewInfo[0]) != 0xff)
-            ||  (static_cast<uint8_t>(liveViewInfo[1]) != 0x00)
-            ||  (static_cast<uint8_t>(liveViewInfo[2]) != 0x01))
+        // 体裁の検査は checkLiveViewInfo へ寄せた(測光可の判定 liveViewMeterReady と同じ物差しに
+        // するため。従来は先頭3バイトを長さ確認なしで読んでいたので境界検査も入った)。
+        const int lvChk = checkLiveViewInfo(liveViewInfo);
+        if (lvChk == 1)
         {   // live view 付帯情報ではない
             DBGLN(col::YEL,"len:%u",liveViewInfo.length());
             DUMP(0, liveViewInfo.c_str(),32);
@@ -982,7 +1025,7 @@ errCode apiCanonCCAPI::alzMetering(cmdt::HISTOGRAM& histoOut)
                       + (static_cast<uint8_t>(liveViewInfo[6]) << (8 * 0));
         DBGLN(col::CYN, "length(%u)", len);
 
-        if(len > (liveViewInfo.length() -9))
+        if (lvChk == 2)
         {
             DBGLN(col::RED, "len(%u) histogramRaw(%u)",len, liveViewInfo.length());
             return ERR_HGC_NOT_LIVE_FORMAT;
