@@ -1249,9 +1249,21 @@ namespace
 	}
 
 	// 1セッションを停止・破棄する(ランナーを join してから erase)。
-	void stopSessionAt(size_t i)
+	// 停止の記録(2026-08-07)。従来ここは何もログを残さず、STOP は撮影ループが正常終了した
+	// ときだけ出ていた。そのため「外から止められた」痕跡がログに一切残らない。
+	// 2026-08-07 02:00 の Edje00 で、朝R10 のセッション起動が2回走り(01:59:30 起点と
+	// 02:00:08 起点)、2回目は ccm の中身が違っていた。開始経路には二重開始ガード
+	// (hge_captureStartPlan の sessionFor)があるので1本目は消されたはずだが、消えた記録が
+	// 無く原因を特定できなかった。次に起きたとき1回で分かるようにする。
+	void stopSessionAt(size_t i, const char* why)
 	{
 		captureSession* s = g_sessions[i].get();
+		{
+			std::string d = "セッション停止 計画=" + s->plan.name + " id=" + s->planId
+			              + " 理由=" + (why ? why : "?")
+			              + " 状態=" + std::to_string(s->state.load());
+			dataManager::logEvent("INFO", d.c_str());
+		}
 		s->cancel = true;	// 予約待ち中の開始スレッドを中断させてから join する(長時間 sleep のデッドロック回避)
 		s->deferred = false;	// 遅延アーム待ちなら hge_pump の生成対象から外す(スレッド未生成のまま破棄)
 		pokeUnregister(s->runner ? s->runner.get() : nullptr);	// 3b: ポーク対象から外す(runner破棄前)
@@ -1315,7 +1327,7 @@ int32_t hge_init(void)
 
 int32_t hge_term(void)
 {
-	while (!g_sessions.empty()) { stopSessionAt(g_sessions.size() - 1); }	// 全セッション停止(最後の1つで待ち受けも停止)
+	while (!g_sessions.empty()) { stopSessionAt(g_sessions.size() - 1, "終了処理"); }	// 全セッション停止(最後の1つで待ち受けも停止)
 	cameraController::watchStop(); g_watching = false;	// 3b: 念のためSSDP待ち受けを確実に停止
 	if (g_searchThread) { ossc::threadEnd(g_searchThread); g_searchThread = nullptr; }
 	if (g_inited) { netThread::deInit(); g_inited = false; }
@@ -1424,6 +1436,20 @@ int32_t hge_importPlan(const char* id, const char* json, int32_t len)
 	if (r != ERR_HGC_OK) { return r; }
 	if (id != nullptr && id[0] != '\0') { g_editId = id; }
 	else if (g_editId.empty())          { g_editId = makePlanId(); }
+	// 受信の記録(2026-08-07)。従来ここは何もログを残さず、走行中の計画を黙って上書きできた。
+	// 走行中セッションは自分のスナップショットで走り続けるので、ログに出ている計画内容と
+	// 実際に効いている制御がずれる。2026-08-07 02:00 の Edje00 で、2回のSTARTのあいだに
+	// ccm の中身が入れ替わっていた(表示名/暗所/初期値がすべて違う)。書き換えたのは
+	// この関数しか無いので、いつ誰が上書きしたかを残す。
+	{
+		std::string existing;
+		const bool  overwrite = dataManager::loadPlanFile(g_editId, existing);
+		const bool  running   = (sessionFor(g_editId) != nullptr);
+		std::string d = "計画受信 id=" + g_editId + " 名前=" + g_plan.name
+		              + (overwrite ? " 上書き" : " 新規")
+		              + (running   ? " ※走行中セッションあり(内容がずれる)" : "");
+		dataManager::logEvent("INFO", d.c_str());
+	}
 	return saveCurrentPlan();
 }
 
@@ -1626,7 +1652,7 @@ int32_t hge_deletePlan(const char* id)
 		setCapturing(pid, false);	// 実行意図を消す(再起動で再開しない)
 		for (size_t i = 0; i < g_sessions.size(); ++i)
 		{
-			if (g_sessions[i]->planId == pid) { stopSessionAt(i); break; }	// cancel→runner->stop()→erase(スレッド破棄)
+			if (g_sessions[i]->planId == pid) { stopSessionAt(i, "計画削除"); break; }	// cancel→runner->stop()→erase(スレッド破棄)
 		}
 	}
 	if (!dataManager::deletePlanFile(std::string(id))) { return ERR_HGC_NO_ELEMENT; }
@@ -2520,7 +2546,7 @@ int32_t hge_captureStopPlan(const char* planId_)
 	setCapturing(planId, false);	// item2: ユーザーによる明示停止 → 実行意図を消す(再起動で再開しない)
 	for (size_t i = 0; i < g_sessions.size(); ++i)
 	{
-		if (g_sessions[i]->planId == planId) { stopSessionAt(i); return ERR_HGC_OK; }
+		if (g_sessions[i]->planId == planId) { stopSessionAt(i, "停止要求"); return ERR_HGC_OK; }
 	}
 	return ERR_HGC_OK;
 }
