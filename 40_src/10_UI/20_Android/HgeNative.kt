@@ -140,7 +140,9 @@ object HgeNative {
     external fun nativeEdgeDeletePlan(host: String, port: Int, planId: String): Int   // 項目6: エッジから計画を削除(撮影中は停止してから)
     external fun nativeEdgeSyncTime(host: String, port: Int, datetime: String, offMin: Int): Int // 能動的な時刻同期(C_TIMEのみ)
     external fun nativeEdgeResearch(host: String, port: Int, planId: String): Int // 継続: エッジへ即再探索を送る
-    external fun nativeEdgeCameraInfo(host: String, port: Int, json: String): Int // 発見中オンラインカメラ[{serial,model,ip,online}]をエッジへ通知(IP直結ヒント)
+    // 【2026-08-06 送信廃止】カメラIPのエッジへの通知はやめた(エッジが自分で見つける。複数AP構成では
+    //  別の場所のカメラのIPを配ることになり有害)。ETPのコマンドとエッジ側の受信処理は互換のため残す。
+    external fun nativeEdgeCameraInfo(host: String, port: Int, json: String): Int
     external fun nativeEdgeProgress(host: String, port: Int, planId: String): String // progress の JSON。planId 指定=計画別状態(空=集約)
     external fun nativeEdgeLogList(host: String, port: Int): String   // ログファイル名一覧の JSON 配列 ["hg_....log",...]
     external fun nativeEdgeLogRead(host: String, port: Int, name: String, offset: Int): ByteArray // ログの1チャンク(最大4KB)。空=EOF/失敗

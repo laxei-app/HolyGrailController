@@ -3433,17 +3433,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
         super.onDestroy()
     }
 
-    // EV_PRESENCE: オンラインカメラ一覧が変化 → 撮影中/待機中/未検出のエッジへ最新の (serial,model,ip,online) を
-    //  プッシュし、エッジのIP直結ヒントを最新化する(待機中にカメラがオンライン化した時点でも即反映される)。
-    private fun pushPresenceToActiveEdges(presenceJson: String) {
-        val ids = capturingPlans + waitingPlans + disconnectedPlans
-        if (ids.isEmpty()) return
-        val targets = ids.mapNotNull { planEdge(it) }.filter { it.ip.isNotEmpty() }.distinctBy { it.ip }
-        if (targets.isEmpty()) return
-        Thread {
-            for (e in targets) { try { HgeNative.nativeEdgeCameraInfo(e.ip, e.port, presenceJson) } catch (_: Exception) {} }
-        }.start()
-    }
+    // 【2026-08-06 廃止】カメラのIPをエッジへプッシュするのはやめた。
+    //  ・エッジは自分でカメラを見つける: 起動時からの定期M-SEARCH(60秒)、撮影要求中のNOTIFY、
+    //    そして接続に成功したIPの永続化(/asset/knownCams.json)。スマホの情報は要らない。
+    //  ・複数エッジをそれぞれAPにして離れた場所のカメラを撮る構成では、スマホはカメラと同じ
+    //    ネットワークに居ない。しかもESP32のSoftAPは既定でどのエッジも 192.168.4.x なので、
+    //    別の場所のカメラのIPを配ることになり有害。将来スマホ⇄エッジをBLEにすると更に無意味。
+    //  ・実測でもエッジのSSDP発見は1秒台で、ヒント無しで開始が遅くなることはない。
+    // ETPの C_CAMERA_INFO とエッジ側の受信処理は残す(古いスマホと組み合わせても壊れないように)。
 
     // ② 未登録カメラの発見 → 所持カメラへ反映。既存(serial一致)は friendly 更新、未定義の同機種枠は serial+friendly を確定
     //  (どちらも自動)。いずれにも該当しない新規個体は「登録しますか？」を出す(拒否済みserialは自動プロンプトしない)。
@@ -3577,7 +3574,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 }
                 HgeNative.EV_SCHEDULE -> { latestSchedule = json; updatePlanDisplay(json) }
                 HgeNative.EV_DEVICE -> {}
-                HgeNative.EV_PRESENCE -> { pushPresenceToActiveEdges(json); reconcileDiscoveredCameras(json) }   // P4: エッジへ最新IP push + ②未登録カメラの反映/登録プロンプト
+                HgeNative.EV_PRESENCE -> { reconcileDiscoveredCameras(json) }   // ②未登録カメラの反映/登録プロンプト(エッジへのIP pushは廃止)
                 HgeNative.EV_ERROR -> {
                     val o = JSONObject(json)
                     val msg = o.optString("msg")
@@ -5610,22 +5607,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val name = planNameFor(planId)   // 対象planIdの名前を同期取得(非同期キャッシュ latestSchedule は使わない)
         val nameBmp = makeNameBitmapBytes(if (name.isEmpty()) "撮影計画" else name)
         run {
-            // 発見中のオンラインカメラをエッジへ通知(IP直結ヒント)。エッジは (model,serial) で本人確認して直結する。
-            //  (在否の判定はエッジ自身が行う。ここは直結を速くするIPヒントに徹する。)
-            try {
-                val arr = org.json.JSONArray(HgeNative.nativeSearchDevicesList())
-                val push = org.json.JSONArray()
-                for (i in 0 until arr.length()) {
-                    val d = arr.optJSONObject(i) ?: continue
-                    if (d.optString("ip").isEmpty()) continue
-                    push.put(JSONObject()
-                        .put("serial", d.optString("serial"))
-                        .put("model", d.optString("model"))
-                        .put("ip", d.optString("ip"))
-                        .put("online", true))
-                }
-                if (push.length() > 0) HgeNative.nativeEdgeCameraInfo(e.ip, e.port, push.toString())
-            } catch (_: Exception) {}
+            // 【2026-08-06 廃止】開始前のカメラIP通知はやめた(理由は pushPresenceToActiveEdges の跡地を参照)。
+            //  エッジは自分でカメラを見つけるので、スマホが見ているIPを渡す必要がない。
+            //  探索に1秒余分にかかっても、間違ったネットワークのIPを渡すより良い。
             val r = HgeNative.nativeEdgeStart(e.ip, e.port, s, off, nameBmp, planId, planJson)
             // 開始が失敗コードを返しても、エッジ側では実際に走っている場合がある:
             //  ・既に同じ計画がエッジで走行中 → C_ACTION が INVALID_STATE で NAK(-4)
