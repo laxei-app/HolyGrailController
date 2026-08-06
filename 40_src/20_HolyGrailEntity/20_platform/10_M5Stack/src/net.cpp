@@ -270,8 +270,8 @@ static void noteHttpError(int code, std::string& response)
         if (g_open && ep != g_endpoint) { closeConn(); }
         if (!g_http.begin(url.c_str())) { return false; }
         g_http.setReuse(true);				// 応答後もソケットを閉じない
-        g_http.setConnectTimeout(1500);		// 不達時に接続で長時間ブロックしない
-        g_http.setTimeout(3000);
+        g_http.setConnectTimeout(kHttpConnectTimeoutMs);	// スマホと同じ値(net.h)
+        g_http.setTimeout(kHttpIoTimeoutMs);
         g_endpoint = ep; g_open = true;
         return true;
     }
@@ -376,8 +376,8 @@ static void noteHttpError(int code, std::string& response)
 
         HTTPClient http;
         http.begin(url.c_str());
-        http.setConnectTimeout(1500);   // ②カメラ不達時にTCP接続(SYN)で数十秒ブロックしない=復帰を速く。健全な同一LANカメラは<100msで接続する。
-        http.setTimeout(500);
+        http.setConnectTimeout(kHttpConnectTimeoutMs);	// スマホと同じ値(net.h)
+        http.setTimeout(kHttpIoTimeoutMs);
         int code = noteHttpStatus(http.GET());
         if(code == 200)
         {
@@ -400,7 +400,8 @@ static void noteHttpError(int code, std::string& response)
     {
         HTTPClient http;
         http.begin(url.c_str());
-        http.setConnectTimeout(1500);   // ②不達時に接続で長時間ブロックしない
+        http.setConnectTimeout(kHttpConnectTimeoutMs);	// スマホと同じ値(net.h)
+        http.setTimeout(kHttpIoTimeoutMs);				// 以前は未設定でArduino既定の5000msだった
         int code = noteHttpStatus(http.POST(body.c_str()));
         if (code > 0) response = http.getString().c_str();
         noteHttpError(code, response);	// 失敗なら理由(接続不可か無返答か)を残す
@@ -414,7 +415,8 @@ static void noteHttpError(int code, std::string& response)
         HTTPClient http;
         // URLの開始
         http.begin(url.c_str());
-        http.setConnectTimeout(1500);   // ②不達時に接続で長時間ブロックしない
+        http.setConnectTimeout(kHttpConnectTimeoutMs);	// スマホと同じ値(net.h)
+        http.setTimeout(kHttpIoTimeoutMs);				// 以前は未設定でArduino既定の5000msだった
         // Content-Typeを指定（APIの仕様に合わせて適宜変更してください）
         http.addHeader("Content-Type", "application/json");
 
@@ -436,7 +438,8 @@ static void noteHttpError(int code, std::string& response)
     {
         HTTPClient http;
         http.begin(url.c_str());
-        http.setConnectTimeout(1500);   // ②不達時に接続で長時間ブロックしない
+        http.setConnectTimeout(kHttpConnectTimeoutMs);	// スマホと同じ値(net.h)
+        http.setTimeout(kHttpIoTimeoutMs);				// 以前は未設定でArduino既定の5000msだった
 
         // DELETEメソッドの実行
         int code = noteHttpStatus(http.sendRequest("DELETE"));

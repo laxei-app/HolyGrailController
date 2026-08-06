@@ -14,10 +14,12 @@
 #include <vector>
 
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <ifaddrs.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <net/if.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -28,14 +30,48 @@ namespace net
 	{
 		std::atomic<bool> g_break{ false };
 
-		// 受信タイムアウトを設定する
-		void setTimeout(int fd, int sec)
+		// 送受信のタイムアウトを設定する(net::kHttpIoTimeoutMs を使う。エッジと同じ値)。
+		void setIoTimeout(int fd, int ms)
 		{
 			timeval tv{};
-			tv.tv_sec = sec;
-			tv.tv_usec = 0;
+			tv.tv_sec  = ms / 1000;
+			tv.tv_usec = (ms % 1000) * 1000;
 			setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 			setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+		}
+
+		// 指定時間内に接続できなければ諦める。
+		// SO_SNDTIMEO は connect() には効かない(Linux/Android)ので、一時的に非ブロッキングにして
+		// select で待つ。これをやらないと、応答しない相手に対して OS 既定(分単位)まで居座り、
+		// エッジ側(setConnectTimeout=1.5秒)と挙動が食い違う。
+		//  return: 0=接続できた / -1=失敗(errno に理由。時間切れは ETIMEDOUT)
+		int connectWithTimeout(int fd, const sockaddr* addr, socklen_t len, int timeoutMs)
+		{
+			const int flags = fcntl(fd, F_GETFL, 0);
+			if (flags < 0) { return -1; }
+			if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) { return -1; }
+
+			int r = ::connect(fd, addr, len);
+			if (r != 0 && errno == EINPROGRESS)
+			{
+				fd_set wf;
+				FD_ZERO(&wf);
+				FD_SET(fd, &wf);
+				timeval tv{};
+				tv.tv_sec  = timeoutMs / 1000;
+				tv.tv_usec = (timeoutMs % 1000) * 1000;
+				const int s = select(fd + 1, nullptr, &wf, nullptr, &tv);
+				if (s > 0)
+				{	// 書き込み可になっただけでは成功とは限らない。SO_ERROR で結果を確かめる。
+					int err = 0;
+					socklen_t el = sizeof(err);
+					if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &el) == 0 && err == 0) { r = 0; }
+					else { errno = (err != 0) ? err : ECONNREFUSED; r = -1; }
+				}
+				else { errno = (s == 0) ? ETIMEDOUT : errno; r = -1; }
+			}
+			fcntl(fd, F_SETFL, flags);	// ブロッキングへ戻す(以降の送受信は SO_*TIMEO で制限する)
+			return r;
 		}
 
 		// URL を host/port/path に分解する。http:// 前提。
@@ -79,8 +115,8 @@ namespace net
 			{
 				fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
 				if (fd < 0) { continue; }
-				setTimeout(fd, 3);
-				if (connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) { break; }
+				setIoTimeout(fd, kHttpIoTimeoutMs);
+				if (connectWithTimeout(fd, ai->ai_addr, ai->ai_addrlen, kHttpConnectTimeoutMs) == 0) { break; }
 				close(fd);
 				fd = -1;
 			}
@@ -330,7 +366,7 @@ namespace net
 	{
 		int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 		if (sock < 0) { return nullptr; }
-		setTimeout(sock, 1);
+		setIoTimeout(sock, 1000);	// SSDPは短周期で読み直すので1秒(HTTPとは別物)
 
 		int reuse = 1;
 		setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
@@ -398,7 +434,7 @@ namespace net
 	{
 		int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 		if (sock < 0) { return nullptr; }
-		setTimeout(sock, 1);	// recv 1秒タイムアウト(専用スレッドから周期読み。停止に追随)
+		setIoTimeout(sock, 1000);	// recv 1秒タイムアウト(専用スレッドから周期読み。停止に追随)
 
 		int reuse = 1;
 		setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));

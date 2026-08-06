@@ -40,6 +40,16 @@ namespace net
     bool  ssdpListenRead(void* handle, std::string& answer);
     void  ssdpListenClose(void* handle);
 
+    // --- HTTPのタイムアウト(2026-08-06) ---
+    // エッジとスマホで同じ値を使う。片方だけ変えると、同じ共通ロジック(captureRunner等)が
+    // 端末によって違う待ち方をすることになり、片方でだけ再現する不具合を生む。
+    // 実際、以前は GET だけ 500ms で PUT/POST は未設定(Arduino既定の5000ms)という食い違いがあり、
+    // 「露出設定の2秒リトライが1回も再試行できていない」原因になっていた。
+    //  接続: 不達の相手でSYNを待ち続けない。健全な同一LANのカメラは<100msで繋がる。
+    //  送受信: 応答が返らない相手を待ち続けない。実測の最長は数百ms。
+    constexpr int kHttpConnectTimeoutMs = 1500;
+    constexpr int kHttpIoTimeoutMs      = 3000;
+
     // HTTP関連
     void httpBreak(void);
     bool httpGet(const std::string& url, std::string& answer);
