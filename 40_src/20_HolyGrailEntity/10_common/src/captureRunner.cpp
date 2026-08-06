@@ -161,6 +161,7 @@ bool captureRunner::meterFrame(const hgc::exposure& shotExp, apiBase::meterResul
 	meterSsUsed_   = mr.meterSsUsed;
 	meterSettleMs_ = mr.settleMs;
 	lvPinnedLog_   = mr.pinned;
+	meterUsableLog_ = mr.usable;
 	meterWaitMs_   = mr.waitMs;
 	meterFetchMs_  = mr.fetchMs;
 	meterDecodeMs_ = mr.decodeMs;
@@ -1136,7 +1137,9 @@ errCode captureRunner::loop(void)
 				if (warmedUp) { lastExp = meterExp; }	// ev0 は「測光時の露出」
 				const double linear = mr.ok ? mr.linear : -1.0;
 				meteredLinear = linear;
-				if (linear > 0.0)
+				// mr.usable=false は「測れたが帯の外=根拠にできない」。値はログへ残し露出は据え置く
+				// (2026-08-07。黒つぶれの測光値で撮影露出を絞り切った事故の再発防止)。
+				if (linear > 0.0 && mr.usable)
 				{
 					// 測光値は測光露出で写る明るさ → 露出成分を割り戻してから平均する(土俵合わせ)。
 					if (stepLock_ > 0) { --stepLock_; }	// 反転抑制の残りコマ(測光できたコマだけ数える)
@@ -1237,7 +1240,8 @@ errCode captureRunner::loop(void)
 			if (warmedUp) { lastExp = meterExp; }	// ev0 は「測光時の露出」
 			const double linear = mr.ok ? mr.linear : -1.0;
 			meteredLinear = linear;
-			if (linear > 0.0)
+			// mr.usable=false は「測れたが帯の外=根拠にできない」。値はログへ残し露出は据え置く。
+			if (linear > 0.0 && mr.usable)
 			{
 				// 露出補正(仕様 4.5): 移動平均・ヒステリシス。目標 ev=postEv。往復対称(home=次の基準)。
 				// 測光値は測光露出で写る明るさ → 露出成分を割り戻してから平均する(土俵合わせ)。
@@ -1347,7 +1351,8 @@ errCode captureRunner::loop(void)
 				const double linear = mr.ok ? mr.linear : -1.0;
 				meteredLinear = linear;	// 測光値をログ用に保持(失敗時は-1)
 
-				if (linear > 0.0)
+				// mr.usable=false は「測れたが帯の外=根拠にできない」。値はログへ残し露出は据え置く。
+				if (linear > 0.0 && mr.usable)
 				{
 					// 露出補正(仕様 4.5): 移動平均とヒステリシス帯(項目7: ccm 個別値を優先)
 					// 測光値は「測光露出で写る明るさ」なので、露出成分を割り戻した場面の明るさを
@@ -1508,7 +1513,7 @@ errCode captureRunner::loop(void)
 			onCaptured_(capturedInfo{ frame, shotExp, lum, ccm->name, meteredLinear, meterMs_, applyMs, prepMs,
 			                          static_cast<int>(lateMs), meterOk_, (applyErr == ERR_HGC_OK),
 			                          meterTry_, applyTry, histSum_, lvTimeMs_, staleSkip_, shutterMs, lvP99_, lvPMax_,
-			                          meterSsUsed_, meterSettleMs_, lvPinnedLog_,
+			                          meterSsUsed_, meterSettleMs_, lvPinnedLog_, meterUsableLog_,
 			                          meterWaitMs_, meterFetchMs_, meterDecodeMs_, meterFetchTries_, busyMs, leadUsed,
 			                          asIsLinear_, firstApplyTries_, converge_ });
 		}

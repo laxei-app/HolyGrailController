@@ -54,6 +54,9 @@ public:
 	                      std::string meterSs;	// 測光に使ったシャッター(空=撮影露出のまま測光=従来動作)
 	                      int meterSettleMs = -1;	// 測光ss変更→LV反映の待ち[ms](-1=切替なし)
 	                      bool lvPinned = false;	// 測光ssを変えても値が動かない=ライブビューが張り付いている
+	                      // 測れたが中央値が使える帯の外(=露出制御の根拠にできない)。値はログに残し
+	                      // 露出は据え置いた、という状態(2026-08-07)。ログ use=0。true=正常に採用。
+	                      bool meterUsable = true;
 	                      // 測光所要の内訳(2026-07-28)。遅延がカメラの記録待ちか通信かを切り分ける。
 	                      int meterWaitMs = -1;	// 新しい画像の登録通知を待った時間[ms]
 	                      int meterFetchMs = -1;	// サムネイル取得(HTTP GET)の時間[ms]
@@ -301,6 +304,7 @@ private:
 	std::string meterSsUsed_;			// 今コマ実際に使った測光ss(ログ用。空=撮影ssのまま測光した)
 	int         meterSettleMs_ = -1;	// 今コマの「Tv変更→LV反映」の待ち[ms](-1=切替なし)
 	bool        lvPinnedLog_    = false;	// 張り付き判定(ログ用)
+	bool        meterUsableLog_ = true;		// 測光値を露出制御に使えたか(ログ用。false=帯の外で据え置き)
 	int         meterWaitMs_ = -1, meterFetchMs_ = -1, meterDecodeMs_ = -1, meterFetchTries_ = 0;	// 測光所要の内訳(ログ用)
 	double      asIsLinear_ = -1.0;		// 切替なしで測ったリニア値(ログ用。切替判断の材料そのもの)
 	int         firstApplyTries_ = 0;	// 1枚目の露出適用に要した回数(ログ用。セッション単位)

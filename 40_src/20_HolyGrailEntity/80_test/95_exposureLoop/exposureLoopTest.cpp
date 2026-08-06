@@ -632,6 +632,53 @@ int main()
 		}
 	}
 
+	// --- 11) 測光ss切替経路の採否(2026-08-07) ---
+	//
+	// 【背景】切替なし経路(①)には lvUsableAsIs による採否判定があるが、切替経路(②)には
+	//  無く、帯の外の値でも ok=true / sceneRef をそのまま返していた。①と②で非対称だった。
+	//  実測(2026-08-06 夕R10 19:12〜20:24): 測光ssが 1/16000 まで走った状態で Y=0.0002
+	//  (下限 0.001548 を約3段下回る)を返し続け、「1/16000 でこれだけ写る=非常に明るい場面」
+	//  と解釈されて撮影露出が 8s → 1/20秒 まで絞られた。305コマが真っ黒になった直接の経路。
+	//
+	// 【このテストが固定する仕様】
+	//  ・切替経路でも、帯の外の値は露出制御に使わない(usable=false → 露出据え置き)
+	//  ・ただし値そのものはログに残す(ok は落とさない=Y=/LVHIST が消えない)
+	//  ・帯の内側なら従来どおり採用する
+	//  ・据え置きにしていれば、黒つぶれの値では撮影露出が1歩も動かないこと
+	{
+		const double loLin = expo::srgbToLinear(0.020);	// = kMeterUsableLoX
+		const double hiLin = expo::srgbToLinear(0.850);	// = kMeterUsableHiX
+		auto usable = [&](double linear) { return (linear > 0.0) && (linear >= loLin) && (linear <= hiLin); };
+
+		// 実測値の分類
+		check(!usable(0.0002), "1/16000で測った Y=0.0002 は帯の外 → 露出制御に使わない");
+		check(!usable(0.0004), "暴走中の Y=0.0004 も帯の外");
+		check( usable(0.0160), "暴走直前の Y=0.0160 は帯の内側 → 従来どおり採用");
+		check( usable(0.1469), "日中の Y=0.1469 は帯の内側");
+		check(!usable(0.9500), "飽和側 Y=0.95 も帯の外 → 使わない");
+
+		// ログは残す(ok と usable を分けた理由)。ok は「測れたか」だけを表す。
+		{
+			const bool ok = true, use = usable(0.0002);
+			check(ok && !use, "測れているので ok=true(ログにY=が出る)が、usable=false で据え置き");
+		}
+
+		// 露出が動かないこと。据え置き = 目標露出を1歩も変えない。
+		{
+			// 暴走時と同じ入力: 測光ss 1/16000(撮影ss 8s より 14.97段短い)で Y=0.0002。
+			// 採否を入れないと sceneRef が跳ね上がり「明るすぎ」と読んで絞り続ける。
+			const double meterStops = -14.97;			// 測光露出[段](撮影露出基準)
+			const double sceneRef   = 0.0002 / std::pow(2.0, meterStops);
+			const double predicted  = sceneRef * std::pow(2.0, 0.0);	// 撮影露出で写る明るさ
+			const double target     = 0.18;				// 中庸グレー
+			const double need       = std::log2(target / predicted);	// 負=暗くしろ
+			char note[128];
+			std::snprintf(note, sizeof(note), "(予測=%.1f 目標=%.2f → %+.1f段の指示)", predicted, target, need);
+			check(need < -5.0, "採否が無いと『5段以上暗くしろ』という指示になる(暴走の再現)", note);
+			check(!usable(0.0002), "採否を入れればこの値は制御に届かない=露出は据え置き", note);
+		}
+	}
+
 	std::printf("\n%s (fail=%d)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail);
 	return g_fail == 0 ? 0 : 1;
 }

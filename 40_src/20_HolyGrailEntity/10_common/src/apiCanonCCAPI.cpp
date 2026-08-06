@@ -1504,6 +1504,14 @@ errCode apiCanonCCAPI::meterSceneLv(const hgc::exposure& shotExp, meterResult& o
 		const double predicted = out.sceneRef * std::pow(2.0, expo::brightnessStops(shotExp, tables_));
 		if (!this->lvUsableAsIs(predicted)) { lvAsIsWait_ = kLvRetryAsIsFrames; }
 	}
+	// 【採否(2026-08-07)】切替経路には①経路の lvUsableAsIs に当たる採否判定が無く、
+	//  帯の外の値でも ok=true / sceneRef をそのまま返していた。①と②で非対称だった。
+	//  実測(2026-08-06 夕R10 19:12〜20:24): 測光ssが 1/16000 まで走った状態で Y=0.0002
+	//  (下限 0.001548 を 3段下回る)を返し続け、「1/16000 でこれだけ写る=非常に明るい場面」
+	//  と解釈されて撮影露出が 1/20 秒まで絞られた。305コマが真っ黒になった直接の経路がここ。
+	//  値そのものはログに残したいので ok は落とさず、usable だけを下げる(呼び出し側は据え置き)。
+	//  学習(adaptMeterSs)は上で済ませてある。止めると測光ssが復帰できなくなるため。
+	out.usable = this->lvUsableAsIs(here.linear);
 	return ERR_HGC_OK;
 }
 

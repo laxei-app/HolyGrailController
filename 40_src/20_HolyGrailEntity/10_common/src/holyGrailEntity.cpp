@@ -1062,12 +1062,16 @@ namespace
 					// ai=切替なしで測ったリニア値。測光ssへ切替えた(mss≠-)コマでは、この値が
 					// 使える範囲を外れたことが切替の理由。2.6秒の反映待ちを毎コマ payする
 					// 原因がここでしか分からない(2026-08-05 追加)。-1=切替なし経路を通らず。
+					// use=0: 測れたが中央値が使える帯の外で、露出制御には使わず据え置いた
+					//        (2026-08-07。黒つぶれの測光値で撮影露出を絞り切った事故の再発防止)。
+					//        Y= は据え置いたコマでも残すので「何が見えていたか」は追える。
 					char d[256];
 					std::snprintf(d, sizeof(d),
-						"fr=%d Y=%.4f p99=%.3f pMx=%.3f mss=%s stl=%dms pin=%d late=%dms prep=%dms"
+						"fr=%d Y=%.4f p99=%.3f pMx=%.3f mss=%s stl=%dms pin=%d use=%d late=%dms prep=%dms"
 						" wait=%dms fetch=%dms dec=%dms ftry=%d ai=%.5f",
 						c.frame, c.metered, c.lvP99, c.lvPMax,
 						c.meterSs.empty() ? "-" : c.meterSs.c_str(), c.meterSettleMs, c.lvPinned ? 1 : 0,
+						c.meterUsable ? 1 : 0,
 						c.lateMs, c.prepMs,
 						c.meterWaitMs, c.meterFetchMs, c.meterDecodeMs, c.meterFetchTries, c.asIsLinear);
 					dataManager::logEvent("LVHIST", d);
