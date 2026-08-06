@@ -529,6 +529,109 @@ int main()
 		}
 	}
 
+	// --- 10) 測光ssの下り階段(2026-08-06 夕R10 の実機暴走から) ---
+	//
+	// 【何が起きたか】19:02、日没後の preNight で測光ss切替に入った直後から、測光ssが
+	//  0.5s → 1/4 → 1/8 → 1/15 → 1/30 → … → 1/16000 と 1段/コマで単調に短くなり続けた。
+	//  撮影露出はそれに追随して ISO320/8s → ISO100/(1/20s) まで 8.3段 落ち、
+	//  19:12〜20:24 の 305コマ(全960コマ中)が Y=0.0002 の真っ黒になった。
+	//  20:24 の星景(固定露出)への切替でようやく復帰した。
+	//
+	// 【原因】adaptMeterSs の張り付き判定が向きを見ていなかった(std::fabs(dSs))。
+	//  この判定の意味は「伸ばしたのに上がらない=LVの積分上限に当たった」で、対処は
+	//  「天井を1段下げる=短くする」。ところが fabs のため「短くしたのに指示ほど下がらない」
+	//  コマにも成立する。暗所では測光値がヒストグラムの最下位ビンに張り付いて応答が鈍るので
+	//  必ず成立し、対処の短縮がまた成立を生む自己増幅になる。
+	//  実測の連鎖(fr=500〜513): 0.4→0.5s で伸ばして無反応 → 正当な張り付き → 1段短縮。
+	//  以降は「短縮 → 応答比 0.3〜0.4 → 誤って張り付き → さらに短縮」を表の下端まで繰り返した。
+	//
+	// 【このテストが固定する仕様】
+	//  ・伸ばして反応が無いコマは従来どおり張り付きと判定する(正当な検出は失わない)
+	//  ・縮めたコマでは張り付きと判定しない(向きを見る)
+	//  ・実測の下り階段の入力を流しても、測光ssが単調減少し続けないこと
+	{
+		const double kRatio    = 0.50;	// = kMeterRespondRatio
+		const double kMinStops = 0.30;	// = kMeterRespondMinStops
+
+		// 修正後の adaptMeterSs と同じ判定(伸ばした側だけを見る)。
+		auto pinnedNew = [&](double dSs, double dLin)
+		{
+			if (!(dSs >= kMinStops)) { return false; }
+			return (dLin / dSs) < kRatio;
+		};
+		// 修正前(向きを見ない)。バグの再現用。
+		auto pinnedOld = [&](double dSs, double dLin)
+		{
+			if (std::fabs(dSs) < kMinStops) { return false; }
+			return (dLin / dSs) < kRatio;
+		};
+
+		// ① 正当な検出: 伸ばした(+0.33段)のに測光値が動かない → 張り付き。
+		check(pinnedNew(+1.0 / 3.0, 0.0), "伸ばして無反応なら張り付きと判定する(積分上限)");
+		check(pinnedNew(+1.0, 0.0),       "1段伸ばして無反応でも張り付きと判定する");
+		// 伸ばして素直に上がったコマは張り付きではない。
+		check(!pinnedNew(+1.0, 1.0),      "伸ばして指示どおり上がったコマは張り付きではない");
+
+		// ② 誤検出の除去: 縮めた側は判定しない。実測 fr=501〜505 の応答比。
+		//    (1段短縮に対し測光値は 0.32/0.0/0.415 段しか下がらない=黒の底に当たっている)
+		{
+			const double dLin[] = { -0.32, -0.415, 0.0, 0.0, -0.30 };
+			int oldPin = 0, newPin = 0;
+			for (int i = 0; i < 5; ++i)
+			{
+				if (pinnedOld(-1.0, dLin[i])) { ++oldPin; }
+				if (pinnedNew(-1.0, dLin[i])) { ++newPin; }
+			}
+			char note[96];
+			std::snprintf(note, sizeof(note), "(修正前=%d回 修正後=%d回)", oldPin, newPin);
+			check(oldPin == 5, "修正前は縮めた5コマ全部を張り付きと誤判定する(バグの再現)", note);
+			check(newPin == 0, "修正後は縮めたコマを張り付きと判定しない", note);
+		}
+
+		// ③ 下り階段が起きないこと。実測 fr=500 起点で、暗所(測光値は底に張り付いて動かない)を
+		//    模して回す。1コマの流れ = 張り付き判定 → 天井更新 → 暗すぎなら伸長 → 天井でクランプ。
+		{
+			const double kPinBackoff = 1.0;		// = kMeterPinBackoffStops
+			const double kCeilRelax  = 0.10;	// = kMeterCeilRelaxStops
+			const double kMaxLenStep = 1.0;		// = kMeterMaxLenStep
+			const double kSsFloor    = -14.0;	// 測光ss表の下端(撮影ss基準の相対段。1/16000 相当)
+
+			auto run = [&](bool useOld)
+			{
+				double cur = 0.0;			// 測光ssの位置[段](相対)
+				double ceil_ = 1e9;
+				double prev = cur;
+				double minSeen = 0.0;
+				for (int i = 0; i < 40; ++i)
+				{
+					const double dSs = cur - prev;
+					// 暗所の応答: 底に張り付いているので、指示の 30〜40% しか動かない。
+					const double dLin = dSs * 0.35;
+					const bool pinned = useOld ? pinnedOld(dSs, dLin) : pinnedNew(dSs, dLin);
+					prev = cur;
+					double want;
+					if (pinned) { ceil_ = cur - kPinBackoff; want = ceil_; }
+					else
+					{
+						want = cur + kMaxLenStep;	// 測光値が下限を割っている=伸ばす側
+						ceil_ += kCeilRelax;
+						if (want > ceil_) { want = ceil_; }
+					}
+					cur = want;
+					if (cur < kSsFloor) { cur = kSsFloor; }	// 表の下端で止まる
+					if (cur < minSeen) { minSeen = cur; }
+				}
+				return minSeen;
+			};
+			const double oldMin = run(true);
+			const double newMin = run(false);
+			char note[128];
+			std::snprintf(note, sizeof(note), "(修正前 %.1f段 / 修正後 %.1f段)", oldMin, newMin);
+			check(oldMin <= kSsFloor + 1e-9, "修正前は測光ssが表の下端まで走り切る(バグの再現)", note);
+			check(newMin > -2.5, "修正後は測光ssが下り階段にならず1段幅に収まる", note);
+		}
+	}
+
 	std::printf("\n%s (fail=%d)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail);
 	return g_fail == 0 ? 0 : 1;
 }
