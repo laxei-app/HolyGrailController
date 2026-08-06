@@ -195,6 +195,9 @@ protected:
 	void        adaptMeterSs(const hgc::exposure& meterExp, double linear, bool& pinnedOut);
 	// 中断可能な待ち(keepGoing が false になったら早期に戻る)。
 	void        meterSleep(int ms, const std::function<bool()>& keepGoing) const;
+	// 測光ss切替がライブビューへ反映されるまで待つ(反映を確かめて早く抜ける。上限は budgetMs)。
+	int         waitLvReflect(double beforeLinear, double deltaStops,
+	                          int budgetMs, const std::function<bool()>& keepGoing);
 	// --- 撮影画像フィードバック測光(方式A) ---
 	// LV方式の meterScene 本体(方式B。コード温存・kUseShotThumbMetering=false で復活)。
 	errCode meterSceneLv(const hgc::exposure& shotExp, meterResult& out,

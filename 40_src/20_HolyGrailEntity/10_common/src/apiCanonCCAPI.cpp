@@ -1050,6 +1050,13 @@ namespace
 {
 	// --- 測光の調整定数(実測から決定。captureRunner から移設) ---
 	constexpr int    kMeterSettleMaxMs    = 2600;	// Tv変更がLVに反映されるまでの待ち上限[ms](実測R10=1.3〜2.1秒)
+	// --- 反映の検知(2026-08-06) ---
+	// 上限まで寝るのをやめ、実際に反映されたら抜ける。実測1.3〜2.1秒に対し2.6秒を毎回払っており、
+	// 薄明の遷移帯では毎コマ効く。判定は「指示した向きへ指示量の一定割合だけ動いたか」。
+	// ノイズでヒストグラムは毎フレーム微妙に変わるので「中身が変わった」だけでは早すぎる。
+	constexpr int    kMeterReflectPollMs   = 200;	// 反映を確かめる間隔[ms]
+	constexpr double kMeterReflectRatio    = 0.5;	// 指示量のこの割合だけ動いたら反映とみなす
+	constexpr double kMeterReflectMinStops = 1.0;	// これ未満の指示量では判定しない(ノイズと区別できない)
 	constexpr double kMeterUsableLoX      = 0.020;	// 中央値がこれ未満は暗すぎて信用しない(sRGB)
 	constexpr double kMeterUsableHiX      = 0.850;	// これ超は明るすぎ(飽和寄り)
 	constexpr double kMeterRespondRatio   = 0.50;	// 「Δss段」に対しΔ測光段がこの比未満なら張り付き
@@ -1100,6 +1107,42 @@ void apiCanonCCAPI::meterReset(void)
 	contentsDir_.clear();			// 保存先も取り直す
 	lvNeedSwitch_   = false;	// 撮影ssのままでいけるか、次コマでまた試す
 	lvAsIsWait_     = 0;
+}
+
+// 測光ssへ切替えた変更が、ライブビューに反映されるまで待つ。
+//
+// 【なぜ上限まで寝ないのか(2026-08-06)】従来は kMeterSettleMaxMs をまるごと寝ていた。
+//  実測の反映は1.3〜2.1秒なので毎回0.5〜1.3秒を捨てており、切替が要る薄明の遷移帯では
+//  毎コマ効いてくる(準備のリードを食い、撮影周期を詰められない)。
+//  フレームの時刻(systemtime)は変更直後でも進むため反映の合図に使えない
+//  (中身が変更前のまま時刻だけ新しいフレームが返る。実測)。そこで中身そのものを見る。
+//  ただし「中身が変わった」だけではノイズで毎フレーム変わってしまい早すぎるので、
+//  「指示した向きへ、指示量の kMeterReflectRatio 以上動いたか」で判定する。
+//  検知できないうちは従来どおり上限まで待つので、今より遅くなることはない。
+//  beforeLinear: 切替前に測れていたリニア輝度 / deltaStops: 指示した露出変化[段]
+//  return: 実際に待った時間[ms]
+int apiCanonCCAPI::waitLvReflect(double beforeLinear, double deltaStops,
+                                 int budgetMs, const std::function<bool()>& keepGoing)
+{
+	void* t0 = tool::startElapse();
+	// 基準が無い/指示量が小さくて判定できない → 従来どおり上限まで待つ。
+	if (!(beforeLinear > 0.0) || std::fabs(deltaStops) < kMeterReflectMinStops)
+	{
+		meterSleep(budgetMs, keepGoing);
+		return static_cast<int>(tool::getElapse(t0));
+	}
+	while (static_cast<int>(tool::getElapse(t0)) < budgetMs)
+	{
+		if (keepGoing && !keepGoing()) { break; }
+		meterSleep(kMeterReflectPollMs, keepGoing);
+		cmdt::HISTOGRAM h;
+		if (rdyMetering() != ERR_HGC_OK || alzMetering(h) != ERR_HGC_OK) { continue; }
+		const double lin = expo::srgbToLinear(expo::histMedian(h.y, cmdt::hist_bin));
+		if (!(lin > 0.0)) { continue; }
+		// 割り算で向きも一緒に見る(同じ向きなら正、逆向きなら負になる)。
+		if ((std::log2(lin / beforeLinear) / deltaStops) >= kMeterReflectRatio) { break; }
+	}
+	return static_cast<int>(tool::getElapse(t0));
 }
 
 // カメラの現在の露出のまま、LVヒストグラムからリニア輝度(中央値)を得る。
@@ -1285,6 +1328,9 @@ errCode apiCanonCCAPI::meterSceneLv(const hgc::exposure& shotExp, meterResult& o
 {
 	out = meterResult{};
 	hgc::exposure meterExp = shotExp;
+	// 測光ssへ切替えたとき「反映されたか」を判定する基準(切替前のリニア輝度)。
+	// ①で測れていればそれを使う。使えないときは②で1回だけ測る。
+	double preSwitchLinear = -1.0;
 
 	if (lvAsIsWait_ > 0) { --lvAsIsWait_; }
 
@@ -1320,6 +1366,7 @@ errCode apiCanonCCAPI::meterSceneLv(const hgc::exposure& shotExp, meterResult& o
 			return (e0 != ERR_HGC_OK) ? e0 : ERR_HGC_RDY_METARING;
 		}
 		out.asIsLinear = asIs.linear;	// 切替の可否を決めた値(ログ ai=)。切替えた理由の追跡用
+		preSwitchLinear = asIs.linear;	// 切替えた場合の「反映されたか」の基準に使う
 		if (this->lvUsableAsIs(asIs.linear))
 		{
 			// 【2026-08-03 追加】中央値が使える範囲にあることと、露出変更に反応することは別物。
@@ -1369,6 +1416,15 @@ errCode apiCanonCCAPI::meterSceneLv(const hgc::exposure& shotExp, meterResult& o
 	const std::string want = decideMeterSs(shotExp);
 	if (!want.empty())
 	{
+		// 反映を確かめるための基準を用意する。①を通っていなければここで1回だけ測る。
+		// LV取得1回(約100ms)で、以降の待ちを1秒前後縮められるので割に合う。
+		if (!(preSwitchLinear > 0.0))
+		{
+			meterResult before;
+			if (meterHere(before, keepGoing) == ERR_HGC_OK && before.linear > 0.0)
+			{ preSwitchLinear = before.linear; }
+		}
+		const double beforeStops = expo::brightnessStops(meterExp, tables_);
 		if (setSS(want) != ERR_HGC_OK)
 		{
 			// 切替失敗。応答が返らないだけでカメラに遅延適用されることがある(IMG_3920事故)。
@@ -1380,10 +1436,9 @@ errCode apiCanonCCAPI::meterSceneLv(const hgc::exposure& shotExp, meterResult& o
 			meterExp.ss     = want;
 			out.appliedSs   = want;
 			out.meterSsUsed = want;
-			// 反映待ち: Tv変更直後はsystemtimeが新しくても中身が変更前のことがある(実測)。上限まで待つ。
-			void* t0 = tool::startElapse();
-			meterSleep(kMeterSettleMaxMs, keepGoing);
-			out.settleMs = static_cast<int>(tool::getElapse(t0));
+			// 反映待ち: 反映されたら抜ける(検知できなければ上限まで待つ=従来と同じ)。
+			const double delta = expo::brightnessStops(meterExp, tables_) - beforeStops;
+			out.settleMs = this->waitLvReflect(preSwitchLinear, delta, kMeterSettleMaxMs, keepGoing);
 		}
 	}
 	else
