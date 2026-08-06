@@ -192,7 +192,9 @@ protected:
 	void*            lvFreshPrevAt_  = nullptr;	// その採用時点の実時刻アンカー
 	// 測光ssの決定と適応(旧 captureRunner::enterMeteringShutter / updateMeterShutter)。
 	std::string decideMeterSs(const hgc::exposure& shotExp) const;
-	void        adaptMeterSs(const hgc::exposure& meterExp, double linear, bool& pinnedOut);
+	// shotExp は測光ssの天井の「下限」を決めるのに使う(撮影ss-kMeterInitDropStops より下げない)。
+	void        adaptMeterSs(const hgc::exposure& meterExp, const hgc::exposure& shotExp,
+	                         double linear, bool& pinnedOut);
 	// 中断可能な待ち(keepGoing が false になったら早期に戻る)。
 	void        meterSleep(int ms, const std::function<bool()>& keepGoing) const;
 	// 測光ss切替がライブビューへ反映されるまで待つ(反映を確かめて早く抜ける。上限は budgetMs)。

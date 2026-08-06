@@ -1085,7 +1085,15 @@ namespace
 	// 切替なし経路でLVが取れなかったコマの段番号(ログ stage=)。方式Aの 1〜5 と区別する。
 	constexpr int    kLvFailAsIsStage      = 10;
 	constexpr int    kLvRetryAsIsFrames    = 20;	// 切替なしを再試行するまでの間隔[コマ]
-	constexpr double kMeterCeilRelaxStops  = 0.10;	// 天井を毎コマこれだけ緩め、条件変化へ追従
+	// 天井を毎コマこれだけ緩め、条件変化へ追従する。
+	// 【0.10 → 1/3 段(2026-08-07)】0.10 には2つ問題があった。
+	//  ・遅すぎる: 15秒周期だと1段の復帰に25秒。実測(2026-08-06 夕R10)では下端から戻るのに
+	//    約35分かかり、星景(固定露出)へ切り替わるまで復帰できなかった。
+	//  ・張り付き判定が働かなくなる: 緩和が 0.10 だと1コマの露出変化も 0.10 段にしかならず、
+	//    判定の最小変化量 kMeterRespondMinStops(0.30) に届かない。つまり天井を緩めている
+	//    あいだ「伸ばしたのに上がらない」を一度も検出できず、天井が青天井に伸びる。
+	//  1歩(1/3段)にすれば毎コマ判定が働き、積分上限に当たった時点で正しく止まる。
+	constexpr double kMeterCeilRelaxStops  = 1.0 / 3.0;
 	// --- 撮影画像フィードバック測光(方式A)の予算 ---
 	// 露光終了→カメラの記録完了→サムネイル取得 までを含む総予算。記録は実測2.0〜2.6秒だが、
 	// カメラが混んでいると伸びる。取得が503等で弾かれても諦めず、この予算内でリトライする
@@ -1239,7 +1247,8 @@ std::string apiCanonCCAPI::decideMeterSs(const hgc::exposure& shotExp) const
 
 // 測光結果から次コマの測光ssを学習し、張り付き(露出を変えても値が動かない)を判定する。
 //  短い側・忠実優先: 暗すぎる時だけ控えめに伸ばし、明るすぎたら縮め、張り付いたら天井を下げる。
-void apiCanonCCAPI::adaptMeterSs(const hgc::exposure& meterExp, double linear, bool& pinnedOut)
+void apiCanonCCAPI::adaptMeterSs(const hgc::exposure& meterExp, const hgc::exposure& shotExp,
+                                 double linear, bool& pinnedOut)
 {
 	pinnedOut = false;
 	if (tables_.ss.empty()) { return; }
@@ -1271,10 +1280,16 @@ void apiCanonCCAPI::adaptMeterSs(const hgc::exposure& meterExp, double linear, b
 	meterPrevStops_ = curStops;
 	meterPrevLin_   = x;
 
+	// 天井の下限(2026-08-07)。測光ssは「撮影ssより短く、LVが積分できる範囲で最も忠実に測れる
+	// 位置」を探すもので、初期値(撮影ss-kMeterInitDropStops)より下へ行く意味は無い。
+	// 下限が無かったため、張り付きの誤検出が連鎖したときに ss表の下端(1/16000)まで走れた。
+	const double ceilFloor = expo::brightnessStops(shotExp, tables_) - static_cast<double>(kMeterInitDropStops);
+
 	double wantStops;
 	if (pinnedOut)
 	{	// 張り付き=このssは長すぎてLVが積分できない。天井として記録し短い側へ後退。
 		meterCeilStops_ = curStops - kMeterPinBackoffStops;
+		if (meterCeilStops_ < ceilFloor) { meterCeilStops_ = ceilFloor; }
 		wantStops = meterCeilStops_;
 	}
 	else
@@ -1309,6 +1324,7 @@ void apiCanonCCAPI::adaptMeterSs(const hgc::exposure& meterExp, double linear, b
 			else { wantStops = curStops; }
 		}
 		meterCeilStops_ += kMeterCeilRelaxStops;	// 天井は毎コマ少し緩めて条件変化へ追従
+		if (meterCeilStops_ < ceilFloor) { meterCeilStops_ = ceilFloor; }
 		if (wantStops > meterCeilStops_) { wantStops = meterCeilStops_; }
 	}
 	std::string pick; double best = 1e9;
@@ -1496,7 +1512,7 @@ errCode apiCanonCCAPI::meterSceneLv(const hgc::exposure& shotExp, meterResult& o
 	if (!out.meterSsUsed.empty())
 	{
 		bool pinned = false;
-		adaptMeterSs(meterExp, here.linear, pinned);
+		adaptMeterSs(meterExp, shotExp, here.linear, pinned);
 		out.pinned = pinned;
 
 		// 撮影ssならどう写るかを予測する。LVが忠実に積分できる前提の上限値なので、

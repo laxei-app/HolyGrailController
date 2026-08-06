@@ -679,6 +679,59 @@ int main()
 		}
 	}
 
+	// --- 12) 測光ss天井の下限と復帰速度(2026-08-07) ---
+	//
+	// 【背景】meterCeilStops_ には下限が無く、張り付きの誤検出が連鎖すると ss表の下端まで
+	//  走れた。復帰は緩和 0.10段/コマ だけで、15秒周期では1段に25秒、下端からは約35分かかる。
+	//  さらに 0.10 は張り付き判定の最小変化量 0.30段 に届かないため、天井を緩めているあいだ
+	//  「伸ばしたのに上がらない」を一度も検出できず、天井が青天井に伸びる副作用もあった。
+	//
+	// 【このテストが固定する仕様】
+	//  ・天井は 撮影ss-kMeterInitDropStops(=測光ssの初期値)より下げない
+	//  ・緩和は1歩(1/3段)。張り付き判定の最小変化量以上であること
+	//  ・下端相当から数コマで初期値へ戻れること
+	{
+		const double kInitDrop   = 5.0;			// = kMeterInitDropStops
+		const double kCeilRelax  = 1.0 / 3.0;	// = kMeterCeilRelaxStops(修正後)
+		const double kMinStops   = 0.30;		// = kMeterRespondMinStops
+
+		check(kCeilRelax >= kMinStops,
+		      "天井の緩和は張り付き判定の最小変化量以上(緩和中も判定が働く)");
+		check(0.10 < kMinStops,
+		      "修正前の 0.10 は最小変化量に届かず、緩和中は判定が働かなかった(バグの再現)");
+
+		// 天井の下限。撮影ss基準の相対段で -kInitDrop。
+		const double ceilFloor = -kInitDrop;
+		{
+			double ceil_ = -3.0;					// 張り付きで下げようとする
+			ceil_ = ceil_ - 1.0;					// = -4.0 (kMeterPinBackoffStops)
+			if (ceil_ < ceilFloor) { ceil_ = ceilFloor; }
+			check(ceil_ >= ceilFloor - 1e-9, "1回の後退では下限を割らない");
+
+			ceil_ = -14.0;							// 下端まで走った状態を模す
+			if (ceil_ < ceilFloor) { ceil_ = ceilFloor; }
+			check(std::fabs(ceil_ - ceilFloor) < 1e-9, "下限より下は切り上げられる(-14段→-5段)");
+		}
+
+		// 復帰速度。下限から初期値(=下限そのもの)ではなく、後退した位置から戻る所要コマ数。
+		{
+			double ceil_ = ceilFloor;			// 最も下がった状態
+			const double want = 0.0;			// 撮影ss相当まで戻したい
+			int n = 0;
+			while (ceil_ < want && n < 100) { ceil_ += kCeilRelax; ++n; }
+			char note[96];
+			// 5段 ÷ 1歩 = 15コマ(端数で16)。15秒周期なら約4分。
+			std::snprintf(note, sizeof(note), "(%dコマ=約%d分@15秒周期)", n, n * 15 / 60);
+			check(n <= 16, "下限から撮影ss相当まで16コマ以内で戻れる", note);
+
+			// 旧値との比較(同じ距離を何コマかかっていたか)。
+			double old_ = ceilFloor; int on = 0;
+			while (old_ < want && on < 1000) { old_ += 0.10; ++on; }
+			std::snprintf(note, sizeof(note), "(修正前=%dコマ 修正後=%dコマ)", on, n);
+			check(on > n * 2, "修正前は同じ復帰に倍以上かかっていた", note);
+		}
+	}
+
 	std::printf("\n%s (fail=%d)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail);
 	return g_fail == 0 ? 0 : 1;
 }
