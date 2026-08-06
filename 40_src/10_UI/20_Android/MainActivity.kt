@@ -508,9 +508,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 edgeSpinnerUserTouched = false
                 // 保存先はスピナーが表示している計画。念のため選択中の計画と一致する時だけ書く(不一致=表示が追従前)。
                 val target = edgeSpinnerPlanId
-                if (target.isEmpty() || target != currentPlanId) return
                 val nm = if (pos in 1..edges.size) edges[pos - 1].name else ""
-                setPlanEdgeName(target, nm)
+                if (target.isNotEmpty() && target == currentPlanId) { setPlanEdgeName(target, nm) }
+                // 【2026-08-06】保存の成否によらず、最後に「実際に保存されている値」を表示へ戻す。
+                //  上のガードで弾かれると保存されないのに選んだ表示だけが残り、
+                //  「Edje00 と出ているのにスマホ直結で撮影が始まる」という気づけない食い違いになる
+                //  (2026-08-05 実機で発生)。表示が実態と一致していれば、その場で気づいて選び直せる。
+                showStoredEdgeOnSpinner(target, nm)
             }
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
         }
@@ -5095,6 +5099,22 @@ class MainActivity : AppCompatActivity(), HgeListener {
             edges[i] = Edge(name, ip, port)
         } else edges.add(Edge(name, ip, port))
         saveRegisteredEdges()
+    }
+
+    // 実際に保存されているエッジ割当を、スピナーの表示へ反映する。
+    //  表示が実態からズレたまま残らないようにするためのもの。ズレているときだけ選択し直す
+    //  (毎回 setSelection すると、その通知でまたここへ戻ってくる)。
+    //  chosen を渡すと、ユーザーが選んだ値が保存されなかったときだけ知らせる。
+    //  黙って選択が戻ると画面の不具合に見えるので、選び直せるように一言出す。
+    private fun showStoredEdgeOnSpinner(planId: String, chosen: String? = null) {
+        if (planId.isEmpty()) return
+        val stored = planEdgeName(planId)
+        val idx = if (stored.isEmpty()) 0
+                  else edges.indexOfFirst { it.name == stored }.let { if (it >= 0) it + 1 else 0 }
+        if (edgeSpinner.selectedItemPosition != idx) { try { edgeSpinner.setSelection(idx) } catch (_: Exception) {} }
+        if (chosen != null && chosen != stored) {
+            Toast.makeText(this, "エッジ端末を変更できませんでした。もう一度選んでください", Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun refreshEdgeSpinner() {
