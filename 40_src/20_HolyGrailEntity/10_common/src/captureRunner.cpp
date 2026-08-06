@@ -239,6 +239,28 @@ hgc::exposure captureRunner::appliedExposure(void) const
 	return e;
 }
 
+// 実際にカメラへ乗っている露出を、内部の記録だけから復元する(通信しない)。
+//
+// 1枚目の露出適用が失敗したときに使う。従来はここで「撮ったつもりの露出」をそのまま
+// 撮影露出として扱っていたため、被害が1コマで終わらなかった:
+//   カメラは露出X、アプリは露出Yのつもり
+//    → そのコマの測光値を Y で割り戻す(sceneRefFromMetered)ので場面の明るさを取り違える
+//    → 次コマの露出も誤る
+// 実機の状態を使えば測光が正しい土俵に乗り、次コマから正常へ戻れる。
+//
+//  ・lastXxxApplied_ は「その軸の適用が成功したときだけ」更新されるので、一部の軸だけ
+//    通った場合(fnは通ったがisoは失敗など)も軸ごとに正しく表せる。
+//  ・空の軸は、初期収束が最後に適用できた露出のまま(カメラはそこから動いていない)。
+// 通信が失敗している最中にカメラへ問い合わせに行かずに済むのがこの方式の利点。
+hgc::exposure captureRunner::appliedOrConverge(void) const
+{
+	hgc::exposure e = this->appliedExposure();
+	if (e.fn.empty())  { e.fn  = convergeLastApplied_.fn; }
+	if (e.ss.empty())  { e.ss  = convergeLastApplied_.ss; }
+	if (e.iso.empty()) { e.iso = convergeLastApplied_.iso; }
+	return e;
+}
+
 // 目標との差(段)から、このコマで踏む 1/3 段ステップ数を決める。
 //  定常時は1ステップ(=1/3段)に留めてフリッカーを抑え、大きくずれているときだけ速く詰める。
 // シャッターを切る。カメラが「記録中(503 Device busy)」を返している間は、そのコマの
@@ -617,6 +639,9 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 			continue;	// step は増やさない(収束の1歩として数えない)
 		}
 		++step;
+		// 実際にカメラへ乗った露出を覚えておく。1枚目の適用が失敗したとき、カメラはこの露出の
+		// ままなので、通信せずに「実機の状態」を復元できる(appliedOrConverge)。
+		convergeLastApplied_ = meterE;
 		interruptibleSleep(kMeterSettleMs);
 
 		apiBase::meterResult mr;
@@ -1424,10 +1449,16 @@ errCode captureRunner::loop(void)
 						              t1, kFirstApplyMaxMs);
 						onError_(ae, eb);
 					}
-					// 乗らなかった。カメラの露出は不明なので、シャッター直前の再適用へ託す
-					// (ループ先頭の applyFailed_ 経路が1回だけ試し直す)。ここで撮った気にならない。
+					// 乗らなかった。狙いは変えず、シャッター直前の再適用へ託す
+					// (ループ先頭の applyFailed_ 経路が1回だけ試し直す)。
 					applyFailed_ = true;
 					wantExp_     = pending;
+					// 【2026-08-06】撮る露出は「実機に乗っている値」にする。従来は狙いの値のまま
+					//  撮ったことにしていたため、そのコマの測光を誤った露出で割り戻し、次コマの
+					//  露出まで巻き添えにしていた(被害が1コマで終わらない)。ログと実写も食い違った。
+					//  通信が失敗している最中なので、カメラへ問い合わせず内部の記録から復元する。
+					const hgc::exposure act = this->appliedOrConverge();
+					if (validExposure(act)) { pending = act; }
 				}
 			}
 			// 収束が撮影窓より早く終わった余り時間は keepAlive で待つ。窓開始で CAPTURING。
