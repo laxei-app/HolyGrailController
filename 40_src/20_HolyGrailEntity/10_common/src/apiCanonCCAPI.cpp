@@ -1100,6 +1100,13 @@ namespace
 	constexpr int    kMeterReflectPollMs   = 200;	// 反映を確かめる間隔[ms]
 	constexpr double kMeterReflectRatio    = 0.5;	// 指示量のこの割合だけ動いたら反映とみなす
 	constexpr double kMeterReflectMinStops = 1.0;	// これ未満の指示量では判定しない(ノイズと区別できない)
+	// --- 反映の検知: 第2の抜け条件(2026-08-07) ---
+	// 上の比率判定は「指示した段数の半分以上動く」ことを求めるが、LVの中央値はヒストグラムの
+	// 最下位ビンより下がれず(上は飽和で頭打ち)、深い切替では要求が限界を超えて**構造的に
+	// 成立しなくなる**。実測(2026-08-06 夕R10)では要求下落 3.45段までは 623〜1020ms で抜け、
+	// 3.95段以上は全コマ上限 2641〜2876ms だった。そこで「これ以上変わらない」も反映とみなす。
+	constexpr int    kMeterReflectMinWaitMs   = 600;	// この時間は必ず待つ(切替直後の未反映で抜けない)
+	constexpr double kMeterReflectStableStops = 0.10;	// 連続2回の差がこれ以内なら底/天井に達したとみなす
 	constexpr double kMeterUsableLoX      = 0.020;	// 中央値がこれ未満は暗すぎて信用しない(sRGB)
 	constexpr double kMeterUsableHiX      = 0.850;	// これ超は明るすぎ(飽和寄り)
 	// --- 測光ssを選ぶときの狙い(2026-08-06) ---
@@ -1193,8 +1200,13 @@ int apiCanonCCAPI::waitLvReflect(double beforeLinear, double deltaStops,
 		meterSleep(budgetMs, keepGoing);
 		return static_cast<int>(tool::getElapse(t0));
 	}
-	while (static_cast<int>(tool::getElapse(t0)) < budgetMs)
+	double prevLin = -1.0;	// 直前のポーリング値(安定判定用)
+	for (;;)
 	{
+		// 予算チェックはスリープ+LV取得の**前**に行う。従来は先頭で見てから寝て取りに行って
+		// いたため、1周期ぶん(200ms + 取得100〜300ms)超過していた(実測 stl=2951ms > 上限2600)。
+		const int elapsed = static_cast<int>(tool::getElapse(t0));
+		if (elapsed + kMeterReflectPollMs >= budgetMs) { break; }
 		if (keepGoing && !keepGoing()) { break; }
 		meterSleep(kMeterReflectPollMs, keepGoing);
 		cmdt::HISTOGRAM h;
@@ -1203,6 +1215,20 @@ int apiCanonCCAPI::waitLvReflect(double beforeLinear, double deltaStops,
 		if (!(lin > 0.0)) { continue; }
 		// 割り算で向きも一緒に見る(同じ向きなら正、逆向きなら負になる)。
 		if ((std::log2(lin / beforeLinear) / deltaStops) >= kMeterReflectRatio) { break; }
+		// 【第2の抜け条件(2026-08-07)】上の比率判定は「指示した段数の半分以上、測光値が動く」
+		//  ことを求める。ところが LV の中央値はヒストグラムの最下位ビン(Y≒0.0002)より下がれず、
+		//  上は飽和で頭打ちになる。深く切替えるほど要求される変化量が大きくなるので、要求が
+		//  限界を超えた瞬間にこの条件は**構造的に成立しなくなり、必ず上限まで待つ**。
+		//  実測(2026-08-06 夕R10): 要求下落 3.45段までは 623〜1020ms で抜け、3.95段以上は
+		//  全コマ 2641〜2876ms(上限)。境目がきれいに出ていた。
+		//  そこで「これ以上待っても変わらない」を直接見る。連続する2回のポーリングが 0.1段
+		//  以内なら底(または天井)に達しているので、反映は済んだものとして抜ける。
+		//  切替直後にまだ動いていないだけの状態で抜けないよう、最低待ち時間を設ける
+		//  (正常時の実測は 623ms 以上なので、この下限で早すぎる離脱は起きない)。
+		if (prevLin > 0.0
+		 && static_cast<int>(tool::getElapse(t0)) >= kMeterReflectMinWaitMs
+		 && std::fabs(std::log2(lin / prevLin)) <= kMeterReflectStableStops) { break; }
+		prevLin = lin;
 	}
 	return static_cast<int>(tool::getElapse(t0));
 }

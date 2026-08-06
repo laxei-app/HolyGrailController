@@ -732,6 +732,89 @@ int main()
 		}
 	}
 
+	// --- 13) 測光ss切替の反映待ち(2026-08-07) ---
+	//
+	// 【背景】waitLvReflect の抜け条件は「指示した段数の kMeterReflectRatio(=0.5) 以上、
+	//  測光値が動いたか」だけだった。深く切替えるほど要求される変化量が大きくなる一方、
+	//  LVの中央値はヒストグラム最下位ビン(Y≒0.0002)より下がれない。要求が限界を超えると
+	//  この条件は構造的に成立しなくなり、必ず上限 2600ms まで待つ。
+	//  実測(2026-08-06 夕R10)の境目:
+	//    要求下落 2.00/3.00/3.45段 → 623/941/928ms で抜けた
+	//    要求下落 3.95段以上       → 2641〜2876ms(全コマ上限)
+	//
+	// 【このテストが固定する仕様】
+	//  ・比率判定は従来どおり(浅い切替では今までどおり抜ける)
+	//  ・底に達して動かなくなったら「これ以上変わらない」として抜ける(第2の条件)
+	//  ・切替直後の未反映で早すぎる離脱をしない(最低待ち時間)
+	//  ・予算の超過が1ポーリング分ぶん出ない
+	{
+		const double kRatio       = 0.50;	// = kMeterReflectRatio
+		const int    kPollMs      = 200;	// = kMeterReflectPollMs
+		const int    kMinWaitMs   = 600;	// = kMeterReflectMinWaitMs
+		const double kStableStops = 0.10;	// = kMeterReflectStableStops
+		const int    kBudgetMs    = 2600;	// = kMeterSettleMaxMs
+
+		// 抜け判定(実装と同じ)。lin/prevLin/elapsed から「抜けるか」を返す。
+		auto exitNow = [&](double before, double delta, double lin, double prevLin, int elapsed)
+		{
+			if ((std::log2(lin / before) / delta) >= kRatio) { return true; }
+			if (prevLin > 0.0 && elapsed >= kMinWaitMs
+			 && std::fabs(std::log2(lin / prevLin)) <= kStableStops) { return true; }
+			return false;
+		};
+
+		// ① 浅い切替(要求下落 2.00段)。実測は 623ms で抜けている。比率判定で抜けること。
+		{
+			const double before = 0.0150, delta = -4.00;	// 要求下落 -2.00段
+			const double lin    = before * std::pow(2.0, -2.10);	// 素直に下がった
+			check(exitNow(before, delta, lin, -1.0, 400), "浅い切替は従来どおり比率判定で抜ける");
+		}
+
+		// ② 深い切替。LVの中央値は最下位ビンより下がれないので、到達できる下落幅には上限がある。
+		//    到達可能 = log2(底 / 切替前)。比率判定が要求するのは |delta|/2 なので、
+		//    |delta|/2 が到達可能を超えた時点で**構造的に成立しなくなる**。
+		{
+			const double before = 0.0100;					// 切替前(撮影ss=8sで測った値)
+			const double floorY = 0.0004;					// 最下位ビン(これ以上下がらない)
+			const double reach  = std::log2(floorY / before);	// 到達できる下落[段] = -4.64
+			const double bound  = std::fabs(reach) * 2.0;		// この段数を超える切替は抜けられない
+			char note[128];
+			std::snprintf(note, sizeof(note), "(到達可能 %.2f段 → 切替 %.1f段 超で成立しなくなる)", reach, bound);
+			check(bound > 9.0 && bound < 10.0, "到達可能な下落幅から抜けられる切替の上限が決まる", note);
+
+			// 実測の 1/16000(撮影ss 2s に対し -14.97段)。要求 -7.48段 > 到達可能 -4.64段。
+			const double delta = -14.97;
+			check(!exitNow(before, delta, floorY, -1.0, 400),
+			      "底に達すると比率判定だけでは抜けられない(バグの再現)", note);
+			check(exitNow(before, delta, floorY, floorY * 1.02, 800),
+			      "連続2回が0.1段以内なら底に達したとみなして抜ける");
+			// 浅い側は従来どおり抜けられること(第2条件が浅い切替を壊していない)。
+			check(exitNow(before, -7.0, floorY, -1.0, 400),
+			      "到達可能の範囲内(-7.0段)なら従来どおり比率判定で抜ける", note);
+		}
+
+		// ③ 早すぎる離脱をしない。切替直後、まだ動いていない2回で抜けてはいけない。
+		{
+			const double before = 0.0100, delta = -7.91;
+			check(!exitNow(before, delta, before, before, 400),
+			      "最低待ち時間(600ms)の前は安定判定で抜けない");
+			// 正常時の実測は 623ms 以上なので、この下限で損はしない。
+			check(kMinWaitMs <= 623, "最低待ち時間は正常時の実測(623ms)を超えない");
+		}
+
+		// ④ 予算の超過。従来は先頭で経過を見てから寝て取りに行っていたので1周期ぶん超えた。
+		{
+			// 修正前: elapsed < budget なら入る → 最大 budget-1 + poll + 取得 まで伸びる
+			const int oldWorst = (kBudgetMs - 1) + kPollMs + 300;	// 取得を300msとして
+			// 修正後: elapsed + poll >= budget なら入らない
+			const int newWorst = (kBudgetMs - kPollMs - 1) + kPollMs + 300;
+			char note[128];
+			std::snprintf(note, sizeof(note), "(修正前 最悪%dms / 修正後 最悪%dms)", oldWorst, newWorst);
+			check(newWorst < oldWorst, "予算チェックを前倒しして超過を1ポーリング分減らす", note);
+			check(oldWorst >= 2951, "修正前の最悪値は実測の 2951ms を説明できる", note);
+		}
+	}
+
 	std::printf("\n%s (fail=%d)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail);
 	return g_fail == 0 ? 0 : 1;
 }
