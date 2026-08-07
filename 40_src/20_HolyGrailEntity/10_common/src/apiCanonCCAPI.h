@@ -192,6 +192,8 @@ protected:
 	uint64_t         lvFreshPrevMs_  = 0;	// 直近採用フレームのカメラ側時刻(鮮度判定)
 	void*            lvFreshPrevAt_  = nullptr;	// その採用時点の実時刻アンカー
 	// 測光ssの決定と適応(旧 captureRunner::enterMeteringShutter / updateMeterShutter)。
+	// 測光ssへ切り替える価値があるか(切替後に測れなくなるなら切り替えない)。
+	bool        switchWorthIt(const hgc::exposure& shotExp, double asIsLinear) const;
 	std::string decideMeterSs(const hgc::exposure& shotExp) const;
 	// shotExp は測光ssの天井の「下限」を決めるのに使う(撮影ss-kMeterInitDropStops より下げない)。
 	void        adaptMeterSs(const hgc::exposure& meterExp, const hgc::exposure& shotExp,

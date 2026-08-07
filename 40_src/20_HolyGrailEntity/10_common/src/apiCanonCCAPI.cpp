@@ -1126,7 +1126,18 @@ namespace
 	constexpr double kMeterRespondMinStops = 0.30;
 	// 張り付きと確定するまでの連続回数。1コマのノイズで切替へ落ちないようにする。
 	constexpr int    kMeterPinConfirm      = 2;
-	constexpr int    kMeterInitDropStops  = 5;		// 初回の測光ss=撮影ssから何段短くするか
+	// 測光ssの初期値(2026-08-08 改)。従来は「撮影ss-5段」の決め打ちだった。
+	// 測光ss切替の目的は「LVが正直に積分できる長さまで短くする」ことなので、必要以上に
+	// 短くすると信号を失うだけで損しかない。実測(2026-08-07 夕R100): 撮影8秒に対し 1/4秒
+	// (-5段)へ落とした結果、ヒストグラム中央値がビン2(1ビン=0.58段)に沈み、測光値が
+	// 測光ssの揺れをそのまま拾って撮影露出が±3段うねった。1.6秒(-2.3段)ならビン9相当で
+	// 済んだ(同じ場面の実測から算出)。そこで「LVの積分上限」を基準にする。
+	//  実測値: R10/R100 とも約1.6秒相当で頭打ち(2026-07-26)。機種名では分岐しない。
+	constexpr double kLvIntegrateCeilSec  = 1.6;	// LVが正直に積分できる上限[秒](実測)
+	constexpr int    kMeterInitDropStops  = 5;		// 測光ss天井の下限に使う後退量[段](暴走の backstop)
+	// 切替後の測光値がこれ未満になる見込みなら、切り替えても悪化するだけなので切り替えない。
+	// sRGB 0.031 = 256階調のビン8。ここなら1ビン=0.17段で連続量として扱える(ビン2では0.58段)。
+	constexpr double kMeterSwitchMinX     = 0.031;
 	constexpr int    kMeterRetryMs        = 100;	// ヒスト取得リトライ間隔[ms]
 	constexpr int    kMeterMaxMs          = 5000;	// ヒスト取得リトライ上限[ms]
 	constexpr int    kLvFreshMarginMs     = 2000;	// 古いLVフレーム判定の許容[ms](生成周期+揺らぎ)
@@ -1296,7 +1307,12 @@ std::string apiCanonCCAPI::decideMeterSs(const hgc::exposure& shotExp) const
 	std::string want = meterSs_;
 	if (want.empty())
 	{
-		const double target = expo::brightnessStops(shotExp, tables_) - static_cast<double>(kMeterInitDropStops);
+		// 未学習時の初期値。LVが正直に積分できる上限(kLvIntegrateCeilSec)まで短くする。
+		// 撮影ssがもともとそれより短ければ切替は要らない(下の want==shotExp.ss で空を返す)。
+		const double shotSec0 = expo::parseValue(shotExp.ss, expo::expoKind::ss);
+		const double aimSec   = (shotSec0 > 0.0 && shotSec0 < kLvIntegrateCeilSec) ? shotSec0 : kLvIntegrateCeilSec;
+		const double target   = expo::brightnessStops(shotExp, tables_)
+		                      + ((shotSec0 > 0.0) ? std::log2(aimSec / shotSec0) : 0.0);
 		double best = 1e9;
 		for (const auto& e : tables_.ss)
 		{
@@ -1406,6 +1422,23 @@ void apiCanonCCAPI::adaptMeterSs(const hgc::exposure& meterExp, const hgc::expos
 	if (!pick.empty()) { meterSs_ = pick; }
 }
 
+// 測光ssへ切り替える価値があるか(2026-08-08)。
+//  切替は「LVが露出変化に反応しない」問題を「絵が暗すぎてヒストグラムの分解能が無い」問題と
+//  取り換える手段でしかない。取り換えた先が測れないなら切り替えてはいけない。
+//  asIsLinear: いま撮影露出のまま測れている値。ここへ (測光ss/撮影ss) を掛けたものが切替後の見込み。
+//  return: 切り替える価値があるか(切替不要=測光ss==撮影ss のときも true=従来動作を妨げない)
+bool apiCanonCCAPI::switchWorthIt(const hgc::exposure& shotExp, double asIsLinear) const
+{
+	if (!(asIsLinear > 0.0)) { return true; }	// 判断材料が無い → 従来どおり
+	const std::string want = this->decideMeterSs(shotExp);
+	if (want.empty()) { return true; }			// 切替不要(=撮影ssのまま)。妨げない
+	const double wantSec = expo::parseValue(want, expo::expoKind::ss);
+	const double shotSec = expo::parseValue(shotExp.ss, expo::expoKind::ss);
+	if (!(wantSec > 0.0) || !(shotSec > 0.0)) { return true; }
+	const double predicted = asIsLinear * (wantSec / shotSec);
+	return predicted >= expo::srgbToLinear(kMeterSwitchMinX);
+}
+
 // 測光の入口。方式A(撮影画像フィードバック)/方式B(LVヒスト)を切り替える。
 //  Aが失敗したときの自動フォールバックはしない(据え置き=従来の測光失敗時と同じ挙動。
 //  こっそりBへ落ちると評価が濁り、測光ss切替の副作用も混入するため)。
@@ -1508,9 +1541,24 @@ errCode apiCanonCCAPI::meterSceneLv(const hgc::exposure& shotExp, meterResult& o
 					else                                   { lvPinStreak_ = 0; }
 					pinned = (lvPinStreak_ >= kMeterPinConfirm);
 				}
+				else
+				{	// 【古い証拠を持ち越さない(2026-08-08)】従来は露出が動かないコマで
+					//  カウンタを素通りさせていたため、何分も前の1回と今回の1回が足されて
+					//  「連続」扱いになりえた。判定できないコマが挟まったら数え直す。
+					lvPinStreak_ = 0;
+				}
 			}
 			meterPrevStops_ = curStops;
 			meterPrevLin_   = asIs.linear;
+
+			// 【切替の事前判定(2026-08-08)】張り付きを検出しても、切替後に測れなくなるなら
+			//  切り替えてはいけない。切替は「LVが露出変化に反応しない」問題を「絵が暗すぎて
+			//  ヒストグラムの分解能が無い」問題と取り換える手段で、暗い場面では取り換えた後の
+			//  ほうが悪い。実測(2026-08-07 夕R100 19:30-20:20 同一場面):
+			//    撮影露出のまま=中央値ビン7.2 / 測光ssへ切替=ビン2.0(1.9段暗い)
+			//  ビン2では1ビン=0.58段の飛び飛びになり、測光ssを動かすたび場面推定が±1段ずれて
+			//  撮影露出が±3段うねり、約1時間ぶんが4段アンダーになった。
+			if (pinned && !this->switchWorthIt(shotExp, asIs.linear)) { pinned = false; }
 
 			if (!pinned)
 			{	// 撮影露出のまま使えた。切替の PUT も反映待ちも発生しない。

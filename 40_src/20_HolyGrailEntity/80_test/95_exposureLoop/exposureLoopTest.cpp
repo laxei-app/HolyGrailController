@@ -815,6 +815,82 @@ int main()
 		}
 	}
 
+	// --- 14) 測光ss切替の入口と初期値(2026-08-07 夕R100 のうねりから) ---
+	//
+	// 【何が起きたか】19:17 に測光ss切替へ落ち、以後183コマ居座った。切替後の測光値は
+	//  ヒストグラム中央値でビン2(1ビン=0.58段)。測光ssが±1段振動するたび場面推定が
+	//  ±1段ずれ、撮影露出が ISO320→1000→100 と±3段うねった。19:20-20:20 の208コマが
+	//  星景固定露出に対して4段アンダー。実写の中央輝度でも -3.1段/+2.7段/-5.0段 振れた。
+	//
+	// 【原因の切り分け】切替前の応答比は 38ペア中央 +1.28 で LV は健全だった(0.5未満は1ペア)。
+	//  落ちた引き金は外れ値2コマ。本当の被害は「入った判断」ではなく「入った後」で、
+	//  撮影露出のまま測ればビン7.2だった同じ場面を、切替でビン2.0(1.9段暗い)にしていた。
+	//
+	// 【このテストが固定する仕様】
+	//  A 測光ssの初期値は「撮影ss-5段」ではなく LVの積分上限(1.6秒)基準
+	//  B 切替後の見込みがビン8を割るなら切り替えない
+	//  C 応答比の連続カウントは、判定できないコマが挟まったらリセットする
+	{
+		const double kCeilSec    = 1.6;		// = kLvIntegrateCeilSec
+		const double kSwitchMinX = 0.031;	// = kMeterSwitchMinX(256階調のビン8)
+		const double switchMinLin = expo::srgbToLinear(kSwitchMinX);
+
+		// --- A: 測光ssの初期値 ---
+		auto aimSec = [&](double shotSec) { return (shotSec < kCeilSec) ? shotSec : kCeilSec; };
+		{
+			char note[128];
+			const double lostOld = std::log2(8.0 / (8.0 / 32.0));	// 従来: 撮影8秒から -5段
+			const double lostNew = std::log2(8.0 / aimSec(8.0));
+			std::snprintf(note, sizeof(note), "(旧 -%.1f段 → 新 -%.1f段)", lostOld, lostNew);
+			check(lostNew < lostOld, "撮影8秒での測光ssの短縮量が減る(信号を捨てない)", note);
+			check(std::fabs(aimSec(0.5) - 0.5) < 1e-9, "撮影ssが積分上限より短ければ切替不要");
+			check(std::fabs(aimSec(8.0) - kCeilSec) < 1e-9, "撮影ssが長ければ積分上限まで短くする");
+		}
+
+		// --- B: 切替の事前判定 ---
+		auto worth = [&](double asIs, double shotSec, double meterSec)
+		{ return asIs * (meterSec / shotSec) >= switchMinLin; };
+		{
+			const double asIs = 0.01426;	// 実測 fr=551(撮影8秒、撮影露出のまま測った値)
+			char note[176];
+			std::snprintf(note, sizeof(note), "(1/4秒なら %.5f / 1.6秒なら %.5f / 下限 %.5f)",
+			              asIs * (0.25 / 8.0), asIs * (kCeilSec / 8.0), switchMinLin);
+			check(!worth(asIs, 8.0, 0.25),     "実測の場面で 1/4秒への切替は割に合わない(ビン2相当)", note);
+			check( worth(asIs, 8.0, kCeilSec), "同じ場面でも 1.6秒への切替なら測れる(ビン9相当)", note);
+			check( worth(0.15, 8.0, 0.25),     "日中なら短い測光ssでも測れる");
+			check(!worth(0.0022, 8.0, 0.25),   "真っ暗では切替を諦める(撮影露出のまま使う)");
+		}
+
+		// --- C: 応答比の連続カウント ---
+		{
+			struct det {
+				double ratio; double minStops; int confirm; int streak = 0;
+				bool feed(double dSs, double dLin, bool resetOnIdle)
+				{
+					if (std::fabs(dSs) < minStops) { if (resetOnIdle) { streak = 0; } return false; }
+					if ((dLin / dSs) < ratio) { ++streak; } else { streak = 0; }
+					return streak >= confirm;
+				}
+			};
+			const double s = 1.0 / 3.0;	// 1歩
+			det oldD{ 0.50, 0.30, 2 }, newD{ 0.50, 0.30, 2 };
+			bool o = false, n = false;
+			// 実測の並び: 外れ値(比-0.29) → 露出が動かないコマ → 外れ値(比-0.27)
+			o = oldD.feed(s, -0.29 * s, false) || o;
+			o = oldD.feed(0.0, -0.09, false)   || o;
+			o = oldD.feed(s, -0.27 * s, false) || o;
+			n = newD.feed(s, -0.29 * s, true)  || n;
+			n = newD.feed(0.0, -0.09, true)    || n;
+			n = newD.feed(s, -0.27 * s, true)  || n;
+			check(o,  "従来は判定できないコマを挟んでも連続扱いになった(バグの再現)");
+			check(!n, "リセット後は間に判定できないコマが挟まれば連続にならない");
+			det c{ 0.50, 0.30, 2 };
+			bool hit = c.feed(s, -0.29 * s, true);
+			hit = c.feed(s, -0.27 * s, true) || hit;
+			check(hit, "本当に連続した張り付きは従来どおり検出する");
+		}
+	}
+
 	std::printf("\n%s (fail=%d)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail);
 	return g_fail == 0 ? 0 : 1;
 }
