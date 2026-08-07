@@ -156,4 +156,11 @@ namespace osfile
 		if (d.empty()) { return false; }
 		return std::remove((d + "/" + name).c_str()) == 0;
 	}
+
+	// スマホの保存先はアプリ外部ファイル領域で、エッジの内蔵フラッシュのような逼迫は
+	// 起きない。容量不明(false)として、容量基準のログ削除を働かせない(2026-08-08)。
+	bool spaceInfo(unsigned long long& /*totalBytes*/, unsigned long long& /*usedBytes*/)
+	{
+		return false;
+	}
 }

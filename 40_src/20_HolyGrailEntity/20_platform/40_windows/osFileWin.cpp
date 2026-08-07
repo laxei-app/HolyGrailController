@@ -71,4 +71,10 @@ namespace osfile
 		std::fclose(f);
 		return true;
 	}
+
+	// 検証用。容量不明(false)として容量基準のログ削除を働かせない(2026-08-08)。
+	bool spaceInfo(unsigned long long& /*totalBytes*/, unsigned long long& /*usedBytes*/)
+	{
+		return false;
+	}
 }

@@ -40,6 +40,11 @@ namespace osfile
 	// 現在採用しているファイルシステム名("SD"/"LittleFS"/"none")を返す(検証用)。
 	const char* backendName(void);
 
+	// ファイルシステムの容量[バイト]を返す。取得できない環境では false を返す(その場合
+	// 呼び出し側は容量基準の判断を行わない)。保存メディアの差(SD=GB級 / 内蔵フラッシュ=MB級)を
+	// 機種名ではなく実測値で吸収するために置く(2026-08-08)。
+	bool spaceInfo(unsigned long long& totalBytes, unsigned long long& usedBytes);
+
 	// 指定サブディレクトリ(例 "plan")内のファイル名のうち、prefix で始まり suffix で終わる
 	// ものをベース名で返す(撮影計画 plan_<id>.json の列挙など)。prefix/suffix が空なら無条件。
 	// フルパスは dir(subdir) + "/" + 返り値 で構成する。

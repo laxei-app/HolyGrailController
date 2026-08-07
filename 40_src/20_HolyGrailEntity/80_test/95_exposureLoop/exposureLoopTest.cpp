@@ -891,6 +891,110 @@ int main()
 		}
 	}
 
+	// --- 15) ログの保持ポリシー(2026-08-08 Stick01 のログ欠落から) ---
+	//
+	// 【何が起きたか】朝R100(02:00-05:30)の走行中、03:45 に内蔵フラッシュ(LittleFS)への
+	//  書き込みが止まり、05:30 までの 1時間45分ぶんのログ(SHOT/LVHIST/BATT すべて)が
+	//  失われた。撮影自体は840枚すべて正常で、記録だけが黙って消えた。
+	//
+	// 【原因】pruneOldLogs は「当日以外を最新4件まで残す」件数基準しか持たず、容量を見て
+	//  いなかった。M5StickS3 は microSD が無く spiffs パーティション 1536KB しかないのに、
+	//  最近のログは1日400〜660KB あるため、4世代だけで 1130KB を占めていた。
+	//  当日ぶんに残るのは 400KB 弱で、840コマ(182KB)の途中で満杯になった。
+	//  件数は上限内だったため、削除は一度も走っていない。
+	//
+	// 【このテストが固定する仕様】
+	//  ・容量が足りなければ、足りるまで古い順に消す(新しいログを優先して残す)
+	//  ・当日のログは消さない
+	//  ・SD(GB級)では容量条件を常に満たすので従来どおり件数基準だけが効く
+	//  ・実測の構成(1536KB / 4世代1130KB)で、走行に必要な空きが確保できること
+	{
+		const unsigned long long KEEP_FREE = 768ULL * 1024ULL;	// = kLogKeepFreeBytes
+		const double kBytesPerFrame = 222.0;					// 実測(SHOT+LVHIST)
+
+		// 実測の必要量から下限が妥当か
+		{
+			const double night = kBytesPerFrame * 2880.0;		// 15秒周期の12時間
+			char note[128];
+			std::snprintf(note, sizeof(note), "(一晩12時間で %.0fKB / 確保 %lluKB)",
+			              night / 1024.0, KEEP_FREE / 1024ULL);
+			check(KEEP_FREE >= (unsigned long long)night, "確保する空きは一晩ぶんのログ量以上", note);
+		}
+
+		// 削除の模擬。others は日付昇順(先頭が最古)。当日は含めない。
+		struct fsSim
+		{
+			unsigned long long total, used;
+			std::vector<std::pair<std::string, unsigned long long>> others;	// 名前昇順
+			int removed = 0;
+			void prune(unsigned long long keepFree, size_t keepCount, bool spaceKnown)
+			{
+				size_t i = 0;
+				for (; i + keepCount < others.size(); ++i) { used -= others[i].second; ++removed; }
+				if (!spaceKnown) { return; }
+				for (; i < others.size(); ++i)
+				{
+					if (total - used >= keepFree) { break; }
+					used -= others[i].second; ++removed;
+				}
+			}
+		};
+
+		// ① 実測の構成: 1536KB / 当日以外 3+72+394+661KB / 当日と他で約100KB使用
+		{
+			fsSim s{ 1536ULL * 1024, (3 + 72 + 394 + 661 + 100) * 1024ULL,
+			         { {"hg_2026-08-02.log", 3 * 1024ULL}, {"hg_2026-08-05.log", 72 * 1024ULL},
+			           {"hg_2026-08-06.log", 394 * 1024ULL}, {"hg_2026-08-07.log", 661 * 1024ULL} } };
+			const unsigned long long before = s.total - s.used;
+			s.prune(KEEP_FREE, 4, true);
+			const unsigned long long after = s.total - s.used;
+			char note[160];
+			std::snprintf(note, sizeof(note), "(空き %lluKB → %lluKB / %d件削除)",
+			              before / 1024, after / 1024, s.removed);
+			check(before < KEEP_FREE, "修正前の構成では空きが足りていない(バグの再現)", note);
+			check(after >= KEEP_FREE, "容量基準で足りるまで消える", note);
+			check(s.removed == 3, "消えるのは古い3件。最新の 08-07 は残る", note);
+			// 840コマ(182KB)が確実に入る
+			check(after >= (unsigned long long)(kBytesPerFrame * 840), "今朝の走行(840コマ)が収まる", note);
+		}
+
+		// ② 件数基準だけでは何も消えない(修正前の挙動)
+		{
+			fsSim s{ 1536ULL * 1024, (3 + 72 + 394 + 661 + 100) * 1024ULL,
+			         { {"a", 3 * 1024ULL}, {"b", 72 * 1024ULL}, {"c", 394 * 1024ULL}, {"d", 661 * 1024ULL} } };
+			s.prune(KEEP_FREE, 4, false);	// 容量不明=容量基準を使わない
+			check(s.removed == 0, "件数が上限内なら従来は1件も消さなかった(バグの再現)");
+		}
+
+		// ③ SD(GB級)では容量条件を満たすので件数基準だけが効く
+		{
+			fsSim s{ 32ULL * 1024 * 1024 * 1024, 2ULL * 1024 * 1024 * 1024,
+			         { {"a", 100 * 1024ULL}, {"b", 100 * 1024ULL}, {"c", 100 * 1024ULL},
+			           {"d", 100 * 1024ULL}, {"e", 100 * 1024ULL} } };
+			s.prune(KEEP_FREE, 4, true);
+			check(s.removed == 1, "SDでは件数超過の1件だけ消える(従来と同じ挙動)");
+		}
+
+		// ④ 必要な分だけ消す(消しすぎない)。1件消せば足りるなら1件で止まる。
+		{
+			fsSim s{ 1000 * 1024ULL, 900 * 1024ULL,
+			         { {"hg_2026-01-01.log", 300 * 1024ULL}, {"hg_2026-01-02.log", 300 * 1024ULL} } };
+			s.prune(300 * 1024ULL, 4, true);	// 空き100KB → 1件(300KB)消せば400KBで足りる
+			check(s.removed == 1, "1件で足りるなら1件で止まる(消しすぎない)");
+			check(s.total - s.used >= 300 * 1024ULL, "消したあとは条件を満たす");
+			check(s.others[1].first == "hg_2026-01-02.log", "残るのは新しい側");
+		}
+
+		// ⑤ 足りなければ足りるまで消す(1件では届かない場合)
+		{
+			fsSim s{ 1000 * 1024ULL, 900 * 1024ULL,
+			         { {"hg_2026-01-01.log", 300 * 1024ULL}, {"hg_2026-01-02.log", 300 * 1024ULL} } };
+			s.prune(500 * 1024ULL, 4, true);	// 1件(400KB)では届かないので2件目まで
+			check(s.removed == 2, "1件で足りなければ次の古い方も消す");
+			check(s.total - s.used >= 500 * 1024ULL, "消したあとは条件を満たす");
+		}
+	}
+
 	std::printf("\n%s (fail=%d)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail);
 	return g_fail == 0 ? 0 : 1;
 }

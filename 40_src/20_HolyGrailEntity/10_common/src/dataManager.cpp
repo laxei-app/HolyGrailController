@@ -922,6 +922,10 @@ bool dataManager::setSmoothingJson(const std::string& jsonStr)
 // ============================================================================
 //  起動時のログ整理(当日以外が5件以上なら古い順に削除し最新4件まで残す)
 // ============================================================================
+// 走行前に確保しておきたい空き容量[バイト](2026-08-08)。
+// 実測 222バイト/コマ(SHOT+LVHIST)。15秒周期の一晩12時間 = 2880コマ ≒ 640KB に余裕を足した値。
+static constexpr unsigned long long kLogKeepFreeBytes = 768ULL * 1024ULL;
+
 int dataManager::pruneOldLogs(int offMin)
 {
 	// 当日(ローカル)の日付文字列を作る。
@@ -938,13 +942,43 @@ int dataManager::pruneOldLogs(int offMin)
 	std::vector<std::string> all = osfile::logFileNames();	// hg_YYYY-MM-DD.log 群
 	std::vector<std::string> others;
 	for (const auto& f : all) { if (f != today) { others.push_back(f); } }
-	if (others.size() < 5) { return 0; }		// 当日以外が5件未満なら何もしない
 	std::sort(others.begin(), others.end());	// 名前=日付昇順 → 先頭が最古
-	int removed = 0;
-	const size_t keep = 4;						// 当日以外は最新4件まで残す
-	for (size_t i = 0; i + keep < others.size(); ++i)
+	int    removed = 0;
+	size_t i       = 0;
+
+	// ① 件数の上限(従来): 当日以外は最新4件まで残す。
+	const size_t keep = 4;
+	for (; i + keep < others.size(); ++i)
 	{
 		if (osfile::removeLog(others[i])) { ++removed; }
+	}
+
+	// ② 容量の下限(2026-08-08 追加): 空きが足りなければ、足りるまで古い順に消す。
+	//
+	// 【なぜ件数だけでは足りないか】M5StickS3 は microSD が無く内蔵フラッシュ(LittleFS)に
+	//  書く。spiffs パーティションは default_8MB.csv で 0x180000 = 1536KB しかない。
+	//  一方、当日以外を4世代残す①の方針では、最近のログが1日400〜660KBあるため
+	//  4世代だけで 1130KB を占め、当日ぶんに 400KB 弱しか残らない。
+	//  実測(2026-08-08 朝R100): 03:45 に書き込みが止まり、05:30 までの 1時間45分ぶんの
+	//  ログ(SHOT/LVHIST/BATT すべて)が失われた。撮影自体は840枚すべて正常だったので、
+	//  記録だけが黙って消えた。件数は上限内(4件)だったため①では一度も削除されていない。
+	//
+	// 【どれだけ空けるか】実測 222バイト/コマ(SHOT+LVHIST)。15秒周期の一晩12時間 = 2880コマ
+	//  で約640KB。これに余裕を見て 768KB を「走行前に確保しておきたい空き」とする。
+	//  SD 採用時(GB級)はこの条件を常に満たすので①だけが効き、従来と挙動は変わらない。
+	//
+	// 新しいログのほうが価値が高いので、消す順は必ず古い側からにする。当日のログは
+	// 走行中の記録そのものなので対象にしない(消しても空けたいのは当日ぶんの書き込み先)。
+	unsigned long long total = 0, used = 0;
+	if (osfile::spaceInfo(total, used))
+	{
+		for (; i < others.size(); ++i)
+		{
+			const unsigned long long freeB = (total > used) ? (total - used) : 0ULL;
+			if (freeB >= kLogKeepFreeBytes) { break; }		// 十分空いた
+			if (osfile::removeLog(others[i])) { ++removed; }
+			if (!osfile::spaceInfo(total, used)) { break; }	// 削除のたび測り直す
+		}
 	}
 	return removed;
 }

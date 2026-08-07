@@ -132,6 +132,24 @@ namespace osfile
 		return true;	// offsetがEOF以降でも out空で成功(呼び手は空=EOFと判断)
 	}
 
+	// ファイルシステムの容量。SD は GB 級、内蔵フラッシュ(LittleFS)は spiffs パーティション
+	// (default_8MB.csv で 0x180000 = 1536KB)しかない。この差を実測で返す。
+	bool spaceInfo(unsigned long long& totalBytes, unsigned long long& usedBytes)
+	{
+		ensureInit();
+		if (g_fs == &SD)
+		{	totalBytes = static_cast<unsigned long long>(SD.totalBytes());
+			usedBytes  = static_cast<unsigned long long>(SD.usedBytes());
+			return true;
+		}
+		if (g_fs == &LittleFS)
+		{	totalBytes = static_cast<unsigned long long>(LittleFS.totalBytes());
+			usedBytes  = static_cast<unsigned long long>(LittleFS.usedBytes());
+			return true;
+		}
+		return false;
+	}
+
 	const char* backendName(void)
 	{
 		ensureInit();
