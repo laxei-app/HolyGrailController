@@ -1286,6 +1286,28 @@ errCode apiCanonCCAPI::meterHere(meterResult& out, const std::function<bool()>& 
 				for (int i = cmdt::hist_bin - 1; i >= 0; --i) { if (hist.y[i] > 0) { pmax = i; break; } }
 				out.p99  = static_cast<double>(p99i) / static_cast<double>(cmdt::hist_bin - 1);
 				out.pMax = static_cast<double>(pmax) / static_cast<double>(cmdt::hist_bin - 1);
+				// --- 測光統計量の比較用(2026-08-08 診断。制御には使わない) ---
+				// 夜明けに露出の追従が約1時間遅れた。原因は測光に使っている中央値が実写より
+				// 最大4.35段暗く出ることだが(2026-08-08 朝R10 実測)、統計量を変えれば早く反応する
+				// のか・どれだけかを、ログに中央値/p99/pMx しか無いため算出できなかった。
+				// 同じヒストグラムから候補を作って残すだけで、追加の通信もカメラ操作も無い。
+				const double last  = static_cast<double>(cmdt::hist_bin - 1);
+				const double thr75 = total * 0.75, thr90 = total * 0.90;
+				int  p75i = cmdt::hist_bin - 1, p90i = cmdt::hist_bin - 1;
+				bool got75 = false, got90 = false;
+				double c2 = 0.0, sumLin = 0.0;
+				for (int i = 0; i < cmdt::hist_bin; ++i)
+				{
+					const double n = hist.y[i];
+					sumLin += expo::srgbToLinear(static_cast<double>(i) / last) * n;
+					c2 += n;
+					if (!got75 && c2 >= thr75) { p75i = i; got75 = true; }
+					if (!got90 && c2 >= thr90) { p90i = i; got90 = true; }
+				}
+				out.meanLin  = sumLin / total;
+				out.p75      = static_cast<double>(p75i) / last;
+				out.p90      = static_cast<double>(p90i) / last;
+				out.satRatio = static_cast<double>(hist.y[cmdt::hist_bin - 1]) / total;
 			}
 			out.lvTimeMs = lvSysTimeMs_;
 			out.x        = expo::histMedian(hist.y, cmdt::hist_bin);
@@ -1511,6 +1533,7 @@ errCode apiCanonCCAPI::meterSceneLv(const hgc::exposure& shotExp, meterResult& o
 		if (e0 != ERR_HGC_OK || !(asIs.linear > 0.0))
 		{
 			out.linear = asIs.linear; out.x = asIs.x; out.p99 = asIs.p99; out.pMax = asIs.pMax;
+				out.meanLin = asIs.meanLin; out.p75 = asIs.p75; out.p90 = asIs.p90; out.satRatio = asIs.satRatio;
 			out.histSum = asIs.histSum; out.lvTimeMs = asIs.lvTimeMs; out.staleSkip = asIs.staleSkip;
 			out.rdyMs    = asIs.rdyMs;
 			out.meterExp = meterExp;
@@ -1563,6 +1586,7 @@ errCode apiCanonCCAPI::meterSceneLv(const hgc::exposure& shotExp, meterResult& o
 			if (!pinned)
 			{	// 撮影露出のまま使えた。切替の PUT も反映待ちも発生しない。
 				out.linear = asIs.linear; out.x = asIs.x; out.p99 = asIs.p99; out.pMax = asIs.pMax;
+				out.meanLin = asIs.meanLin; out.p75 = asIs.p75; out.p90 = asIs.p90; out.satRatio = asIs.satRatio;
 				out.histSum = asIs.histSum; out.lvTimeMs = asIs.lvTimeMs; out.staleSkip = asIs.staleSkip;
 				out.rdyMs = asIs.rdyMs;
 				out.meterExp = meterExp;
@@ -1618,6 +1642,7 @@ errCode apiCanonCCAPI::meterSceneLv(const hgc::exposure& shotExp, meterResult& o
 	const errCode e = meterHere(here, keepGoing);
 	// meterHere の診断を統合(切替系のフィールドは維持)。
 	out.linear = here.linear; out.x = here.x; out.p99 = here.p99; out.pMax = here.pMax;
+	out.meanLin = here.meanLin; out.p75 = here.p75; out.p90 = here.p90; out.satRatio = here.satRatio;
 	out.histSum = here.histSum; out.lvTimeMs = here.lvTimeMs; out.staleSkip = here.staleSkip;
 	out.tries += here.tries; out.rdyMs = here.rdyMs;
 	out.meterExp = meterExp;

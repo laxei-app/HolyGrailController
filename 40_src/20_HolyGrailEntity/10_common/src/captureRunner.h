@@ -51,6 +51,11 @@ public:
 	                      uint64_t shutterMs = 0;	// actShutter直前の壁時計(UTCエポックms)。0=未記録
 	                      double lvP99 = -1.0;	// 【診断トラップ】測光ヒストの明るい側1%点(0..1)。<0=測光なし
 	                      double lvPMax = -1.0;	// 【診断トラップ】画素のある最も明るいビン(0..1)。<0=測光なし
+	                      // 測光統計量の比較用(2026-08-08 診断。制御には使わない)。夜明けの追従遅れの
+	                      // 原因が中央値にあるため、候補(平均/p75/p90/飽和率)を並べてログに残す。
+	                      double lvMeanLin = -1.0;	// ヒストグラム全体のリニア平均
+	                      double lvP75 = -1.0, lvP90 = -1.0;	// 75%点/90%点(sRGB位置)
+	                      double lvSat = -1.0;	// 最上位ビンの画素割合(0..1)
 	                      std::string meterSs;	// 測光に使ったシャッター(空=撮影露出のまま測光=従来動作)
 	                      int meterSettleMs = -1;	// 測光ss変更→LV反映の待ち[ms](-1=切替なし)
 	                      bool lvPinned = false;	// 測光ssを変えても値が動かない=ライブビューが張り付いている
@@ -305,6 +310,9 @@ private:
 	int         meterSettleMs_ = -1;	// 今コマの「Tv変更→LV反映」の待ち[ms](-1=切替なし)
 	bool        lvPinnedLog_    = false;	// 張り付き判定(ログ用)
 	bool        meterUsableLog_ = true;		// 測光値を露出制御に使えたか(ログ用。false=帯の外で据え置き)
+	double      lvMeanLinLog_ = -1.0;	// 測光統計量の比較用(2026-08-08 診断)
+	double      lvP75Log_ = -1.0, lvP90Log_ = -1.0;
+	double      lvSatLog_ = -1.0;
 	int         meterWaitMs_ = -1, meterFetchMs_ = -1, meterDecodeMs_ = -1, meterFetchTries_ = 0;	// 測光所要の内訳(ログ用)
 	double      asIsLinear_ = -1.0;		// 切替なしで測ったリニア値(ログ用。切替判断の材料そのもの)
 	int         firstApplyTries_ = 0;	// 1枚目の露出適用に要した回数(ログ用。セッション単位)

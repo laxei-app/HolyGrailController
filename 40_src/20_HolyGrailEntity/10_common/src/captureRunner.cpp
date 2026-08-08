@@ -1,4 +1,4 @@
-#include "common.h"
+﻿#include "common.h"
 #include "captureRunner.h"
 #include "osSystemCall.h"
 #include "debugOut.h"
@@ -162,6 +162,7 @@ bool captureRunner::meterFrame(const hgc::exposure& shotExp, apiBase::meterResul
 	meterSettleMs_ = mr.settleMs;
 	lvPinnedLog_   = mr.pinned;
 	meterUsableLog_ = mr.usable;
+	lvMeanLinLog_ = mr.meanLin; lvP75Log_ = mr.p75; lvP90Log_ = mr.p90; lvSatLog_ = mr.satRatio;
 	meterWaitMs_   = mr.waitMs;
 	meterFetchMs_  = mr.fetchMs;
 	meterDecodeMs_ = mr.decodeMs;
@@ -1513,6 +1514,7 @@ errCode captureRunner::loop(void)
 			onCaptured_(capturedInfo{ frame, shotExp, lum, ccm->name, meteredLinear, meterMs_, applyMs, prepMs,
 			                          static_cast<int>(lateMs), meterOk_, (applyErr == ERR_HGC_OK),
 			                          meterTry_, applyTry, histSum_, lvTimeMs_, staleSkip_, shutterMs, lvP99_, lvPMax_,
+			                          lvMeanLinLog_, lvP75Log_, lvP90Log_, lvSatLog_,
 			                          meterSsUsed_, meterSettleMs_, lvPinnedLog_, meterUsableLog_,
 			                          meterWaitMs_, meterFetchMs_, meterDecodeMs_, meterFetchTries_, busyMs, leadUsed,
 			                          asIsLinear_, firstApplyTries_, converge_ });

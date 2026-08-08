@@ -1065,15 +1065,21 @@ namespace
 					// use=0: 測れたが中央値が使える帯の外で、露出制御には使わず据え置いた
 					//        (2026-08-07。黒つぶれの測光値で撮影露出を絞り切った事故の再発防止)。
 					//        Y= は据え置いたコマでも残すので「何が見えていたか」は追える。
-					char d[256];
+					// mean/p75/p90/sat: 測光統計量の比較用(2026-08-08 診断。制御には使わない)。
+					//        夜明けに露出の追従が約1時間遅れた。中央値が実写より最大4.35段暗く出るのが
+					//        原因だが、どの統計量なら何時に反応したかを後から机上で比べられるよう残す。
+					//        mean=リニア平均 / p75,p90=パーセンタイル(sRGB位置) / sat=最上位ビンの画素割合。
+					char d[320];
 					std::snprintf(d, sizeof(d),
 						"fr=%d Y=%.4f p99=%.3f pMx=%.3f mss=%s stl=%dms pin=%d use=%d late=%dms prep=%dms"
-						" wait=%dms fetch=%dms dec=%dms ftry=%d ai=%.5f",
+						" wait=%dms fetch=%dms dec=%dms ftry=%d ai=%.5f"
+						" mean=%.5f p75=%.3f p90=%.3f sat=%.4f",
 						c.frame, c.metered, c.lvP99, c.lvPMax,
 						c.meterSs.empty() ? "-" : c.meterSs.c_str(), c.meterSettleMs, c.lvPinned ? 1 : 0,
 						c.meterUsable ? 1 : 0,
 						c.lateMs, c.prepMs,
-						c.meterWaitMs, c.meterFetchMs, c.meterDecodeMs, c.meterFetchTries, c.asIsLinear);
+						c.meterWaitMs, c.meterFetchMs, c.meterDecodeMs, c.meterFetchTries, c.asIsLinear,
+						c.lvMeanLin, c.lvP75, c.lvP90, c.lvSat);
 					dataManager::logEvent("LVHIST", d);
 				}
 				// 撮影結果レポートの積算(1コマ=1回)。撮影終了時にまとめてファイルへ出す。
