@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- エッジ端末設定(2026-08-08 UI依頼)。従来は「エッジ端末の登録」ダイアログと
+     「エッジ端末設定」ダイアログの2つに分かれていたものを、他の設定画面と同じ
+     「上=一覧 / 分割バー / 下=入力」の1画面へ統合した。
+     一覧で端末を選ぶとその端末の設定対象になり、「+ 新規エッジ端末」で追加できる。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="#1565C0"
+        android:gravity="center_vertical"
+        android:padding="8dp">
+        <ImageView android:id="@+id/edge_back" android:layout_width="32dp" android:layout_height="32dp"
+            android:clickable="true" android:focusable="true" android:src="@drawable/ic_back_r" />
+        <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+            android:gravity="center" android:text="エッジ端末設定" android:textColor="#FFFFFF"
+            android:textSize="20sp" android:textStyle="bold" />
+        <ImageView android:id="@+id/edge_menu" android:layout_width="32dp" android:layout_height="32dp"
+            android:clickable="true" android:focusable="true" android:src="@drawable/ic_menu_r" />
+    </LinearLayout>
+
+    <!-- 上: 登録済みエッジ端末の一覧(タップで設定対象。先頭に新規追加行) -->
+    <ScrollView android:id="@+id/edge_listScroll"
+        android:layout_width="match_parent" android:layout_height="140dp">
+        <LinearLayout android:id="@+id/edge_container"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:padding="8dp" />
+    </ScrollView>
+
+    <!-- 分割バー(ドラッグで上下比率を変更) -->
+    <FrameLayout android:id="@+id/edge_divider"
+        android:layout_width="match_parent" android:layout_height="26dp"
+        android:background="#ECEFF1" android:clickable="true" android:focusable="true">
+        <View android:layout_width="48dp" android:layout_height="5dp" android:layout_gravity="center"
+            android:background="@drawable/divider_handle" />
+    </FrameLayout>
+
+    <!-- 下: 選択した端末の設定(残り全部。中身は Kotlin で組み立てる) -->
+    <ScrollView android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+        <LinearLayout android:id="@+id/edge_form"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:padding="12dp" />
+    </ScrollView>
+</LinearLayout>

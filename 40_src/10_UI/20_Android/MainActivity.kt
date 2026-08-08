@@ -30,6 +30,7 @@ import android.view.ViewGroup
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.CheckBox
+import android.widget.CompoundButton
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -461,6 +462,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             12 -> leavePlacesList()
             13 -> { flipper.displayedChild = 5; buildGearMenu() }        // カメラ予約表 → メニュー
             14 -> { flipper.displayedChild = 5; buildGearMenu() }        // 操作履歴 → メニュー
+            16 -> { flipper.displayedChild = 5; buildGearMenu() }        // エッジ端末設定 → メニュー
             else -> { flipper.displayedChild = 0 }
         }
         return true
@@ -550,6 +552,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<ImageView>(R.id.report_back).setOnClickListener { flipper.displayedChild = 5; buildGearMenu() }
         findViewById<ImageView>(R.id.report_menu).setOnClickListener { flipper.displayedChild = 5; buildGearMenu() }
         setupDivider(R.id.report_divider, R.id.report_listScroll)
+        // 8.2 エッジ端末設定(2026-08-08 UI依頼で画面化)
+        findViewById<ImageView>(R.id.edge_back).setOnClickListener { flipper.displayedChild = 5; buildGearMenu() }
+        findViewById<ImageView>(R.id.edge_menu).setOnClickListener { flipper.displayedChild = 5; buildGearMenu() }
+        setupDivider(R.id.edge_divider, R.id.edge_listScroll)
         findViewById<Button>(R.id.history_clear).setOnClickListener {
             AlertDialog.Builder(this)
                 .setTitle("履歴削除")
@@ -812,7 +818,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         gearItem(box, "カメラリスト") { openCameraList() }
         gearItem(box, "レンズリスト") { openLensList() }
         gearBand(box, "エッジ端末")
-        gearItem(box, "エッジ端末の登録") { manageEdges() }
+        // 2026-08-08 UI依頼: 「登録」と「設定」を1画面へ統合した(登録は画面内の
+        // 「＋ 新規エッジ端末」から行う)。
         gearItem(box, "エッジ端末設定") { openEdgeSettings() }
         gearBand(box, "ログ")
         // 撮影中/開始要求中はグレー表示で不可(コピー処理が撮影と競合しないように)。
@@ -940,184 +947,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // ---------- 8.2 エッジ端末設定(QR+PoP プロビジョニング) ----------
     // エッジが表示する QR {"n":端末名,"pop":乱数} を読み取り、端末識別名/SSID/password を
     // PoP 由来鍵で暗号化して BLE 送信する(送信本体は M3)。ここでは入力とQR読取まで。
-    private fun openEdgeSettings() {
-        val ctx = this
-        val d = resources.displayMetrics.density
-        val pad = (16 * d).toInt()
-        val box = LinearLayout(ctx); box.orientation = LinearLayout.VERTICAL; box.setPadding(pad, pad, pad, 0)
-        fun field(label: String, init: String, pw: Boolean): EditText {
-            box.addView(TextView(ctx).apply { text = label; setPadding(0, (8 * d).toInt(), 0, 0) })
-            val e = EditText(ctx); e.setText(init)
-            if (pw) e.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            box.addView(e); return e
-        }
-        // 項目4: 登録済みエッジ端末の一覧。選択するとその端末名で設定できる(削除もここから)。
-        box.addView(TextView(ctx).apply { text = "登録済みエッジ端末(選択して設定)"; setTypeface(null, Typeface.BOLD) })
-        val edgeListBox = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
-        box.addView(edgeListBox)
-
-        val nameE = field("端末識別名 (半角英数字。エッジのLCDに表示)", scannedName, false)
-        applyEdgeNameInput(nameE)   // エッジで表示できない日本語等は入力不可(§8.2)
-        val ssidE = field("接続先 SSID", "", false)
-        val passE = field("接続先 password", "", true)
-        // 項目4: STA時のSSIDは周辺のWi-Fiから選べるようにする(手入力も可)。
-        val ssidPickBtn = Button(ctx).apply { text = "SSIDを選択" }
-        box.addView(ssidPickBtn)
-        ssidPickBtn.setOnClickListener { pickWifiSsid { s -> ssidE.setText(s) } }
-
-        // 登録済みリストを描画(選択で端末識別名へ流し込み。削除も可)。
-        var selectedEdgeName = ""
-        fun rebuildEdgeList() {
-            edgeListBox.removeAllViews()
-            if (edges.isEmpty()) {
-                edgeListBox.addView(TextView(ctx).apply { text = "(登録なし。「エッジ端末の登録」から追加)"; setPadding(0, (4 * d).toInt(), 0, 0) })
-                return
-            }
-            edges.toList().forEach { e ->
-                val row = LinearLayout(ctx); row.orientation = LinearLayout.HORIZONTAL; row.gravity = Gravity.CENTER_VERTICAL
-                // IPは表示しない(2026-08-08 UI依頼)。DHCPで変わるためユーザーには意味が無く、
-                // 実際 8/7→8/8 で R10/R100 の IP が入れ替わっている。識別は端末名で行う。
-                val sub = ""
-                val mark = if (e.name == selectedEdgeName) "● " else "○ "
-                val tv = TextView(ctx).apply {
-                    text = mark + e.name + sub
-                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                    setPadding(0, (6 * d).toInt(), 0, (6 * d).toInt())
-                    if (e.name == selectedEdgeName) setTypeface(null, Typeface.BOLD)
-                }
-                tv.setOnClickListener {
-                    selectedEdgeName = e.name
-                    nameE.setText(e.name)   // 選択した端末を設定対象にする
-                    rebuildEdgeList()
-                }
-                row.addView(tv)
-                row.addView(Button(ctx).apply {
-                    text = "削除"
-                    setOnClickListener {
-                        edges.remove(e); saveRegisteredEdges(); refreshEdgeSpinner()
-                        if (selectedEdgeName == e.name) selectedEdgeName = ""
-                        rebuildEdgeList()
-                    }
-                })
-                edgeListBox.addView(row)
-            }
-        }
-        rebuildEdgeList()
-        // ネットワークモード: OFF=既存ネットに参加(STA。SSID/pass使用) / ON=エッジ自身がAP(屋外・ルーター無し)。
-        // APではエッジ固有のAP資格を使うのでSSID/passは不要(エッジのLCDにQR表示)。
-        val apSwitch = android.widget.Switch(ctx).apply {
-            text = "エッジをAPにする (OFF=既存ネットに接続)"
-            setPadding(0, (12 * d).toInt(), 0, 0)
-        }
-        apSwitch.setOnCheckedChangeListener { _, ap ->
-            ssidE.isEnabled = !ap; passE.isEnabled = !ap		// AP時はSSID/pass入力を無効化
-        }
-        box.addView(apSwitch)
-        val popView = TextView(ctx).apply {
-            setPadding(0, (12 * d).toInt(), 0, 0)
-            text = if (scannedPop.isEmpty()) "PoP: 未取得 — QRをスキャンしてください" else "PoP: $scannedPop"
-        }
-        box.addView(popView)
-        val scanBtn = Button(ctx).apply { text = "エッジのQRをスキャン" }
-        box.addView(scanBtn)
-
-        val dlg = AlertDialog.Builder(ctx)
-            .setTitle("エッジ端末設定 (§8.2)")
-            .setView(ScrollView(ctx).apply { addView(box) })
-            .setPositiveButton("送信", null)
-            .setNegativeButton("閉じる", null)
-            .create()
-
-        // カメラでエッジのQRを読み取り、PoP/端末名を取得する。
-        fun doCameraScan() {
-            val options = GmsBarcodeScannerOptions.Builder()
-                .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
-                .build()
-            val scanner = GmsBarcodeScanning.getClient(ctx, options)
-            scanner.startScan()
-                .addOnSuccessListener { barcode ->
-                    val contents = barcode.rawValue ?: ""
-                    try {
-                        val o = JSONObject(contents)
-                        scannedPop = o.optString("pop", "")
-                        scannedName = o.optString("n", "")
-                        if (scannedName.isNotEmpty() && nameE.text.isNullOrEmpty()) nameE.setText(scannedName)
-                        popView.text = "PoP: $scannedPop(取得済)。SSID等を入力し送信"
-                        android.util.Log.i("EdgeProv", "QR decoded: name=$scannedName pop=$scannedPop raw=$contents")
-                        Toast.makeText(ctx, "QR読取 OK: $scannedName / PoP=$scannedPop", Toast.LENGTH_LONG).show()
-                    } catch (e: Exception) {
-                        android.util.Log.w("EdgeProv", "QR parse failed raw=$contents")
-                        Toast.makeText(ctx, "QR内容が不正: $contents", Toast.LENGTH_LONG).show()
-                    }
-                }
-                .addOnCanceledListener {
-                    Toast.makeText(ctx, "QRスキャンを中止しました", Toast.LENGTH_SHORT).show()
-                }
-                .addOnFailureListener { e ->
-                    android.util.Log.w("EdgeProv", "scan failed: ${e.message}")
-                    Toast.makeText(ctx, "スキャン失敗: ${e.message}", Toast.LENGTH_LONG).show()
-                }
-        }
-
-        // ボタン: まず BLE でエッジに "start" を送って QR を表示させ、その後カメラでスキャンする。
-        // (エッジは start を受けて初めて PoP を生成しQRを出すため、この順序が必要)
-        scanBtn.setOnClickListener {
-            ensureBlePermissions {
-                popView.text = "エッジにQR表示を要求中(BLE)..."
-                EdgeBle(ctx,
-                    log = { m -> runOnUiThread { popView.text = m } },
-                    result = { ok, m -> runOnUiThread {
-                        if (ok) { popView.text = "QR表示OK。カメラでスキャンしてください"; doCameraScan() }
-                        else { popView.text = m; Toast.makeText(ctx, "QR表示要求に失敗: $m", Toast.LENGTH_LONG).show() }
-                    } }
-                ).also {
-                    // 登録済み端末を選んでいるなら、その名前の端末だけに反応させる(2026-08-08 UI依頼)。
-                    // 未選択(新規登録)なら空 = 従来どおり最初に見つかった1台。
-                    // 送信(provision)は EdgeBle.lastAddress で同じ端末へ直接つなぐので、
-                    // ここで正しい相手を掴めば設定の飛び先も確定する。
-                    it.setTargetName(selectedEdgeName)
-                }.startQr()
-            }
-        }
-
-        dlg.setOnShowListener {
-            dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                if (scannedPop.isEmpty()) {
-                    Toast.makeText(ctx, "先にQRスキャンでPoPを取得してください", Toast.LENGTH_SHORT).show()
-                    return@setOnClickListener
-                }
-                val name = nameE.text.toString().trim()
-                if (name.isEmpty() || !isAsciiEdgeName(name)) { Toast.makeText(ctx, "端末識別名は半角英数字で入力してください(エッジ端末で日本語は表示できません)", Toast.LENGTH_LONG).show(); return@setOnClickListener }
-                val ssid = ssidE.text.toString()
-                val pass = passE.text.toString()
-                val mode = if (apSwitch.isChecked) "ap" else "sta"
-                // STA時のSSIDは「新規登録のとき」だけ必須(2026-08-08)。
-                //  登録済み端末を選んでいる場合、SSIDが空なら「端末名だけ変更」とみなし、
-                //  エッジ側は今の接続先を保ったまま名前だけ更新して再起動する。
-                //  (AP時はエッジ固有のAP資格を使うためSSID/passは元から不要)
-                if (mode == "sta" && ssid.isEmpty() && selectedEdgeName.isEmpty()) {
-                    Toast.makeText(ctx, "SSIDを入力してください(新規登録は接続先が必要です)", Toast.LENGTH_LONG).show(); return@setOnClickListener
-                }
-                val json = JSONObject().put("name", name).put("ssid", ssid).put("pass", pass).put("mode", mode).toString()
-                ensureBlePermissions {
-                    popView.text = "BLE送信中..."
-                    EdgeBle(ctx,
-                        log = { m -> runOnUiThread { popView.text = m } },
-                        result = { ok, m -> runOnUiThread {
-                            android.util.Log.i("EdgeProv", "provision result ok=$ok msg=$m")
-                            Toast.makeText(ctx, m, Toast.LENGTH_LONG).show()
-                            popView.text = m
-                            // 送信できたら、スマホ側の登録名もエッジに合わせて改名する(2026-08-08)。
-                            // これをしないと登録リストが古い名前のまま残り、名前一致でエッジを
-                            // 探せなくなって再設定できなくなる(計画のエッジ割り当ても外れる)。
-                            if (ok) { renameRegisteredEdge(selectedEdgeName, name); dlg.dismiss() }
-                        } }
-                    ).provision(scannedPop, json)
-                }
-            }
-        }
-        dlg.show()
-    }
 
     // ---------- 602 色の設定(文字色/背景色。jaredrummler ColorPicker) ----------
     private fun colorTypeName(k: String) = when (k) {
@@ -5120,6 +4949,281 @@ class MainActivity : AppCompatActivity(), HgeListener {
         android.util.Log.i("EdgeProv", "renamed registered edge: $oldName -> $newName")
     }
 
+
+    // ---------- 8.2 エッジ端末設定(画面。2026-08-08 UI依頼で2ダイアログを1画面へ統合) ----------
+    //
+    // 【なぜ画面にしたか】従来は「エッジ端末の登録」と「エッジ端末設定」の2ダイアログに分かれ、
+    //  登録は片方、設定はもう片方という往復が要った。他の設定画面と同じ「上=一覧/分割バー/
+    //  下=入力」に揃えて1画面にし、一覧で選ぶ→下で設定、新規は一覧の先頭行から、で完結させる。
+    //
+    // 一覧で選んだ端末が設定対象(selectedEdgeName)になり、BLEのQR表示要求もその名前の機体
+    // だけに向ける。新規(未選択)のときだけ、名前を広告しない出荷時のエッジにも反応する。
+    private var selectedEdgeName = ""          // 一覧で選択中の端末名(空=新規追加)
+    private var edgeApMode = false             // AP/STA の切替状態(ラベルの出し分けにも使う)
+    private var edgeNameEt: EditText? = null
+    private var edgeSsidEt: EditText? = null
+    private var edgePassEt: EditText? = null
+    private var edgeSsidLabel: TextView? = null
+    private var edgePassLabel: TextView? = null
+    private var edgePopView: TextView? = null
+    // QR側からモードを反映するためスイッチ本体も保持する(2026-08-08)。
+    private var edgeApSwitch: CompoundButton? = null
+
+    private fun openEdgeSettings() {
+        selectedEdgeName = ""
+        scannedPop = ""; scannedName = ""
+        buildEdgeList(); buildEdgeForm()
+        setInitialSplit(R.id.edge_listScroll, R.id.edge_container)
+        flipper.displayedChild = 16
+    }
+
+    // 上段: 登録済み一覧。先頭は新規追加行。タップで設定対象を切り替える。
+    private fun buildEdgeList() {
+        val box = findViewById<LinearLayout>(R.id.edge_container)
+        box.removeAllViews()
+        val d = resources.displayMetrics.density
+        fun row(label: String, sel: Boolean, bold: Boolean, onTap: () -> Unit, onDelete: (() -> Unit)?) {
+            val r = LinearLayout(this); r.orientation = LinearLayout.HORIZONTAL
+            r.gravity = Gravity.CENTER_VERTICAL
+            if (sel) r.setBackgroundColor(0xFFE3F2FD.toInt())
+            val tv = TextView(this).apply {
+                text = label
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                setPadding((8 * d).toInt(), (10 * d).toInt(), (8 * d).toInt(), (10 * d).toInt())
+                if (bold) setTypeface(null, Typeface.BOLD)
+            }
+            tv.setOnClickListener { onTap() }
+            r.addView(tv)
+            if (onDelete != null) {
+                r.addView(Button(this).apply { text = "削除"; setOnClickListener { onDelete() } })
+            }
+            box.addView(r)
+        }
+        // 新規追加(常に先頭。撮影計画の「新規撮影計画」行と同じ位置づけ)
+        row("＋ 新規エッジ端末", selectedEdgeName.isEmpty(), true, {
+            selectedEdgeName = ""; scannedPop = ""; scannedName = ""
+            buildEdgeList(); buildEdgeForm()
+        }, null)
+        if (edges.isEmpty()) {
+            box.addView(TextView(this).apply {
+                text = "(登録なし。上の「＋ 新規エッジ端末」から追加)"
+                setPadding((8 * d).toInt(), (6 * d).toInt(), 0, 0)
+            })
+            return
+        }
+        edges.toList().forEach { e ->
+            val sel = e.name == selectedEdgeName
+            row((if (sel) "● " else "○ ") + e.name, sel, sel, {
+                selectedEdgeName = e.name
+                scannedPop = ""; scannedName = ""
+                buildEdgeList(); buildEdgeForm()
+            }, {
+                AlertDialog.Builder(this)
+                    .setTitle("エッジ端末の削除")
+                    .setMessage("「" + e.name + "」を登録から削除しますか？(エッジ本体の設定は変わりません)")
+                    .setPositiveButton("削除する") { _, _ ->
+                        edges.remove(e); saveRegisteredEdges(); refreshEdgeSpinner()
+                        if (selectedEdgeName == e.name) selectedEdgeName = ""
+                        buildEdgeList(); buildEdgeForm()
+                    }
+                    .setNegativeButton("やめる", null)
+                    .show()
+            })
+        }
+    }
+
+    // 下段: 選択した端末(または新規)の設定フォーム。
+    private fun buildEdgeForm() {
+        val ctx = this
+        val d = resources.displayMetrics.density
+        val box = findViewById<LinearLayout>(R.id.edge_form)
+        box.removeAllViews()
+
+        fun label(t: String): TextView {
+            val v = TextView(ctx).apply { text = t; setPadding(0, (10 * d).toInt(), 0, (2 * d).toInt()) }
+            box.addView(v); return v
+        }
+
+        box.addView(TextView(ctx).apply {
+            text = if (selectedEdgeName.isEmpty()) "新規エッジ端末の登録・設定" else "「" + selectedEdgeName + "」の設定"
+            setTypeface(null, Typeface.BOLD)
+            textSize = 16f
+        })
+
+        label("端末識別名 (半角英数字。エッジのLCDに表示)")
+        val nameE = EditText(ctx); applyEdgeNameInput(nameE)
+        nameE.setText(if (selectedEdgeName.isNotEmpty()) selectedEdgeName else scannedName)
+        box.addView(nameE); edgeNameEt = nameE
+
+        // ネットワークモード。ONでエッジ自身がAP(屋外・ルーター無し)、OFFで既存ネットへ参加。
+        val apSwitch = android.widget.Switch(ctx).apply {
+            text = "エッジをAPにする (OFF=既存ネットに接続)"
+            isChecked = edgeApMode
+            setPadding(0, (12 * d).toInt(), 0, 0)
+        }
+        box.addView(apSwitch)
+
+        // SSID/password。APモードでは「エッジが立てるAPの資格」、STAでは「参加先の資格」。
+        // 2026-08-08 UI依頼: どちらを編集しているのかが分かるようラベルを出し分ける。
+        val ssidLabel = label("接続先 SSID")
+        val ssidE = EditText(ctx); box.addView(ssidE)
+        val ssidPickBtn = Button(ctx).apply { text = "SSIDを選択(周辺のWi-Fiから)" }
+        box.addView(ssidPickBtn)
+        val passLabel = label("接続先 password")
+        val passE = EditText(ctx).apply { inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }
+        box.addView(passE)
+        edgeSsidEt = ssidE; edgePassEt = passE; edgeSsidLabel = ssidLabel; edgePassLabel = passLabel
+
+        fun applyModeLabels(ap: Boolean) {
+            ssidLabel.text = if (ap) "AP SSID (空ならエッジの既定値)" else "接続先 SSID"
+            passLabel.text = if (ap) "AP password (空ならエッジの既定値)" else "接続先 password"
+            // APモードでは周辺Wi-Fiから選ぶ意味が無い(自分で立てる側なので)。
+            ssidPickBtn.isEnabled = !ap
+            ssidPickBtn.alpha = if (ap) 0.4f else 1f
+        }
+        applyModeLabels(edgeApMode)
+        apSwitch.setOnCheckedChangeListener { _, ap -> edgeApMode = ap; applyModeLabels(ap) }
+        edgeApSwitch = apSwitch
+        ssidPickBtn.setOnClickListener { pickWifiSsid { sid -> ssidE.setText(sid) } }
+
+        val popView = TextView(ctx).apply {
+            setPadding(0, (12 * d).toInt(), 0, 0)
+            text = if (scannedPop.isEmpty()) "PoP: 未取得 — QRをスキャンしてください" else "PoP: " + scannedPop
+        }
+        box.addView(popView); edgePopView = popView
+
+        box.addView(Button(ctx).apply {
+            text = "エッジのQRをスキャン"
+            setOnClickListener { requestEdgeQr() }
+        })
+        box.addView(Button(ctx).apply {
+            text = "設定を送信"
+            setOnClickListener { sendEdgeProvision() }
+        })
+
+        // 新規は「登録だけ」もできる(エッジが手元に無くても計画で選べるようにするため)。
+        box.addView(Button(ctx).apply {
+            text = "登録だけする(エッジへ送信しない)"
+            setOnClickListener {
+                val nm = nameE.text.toString().trim()
+                if (nm.isEmpty()) { Toast.makeText(ctx, "端末識別名を入力してください", Toast.LENGTH_SHORT).show(); return@setOnClickListener }
+                if (!isAsciiEdgeName(nm)) { Toast.makeText(ctx, "端末識別名は半角英数字で入力してください", Toast.LENGTH_LONG).show(); return@setOnClickListener }
+                if (edges.none { it.name == nm }) edges.add(Edge(nm, "", 50506))
+                saveRegisteredEdges(); refreshEdgeSpinner()
+                selectedEdgeName = nm
+                buildEdgeList(); buildEdgeForm()
+                Toast.makeText(ctx, "「" + nm + "」を登録しました", Toast.LENGTH_SHORT).show()
+            }
+        })
+    }
+
+    // BLEでエッジに start を送ってQRを表示させ、続けてカメラでスキャンする。
+    private fun requestEdgeQr() {
+        val ctx = this
+        ensureBlePermissions {
+            edgePopView?.text = "エッジにQR表示を要求中(BLE)..."
+            EdgeBle(ctx,
+                log = { m -> runOnUiThread { edgePopView?.text = m } },
+                result = { ok, m -> runOnUiThread {
+                    if (ok) { edgePopView?.text = "QR表示OK。カメラでスキャンしてください"; scanEdgeQr() }
+                    else { edgePopView?.text = m; Toast.makeText(ctx, "QR表示要求に失敗: " + m, Toast.LENGTH_LONG).show() }
+                } }
+            ).also { it.setTargetName(selectedEdgeName) }.startQr()
+        }
+    }
+
+    // QRの読み取り。2種類を受ける(2026-08-08 UI依頼)。
+    //  ・プロビジョニングQR … 設定送信に使う PoP を得る
+    //  ・AP参加QR(WIFI: 形式) … APモード中のエッジが出しているもの。従来はJSONとして
+    //    解釈できず「QR内容が不正」で終わっていた。SSID/password を画面に出す。
+    private fun scanEdgeQr() {
+        val ctx = this
+        val options = GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
+        GmsBarcodeScanning.getClient(ctx, options).startScan()
+            .addOnSuccessListener { barcode ->
+                val contents = barcode.rawValue ?: ""
+                if (contents.startsWith("WIFI:")) {
+                    val ssid = Regex("S:([^;]*)").find(contents)?.groupValues?.get(1) ?: ""
+                    val pass = Regex("P:([^;]*)").find(contents)?.groupValues?.get(1) ?: ""
+                    edgeSsidEt?.setText(ssid); edgePassEt?.setText(pass)
+                    edgePopView?.text = "AP参加QRを読みました   SSID: " + ssid + "   password: " + pass +
+                        "\n(このQRにはPoPが無いため送信はできません。変更するには「エッジのQRをスキャン」)"
+                    Toast.makeText(ctx, "AP: " + ssid + " / " + pass, Toast.LENGTH_LONG).show()
+                    return@addOnSuccessListener
+                }
+                try {
+                    val o = JSONObject(contents)
+                    scannedPop = o.optString("pop", "")
+                    scannedName = o.optString("n", "")
+                    if (scannedName.isNotEmpty() && edgeNameEt?.text.isNullOrEmpty()) edgeNameEt?.setText(scannedName)
+                    // エッジの現在値を入力欄へ入れる(2026-08-08 UI依頼)。読んだ値をそのまま送れば
+                    //  変わらず、書き換えて送れば変えた値が設定される。旧版のQRには m/s/p が
+                    //  無いので、その場合は今の入力を触らない(空文字で上書きしない)。
+                    val curMode = o.optString("m", "")
+                    if (curMode.isNotEmpty()) {
+                        val ap = (curMode == "ap")
+                        edgeApMode = ap
+                        edgeApSwitch?.isChecked = ap   // リスナ経由でラベルも切り替わる
+                    }
+                    val apSsid = o.optString("s", "")
+                    val apPass = o.optString("p", "")
+                    if (curMode == "ap" && apSsid.isNotEmpty()) {
+                        edgeSsidEt?.setText(apSsid); edgePassEt?.setText(apPass)
+                    }
+                    edgePopView?.text = if (curMode == "ap")
+                        "PoP取得済。AP SSID: " + apSsid + "   password: " + apPass + " — 変更したい場合だけ書き換えて「設定を送信」"
+                    else
+                        "PoP: " + scannedPop + "(取得済)。内容を入力し「設定を送信」"
+                    Toast.makeText(ctx, "QR読取 OK: " + scannedName + " / PoP=" + scannedPop, Toast.LENGTH_LONG).show()
+                } catch (_: Exception) {
+                    Toast.makeText(ctx, "QR内容が不正: " + contents, Toast.LENGTH_LONG).show()
+                }
+            }
+            .addOnCanceledListener { Toast.makeText(ctx, "QRスキャンを中止しました", Toast.LENGTH_SHORT).show() }
+            .addOnFailureListener { e -> Toast.makeText(ctx, "スキャン失敗: " + e.message, Toast.LENGTH_LONG).show() }
+    }
+
+    // 入力内容をエッジへ送る(PoP由来鍵で暗号化してBLE書き込み)。
+    private fun sendEdgeProvision() {
+        val ctx = this
+        if (scannedPop.isEmpty()) { Toast.makeText(ctx, "先にQRスキャンでPoPを取得してください", Toast.LENGTH_SHORT).show(); return }
+        val name = (edgeNameEt?.text?.toString() ?: "").trim()
+        if (name.isEmpty() || !isAsciiEdgeName(name)) {
+            Toast.makeText(ctx, "端末識別名は半角英数字で入力してください(エッジ端末で日本語は表示できません)", Toast.LENGTH_LONG).show(); return
+        }
+        val ssid = edgeSsidEt?.text?.toString() ?: ""
+        val pass = edgePassEt?.text?.toString() ?: ""
+        val mode = if (edgeApMode) "ap" else "sta"
+        // STAのSSIDは「新規登録のとき」だけ必須。登録済みなら空=端末名だけ変更(エッジは接続先を保つ)。
+        // APは空ならエッジ側が既定値(HGC-Edge-<MAC下2桁> / 8桁乱数)を用意する。
+        if (mode == "sta" && ssid.isEmpty() && selectedEdgeName.isEmpty()) {
+            Toast.makeText(ctx, "SSIDを入力してください(新規登録は接続先が必要です)", Toast.LENGTH_LONG).show(); return
+        }
+        val json = JSONObject().put("name", name).put("ssid", ssid).put("pass", pass).put("mode", mode).toString()
+        ensureBlePermissions {
+            edgePopView?.text = "BLE送信中..."
+            EdgeBle(ctx,
+                log = { m -> runOnUiThread { edgePopView?.text = m } },
+                result = { ok, m -> runOnUiThread {
+                    Toast.makeText(ctx, m, Toast.LENGTH_LONG).show()
+                    edgePopView?.text = m
+                    if (ok) {
+                        // 送信できた端末を登録へ反映する。既存なら改名に追従、新規なら追加。
+                        if (selectedEdgeName.isEmpty()) {
+                            if (edges.none { it.name == name }) edges.add(Edge(name, "", 50506))
+                            saveRegisteredEdges(); refreshEdgeSpinner()
+                        } else {
+                            renameRegisteredEdge(selectedEdgeName, name)
+                        }
+                        selectedEdgeName = name
+                        scannedPop = ""
+                        buildEdgeList(); buildEdgeForm()
+                    }
+                } }
+            ).provision(scannedPop, json)
+        }
+    }
+
     private fun saveRegisteredEdges() {
         val a = JSONArray()
         edges.forEach { a.put(JSONObject().apply { put("name", it.name); put("ip", it.ip); put("port", it.port) }) }
@@ -5264,30 +5368,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // エッジ端末の登録/管理(設定)。名称で手動登録(IPは撮影開始時に自動検索)。オフラインでも登録でき計画で選べる。
-    private fun manageEdges() {
-        val ctx = this; val d = resources.displayMetrics.density; val pad = (16 * d).toInt()
-        val box = LinearLayout(ctx); box.orientation = LinearLayout.VERTICAL; box.setPadding(pad, pad, pad, 0)
-        fun rebuild() {
-            box.removeAllViews()
-            // 項目3: 過去に登録したエッジ端末のリストは表示しない(一覧と設定は「エッジ端末設定」に集約)。
-            box.addView(TextView(ctx).apply { text = "追加(端末名称で登録。IPは撮影開始時に自動検索)"; setTypeface(null, Typeface.BOLD) })
-            val nameE = EditText(ctx).apply { hint = "端末名称(半角英数字。例: Edje00)" }; applyEdgeNameInput(nameE); box.addView(nameE)
-            box.addView(Button(ctx).apply {
-                text = "登録"
-                setOnClickListener {
-                    val nm = nameE.text.toString().trim()
-                    if (nm.isEmpty()) { Toast.makeText(ctx, "端末名称を入力してください", Toast.LENGTH_SHORT).show(); return@setOnClickListener }
-                    if (!isAsciiEdgeName(nm)) { Toast.makeText(ctx, "端末名称は半角英数字のみ(エッジ端末で日本語は表示できません)", Toast.LENGTH_LONG).show(); return@setOnClickListener }
-                    if (edges.none { it.name == nm }) edges.add(Edge(nm, "", 50506))
-                    saveRegisteredEdges(); refreshEdgeSpinner(); rebuild()
-                }
-            })
-        }
-        rebuild()
-        val dlg = AlertDialog.Builder(ctx).setTitle("エッジ端末の登録").setView(ScrollView(ctx).apply { addView(box) }).setPositiveButton("閉じる", null).create()
-        dlg.setCanceledOnTouchOutside(false)   // 入力フォームが誤タップで閉じないように
-        dlg.show()
-    }
 
     // エッジ端末の状態を約10秒ごとに問い合わせ、スマホ表示へ反映する(仕様8.2)。
     // エッジ側で停止された場合もここで検知してスマホUIを更新する(既知ギャップの解消)。

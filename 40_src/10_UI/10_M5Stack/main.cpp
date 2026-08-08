@@ -579,8 +579,22 @@ void edgeProvApply(const char* name, const char* ssid, const char* pass, const c
 	if (name && name[0]) { g_devName = name; }	// 端末名は共通で更新
 	if (m == "ap")
 	{
-		// APモードへ: SSID/passは受け取らない(エッジ自身のAP資格を使う)。端末名だけ保存し netmode=ap で再起動。
-		Preferences p; if (p.begin("hgc", false)) { p.putString("devname", g_devName.c_str()); p.end(); }
+		// APモードへ: 端末名と AP資格を保存して netmode=ap で再起動する。
+		// AP資格を受け取ったら保存する(2026-08-08)。従来は端末名だけ保存し SSID/pass を
+		//  捨てていたため、APのSSID/パスワードをユーザーが決められなかった。
+		//  空で送られたときは今の値を保つ。まだ何も無ければ ensureApCreds が
+		//  端末固有の既定値(HGC-Edge-<MAC下2桁> / 8桁乱数)を作る。
+		if (ssid && ssid[0]) { g_apSsid = ssid; }
+		if (pass && pass[0]) { g_apPass = pass; }
+		ensureApCreds();	// 片方でも空なら既定値を用意(既にあれば何もしない)
+		Preferences p;
+		if (p.begin("hgc", false))
+		{
+			p.putString("devname", g_devName.c_str());
+			p.putString("apssid",  g_apSsid.c_str());
+			p.putString("appass",  g_apPass.c_str());
+			p.end();
+		}
 		saveNetMode("ap");
 		Serial.println("[PROV] mode=ap -> restart into AP");
 		delay(200); ESP.restart();
@@ -608,8 +622,18 @@ static void renderProv(void)
 {
 	g_cv.fillScreen(TFT_WHITE);
 	// QR内容: 端末名 + PoP(スマホはこれを読み、PoP由来鍵で暗号化してBLE送信する)。
-	std::string qr = std::string("{\"n\":\"") + g_devName + "\",\"pop\":\"" + g_pop + "\"}";
-	g_cv.qrcode(qr.c_str(), 76, 14, 168, 4);
+	// QR内容(2026-08-08 拡張): 端末名 + PoP に加えて「いまのモード」と「AP資格」を載せる。
+	//  スマホは1回のスキャンで現在値を入力欄へ入れ、変えなければそのまま、変えれば
+	//  変えた値をエッジへ書き戻す。従来はAP資格を知る手段が無く(AP参加QRにはPoPが無い)、
+	//  APのSSID/パスワードをユーザーが確認・変更できなかった。
+	//  m=sta/ap, s=AP SSID, p=AP password。内容が増えるので QR は version 6 にする。
+	ensureApCreds();	// まだ無ければ既定値を作ってから載せる
+	std::string qr = std::string("{\"n\":\"") + g_devName
+	                + "\",\"pop\":\"" + g_pop
+	                + "\",\"m\":\"" + g_netMode
+	                + "\",\"s\":\"" + g_apSsid
+	                + "\",\"p\":\"" + g_apPass + "\"}";
+	g_cv.qrcode(qr.c_str(), 76, 14, 168, 6);	// version 6: 内容が増えたため
 	g_cv.setFont(&fonts::Font2);	// ASCII専用フォント(日本語フォントefontJA_16は撤去。エッジ表示は英語のみ)
 	g_cv.setTextColor(TFT_BLACK);
 	g_cv.setTextDatum(textdatum_t::middle_center);
