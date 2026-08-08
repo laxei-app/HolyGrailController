@@ -5132,25 +5132,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
     }
 
-    // QRの読み取り。2種類を受ける(2026-08-08 UI依頼)。
-    //  ・プロビジョニングQR … 設定送信に使う PoP を得る
-    //  ・AP参加QR(WIFI: 形式) … APモード中のエッジが出しているもの。従来はJSONとして
-    //    解釈できず「QR内容が不正」で終わっていた。SSID/password を画面に出す。
+    // QRの読み取り。エッジが出すのはプロビジョニングQRだけである。
+    //  {"n":端末名,"pop":合言葉,"m":sta|ap,"s":AP SSID,"p":AP password}
+    //  PoP は設定送信の暗号鍵(SHA-256)になり、m/s/p は現在値として入力欄へ入る。
+    //  ※ AP参加QR(標準 WIFI: 形式)は廃止した(2026-08-08)。スマホとエッジの接続は将来
+    //    BLEへ移すためQRで参加させる必要が無く、カメラは元々QRを読めない。APのSSID/
+    //    パスワードはエッジ本体の画面に文字で表示する。
     private fun scanEdgeQr() {
         val ctx = this
         val options = GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
         GmsBarcodeScanning.getClient(ctx, options).startScan()
             .addOnSuccessListener { barcode ->
                 val contents = barcode.rawValue ?: ""
-                if (contents.startsWith("WIFI:")) {
-                    val ssid = Regex("S:([^;]*)").find(contents)?.groupValues?.get(1) ?: ""
-                    val pass = Regex("P:([^;]*)").find(contents)?.groupValues?.get(1) ?: ""
-                    edgeSsidEt?.setText(ssid); edgePassEt?.setText(pass)
-                    edgePopView?.text = "AP参加QRを読みました   SSID: " + ssid + "   password: " + pass +
-                        "\n(このQRにはPoPが無いため送信はできません。変更するには「エッジのQRをスキャン」)"
-                    Toast.makeText(ctx, "AP: " + ssid + " / " + pass, Toast.LENGTH_LONG).show()
-                    return@addOnSuccessListener
-                }
                 try {
                     val o = JSONObject(contents)
                     scannedPop = o.optString("pop", "")

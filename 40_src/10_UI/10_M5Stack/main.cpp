@@ -61,7 +61,7 @@ static std::string g_pop;				// 現在のPoP(乱数)
 static std::string g_netMode = "sta";	// NVS設定済み機の既定。未設定機(出荷時)は loadEdgeCreds が AP へ倒す(Phase5)
 static std::string g_apSsid;			// APモードのSSID(初回自動生成しNVS保存)
 static std::string g_apPass;			// APモードのパスワード(初回自動生成しNVS保存)
-static bool        g_apQrMode = false;	// AP参加用QR(SSID/パス)をLCD表示中か
+static bool        g_apInfoMode = false;	// AP参加情報(SSID/パス)をLCD表示中か
 
 // NVS(Preferences 名前空間 "hgc")から接続情報を読み込む。
 static void loadEdgeCreds(void)
@@ -643,18 +643,25 @@ static void renderProv(void)
 	g_cv.pushSprite(0, 0);
 }
 
-// ── APモード: 参加用QR(標準 WIFI: 形式)。スマホはスキャンで即参加、カメラは手設定 ──
-static void renderApQr(void)
+// ── APモード: 参加情報(SSID/パスワード)の表示 ──
+// 【なぜQRを廃止したか】(2026-08-08 依頼) 参加用QRは標準 WIFI: 形式でスマホを即参加
+//  させるためのものだったが、スマホとエッジの接続は将来BLEへ移す方針のため、QRで参加
+//  させる必要が無くなった。カメラはそもそもQRを読めず手入力なので、要るのは「読み取れる
+//  文字」だけである。画面いっぱいを文字に使えるようになり、離れていても読める大きさにした。
+static void renderApInfo(void)
 {
 	g_cv.fillScreen(TFT_WHITE);
-	// WIFI:T:WPA;S:<ssid>;P:<pass>;; (SSID/パスは英数のみなのでエスケープ不要)
-	std::string qr = std::string("WIFI:T:WPA;S:") + g_apSsid + ";P:" + g_apPass + ";;";
-	g_cv.qrcode(qr.c_str(), 76, 6, 168, 4);
-	g_cv.setFont(&fonts::Font2);	// ASCII専用フォント(日本語フォントefontJA_16は撤去。エッジ表示は英語のみ)
 	g_cv.setTextColor(TFT_BLACK);
+	g_cv.setFont(&fonts::Font2);	// ASCII専用フォント(エッジ表示は英語のみ)
 	g_cv.setTextDatum(textdatum_t::middle_center);
-	g_cv.drawString("AP mode: connect to this AP", 160, 184);
-	g_cv.drawString((g_apSsid + " / " + g_apPass).c_str(), 160, 204);
+	g_cv.drawString("AP mode: connect to this AP", 160, 22);
+	// SSID/パスワードはカメラへ手入力する値なので、画面で最大の文字で出す。
+	g_cv.setFont(&fonts::Font4);
+	g_cv.drawString("SSID", 160, 62);
+	g_cv.drawString(g_apSsid.c_str(), 160, 92);
+	g_cv.drawString("password", 160, 140);
+	g_cv.drawString(g_apPass.c_str(), 160, 170);
+	g_cv.setFont(&fonts::Font2);
 	g_cv.drawString("(tap screen for plans)", 160, 224);
 	g_cv.setTextDatum(textdatum_t::top_left);
 	g_cv.pushSprite(0, 0);
@@ -672,7 +679,7 @@ static void startApAndEtp(void)
 		              g_apSsid.c_str(), g_apPass.c_str(), wifiConnect::apIp().c_str());
 		etpEdge::setup(g_devName);	// スマホは 192.168.4.1 のエッジへ(探索応答IPはAP対応済)
 		g_edgeUp = true;
-		g_apQrMode = true;			// LCDに参加用QR
+		g_apInfoMode = true;			// LCDに参加情報(SSID/パス)
 		hge_resumeCapture();		// AP参加済みカメラがあれば撮影再開(Phase2でstation列挙発見)
 		hge_presenceStart();		// 項目1: エッジ自身の在否モニタ(スマホと共通)を開始(APサブネットのカメラを探す)
 		g_state = hge_getState();
@@ -737,8 +744,8 @@ static void redraw(void)
 {
 	// AP参加QRは撮影/待機が始まったら自動で閉じ、計画・進捗を見せる。スマホから開始した場合でも
 	// 画面タップを待たずに切り替わる(QRは「カメラ/スマホを参加させるまで」の初期表示)。
-	if (g_apQrMode && g_state != HGE_ST_IDLE) { g_apQrMode = false; }
-	if (g_apQrMode) { renderApQr(); }	// APモード: 参加用QR
+	if (g_apInfoMode && g_state != HGE_ST_IDLE) { g_apInfoMode = false; }
+	if (g_apInfoMode) { renderApInfo(); }	// APモード: 参加情報
 	else if (g_provMode) { renderProv(); }	// 仕様8.2: 設定(QR+PoP)表示
 	else            { renderPlan(); }	// 仕様8.1: 計画名+開始/停止のみ
 }
@@ -746,7 +753,7 @@ static void redraw(void)
 // ── タップ処理(計画リストの左アイコンで開始/停止。プロビジョニング表示中は戻る) ──
 static void onTap(int x, int y)
 {
-	if (g_apQrMode)  { g_apQrMode = false; g_dirty = true; return; }	// APモード: QRを閉じて計画画面へ
+	if (g_apInfoMode)  { g_apInfoMode = false; g_dirty = true; return; }	// APモード: 参加情報を閉じて計画画面へ
 	if (g_provMode) { g_provMode = false; g_dirty = true; return; }
 	// 項目7: エッジ側の削除は廃止。削除確認ダイアログ/ゴミ箱タップは撤去した。
 	for (const auto& h : g_planHits)
@@ -997,7 +1004,7 @@ void loop(void)
 	{
 		static uint32_t lastColon = 0;
 		uint32_t nowMs = millis();
-		if (!g_apQrMode && !g_provMode && (nowMs - lastColon) >= 500)
+		if (!g_apInfoMode && !g_provMode && (nowMs - lastColon) >= 500)
 		{
 			lastColon = nowMs; g_colonOn = !g_colonOn;
 			// バッテリ残りわずか(level2)のアイコン点滅。1秒周期にするため ":" 2回ぶんで1トグル。

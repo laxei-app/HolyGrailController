@@ -169,7 +169,7 @@ static std::string g_pop;
 static std::string g_netMode = "sta";
 static std::string g_apSsid;
 static std::string g_apPass;
-static bool        g_apQrMode = false;
+static bool        g_apInfoMode = false;
 
 static void loadEdgeCreds(void)
 {
@@ -773,18 +773,20 @@ static void renderProv(void)
 	g_cv.drawString("Scan with phone", g_scrW / 2, g_scrH - 2);
 	g_cv.setTextDatum(textdatum_t::top_left);
 }
-static void renderApQr(void)
+// AP参加情報。QRは廃止した(理由はCoreS3側 renderApInfo のコメント参照)。カメラへ手入力
+// する値なので、狭い画面でも読めるよう画面を分けて大きな文字で出す。
+static void renderApInfo(void)
 {
 	g_cv.fillScreen(TFT_WHITE);
-	std::string qr = std::string("WIFI:T:WPA;S:") + g_apSsid + ";P:" + g_apPass + ";;";
-	// カメラはQRを読めず手入力のため、SSIDに加えてパスワードも表示する(QRは2行分小さく)。
-	int sz = g_scrH - 40;
-	g_cv.qrcode(qr.c_str(), (g_scrW - sz) / 2, 2, sz, 4);
-	g_cv.setFont(&fonts::Font2);
 	g_cv.setTextColor(TFT_BLACK);
-	g_cv.setTextDatum(textdatum_t::bottom_center);
-	g_cv.drawString((g_apSsid).c_str(), g_scrW / 2, g_scrH - 18);
-	g_cv.drawString(("pass: " + g_apPass).c_str(), g_scrW / 2, g_scrH - 2);
+	g_cv.setTextDatum(textdatum_t::middle_center);
+	g_cv.setFont(&fonts::Font2);
+	g_cv.drawString("AP mode: connect to this AP", g_scrW / 2, 12);
+	g_cv.setFont(&fonts::Font4);
+	g_cv.drawString(g_apSsid.c_str(), g_scrW / 2, 48);
+	g_cv.drawString(g_apPass.c_str(), g_scrW / 2, 90);
+	g_cv.setFont(&fonts::Font2);
+	g_cv.drawString("SSID / password", g_scrW / 2, g_scrH - 12);
 	g_cv.setTextDatum(textdatum_t::top_left);
 }
 static void startApAndEtp(void)
@@ -794,7 +796,7 @@ static void startApAndEtp(void)
 	{
 		Serial.printf("[AP] SoftAP up ssid=%s pass=%s ip=%s\n", g_apSsid.c_str(), g_apPass.c_str(), wifiConnect::apIp().c_str());
 		etpEdge::setup(g_devName);
-		g_edgeUp = true; g_apQrMode = true;
+		g_edgeUp = true; g_apInfoMode = true;
 		hge_resumeCapture(); hge_presenceStart(); g_state = hge_getState();	// 項目1: 在否モニタ開始(共通)
 	}
 	else { Serial.println("[AP] softAP start FAILED"); }
@@ -816,8 +818,8 @@ static void redraw(bool bandOnly)
 {
 	// AP参加QRは撮影/待機が始まったら自動で閉じ、計画・進捗を見せる。スマホから開始した場合でも
 	// エッジのボタンを押さずに切り替わる(QRは「カメラ/スマホを参加させるまで」の初期表示)。
-	if (g_apQrMode && g_state != HGE_ST_IDLE) { g_apQrMode = false; }
-	if (g_apQrMode) { renderApQr(); g_cv.pushSprite(0, 0); return; }
+	if (g_apInfoMode && g_state != HGE_ST_IDLE) { g_apInfoMode = false; }
+	if (g_apInfoMode) { renderApInfo(); g_cv.pushSprite(0, 0); return; }
 	if (g_provMode) { renderProv(); g_cv.pushSprite(0, 0); return; }
 	renderPlan();
 	if (bandOnly) { pushBand(g_scrH - BAND_H, BAND_H); }
@@ -830,10 +832,10 @@ static void handleButtons(uint32_t now)
 	int e1 = g_key1.update(now);
 	int e2 = g_key2.update(now);
 
-	// QR表示中はどちらのキーでも計画画面へ戻る。
-	if (g_apQrMode || g_provMode)
+	// 参加情報/プロビジョニング表示中はどちらのキーでも計画画面へ戻る。
+	if (g_apInfoMode || g_provMode)
 	{
-		if ((e1 & 1) || (e2 & 1) || (e1 & 2) || (e2 & 2)) { g_apQrMode = false; g_provMode = false; g_dirty = true; }
+		if ((e1 & 1) || (e2 & 1) || (e1 & 2) || (e2 & 2)) { g_apInfoMode = false; g_provMode = false; g_dirty = true; }
 		return;
 	}
 
@@ -885,7 +887,7 @@ static void notifyCb(int32_t ev, const char* json_, int32_t len, void* user)
 		const char* p = std::strstr(json_, "\"state\":");
 		if (p) { std::sscanf(p, "\"state\":%d", &s); }
 		g_state = s;
-		if (g_apQrMode && s != HGE_ST_IDLE) { g_dirty = true; }	// QR中に撮影開始→QRを閉じ計画画面へ(全画面再描画)
+		if (g_apInfoMode && s != HGE_ST_IDLE) { g_dirty = true; }	// 参加情報表示中に撮影開始→閉じて計画画面へ(全画面再描画)
 		Serial.printf("[EV] STATE: %s\n", stName(s));
 		break;
 	}
@@ -1064,7 +1066,7 @@ void loop(void)
 	// QR/プロビジョニング表示中は下部バンド更新をしない(それらは全画面で別描画のため)。
 	{
 		static uint32_t lastColon = 0;
-		if (!g_apQrMode && !g_provMode && (now - lastColon) >= 500)
+		if (!g_apInfoMode && !g_provMode && (now - lastColon) >= 500)
 		{
 			lastColon = now; g_colonOn = !g_colonOn;
 			// バッテリ残りわずか(level2)のアイコン点滅。1秒周期にするため ":" 2回ぶんで1トグル。
