@@ -1,7 +1,41 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+
+// アプリのバージョン(2026-08-08 UI依頼)。
+//  major/minor は 40_src/version.properties でエッジ端末と共有し、手で更新する。
+//  phonePatch はスマホをビルドするたびに +1 する(パッチはエッジと独立に進む)。
+// 版数を上げるのは実際に成果物を作るときだけにしたいので、タスク名に assemble/install/build を
+// 含むときだけ加算する(./gradlew tasks 等では動かさない)。
+val versionPropsFile = file("../../../version.properties")
+fun readVersionProps(): Properties {
+    val p = Properties()
+    versionPropsFile.inputStream().use { p.load(it) }
+    return p
+}
+fun bumpPhonePatch(): Int {
+    val p = readVersionProps()
+    var patch = (p.getProperty("phonePatch") ?: "0").trim().toInt()
+    val building = gradle.startParameter.taskNames.any {
+        it.contains("assemble", true) || it.contains("install", true) || it.contains("build", true)
+    }
+    if (building) {
+        patch += 1
+        // コメントを保ちたいので Properties.store ではなく該当行だけ置換する。
+        val text = versionPropsFile.readText(Charsets.UTF_8)
+            .replace(Regex("(?m)^phonePatch[ \t]*=.*$"), "phonePatch=$patch")
+        versionPropsFile.writeText(text, Charsets.UTF_8)
+    }
+    return patch
+}
+val vProps = readVersionProps()
+val hgcMajor = (vProps.getProperty("major") ?: "0").trim().toInt()
+val hgcMinor = (vProps.getProperty("minor") ?: "0").trim().toInt()
+val hgcPatch = bumpPhonePatch()
+val hgcVersionName = "$hgcMajor.$hgcMinor.$hgcPatch"
 
 android {
     namespace = "app.laxei.holygrail"
@@ -15,8 +49,8 @@ android {
         applicationId = "app.laxei.holygrail"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1"
+        versionCode = hgcPatch.coerceAtLeast(1)
+        versionName = hgcVersionName
 
         externalNativeBuild {
             cmake {

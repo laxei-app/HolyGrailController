@@ -160,9 +160,9 @@
                     android:layout_height="wrap_content" android:layout_marginTop="8dp" android:text="カメラ: Canon EOS R10" />
                 <TextView android:id="@+id/plan_lensText" android:layout_width="match_parent"
                     android:layout_height="wrap_content" android:text="レンズ: SIGMA 12mm F1.4 DC" />
-                <TextView android:id="@+id/plan_sensorText" android:layout_width="match_parent"
-                    android:layout_height="wrap_content" android:textSize="13sp" android:textColor="#888888"
-                    android:text="センサー 22.4×14.9mm  焦点距離 12mm" />
+                <!-- センサー/焦点距離/画角はここから撮影シミュレーション画面へ移した(2026-08-08 UI依頼)。
+                     撮影計画の1ページ目は「何を・いつ・どの機材で撮るか」に絞り、画角の確認は
+                     実際に画角が見えるシミュレーション画面で行う。 -->
 
                 <!-- 撮影周期(タップでキーボード入力) + 横向き(ランドスケープ) -->
                 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"

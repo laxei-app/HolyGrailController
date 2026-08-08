@@ -198,7 +198,12 @@ class SimPage(
     private val onDirection: (Float, Float) -> Unit
 ) : LinearLayout(context) {
 
+    // タイトル行(2026-08-08 UI依頼): 1行目=撮影計画名(左詰め) / 2行目=「撮影シミュレーション」。
+    // 2行目は薄明ページの見出し(ScheduleView の titleTxt = 12sp 太字)と同じ大きさに揃える。
+    private val planNameView = TextView(context)
     private val titleView = TextView(context)
+    // センサー/焦点距離/画角(2026-08-08 UI依頼で撮影計画1ページ目から移設)。
+    private val gearView = TextView(context)
     private val compass = CompassView(context)
     private val elevationView = ElevationView(context)
     private val landscapeCheck = CheckBox(context)
@@ -229,17 +234,42 @@ class SimPage(
         orientation = VERTICAL
         setPadding(dp(12f), dp(8f), dp(12f), dp(8f))
 
-        // ⓪ タイトル(項目G: 以前は無かった)
+        // ⓪ タイトル(2026-08-08 UI依頼で2行構成へ)
+        //   1行目: 撮影計画名を左詰め。薄明ページの見出しと同じ見え方(15sp 太字・淡い青地)に揃える。
+        //   2行目: 「撮影シミュレーション」。薄明ページの帯見出し(12sp 太字)と同じ大きさ。
+        planNameView.text = "撮影計画"
+        planNameView.textSize = 15f
+        planNameView.gravity = Gravity.START
+        planNameView.setTypeface(planNameView.typeface, android.graphics.Typeface.BOLD)
+        planNameView.maxLines = 1
+        planNameView.ellipsize = android.text.TextUtils.TruncateAt.END
+        planNameView.setPadding(dp(12f), dp(6f), dp(12f), dp(6f))
+        planNameView.setBackgroundColor(0xFFE3F2FD.toInt())
+        // 親の左右パディング(12dp)を打ち消して、薄明ページと同じく画面幅いっぱいの帯にする。
+        addView(planNameView, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            leftMargin = -dp(12f); rightMargin = -dp(12f)
+        })
+
         titleView.text = "撮影シミュレーション"
-        titleView.textSize = 16f
-        titleView.gravity = Gravity.CENTER
+        titleView.textSize = 12f
+        titleView.gravity = Gravity.START
         titleView.setTypeface(titleView.typeface, android.graphics.Typeface.BOLD)
-        titleView.setPadding(0, 0, 0, dp(4f))
+        titleView.setTextColor(0xFF37474F.toInt())
+        titleView.setPadding(0, dp(4f), 0, dp(2f))
         addView(titleView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         // ① 撮影イメージ(高さは幅と横向きセンサー比から決まる=横向き/縦向きで枠は不変)
         addView(render, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        // ②-0 センサー/焦点距離/画角(2026-08-08 UI依頼で計画1ページ目から移設)。
+        //     ここは実際に画角が見える画面なので、数値の確認もここでできるようにする。
+        gearView.textSize = 12f
+        gearView.setTextColor(0xFF888888.toInt())
+        gearView.gravity = Gravity.CENTER
+        gearView.setPadding(0, dp(2f), 0, 0)
+        addView(gearView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         // ② 日時(欄外の下・年なし)
         dateLabel.textSize = 13f
@@ -295,11 +325,18 @@ class SimPage(
         landscapeCheck.setOnCheckedChangeListener { _, checked ->
             if (suppress) return@setOnCheckedChangeListener
             landscape = checked
+            elevationView.setLandscape(checked)   // 仰角のカメラ絵を横向き/縦向きで差し替える(2026-08-08 UI依頼)
             onLandscape(checked)     // 撮影計画へ反映(先頭ページと同じ)。再生成後に再bindされる。
             renderSky()
         }
         addView(landscapeCheck)
     }
+
+    // タイトル1行目の撮影計画名(2026-08-08 UI依頼)。薄明ページの見出しと同じ文言を出す。
+    fun setPlanName(n: String) { planNameView.text = n }
+
+    // センサー/焦点距離/画角の表示(2026-08-08 UI依頼)。撮影計画側で整形した文字列をそのまま出す。
+    fun setGearText(t: String) { gearView.text = t }
 
     // 撮影計画(nativeGetPlanJson の JSON)を読み込み、ウィジェット初期化＆描画。
     //  masterLensesJson: マスターレンズ一覧(nativeGetMasterLenses)。起動時にアセットから再コピー
@@ -341,6 +378,7 @@ class SimPage(
 
         suppress = true
         landscapeCheck.isChecked = landscape
+        elevationView.setLandscape(landscape)   // 仰角のカメラ絵を計画の横向き設定に合わせる(2026-08-08 UI依頼)
         compass.setAzimuth(az.toFloat())
         elevationView.setAngle(el.toFloat())
         val (fh, fv) = fovDeg()

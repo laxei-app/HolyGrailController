@@ -149,6 +149,19 @@ class ElevationView @JvmOverloads constructor(context: Context, attrs: Attribute
     private var prevAng = 0f   // 直前のタッチ角(ピボット周り, ラジアン)
     private var hasPrev = false
 
+    // カメラの絵(2026-08-08 UI依頼で図形描画から画像へ)。撮る向きで絵を替える:
+    //  横向きで撮る(ランドスケープ)=ICOカメラ(右透) / 縦向き=ICOカメラ(上)。
+    //  どちらも 80×80 の透過PNG。仰角に合わせてピボット中心に回転させる。
+    private var landscape = true
+    private val camSide: android.graphics.Bitmap? =
+        try { android.graphics.BitmapFactory.decodeResource(resources, R.drawable.ic_cam_side) } catch (_: Exception) { null }
+    private val camUp: android.graphics.Bitmap? =
+        try { android.graphics.BitmapFactory.decodeResource(resources, R.drawable.ic_cam_up) } catch (_: Exception) { null }
+    private val camPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { isFilterBitmap = true }
+
+    // 横向き/縦向きの切替(撮影計画の「横向きで撮る」に追従)。
+    fun setLandscape(l: Boolean) { if (landscape != l) { landscape = l; invalidate() } }
+
     fun setAngle(a: Float) { angle = clamp(a); invalidate() }
     fun setFov(v: Float) { fovV = v; invalidate() }
     private fun clamp(a: Float) = if (a > 90f) 90f else if (a < -90f) -90f else a
@@ -170,13 +183,23 @@ class ElevationView @JvmOverloads constructor(context: Context, attrs: Attribute
         c.drawArc(rect, -(angle + fovV / 2f), fovV, true, fovP)
         // 仰角を示す円弧(水平→撮影方向)
         c.drawArc(rect, -angle, angle, false, arcP)
-        // カメラの絵(ピボット中心に -elevation 回転=上を向く)
+        // カメラの絵(ピボット中心に -elevation 回転=上を向く)。
+        // 2026-08-08 UI依頼: 図形描画から画像へ。横向き/縦向きで絵を替える。
+        val bmp = if (landscape) camSide else camUp
         c.save()
         c.rotate(-angle, cx, cy)
-        val bw = dp(22f); val bh = dp(15f)
-        c.drawRect(cx - bw, cy - bh, cx + bw * 0.4f, cy + bh, bodyP)        // 本体
-        c.drawRect(cx - bw * 0.2f, cy - bh * 0.6f, cx + bw, cy + bh * 0.6f, lensP) // レンズ(右=撮影方向)
-        c.drawRect(cx - bw * 0.5f, cy - bh - dp(4f), cx + dp(2f), cy - bh, bodyP)   // ホットシュー
+        if (bmp != null) {
+            // 扇(画角)と水平線を隠しすぎない大きさにする。半径の 0.9 倍を一辺とする正方形。
+            val side = rad * 0.9f
+            val dst = RectF(cx - side / 2f, cy - side / 2f, cx + side / 2f, cy + side / 2f)
+            c.drawBitmap(bmp, null, dst, camPaint)
+        } else {
+            // 画像が読めない環境向けの従来描画(保険)。
+            val bw = dp(22f); val bh = dp(15f)
+            c.drawRect(cx - bw, cy - bh, cx + bw * 0.4f, cy + bh, bodyP)
+            c.drawRect(cx - bw * 0.2f, cy - bh * 0.6f, cx + bw, cy + bh * 0.6f, lensP)
+            c.drawRect(cx - bw * 0.5f, cy - bh - dp(4f), cx + dp(2f), cy - bh, bodyP)
+        }
         c.restore()
     }
 

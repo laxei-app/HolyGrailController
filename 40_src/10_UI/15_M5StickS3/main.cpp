@@ -1,4 +1,4 @@
-// HolyGrail Controller エッジ端末(M5StickC S3 / StickS3) アプリ。
+﻿// HolyGrail Controller エッジ端末(M5StickC S3 / StickS3) アプリ。
 // holyGrailEntity を駆動し、スマホからの ETP(§6)制御・BLE設定(§8.2)を受ける。
 // CoreS3版(10_M5Stack)とロジックは共通だが、UIが異なる:
 //   ・LCD は小さく(240x135 横向き)タッチ非対応。物理ボタン2つで操作する。
@@ -8,6 +8,7 @@
 // etpEdge.cpp / edgeProv.cpp は表示非依存なので CoreS3版を共有ビルドする(build_src_filter)。
 
 #include <M5Unified.h>
+#include "edgeVersion.h"	// 自動生成の版数(bump_version.py。2026-08-08 UI依頼)
 #include <M5GFX.h>
 #include <lgfx/v1/panel/Panel_ST7789.hpp>	// ST7789 パネル型を明示include
 #include <WiFi.h>
@@ -662,6 +663,12 @@ static void renderSplash(void)
 	if (SPLASH_PX != nullptr && SPLASH_W > 0 && SPLASH_H > 0)
 	{
 		g_cv.pushImage((g_scrW - SPLASH_W) / 2, (g_scrH - SPLASH_H) / 2, SPLASH_W, SPLASH_H, SPLASH_PX);
+		// 版数を右下へ小さく出す(2026-08-08 UI依頼)。どのファームが載っているかを画面だけで確認できる。
+		g_cv.setFont(&fonts::Font2);
+		g_cv.setTextDatum(textdatum_t::bottom_right);
+		g_cv.setTextColor(TFT_BLACK);
+		g_cv.drawString(HGC_EDGE_VERSION, g_scrW - 3, g_scrH - 2);
+		g_cv.setTextDatum(textdatum_t::top_left);
 		g_cv.pushSprite(0, 0);
 		return;
 	}
@@ -684,6 +691,12 @@ static void renderSplash(void)
 	g_cv.setTextDatum(textdatum_t::top_left);
 	g_cv.setTextColor(TFT_WHITE);
 	g_cv.setFont(&fonts::Font2);
+	// 版数を右下へ小さく出す(2026-08-08 UI依頼)。どのファームが載っているかを画面だけで確認できる。
+	g_cv.setFont(&fonts::Font2);
+	g_cv.setTextDatum(textdatum_t::bottom_right);
+	g_cv.setTextColor(TFT_BLACK);
+	g_cv.drawString(HGC_EDGE_VERSION, g_scrW - 3, g_scrH - 2);
+	g_cv.setTextDatum(textdatum_t::top_left);
 	g_cv.pushSprite(0, 0);
 }
 

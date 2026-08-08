@@ -67,12 +67,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private lateinit var endDate: Button
     private lateinit var endTime: Button
     private lateinit var resetButton: Button
+    // センサー/焦点距離/画角の文言(2026-08-08 UI依頼で撮影シミュレーション画面へ移設)。
+    // 計画JSONの更新時に作り、SimPage が生成済みならそのまま渡す(未生成なら次のbindで反映)。
+    private var simGearText: String = ""
     private lateinit var placeText: TextView
     private lateinit var latlngText: TextView
     private lateinit var cameraText: TextView
     private lateinit var lensText: TextView
     private lateinit var intervalText: TextView
-    private lateinit var sensorText: TextView
     private lateinit var npfText: TextView
     private lateinit var landscapeCheck: CheckBox
     private var suppressLandscape = false   // updatePlanDisplay でのチェック設定が native を呼ばないように
@@ -411,7 +413,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         cameraText = findViewById(R.id.plan_cameraText)
         lensText = findViewById(R.id.plan_lensText)
         intervalText = findViewById(R.id.plan_intervalText)
-        sensorText = findViewById(R.id.plan_sensorText)
         npfText = findViewById(R.id.plan_npfText)
         landscapeCheck = findViewById(R.id.plan_landscape)
         planOverview = findViewById(R.id.plan_overviewContainer)
@@ -469,7 +470,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 項目11: 計画1ページ目の方向/仰角ウィジェットは廃止(設定は撮影シミュレーション画面で行う)。
         startDate.setOnClickListener { pickDate(startCal) }
         startTime.setOnClickListener { pickTime(startCal) }
-        endDate.setOnClickListener { pickDate(endCal) }
+        // 終了日は自動決定なのでタップしても何もしない(2026-08-08 UI依頼)。
         endTime.setOnClickListener { pickTime(endCal) }
         // 旧「リセット」→「変更の取り消し」(他画面と同じ)。画面/計画に入った時点(planBaseline)へ戻す。
         styleCancelButton(resetButton)
@@ -816,7 +817,21 @@ class MainActivity : AppCompatActivity(), HgeListener {
         gearBand(box, "ログ")
         // 撮影中/開始要求中はグレー表示で不可(コピー処理が撮影と競合しないように)。
         gearItem(box, "ログ取得", enabled = !isCaptureBusy()) { retrieveLogs() }
+
+        // 版数を一番下に出す(2026-08-08 UI依頼)。どのビルドを使っているかを画面だけで確認できる。
+        // major.minor はエッジ端末と一致させる約束なので、食い違っていたらどちらかの書き込み漏れ。
+        box.addView(TextView(this).apply {
+            text = "バージョン " + appVersionName()
+            textSize = 12f
+            setTextColor(0xFF9E9E9E.toInt())
+            setPadding(dp(16), dp(16), dp(16), dp(8))
+        })
     }
+
+    // このアプリの版数("0.0.x")。build.gradle.kts の versionName をそのまま読む。
+    private fun appVersionName(): String = try {
+        packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
+    } catch (_: Exception) { "?" }
 
     // 撮影実行中/開始要求(待機・未検出含む)中か。ログ取得の可否判定に使う。
     private fun isCaptureBusy(): Boolean =
@@ -960,7 +975,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
             }
             edges.toList().forEach { e ->
                 val row = LinearLayout(ctx); row.orientation = LinearLayout.HORIZONTAL; row.gravity = Gravity.CENTER_VERTICAL
-                val sub = if (e.ip.isEmpty()) "" else " (前回 ${e.ip})"
+                // IPは表示しない(2026-08-08 UI依頼)。DHCPで変わるためユーザーには意味が無く、
+                // 実際 8/7→8/8 で R10/R100 の IP が入れ替わっている。識別は端末名で行う。
+                val sub = ""
                 val mark = if (e.name == selectedEdgeName) "● " else "○ "
                 val tv = TextView(ctx).apply {
                     text = mark + e.name + sub
@@ -1053,7 +1070,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         if (ok) { popView.text = "QR表示OK。カメラでスキャンしてください"; doCameraScan() }
                         else { popView.text = m; Toast.makeText(ctx, "QR表示要求に失敗: $m", Toast.LENGTH_LONG).show() }
                     } }
-                ).startQr()
+                ).also {
+                    // 登録済み端末を選んでいるなら、その名前の端末だけに反応させる(2026-08-08 UI依頼)。
+                    // 未選択(新規登録)なら空 = 従来どおり最初に見つかった1台。
+                    // 送信(provision)は EdgeBle.lastAddress で同じ端末へ直接つなぐので、
+                    // ここで正しい相手を掴めば設定の飛び先も確定する。
+                    it.setTargetName(selectedEdgeName)
+                }.startQr()
             }
         }
 
@@ -2836,36 +2859,39 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .show()
     }
 
+    // 撮影開始日のみ選べる(終了日は開始日と時刻の関係から自動で決まる。2026-08-08 UI依頼)。
+    // 日付を変えても時刻は動かさない。終了日だけを derive で決め直す。
     private fun pickDate(cal: Calendar) {
         DatePickerDialog(this, { _, y, m, d ->
             cal.set(Calendar.YEAR, y); cal.set(Calendar.MONTH, m); cal.set(Calendar.DAY_OF_MONTH, d)
-            clampPlanRange(cal === startCal); updateTimeButtons(); pushTimesToEntity()
+            deriveEndDate(); updateTimeButtons(); pushTimesToEntity()
         }, cal.get(Calendar.YEAR), cal.get(Calendar.MONTH), cal.get(Calendar.DAY_OF_MONTH)).show()
     }
 
+    // 開始/終了の時刻。片方を変えてももう片方の時刻は動かさない(2026-08-08 UI依頼)。
+    // 変わるのは終了日だけで、それも開始時刻と終了時刻の関係から自動で決まる。
     private fun pickTime(cal: Calendar) {
         TimePickerDialog(this, { _, h, min ->
             cal.set(Calendar.HOUR_OF_DAY, h); cal.set(Calendar.MINUTE, min); cal.set(Calendar.SECOND, 0)
-            clampPlanRange(cal === startCal); updateTimeButtons(); pushTimesToEntity()
+            deriveEndDate(); updateTimeButtons(); pushTimesToEntity()
         }, cal.get(Calendar.HOUR_OF_DAY), cal.get(Calendar.MINUTE), true).show()
     }
 
-    // 開始/終了の間隔を 最小1分〜最大24時間 に収め、逆転(終了≦開始)を防ぐ。
-    // startChanged=true(開始を編集) のときは終了を、false(終了を編集) のときは開始を動かす。
-    private fun clampPlanRange(startChanged: Boolean) {
-        val minMs = 60_000L              // 最小1分
-        val maxMs = 24L * 60L * 60_000L  // 最大24時間
-        val span = endCal.timeInMillis - startCal.timeInMillis
-        if (span in minMs..maxMs) return
-        if (startChanged) {
-            // 開始を基準に終了を範囲内へ寄せる。
-            val clamped = if (span < minMs) minMs else maxMs
-            endCal.timeInMillis = startCal.timeInMillis + clamped
-        } else {
-            // 終了を基準に開始を範囲内へ寄せる。
-            val clamped = if (span < minMs) minMs else maxMs
-            startCal.timeInMillis = endCal.timeInMillis - clamped
-        }
+    // 終了日を「開始日 + (終了時刻が開始時刻以下なら1日)」で決める(2026-08-08 UI依頼)。
+    //
+    // 【なぜ自動にするか】従来は開始/終了を独立に編集でき、間隔が 1分〜24時間 に収まらない
+    //  ときは「もう片方を動かして」帳尻を合わせていた。そのため日付を1日ずらすと開始時刻が
+    //  勝手に書き換わり(実際に 17:00 が 21:00 へ押し出される)、操作の順番を知らないと
+    //  設定できなかった。撮影は「その日の何時から翌朝の何時まで」の形しか使わないので、
+    //  終了日はユーザーが決めるものではなく、開始日と2つの時刻から一意に決まる。
+    //
+    // 終了時刻＝開始時刻のときは 24時間(翌日)とする。0分の窓は意味がないため。
+    private fun deriveEndDate() {
+        endCal.set(Calendar.YEAR,  startCal.get(Calendar.YEAR))
+        endCal.set(Calendar.MONTH, startCal.get(Calendar.MONTH))
+        endCal.set(Calendar.DAY_OF_MONTH, startCal.get(Calendar.DAY_OF_MONTH))
+        endCal.set(Calendar.SECOND, 0); endCal.set(Calendar.MILLISECOND, 0)
+        if (endCal.timeInMillis <= startCal.timeInMillis) { endCal.add(Calendar.DAY_OF_MONTH, 1) }
     }
 
     private fun updateTimeButtons() {
@@ -2873,6 +2899,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
         startTime.text = fmtTime.format(startCal.time)
         endDate.text = fmtDate.format(endCal.time)
         endTime.text = fmtTime.format(endCal.time)
+        // 終了日は自動で決まる項目なので押せない・グレー表示にする(2026-08-08 UI依頼)。
+        // isEnabled=false だと setPlanEditEnabled 側の一括操作と競合するので、
+        // クリック不可と色だけをここで固定する。
+        endDate.isClickable = false
+        endDate.isFocusable = false
+        endDate.setTextColor(0xFF9E9E9E.toInt())
     }
 
     // 開始/終了時刻をEntityへ渡してスケジュールを再生成させる(結果はEV_SCHEDULEで反映)。
@@ -3600,9 +3632,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
             latlngText.text = o.optString("latlng") + "  標高 " + o.optInt("altitude") + "m"
             cameraText.text = "カメラ: " + o.optString("camera")
             lensText.text = "レンズ: " + o.optString("lens")
-            sensorText.text = "センサー %.1f×%.1fmm  焦点距離 %d mm  画角 %.0f×%.0f°".format(
+            // センサー/焦点距離/画角は撮影シミュレーション画面へ移した(2026-08-08 UI依頼)。
+            simGearText = "センサー %.1f×%.1fmm  焦点距離 %d mm  画角 %.0f×%.0f°".format(
                 o.optDouble("sensorW"), o.optDouble("sensorH"), o.optInt("focalLength"),
                 o.optDouble("fovH"), o.optDouble("fovV"))
+            simPage?.setGearText(simGearText)
             intervalText.text = fmtInterval(o.optDouble("interval", 15.0)) + "秒"
             suppressLandscape = true
             landscapeCheck.isChecked = o.optBoolean("landscape")
@@ -4893,6 +4927,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             planPager.removeView(sp)
             planPager.addView(sp, FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            sp.setPlanName(planName.ifEmpty { "撮影計画" })   // タイトル1行目(2026-08-08 UI依頼)
+            sp.setGearText(simGearText)                      // センサー/焦点距離/画角(同上)
             // 方位磁石の日の出/日の入・月マーカー(表示JSONに含まれる)を反映。
             sp.setMarkers(
                 o.optDouble("sunriseAz", Double.NaN).toFloat(),
@@ -4951,7 +4987,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         planReadOnly = isPlanOnEdge(currentPlanId)
         val ed = !planReadOnly
         // plan_resetButton(=変更の取り消し)は planDirtyWatch が有効/無効を管理(撮影中は自動で無効)。
-        intArrayOf(R.id.plan_startDate, R.id.plan_startTime, R.id.plan_endDate, R.id.plan_endTime,
+        // plan_endDate は自動決定で常時グレー・タップ不可のため対象外(2026-08-08 UI依頼)。
+        intArrayOf(R.id.plan_startDate, R.id.plan_startTime, R.id.plan_endTime,
             R.id.plan_gearConst,
             R.id.plan_edgeSearchButton, R.id.searchButton, R.id.connectButton)
             .forEach { findViewById<View>(it).isEnabled = ed }

@@ -1,4 +1,4 @@
-// エッジ端末 設定プロビジョニング(仕様 8.2.2)の実装。
+﻿// エッジ端末 設定プロビジョニング(仕様 8.2.2)の実装。
 //  フロー: スマホがBLE接続 → CTRL に "start" write → エッジが PoP 生成+QR表示(edgeProvShowQr)
 //          → スマホがQRを読み PoP を得て鍵=SHA256(PoP) を導出 → {name,ssid,pass} を AES-256-GCM 暗号化
 //          → CRED に [IV(12)|暗号文|TAG(16)] を write → エッジが復号 → saveEdgeCreds + WiFi再接続。
@@ -98,7 +98,13 @@ namespace edgeProv
 {
 	void begin(const std::string& devName)
 	{
-		NimBLEDevice::init("HGC-Edge");
+		// 【広告名に端末名を入れる(2026-08-08 UI依頼)】従来は全機が "HGC-Edge" を広告しており、
+		//  スマホは最初に見つけた1台へ無条件で接続していた。エッジを複数台起動していると
+		//  どれに設定が飛ぶか分からず、登録済み端末の設定を更新できなかった。
+		//  端末名が決まっていれば "HGC-<端末名>" を広告し、スマホ側は名前一致で選ぶ。
+		//  出荷時(名前未設定)は従来どおり "HGC-Edge" を広告して新規登録を妨げない。
+		const std::string advName = devName.empty() ? std::string("HGC-Edge") : ("HGC-" + devName);
+		NimBLEDevice::init(advName);
 		NimBLEServer* srv = NimBLEDevice::createServer();
 		srv->setCallbacks(new SrvCb());
 		NimBLEService* svc = srv->createService(UUID_SVC);
@@ -115,7 +121,7 @@ namespace edgeProv
 		adv->addServiceUUID(UUID_SVC);
 		adv->enableScanResponse(true);
 		NimBLEDevice::startAdvertising();
-		Serial.printf("[PROV] BLE advertising started name=HGC-Edge svc=%s (dev=%s)\n", UUID_SVC, devName.c_str());
+		Serial.printf("[PROV] BLE advertising started name=%s svc=%s (dev=%s)\n", advName.c_str(), UUID_SVC, devName.c_str());
 	}
 
 	void loop(void)

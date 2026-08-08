@@ -1,4 +1,4 @@
-// HolyGrail Controller エッジ端末(M5Stack CoreS3) アプリ。
+﻿// HolyGrail Controller エッジ端末(M5Stack CoreS3) アプリ。
 // holyGrailEntity を駆動する。2系統で動作する:
 //  - 単独: 固定撮影計画 + タッチの[開始]/[停止]。
 //  - スマホ制御: ETP(§6)でスマホから時刻同期・計画転送・開始/停止を受ける(etpEdge)。
@@ -6,6 +6,7 @@
 // 縦スクロール表示し、撮影制御方法をタップするとその方法の画面に切り替わる。
 
 #include <M5Unified.h>
+#include "edgeVersion.h"	// 自動生成の版数(bump_version.py。2026-08-08 UI依頼)
 #include <esp_heap_caps.h>	// heap_caps_malloc_extmem_enable(malloc の PSRAM 閾値を実行時設定)
 #include <WiFi.h>
 #include <Preferences.h>
@@ -659,6 +660,12 @@ static void renderSplash(void)
 	{
 		g_cv.fillScreen(g_cv.color565(0x9E, 0x9E, 0x9E));
 		g_cv.pushImage((320 - SPLASH_W) / 2, (240 - SPLASH_H) / 2, SPLASH_W, SPLASH_H, SPLASH_PX);
+		// 版数を右下へ小さく出す(2026-08-08 UI依頼)。どのファームが載っているかを画面だけで確認できる。
+		g_cv.setFont(&fonts::Font2);
+		g_cv.setTextDatum(textdatum_t::bottom_right);
+		g_cv.setTextColor(TFT_BLACK);
+		g_cv.drawString(HGC_EDGE_VERSION, 320 - 3, 240 - 2);
+		g_cv.setTextDatum(textdatum_t::top_left);
 		g_cv.pushSprite(0, 0);
 		return;
 	}
@@ -682,6 +689,12 @@ static void renderSplash(void)
 	g_cv.setTextDatum(textdatum_t::top_left);
 	g_cv.setTextColor(TFT_WHITE);
 	g_cv.setFont(&fonts::Font2);
+	// 版数を右下へ小さく出す(2026-08-08 UI依頼)。どのファームが載っているかを画面だけで確認できる。
+	g_cv.setFont(&fonts::Font2);
+	g_cv.setTextDatum(textdatum_t::bottom_right);
+	g_cv.setTextColor(TFT_BLACK);
+	g_cv.drawString(HGC_EDGE_VERSION, 320 - 3, 240 - 2);
+	g_cv.setTextDatum(textdatum_t::top_left);
 	g_cv.pushSprite(0, 0);
 }
 

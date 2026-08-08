@@ -55,6 +55,25 @@ class EdgeBle(
     private var startOnly = false   // true=CTRL に "start" を書くだけ(QR表示要求) / false=CRED送信
     private var done = false
 
+    // 接続したいエッジの端末名(2026-08-08 UI依頼)。空なら「最初に見つけた1台」= 従来動作。
+    //
+    // 【なぜ要るか】従来は全エッジが "HGC-Edge" を広告し、スマホは最初に応答した1台へ
+    //  無条件で接続していた。エッジを複数台起動していると、どれに設定が飛ぶか分からず、
+    //  登録済み端末の設定を更新できなかった。エッジ側は名前が決まっていれば
+    //  "HGC-<端末名>" を広告するようにしたので、こちらは名前一致で選ぶ。
+    //  出荷時(名前未設定)のエッジは "HGC-Edge" のままなので、新規登録では空を渡す。
+    private var wantName: String = ""
+    fun setTargetName(n: String) { wantName = n.trim() }
+
+    // 広告名が目的の端末か。wantName が空なら誰でも可(新規登録)。
+    private fun matches(r: ScanResult): Boolean {
+        if (wantName.isEmpty()) return true
+        val adv = try { r.scanRecord?.deviceName } catch (_: Exception) { null }
+        val dev = try { r.device?.name } catch (_: SecurityException) { null }
+        val want = "HGC-" + wantName
+        return adv == want || dev == want
+    }
+
     // エッジに "start" を送って QR(PoP)を LCD に表示させる(スキャン前に呼ぶ)。
     fun startQr() {
         done = false; startOnly = true
@@ -82,17 +101,26 @@ class EdgeBle(
         scanner = adapter.bluetoothLeScanner
         val filter = ScanFilter.Builder().setServiceUuid(ParcelUuid(SVC)).build()
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
-        log("BLEスキャン中 (HGC-Edge)...")
+        log(if (wantName.isEmpty()) "BLEスキャン中 (未設定のエッジ)..." else "BLEスキャン中 (HGC-$wantName)...")
         scanCb = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, r: ScanResult) {
+                // 名前が一致するものだけ拾う(2026-08-08 UI依頼)。一致しなければスキャンを続ける。
+                if (!matches(r)) return
                 stopScan()
-                log("発見 ${r.device.address}。接続中...")
+                val nm = try { r.scanRecord?.deviceName ?: r.device?.name } catch (_: SecurityException) { null }
+                log("発見 ${nm ?: r.device.address}。接続中...")
                 connect(r.device)
             }
             override fun onScanFailed(errorCode: Int) { finish(false, "スキャン失敗 code=$errorCode") }
         }
         scanner?.startScan(listOf(filter), settings, scanCb)
-        handler.postDelayed({ if (!done && gatt == null) { stopScan(); finish(false, "エッジが見つかりません(広告なし)") } }, 12000)
+        handler.postDelayed({
+            if (!done && gatt == null) {
+                stopScan()
+                finish(false, if (wantName.isEmpty()) "エッジが見つかりません(広告なし)"
+                              else "エッジ「$wantName」が見つかりません(電源とBluetoothを確認してください)")
+            }
+        }, 12000)
     }
 
     private fun stopScan() { try { scanCb?.let { scanner?.stopScan(it) } } catch (_: Exception) {}; scanCb = null }
