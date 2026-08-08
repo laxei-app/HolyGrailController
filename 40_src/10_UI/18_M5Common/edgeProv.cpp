@@ -120,6 +120,13 @@ namespace edgeProv
 		NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
 		adv->addServiceUUID(UUID_SVC);
 		adv->enableScanResponse(true);
+		// 【名前を広告に載せる(2026-08-08 修正)】NimBLE 2.x は NimBLEDevice::init(name) で
+		//  GAPの端末名を設定しても、広告パケット/スキャン応答には自動で入れない。
+		//  そのためスマホ側の名前一致が永久に成立せず、QR表示要求が12秒でタイムアウト
+		//  していた(Edje00 のAPモード設定が始められなかった)。明示的に載せる。
+		//  enableScanResponse(true) の後に呼ぶこと(setName は scanResp が立っていれば
+		//  スキャン応答側へ入れる。広告本体は128bitサービスUUIDで18バイト使うため手狭)。
+		adv->setName(advName);
 		NimBLEDevice::startAdvertising();
 		Serial.printf("[PROV] BLE advertising started name=%s svc=%s (dev=%s)\n", advName.c_str(), UUID_SVC, devName.c_str());
 	}

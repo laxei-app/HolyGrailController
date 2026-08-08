@@ -1091,8 +1091,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 val ssid = ssidE.text.toString()
                 val pass = passE.text.toString()
                 val mode = if (apSwitch.isChecked) "ap" else "sta"
-                // STA時のみSSID必須(AP時はエッジ固有AP資格を使うため不要)。
-                if (mode == "sta" && ssid.isEmpty()) { Toast.makeText(ctx, "SSIDを入力してください", Toast.LENGTH_SHORT).show(); return@setOnClickListener }
+                // STA時のSSIDは「新規登録のとき」だけ必須(2026-08-08)。
+                //  登録済み端末を選んでいる場合、SSIDが空なら「端末名だけ変更」とみなし、
+                //  エッジ側は今の接続先を保ったまま名前だけ更新して再起動する。
+                //  (AP時はエッジ固有のAP資格を使うためSSID/passは元から不要)
+                if (mode == "sta" && ssid.isEmpty() && selectedEdgeName.isEmpty()) {
+                    Toast.makeText(ctx, "SSIDを入力してください(新規登録は接続先が必要です)", Toast.LENGTH_LONG).show(); return@setOnClickListener
+                }
                 val json = JSONObject().put("name", name).put("ssid", ssid).put("pass", pass).put("mode", mode).toString()
                 ensureBlePermissions {
                     popView.text = "BLE送信中..."
@@ -1102,7 +1107,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
                             android.util.Log.i("EdgeProv", "provision result ok=$ok msg=$m")
                             Toast.makeText(ctx, m, Toast.LENGTH_LONG).show()
                             popView.text = m
-                            if (ok) dlg.dismiss()
+                            // 送信できたら、スマホ側の登録名もエッジに合わせて改名する(2026-08-08)。
+                            // これをしないと登録リストが古い名前のまま残り、名前一致でエッジを
+                            // 探せなくなって再設定できなくなる(計画のエッジ割り当ても外れる)。
+                            if (ok) { renameRegisteredEdge(selectedEdgeName, name); dlg.dismiss() }
                         } }
                     ).provision(scannedPop, json)
                 }
@@ -5090,6 +5098,28 @@ class MainActivity : AppCompatActivity(), HgeListener {
             }
         } catch (_: Exception) {}
     }
+    // エッジの端末名を変更したとき、スマホ側の登録も追従させる(2026-08-08)。
+    //  ・登録済みリスト(regEdges)の名前を差し替える(新名が既にあれば古い方を消すだけ)
+    //  ・計画ごとのエッジ割り当て(pe_<planId>)も付け替える。ここを直さないと担当が外れる
+    // oldName が空(新規登録)や、新旧が同じときは何もしない。
+    private fun renameRegisteredEdge(oldName: String, newName: String) {
+        if (oldName.isEmpty() || newName.isEmpty() || oldName == newName) return
+        val idx = edges.indexOfFirst { it.name == oldName }
+        if (idx < 0) return
+        if (edges.any { it.name == newName }) edges.removeAt(idx)          // 新名が既にある → 重複を残さない
+        else edges[idx] = Edge(newName, edges[idx].ip, edges[idx].port)
+        saveRegisteredEdges()
+        // 計画の割り当てを付け替える(prefs の pe_<planId> に端末名で入っている)。
+        val pf = hgcPrefs()
+        val ed = pf.edit()
+        pf.all.keys.filter { it.startsWith("pe_") }.forEach { k ->
+            if (pf.getString(k, "") == oldName) ed.putString(k, newName)
+        }
+        ed.apply()
+        refreshEdgeSpinner()
+        android.util.Log.i("EdgeProv", "renamed registered edge: $oldName -> $newName")
+    }
+
     private fun saveRegisteredEdges() {
         val a = JSONArray()
         edges.forEach { a.put(JSONObject().apply { put("name", it.name); put("ip", it.ip); put("port", it.port) }) }

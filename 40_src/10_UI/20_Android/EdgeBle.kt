@@ -65,14 +65,23 @@ class EdgeBle(
     private var wantName: String = ""
     fun setTargetName(n: String) { wantName = n.trim() }
 
+    // スキャンで見えた広告名(null=名前を広告していない)。
+    private fun advName(r: ScanResult): String? =
+        try { r.scanRecord?.deviceName } catch (_: Exception) { null }
+            ?: try { r.device?.name } catch (_: SecurityException) { null }
+
     // 広告名が目的の端末か。wantName が空なら誰でも可(新規登録)。
     private fun matches(r: ScanResult): Boolean {
         if (wantName.isEmpty()) return true
-        val adv = try { r.scanRecord?.deviceName } catch (_: Exception) { null }
-        val dev = try { r.device?.name } catch (_: SecurityException) { null }
-        val want = "HGC-" + wantName
-        return adv == want || dev == want
+        return advName(r) == "HGC-" + wantName
     }
+
+    // 名前を広告しないエッジ(旧ファーム)を1台だけ覚えておく。名前一致が1件も無いまま
+    // タイムアウトしたとき、これがあれば従来動作(最初の1台へ接続)へ落とす(2026-08-08)。
+    //  ・名前つきが見えているのに一致しない → 本当に別の端末なので落とさない
+    //  ・名前が一切見えない → 旧ファームなので落とす
+    // こうしないと、エッジを更新するまで設定を送れず詰む。
+    private var unnamedCandidate: BluetoothDevice? = null
 
     // エッジに "start" を送って QR(PoP)を LCD に表示させる(スキャン前に呼ぶ)。
     fun startQr() {
@@ -98,6 +107,7 @@ class EdgeBle(
                 return
             } catch (_: Exception) { /* だめならスキャンにフォールバック */ }
         }
+        unnamedCandidate = null
         scanner = adapter.bluetoothLeScanner
         val filter = ScanFilter.Builder().setServiceUuid(ParcelUuid(SVC)).build()
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
@@ -105,10 +115,12 @@ class EdgeBle(
         scanCb = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, r: ScanResult) {
                 // 名前が一致するものだけ拾う(2026-08-08 UI依頼)。一致しなければスキャンを続ける。
-                if (!matches(r)) return
+                if (!matches(r)) {
+                    if (advName(r) == null && unnamedCandidate == null) { unnamedCandidate = r.device }
+                    return
+                }
                 stopScan()
-                val nm = try { r.scanRecord?.deviceName ?: r.device?.name } catch (_: SecurityException) { null }
-                log("発見 ${nm ?: r.device.address}。接続中...")
+                log("発見 ${advName(r) ?: r.device.address}。接続中...")
                 connect(r.device)
             }
             override fun onScanFailed(errorCode: Int) { finish(false, "スキャン失敗 code=$errorCode") }
@@ -117,8 +129,15 @@ class EdgeBle(
         handler.postDelayed({
             if (!done && gatt == null) {
                 stopScan()
-                finish(false, if (wantName.isEmpty()) "エッジが見つかりません(広告なし)"
-                              else "エッジ「$wantName」が見つかりません(電源とBluetoothを確認してください)")
+                val fallback = unnamedCandidate
+                if (fallback != null) {
+                    // 名前を広告しないエッジしか居ない = 旧ファーム。従来動作で接続する。
+                    log("名前を広告しないエッジへ接続します(エッジのファームが古い可能性)")
+                    connect(fallback)
+                } else {
+                    finish(false, if (wantName.isEmpty()) "エッジが見つかりません(広告なし)"
+                                  else "エッジ「$wantName」が見つかりません(電源とBluetoothを確認してください)")
+                }
             }
         }, 12000)
     }

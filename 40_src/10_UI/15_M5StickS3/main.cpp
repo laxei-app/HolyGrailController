@@ -721,7 +721,17 @@ void edgeProvApply(const char* name, const char* ssid, const char* pass, const c
 		delay(200); ESP.restart();
 		return;
 	}
-	if (ssid == nullptr || ssid[0] == 0) { Serial.println("[PROV] empty ssid, skip"); return; }
+	// 【SSIDが空なら「名前だけ変更」(2026-08-08)】従来はここで何もせず戻っていたため、
+	//  端末名だけ変えたいときもSSID/passの再入力を強いていた(スマホ側も必須にしていた)。
+	//  空のときは今の接続先をそのまま保ち、端末名だけ更新して再起動する。
+	if (ssid == nullptr || ssid[0] == 0)
+	{
+		saveEdgeCreds(g_ssid, g_pass, g_devName);	// 接続先は変えず端末名だけ保存
+		saveNetMode("sta");
+		Serial.printf("[PROV] mode=sta name-only name=%s (ssid kept=%s) -> restart\n", g_devName.c_str(), g_ssid.c_str());
+		delay(200); ESP.restart();
+		return;
+	}
 	saveEdgeCreds(ssid, pass ? pass : "", g_devName);
 	saveNetMode("sta");
 	Serial.printf("[PROV] mode=sta ssid=%s -> restart into STA\n", g_ssid.c_str());
