@@ -1041,6 +1041,74 @@ void loop(void)
 			Serial.printf("[INFO] state=%s wifi=%d IP=%s\n", stName(g_state),
 			              (int)(WiFi.status() == WL_CONNECTED), WiFi.localIP().toString().c_str());
 		}
+		else if (c == 'T')	// 検証用: SDカードの読み書き自己診断(挿し替えたカードの合否判定)
+		{
+			// 一晩ぶん(約1MB)を実際に書いて読み戻し、1バイトずつ照合する。マウントできても
+			// 書き続けると落ちるカードがあるため(2026-08-09 の 2GB SD)、量と時間で確かめる。
+			// 1レコード=撮影ログ1行と同じ長さ(192B)にし、通しと同じ書き方(1行append+flush)で回す。
+			const int  kRec   = 192;	// 1レコード長[B](SHOT/LVHIST 1行相当)
+			const int  kCount = 5200;	// 行数(192B×5200 ≒ 1.0MB = 通し1回ぶん)
+			std::string dir = osfile::logDir();
+			if (dir.empty()) { Serial.println("[SDTEST] logDir が取れない(未マウント)"); }
+			else
+			{
+				unsigned long long tot = 0, usd = 0;
+				if (osfile::spaceInfo(tot, usd))
+				{
+					Serial.printf("[SDTEST] backend=%s 全体=%lluMB 使用=%lluMB 空き=%lluMB\n",
+					              osfile::backendName(), tot / (1024ULL * 1024ULL), usd / (1024ULL * 1024ULL),
+					              (tot > usd ? (tot - usd) : 0ULL) / (1024ULL * 1024ULL));
+				}
+				const std::string path = dir + "/sdtest.tmp";
+				osfile::removeFile("log", "sdtest.tmp");	// 前回の残りを消してから
+				
+				// --- 書き込み ---
+				char rec[kRec + 1];
+				uint32_t t0 = millis();
+				int  ngWrite = 0, firstNg = -1;
+				uint32_t worstMs = 0; int worstAt = -1;
+				for (int i = 0; i < kCount; ++i)
+				{
+					// 行番号を埋め込む。読み戻しでズレや欠落があれば行番号で場所が分かる。
+					int n = std::snprintf(rec, sizeof(rec), "%06d|", i);
+					while (n < kRec - 1) { rec[n] = static_cast<char>('A' + ((i + n) % 26)); ++n; }
+					rec[kRec - 1] = '\n'; rec[kRec] = '\0';
+					uint32_t a = millis();
+					if (!osfile::append(path, rec, kRec)) { ++ngWrite; if (firstNg < 0) { firstNg = i; } }
+					uint32_t d = millis() - a;
+					if (d > worstMs) { worstMs = d; worstAt = i; }
+					if ((i % 1000) == 999) { Serial.printf("[SDTEST] 書き込み %d/%d\n", i + 1, kCount); }
+					delay(0);	// WDT対策(他タスクへ譲る)
+				}
+				uint32_t wrMs = millis() - t0;
+				
+				// --- 読み戻して照合 ---
+				uint32_t t1 = millis();
+				int  ngRead = 0, badAt = -1, got = 0;
+				for (int i = 0; i < kCount; ++i)
+				{
+					std::string out;
+					if (!osfile::readRange(path, static_cast<size_t>(i) * kRec, kRec, out) ||
+					    out.size() != static_cast<size_t>(kRec))
+					{ ++ngRead; if (badAt < 0) { badAt = i; } continue; }
+					++got;
+					int n = std::snprintf(rec, sizeof(rec), "%06d|", i);
+					while (n < kRec - 1) { rec[n] = static_cast<char>('A' + ((i + n) % 26)); ++n; }
+					rec[kRec - 1] = '\n';
+					if (std::memcmp(out.data(), rec, kRec) != 0) { ++ngRead; if (badAt < 0) { badAt = i; } }
+					delay(0);
+				}
+				uint32_t rdMs = millis() - t1;
+				
+				const unsigned long kb = static_cast<unsigned long>((static_cast<long>(kCount) * kRec) / 1024);
+				Serial.printf("[SDTEST] 書込 %lukB %ums (%.0fkB/s) 失敗=%d(最初=%d) 最悪1行=%ums(%d行目)\n",
+				              kb, wrMs, wrMs ? (kb * 1000.0 / wrMs) : 0.0, ngWrite, firstNg, worstMs, worstAt);
+				Serial.printf("[SDTEST] 読戻 %lukB %ums (%.0fkB/s) 照合NG=%d(最初=%d) 読めた行=%d/%d\n",
+				              kb, rdMs, rdMs ? (kb * 1000.0 / rdMs) : 0.0, ngRead, badAt, got, kCount);
+				Serial.printf("[SDTEST] 判定: %s\n", (ngWrite == 0 && ngRead == 0) ? "合格" : "不合格");
+				osfile::removeFile("log", "sdtest.tmp");
+			}
+		}
 		else if (c == 'F')	// 検証用: 現在のログ保存先(SD/LittleFS)を表示
 		{
 			Serial.printf("[FS] backend=%s\n", osfile::backendName());
