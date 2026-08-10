@@ -49,7 +49,10 @@ android {
         applicationId = "app.laxei.holygrail"
         minSdk = 26
         targetSdk = 34
-        versionCode = hgcPatch.coerceAtLeast(1)
+        // versionCode は必ず単調増加させる。パッチだけを使うと、マイナーを上げて
+        // パッチを 0 に戻したときに番号が下がり、端末が INSTALL_FAILED_VERSION_DOWNGRADE で
+        // 受け付けなくなる(0.1.0 の versionCode=1 < 既存 0.0.17 の 17)。
+        versionCode = (hgcMajor * 1000000 + hgcMinor * 1000 + hgcPatch).coerceAtLeast(1)
         versionName = hgcVersionName
 
         externalNativeBuild {

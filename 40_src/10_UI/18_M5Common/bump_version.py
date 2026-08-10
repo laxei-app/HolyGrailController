@@ -35,8 +35,14 @@ def write_patch(path, key, value):
 p     = read_props(PROPS)
 major = int(p.get("major", 0))
 minor = int(p.get("minor", 0))
-patch = int(p.get("edgePatch", 0)) + 1
-write_patch(PROPS, "edgePatch", patch)
+# 同じ版数を複数台へ焼くための抑止スイッチ。upload はそのたびにビルドが走るので、
+# 素直に +1 すると CoreS3 が2台あるだけで別々の版数になってしまう(2026-08-11)。
+# 2台目以降は HGC_NO_BUMP=1 を付けて焼く。
+if os.environ.get("HGC_NO_BUMP") == "1":
+    patch = int(p.get("edgePatch", 0))
+else:
+    patch = int(p.get("edgePatch", 0)) + 1
+    write_patch(PROPS, "edgePatch", patch)
 
 ver = "%d.%d.%d" % (major, minor, patch)
 with open(OUT, "w", encoding="utf-8", newline="\n") as f:
