@@ -376,6 +376,10 @@ namespace csjson
 					win.ccm->name = (win.type == hgc::ccmType::preNight) ? "preNight"
 					              : (win.type == hgc::ccmType::postNight) ? "postNight" : "";
 				}
+				// 実体を解決できない窓は捨てる。撮影ループは窓の ccm を無条件に参照するので、
+				// null を混ぜたまま進めると落ちる。型が付いていない古い保存を読んだ場合が該当し、
+				// その場合は ccmList を空にして呼び出し側に組み立て直させるのが安全。
+				if (!win.ccm) { plan.ccmList.clear(); break; }
 				plan.ccmList.push_back(std::move(win));
 			}
 		}
