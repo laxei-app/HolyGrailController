@@ -17,7 +17,6 @@ namespace hgc
 		sunrise,		// 朝日撮影(太陽直接撮影 朝)
 		sunset,			// 夕日撮影(太陽直接撮影 夕)
 		day,			// 日中撮影
-		moon,			// 月の影響への対処
 		preNight,		// 夜間前移行(旧リニア移行, 仕様3.7。自動露出→夜間。ユーザー設定項目なし)
 		postNight		// 夜間後移行(仕様3.9。夜間→次の自動露出へ逆優先度で移行)
 	};
@@ -87,38 +86,6 @@ namespace hgc
 
 		ccmDay() : ccmBase(ccmType::day) {}
 		std::unique_ptr<ccmBase> clone() const override { return std::make_unique<ccmDay>(*this); }
-	};
-
-	// 3.6.1 月の影響への対処の種別
-	enum class moonMode : uint8_t
-	{
-		none = 0,			// 補正しない
-		autoBrightness,		// 画角全体の明るさで自動補正
-		moonExposure		// 月自体に露出を合わせる
-	};
-
-	// 3.6.2 月の影響への対処
-	struct ccmMoon : ccmBase
-	{
-		moonMode mode = moonMode::none;		// 対処方法の種別
-		double   startLuminance = 0.0;		// 自動補正開始輝度。0～+3ev (autoBrightness)
-		double   ev = 0.0;					// 目標露出補正。0～-10ev (autoBrightness)
-		exposure initialExposure;			// 開始時露出設定 (moonExposure)
-		bool     atmosphericExtinction = false;	// 大気消光補正 (moonExposure)
-		double   extinctionCoef = 0.2;		// 大気消光係数。0.1～0.6
-		bool     geocentricCorrection = false;	// 地心距離補正 (moonExposure)
-		double   skyBrightnessCoef = 100.0;	// 月周辺の空の明るさ補正係数。0～100[%]
-
-		ccmMoon() : ccmBase(ccmType::moon) {}
-		std::unique_ptr<ccmBase> clone() const override { return std::make_unique<ccmMoon>(*this); }
-	};
-
-	// 3.6.3 月の影響への対処の初期値 (H-G曲線)
-	struct moonExposureCurve
-	{
-		double fullMoonMag  = -12.7;	// 満月の最も明るい瞬間の等級
-		double nightLineAge = 0.0;		// 夜間撮影線の月齢
-		double nightLineMag = 0.0;		// 夜間撮影線の等級
 	};
 }
 

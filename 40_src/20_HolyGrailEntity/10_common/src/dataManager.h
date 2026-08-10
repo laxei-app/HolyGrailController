@@ -20,7 +20,6 @@ public:
 	static astro::ccmSet factoryCcmSet(void);
 
 	// 出荷時設定の月の影響への対処(データ構造仕様書43 §3.6)。
-	static std::shared_ptr<hgc::ccmMoon> factoryMoon(void);
 
 	// --- 撮影制御方法の初期値(参照専用。コード上の出荷時設定。仕様書43 §7.6) ---
 	// 初期値の撮影制御方法一式(=出荷時設定)。スケジュール生成・プリセット種まきに使う。
@@ -93,13 +92,13 @@ public:
 	static bool setOwnedLensDetailJson(const std::string& origName, const std::string& json);
 
 	// --- システム共通の色(全体設定。/asset/settings.json の "colors") ---
-	// 撮影制御方法ごとの文字色/背景色。型キー: night/sunrise/sunset/day/moon/preNight/postNight。
+	// 撮影制御方法ごとの文字色/背景色。型キー: night/sunrise/sunset/day/preNight/postNight。
 	// {"night":{"text":int,"bg":int},...}。未設定は出荷時の既定色で補完する。
 	static std::string colorsJson(void);
 	static bool        setColorsJson(const std::string& json);
 
 	// --- 撮影制御方法の初期値プリセット(/asset/ccmPresets.json。型ごとに複数) ---
-	// 型キー: night/sunrise/sunset/day/moon。各型は ccm の配列。
+	// 型キー: night/sunrise/sunset/day。各型は ccm の配列。
 	// 初回は撮影制御方法の初期値(ccmDefaults)から型別名(星景/朝日/夕日/日中/月)のプリセットを
 	// 生成して種まきする。旧種まき名「標準」が残る既存データは読み込み時に型別名へ改名する。
 	static std::string ccmPresetsJson(const std::string& type);          // 指定型のプリセット配列
@@ -164,9 +163,9 @@ public:
 	// 旧 plan.json を削除する(移行後の後始末)。return: 成功。
 	static bool removeLegacyPlan(void);
 
-	// 任意の ccmSet+moon を JSON 化/復元する(初期値ccmと計画固有ccmで共用)。
-	static std::string ccmSetToJson(const astro::ccmSet& set, const std::shared_ptr<hgc::ccmMoon>& moon);
-	static bool parseCcmSetJson(const std::string& json, astro::ccmSet& set, std::shared_ptr<hgc::ccmMoon>& moon);
+	// 任意の ccmSet を JSON 化/復元する(初期値ccmと計画固有ccmで共用)。
+	static std::string ccmSetToJson(const astro::ccmSet& set);
+	static bool parseCcmSetJson(const std::string& json, astro::ccmSet& set);
 
 	// 保存ラッパー {"plan":..,"planCcm":..} を分解する。plan必須、planCcmは任意(空文字)。
 	// 旧形式(素のcs JSON)もそのまま plan として返す。

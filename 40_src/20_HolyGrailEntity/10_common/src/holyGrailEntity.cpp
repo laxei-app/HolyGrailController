@@ -40,7 +40,6 @@ namespace
 	std::string           g_editId;	// 編集対象の撮影計画 id(plan_<id>.json)。空=未保存
 	// 計画固有の撮影制御方法(初期値ccmとは別管理)。計画作成時に初期値をコピーし、以後独立に編集する。
 	astro::ccmSet                 g_planCcm;
-	std::shared_ptr<hgc::ccmMoon> g_planMoon;
 
 	std::vector<device>   g_devices;
 	void*                 g_searchThread = nullptr;	// カメラ自動検索ワーカー
@@ -65,7 +64,6 @@ namespace
 		std::string                   planId;
 		hgc::cs                       plan;
 		astro::ccmSet                 planCcm;
-		std::shared_ptr<hgc::ccmMoon> planMoon;
 		std::unique_ptr<captureRunner> runner;
 		class device                  dev;					// このセッション専用のカメラ(アドレス安定。撮影開始の都度ディスカバリで再取得)
 		std::atomic<int>              state{ HGE_ST_IDLE };
@@ -600,7 +598,7 @@ namespace
 	// 現在(編集対象)の計画を保存ラッパー JSON {"planCcm":..,"plan":..} にする。
 	std::string wrapCurrentPlan(void)
 	{
-		return "{\"planCcm\":" + dataManager::ccmSetToJson(g_planCcm, g_planMoon) +
+		return "{\"planCcm\":" + dataManager::ccmSetToJson(g_planCcm) +
 		       ",\"plan\":" + csjson::toJson(g_plan) + "}";
 	}
 
@@ -627,9 +625,8 @@ namespace
 			g_plan.camera = fp.camera;
 			g_plan.lens   = fp.lens;
 		}
-		if (ccmJson.empty() || !dataManager::parseCcmSetJson(ccmJson, g_planCcm, g_planMoon))
-		{ dataManager::parseCcmSetJson(dataManager::ccmDefaultsJson(), g_planCcm, g_planMoon); }
-		if (!g_planMoon) { g_planMoon = dataManager::factoryMoon(); }
+		if (ccmJson.empty() || !dataManager::parseCcmSetJson(ccmJson, g_planCcm))
+		{ dataManager::parseCcmSetJson(dataManager::ccmDefaultsJson(), g_planCcm); }
 		astro::buildSchedule(g_plan, g_planCcm, g_offMin);
 		buildScheduleJson();
 		g_editId = id;
@@ -650,11 +647,10 @@ namespace
 		hgc::dateTime endDt;   int o2 = 0; localFromTime(now + 2 * 3600, endDt, o2);
 		g_plan.start = startDt;
 		g_plan.end   = endDt;
-		if (!dataManager::parseCcmSetJson(dataManager::preferredCcmSetJson(), g_planCcm, g_planMoon))
+		if (!dataManager::parseCcmSetJson(dataManager::preferredCcmSetJson(), g_planCcm))
 		{	// 優先プリセットが壊れている等で解釈できなければ内蔵初期値で確実に立ち上げる。
-			dataManager::parseCcmSetJson(dataManager::ccmDefaultsJson(), g_planCcm, g_planMoon);
+			dataManager::parseCcmSetJson(dataManager::ccmDefaultsJson(), g_planCcm);
 		}
-		if (!g_planMoon) { g_planMoon = dataManager::factoryMoon(); }
 		astro::buildSchedule(g_plan, g_planCcm, g_offMin);
 		buildScheduleJson();
 	}
@@ -1697,12 +1693,12 @@ int32_t hge_getCurrentPlanId(char* buf, int32_t* inoutLen)
 	return copyOut(g_editId, buf, inoutLen);
 }
 
-// 計画固有の撮影制御方法(night/sunrise/sunset/day/moon)を JSON で取得(バッファ規約)。
+// 計画固有の撮影制御方法(night/sunrise/sunset/day)を JSON で取得(バッファ規約)。
 int32_t hge_getPlanCcmJson(char* buf, int32_t* inoutLen)
 {
 	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
 	if (!g_planReady) { loadFixedPlanImpl(); }
-	std::string s = dataManager::ccmSetToJson(g_planCcm, g_planMoon);
+	std::string s = dataManager::ccmSetToJson(g_planCcm);
 	int32_t need = static_cast<int32_t>(s.size()) + 1;
 	if (buf == nullptr || *inoutLen < need) { *inoutLen = need; return ERR_HGC_BUF_SHORT; }
 	std::memcpy(buf, s.c_str(), need);
@@ -1716,11 +1712,9 @@ int32_t hge_setPlanCcmJson(const char* json, int32_t len)
 	if (json == nullptr || len <= 0) { return ERR_HGC_INVALID_ARG; }
 	if (!g_planReady) { loadFixedPlanImpl(); }
 	astro::ccmSet set;
-	std::shared_ptr<hgc::ccmMoon> moon;
-	if (!dataManager::parseCcmSetJson(std::string(json, static_cast<size_t>(len)), set, moon))
+	if (!dataManager::parseCcmSetJson(std::string(json, static_cast<size_t>(len)), set))
 	{ return ERR_HGC_JSON_PARSE; }
-	g_planCcm  = set;
-	g_planMoon = moon ? moon : dataManager::factoryMoon();
+	g_planCcm = set;
 	clampPlanCcmToGear();	// item3: 計画のカメラ/レンズ上下限へccm露出をクランプ(初期値選択も含む)
 	errCode e = astro::buildSchedule(g_plan, g_planCcm, g_offMin);
 	if (e != ERR_HGC_OK) { return e; }
@@ -2419,15 +2413,14 @@ int32_t hge_captureStartPlan(const char* planId_)
 	sess->state  = HGE_ST_SEARCHING;	// 起動シーケンス実行前から非IDLEにし、reapDeadSessions に消されないようにする
 	if (planId == g_editId)
 	{
-		sess->plan = g_plan; sess->planCcm = g_planCcm; sess->planMoon = g_planMoon;	// 編集中スナップショット
+		sess->plan = g_plan; sess->planCcm = g_planCcm;	// 編集中スナップショット
 	}
 	else
 	{
 		std::string saved, pj, cj; hgc::cs cs;
 		if (!dataManager::loadPlanFile(planId, saved) || !dataManager::splitSavedPlan(saved, pj, cj) || !csjson::fromJson(pj, cs)) { return ERR_HGC_NO_ELEMENT; }
 		sess->plan = cs;
-		if (cj.empty() || !dataManager::parseCcmSetJson(cj, sess->planCcm, sess->planMoon)) { dataManager::parseCcmSetJson(dataManager::ccmDefaultsJson(), sess->planCcm, sess->planMoon); }
-		if (!sess->planMoon) { sess->planMoon = dataManager::factoryMoon(); }
+		if (cj.empty() || !dataManager::parseCcmSetJson(cj, sess->planCcm)) { dataManager::parseCcmSetJson(dataManager::ccmDefaultsJson(), sess->planCcm); }
 		if (sess->plan.ccmList.empty()) { astro::buildSchedule(sess->plan, sess->planCcm, g_offMin); }
 	}
 	// §7.4 重なり制限: 撮影期間[start-30s, end+1フレーム]が同時に重なる自撮影は2件まで。

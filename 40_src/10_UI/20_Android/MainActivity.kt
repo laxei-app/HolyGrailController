@@ -197,9 +197,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private var ssDisp = listOf<String>()
     private var fnDisp = listOf<String>()
     private lateinit var fixEditor: ExposureEditor      // 夜間 固定露出(単一)
-    private lateinit var moonInitEditor: ExposureEditor // 月 開始時露出(単一)
     private lateinit var editLimit: LimitEditor         // 自動露出 露出限界(優先度+明暗を一体化)
-    private lateinit var moonLimit: LimitEditor         // 月 露出限界(同上)
 
     // 430
     private lateinit var capName: TextView
@@ -441,28 +439,27 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // 項目I: 現在の画面に応じて「戻る」を実行する。各画面の戻るボタンと同じ動作にする。
     //  戻り先があれば true、先頭ページ(=これ以上戻れない)なら false を返す。
-    //  ViewFlipper index: 0 撮影計画 / 1 撮影中 / 2 ccmメニュー(未使用) / 3 ccm編集 / 4 月ccm /
-    //   5 メニュー / 6 カメラリスト / 7 カメラ追加 / 8 レンズリスト / 9 レンズ追加 / 10 色 /
-    //   11 露出平滑化 / 12 撮影場所 / 13 カメラ予約表 / 14 操作履歴
+    //  ViewFlipper index: 0 撮影計画 / 1 撮影中 / 2 ccmメニュー(未使用) / 3 ccm編集 /
+    //   4 メニュー / 5 カメラリスト / 6 カメラ追加 / 7 レンズリスト / 8 レンズ追加 / 9 色 /
+    //   10 露出平滑化 / 11 撮影場所 / 12 カメラ予約表 / 13 操作履歴 / 14 撮影レポート / 15 エッジ端末設定
     private fun goBackOneScreen(): Boolean {
         if (!::flipper.isInitialized) return false
         when (flipper.displayedChild) {
             0 -> return false                                            // 撮影計画(先頭)→ アプリ終了に委ねる
             1 -> { flipper.displayedChild = 0 }                          // 撮影中 → 撮影計画
-            2 -> { flipper.displayedChild = 5; buildGearMenu() }         // ccmメニュー(未使用)→ メニュー
-            3 -> { stopDirtyWatch(); persistCcmEdit(); flipper.displayedChild = if (editingPlanCcm) 0 else 5 }
-            4 -> { stopDirtyWatch(); persistMoonEdit(); flipper.displayedChild = if (editingPlanCcm) 0 else 5 }
-            5 -> { flipper.displayedChild = 0; capturePlanBaseline() }   // メニュー → 撮影計画
-            6 -> leaveCameraList()
-            7 -> leaveCameraAdd(false)
-            8 -> leaveLensList()
-            9 -> leaveLensAdd(false)
-            10 -> leaveColorScreen()
-            11 -> leaveSmoothingScreen()
-            12 -> leavePlacesList()
-            13 -> { flipper.displayedChild = 5; buildGearMenu() }        // カメラ予約表 → メニュー
-            14 -> { flipper.displayedChild = 5; buildGearMenu() }        // 操作履歴 → メニュー
-            16 -> { flipper.displayedChild = 5; buildGearMenu() }        // エッジ端末設定 → メニュー
+            2 -> { flipper.displayedChild = 4; buildGearMenu() }         // ccmメニュー(未使用)→ メニュー
+            3 -> { stopDirtyWatch(); persistCcmEdit(); flipper.displayedChild = if (editingPlanCcm) 0 else 4 }
+            4 -> { flipper.displayedChild = 0; capturePlanBaseline() }   // メニュー → 撮影計画
+            5 -> leaveCameraList()
+            6 -> leaveCameraAdd(false)
+            7 -> leaveLensList()
+            8 -> leaveLensAdd(false)
+            9 -> leaveColorScreen()
+            10 -> leaveSmoothingScreen()
+            11 -> leavePlacesList()
+            12 -> { flipper.displayedChild = 4; buildGearMenu() }        // カメラ予約表 → メニュー
+            13 -> { flipper.displayedChild = 4; buildGearMenu() }        // 操作履歴 → メニュー
+            15 -> { flipper.displayedChild = 4; buildGearMenu() }        // エッジ端末設定 → メニュー
             else -> { flipper.displayedChild = 0 }
         }
         return true
@@ -543,18 +540,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
         planMenu.setOnClickListener { openGearMenu() }
         findViewById<ImageView>(R.id.gmenu_back).setOnClickListener { flipper.displayedChild = 0; capturePlanBaseline() }
         // 650 カメラ予約表(項目17)。戻る/メニューどちらもメニューへ戻す。
-        findViewById<ImageView>(R.id.reserve_back).setOnClickListener { flipper.displayedChild = 5; buildGearMenu() }
-        findViewById<ImageView>(R.id.reserve_menu).setOnClickListener { flipper.displayedChild = 5; buildGearMenu() }
+        findViewById<ImageView>(R.id.reserve_back).setOnClickListener { flipper.displayedChild = 4; buildGearMenu() }
+        findViewById<ImageView>(R.id.reserve_menu).setOnClickListener { flipper.displayedChild = 4; buildGearMenu() }
         // 660 操作履歴(項目9)
-        findViewById<ImageView>(R.id.history_back).setOnClickListener { flipper.displayedChild = 5; buildGearMenu() }
-        findViewById<ImageView>(R.id.history_menu).setOnClickListener { flipper.displayedChild = 5; buildGearMenu() }
+        findViewById<ImageView>(R.id.history_back).setOnClickListener { flipper.displayedChild = 4; buildGearMenu() }
+        findViewById<ImageView>(R.id.history_menu).setOnClickListener { flipper.displayedChild = 4; buildGearMenu() }
         // 670 撮影レポート。読むだけの画面なので離脱時に保存するものは無い。
-        findViewById<ImageView>(R.id.report_back).setOnClickListener { flipper.displayedChild = 5; buildGearMenu() }
-        findViewById<ImageView>(R.id.report_menu).setOnClickListener { flipper.displayedChild = 5; buildGearMenu() }
+        findViewById<ImageView>(R.id.report_back).setOnClickListener { flipper.displayedChild = 4; buildGearMenu() }
+        findViewById<ImageView>(R.id.report_menu).setOnClickListener { flipper.displayedChild = 4; buildGearMenu() }
         setupDivider(R.id.report_divider, R.id.report_listScroll)
         // 8.2 エッジ端末設定(2026-08-08 UI依頼で画面化)
-        findViewById<ImageView>(R.id.edge_back).setOnClickListener { flipper.displayedChild = 5; buildGearMenu() }
-        findViewById<ImageView>(R.id.edge_menu).setOnClickListener { flipper.displayedChild = 5; buildGearMenu() }
+        findViewById<ImageView>(R.id.edge_back).setOnClickListener { flipper.displayedChild = 4; buildGearMenu() }
+        findViewById<ImageView>(R.id.edge_menu).setOnClickListener { flipper.displayedChild = 4; buildGearMenu() }
         setupDivider(R.id.edge_divider, R.id.edge_listScroll)
         findViewById<Button>(R.id.history_clear).setOnClickListener {
             AlertDialog.Builder(this)
@@ -594,8 +591,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<Button>(R.id.cmenu_sunrise).setOnClickListener { openCcmEdit("sunrise") }
         findViewById<Button>(R.id.cmenu_sunset).setOnClickListener { openCcmEdit("sunset") }
         findViewById<Button>(R.id.cmenu_day).setOnClickListener { openCcmEdit("day") }
-        findViewById<Button>(R.id.cmenu_moon).setOnClickListener { openMoonEdit() }
-        findViewById<ImageView>(R.id.edit_back).setOnClickListener { stopDirtyWatch(); persistCcmEdit(); flipper.displayedChild = if (editingPlanCcm) 0 else 5 }
+        findViewById<ImageView>(R.id.edit_back).setOnClickListener { stopDirtyWatch(); persistCcmEdit(); flipper.displayedChild = if (editingPlanCcm) 0 else 4 }
         findViewById<Button>(R.id.edit_save).visibility = View.GONE   // 取消はエディタ先頭行へ移動
         // 色はメニュー「色の設定」(システム共通)で設定する(per-ccm色は廃止)。
         findViewById<ImageView>(R.id.color_back).setOnClickListener { leaveColorScreen() }
@@ -612,7 +608,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         // 初期値プリセット一覧の分割バー(620と同挙動)
         setupDivider(R.id.edit_presetDivider, R.id.edit_presetScroll)
-        setupDivider(R.id.moon_presetDivider, R.id.moon_presetScroll)
         // スライダーの値ラベル更新(露出スライダーと形を統一するため Material Slider・仕様8)
         setupValueSlider(R.id.edit_alt_seek, 14, gradient = true) {
             val deg = seekToAlt(it)
@@ -642,111 +637,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
             trackActiveTintList = transparentTint; trackInactiveTintList = transparentTint
             addOnChangeListener { _, _, _ -> updateAltRangeLabels() }
         }
-        // 月の影響への対処
-        findViewById<ImageView>(R.id.moon_back).setOnClickListener { stopDirtyWatch(); persistMoonEdit(); flipper.displayedChild = if (editingPlanCcm) 0 else 5 }
-        findViewById<Button>(R.id.moon_save).visibility = View.GONE   // 取消はエディタ先頭行へ移動
-        setupValueSlider(R.id.moon_startlum_seek, 30, gradient = true, thumbRes = R.drawable.ic_moon) {
-            findViewById<TextView>(R.id.moon_startlum_val).text = String.format("+%.1fev", it * 0.1)
-        }
-        setupValueSlider(R.id.moon_ev_seek, 100, gradient = true, thumbRes = R.drawable.ic_moon) {
-            findViewById<TextView>(R.id.moon_ev_val).text = String.format("%.1fev", -it * 0.1)
-        }
-        setupValueSlider(R.id.moon_extcoef_seek, 50) {
-            findViewById<TextView>(R.id.moon_extcoef_val).text = String.format("%.2f", 0.1 + it * 0.01)
-        }
-        setupValueSlider(R.id.moon_skycoef_seek, 100) {
-            findViewById<TextView>(R.id.moon_skycoef_val).text = "$it%"
-        }
-        val moonModes = arrayOf("補正しない", "画角全体の明るさで自動補正", "月に露出を合わせる")
-        val ma = ArrayAdapter(this, android.R.layout.simple_spinner_item, moonModes)
-        ma.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        val moonSpinner = findViewById<Spinner>(R.id.moon_mode)
-        moonSpinner.adapter = ma
-        moonSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
-                // 0=補正しない(中身なし) / 1=画角全体で自動補正 / 2=月に露出を合わせる
-                findViewById<View>(R.id.moon_auto_section).visibility = if (pos == 1) View.VISIBLE else View.GONE
-                findViewById<View>(R.id.moon_exp_section).visibility = if (pos == 2) View.VISIBLE else View.GONE
-                findViewById<View>(R.id.moon_limit_section).visibility = if (pos == 0) View.GONE else View.VISIBLE
-            }
-            override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
-        }
-    }
-
-    private fun openMoonEdit() {
-        val o = ccmJson?.optJSONObject("moon") ?: return
-        findViewById<TextView>(R.id.moon_title).text = "月の影響への対処" + (if (editingPlanCcm) "（この計画）" else "（初期値）")
-        applyHeaderColor(R.id.moon_header, R.id.moon_title, 5)   // 月のシステム共通色
-        val showMoonPreset = !editingPlanCcm
-        findViewById<View>(R.id.moon_presetScroll).visibility = if (showMoonPreset) View.VISIBLE else View.GONE
-        findViewById<View>(R.id.moon_presetDivider).visibility = if (showMoonPreset) View.VISIBLE else View.GONE
-        findViewById<Spinner>(R.id.moon_mode).setSelection(o.optInt("mode", 0))
-        val slP = (o.optDouble("startLuminance", 0.0) * 10).toInt().coerceIn(0, 30)
-        setSliderProgress(R.id.moon_startlum_seek, slP)
-        findViewById<TextView>(R.id.moon_startlum_val).text = String.format("+%.1fev", slP * 0.1)
-        val evP = (-o.optDouble("ev", 0.0) * 10).toInt().coerceIn(0, 100)
-        setSliderProgress(R.id.moon_ev_seek, evP)
-        findViewById<TextView>(R.id.moon_ev_val).text = String.format("%.1fev", -evP * 0.1)
-        val ecP = ((o.optDouble("extinctionCoef", 0.2) - 0.1) * 100).toInt().coerceIn(0, 50)
-        setSliderProgress(R.id.moon_extcoef_seek, ecP)
-        findViewById<TextView>(R.id.moon_extcoef_val).text = String.format("%.2f", 0.1 + ecP * 0.01)
-        val skP = o.optDouble("skyBrightnessCoef", 100.0).toInt().coerceIn(0, 100)
-        setSliderProgress(R.id.moon_skycoef_seek, skP)
-        findViewById<TextView>(R.id.moon_skycoef_val).text = "$skP%"
-        findViewById<CheckBox>(R.id.moon_atmext).isChecked = o.optBoolean("atmosphericExtinction", false)
-        findViewById<CheckBox>(R.id.moon_geocorr).isChecked = o.optBoolean("geocentricCorrection", false)
-        moonInitEditor.set(o.optJSONObject("initialExposure"))
-        // 月撮影時露出限界: 暗所側は夜間撮影の設定値(limitBright)で固定。
-        val nightLimit = ccmJson?.optJSONObject("night")?.optJSONObject("limitBright")
-        moonLimit.set(o.optJSONObject("limitBright"), o.optJSONObject("limitDark"),
-            o.optJSONArray("priority"), o.optJSONObject("initial"),
-            moonMode = true, nightLimit = nightLimit)
-        val onPick: (() -> Unit)? = if (editingPlanCcm) ({
-            showPresetPicker("moon") { preset ->
-                val all = ccmJson ?: return@showPresetPicker
-                val merged = JSONObject(preset.toString()); merged.put("type", 5)
-                all.put("moon", merged); openMoonEdit()
-            }
-        }) else null
-        val cancelBtn = addPresetTopRow(R.id.moon_content, { cancelMoonEdit() }, onPick)
-        startDirtyWatch(cancelBtn) { buildMoonEditJson()?.toString() ?: "" }      // item8
-        flipper.displayedChild = 4
-    }
-
-    // 月編集の取り消し(保存済みから再読込)。
-    private fun cancelMoonEdit() {
-        if (!editingPlanCcm) { loadPresets(presetType); loadEditorOnly(); rebuildPresetList(); return }
-        ccmJson = try { JSONObject(HgeNative.nativeGetPlanCcm()) } catch (e: Exception) { null }
-        if (ccmJson == null) return
-        openMoonEdit()
-    }
-
-    // 現在の月エディタ内容から JSON を組み立てる(保存せず・破壊しない)。dirty 比較にも使う。
-    private fun buildMoonEditJson(): JSONObject? {
-        val all = ccmJson ?: return null
-        val src = all.optJSONObject("moon") ?: return null
-        val o = JSONObject(src.toString())
-        o.put("color", ccmBgMap[5] ?: 0)   // 色はシステム共通(転送用に派生値を入れる)
-        o.put("mode", findViewById<Spinner>(R.id.moon_mode).selectedItemPosition)
-        o.put("startLuminance", sliderProgress(R.id.moon_startlum_seek) * 0.1)
-        o.put("ev", -sliderProgress(R.id.moon_ev_seek) * 0.1)
-        o.put("extinctionCoef", 0.1 + sliderProgress(R.id.moon_extcoef_seek) * 0.01)
-        o.put("skyBrightnessCoef", sliderProgress(R.id.moon_skycoef_seek).toDouble())
-        o.put("atmosphericExtinction", findViewById<CheckBox>(R.id.moon_atmext).isChecked)
-        o.put("geocentricCorrection", findViewById<CheckBox>(R.id.moon_geocorr).isChecked)
-        o.put("priority", moonLimit.getPriority())
-        o.put("initialExposure", moonInitEditor.get())
-        o.put("limitBright", moonLimit.getBright())
-        o.put("limitDark", moonLimit.getDark())
-        o.put("initial", moonLimit.getInitial())
-        return o
-    }
-
-    private fun persistMoonEdit() {
-        val all = ccmJson ?: return
-        val o = buildMoonEditJson() ?: return
-        all.put("moon", o)
-        if (editingPlanCcm) HgeNative.nativeSetPlanCcm(all.toString()) else savePresetFromEditor(o)
     }
 
     // --- 撮影制御方法 初期値: メニュー + 方法別エディタ ---
@@ -760,7 +650,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // ============================================================
     //  600.メニュー(帯=大項目 + 遷移項目)
     // ============================================================
-    private fun openGearMenu() { buildGearMenu(); flipper.displayedChild = 5 }
+    private fun openGearMenu() { buildGearMenu(); flipper.displayedChild = 4 }
 
     private fun gearBand(box: LinearLayout, title: String) {
         val tv = TextView(this); tv.text = title; tv.textSize = 14f; tv.setTypeface(null, Typeface.BOLD)
@@ -951,9 +841,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // ---------- 602 色の設定(文字色/背景色。jaredrummler ColorPicker) ----------
     private fun colorTypeName(k: String) = when (k) {
         "night" -> "夜間撮影"; "sunrise" -> "朝日撮影"; "sunset" -> "夕日撮影"; "day" -> "日中撮影"
-        "moon" -> "月の影響への対処"; "preNight" -> "夜間前移行"; "postNight" -> "夜間後移行"; else -> k
+        "preNight" -> "夜間前移行"; "postNight" -> "夜間後移行"; else -> k
     }
-    private fun openColorSetting(typeKey: String) { colorType = typeKey; buildColorScreen(); flipper.displayedChild = 10 }
+    private fun openColorSetting(typeKey: String) { colorType = typeKey; buildColorScreen(); flipper.displayedChild = 9 }
 
     private fun buildColorScreen() {
         val t = keyType(colorType)
@@ -977,7 +867,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         startDirtyWatch(colorCancel) { "${colorTextPicker?.color ?: 0},${colorBgPicker?.color ?: 0}" }
     }
 
-    private fun leaveColorScreen() { stopDirtyWatch(); saveColorScreen(); flipper.displayedChild = 5; buildGearMenu() }
+    private fun leaveColorScreen() { stopDirtyWatch(); saveColorScreen(); flipper.displayedChild = 4; buildGearMenu() }
 
     // ---------- 630 露出平滑化(自動露出 全体設定。settings.json) ----------
     private fun openSmoothingScreen() {
@@ -985,7 +875,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         startDirtyWatch(findViewById(R.id.smooth_cancel)) {
             "${sliderProgress(R.id.smooth_hyst_seek)},${sliderProgress(R.id.smooth_ma_seek)}"
         }
-        flipper.displayedChild = 11
+        flipper.displayedChild = 10
     }
     private fun loadSmoothingScreen() {
         val o = try { JSONObject(HgeNative.nativeGetSmoothing()) } catch (e: Exception) { JSONObject() }
@@ -996,7 +886,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         setSliderProgress(R.id.smooth_ma_seek, m)
         findViewById<TextView>(R.id.smooth_ma_val).text = "${m}frame"
     }
-    private fun leaveSmoothingScreen() { stopDirtyWatch(); saveSmoothingScreen(); flipper.displayedChild = 5; buildGearMenu() }
+    private fun leaveSmoothingScreen() { stopDirtyWatch(); saveSmoothingScreen(); flipper.displayedChild = 4; buildGearMenu() }
     private fun saveSmoothingScreen() {
         val js = JSONObject()
             .put("hysteresis", seekToHyst(sliderProgress(R.id.smooth_hyst_seek)))
@@ -1022,13 +912,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (ccmJson == null) return
         openCcmEdit(key)
     }
-    private fun openInitialMoon() {
-        editingPlanCcm = false
-        ccmJson = try { JSONObject(HgeNative.nativeGetCcmDefaults()) } catch (e: Exception) { null }
-        if (ccmJson == null) return
-        openMoonEdit()
-    }
-
     // ============================================================
     //  撮影制御方法の初期値プリセット(型ごとに複数。分割ビュー=上:一覧/下:選択内容)
     // ============================================================
@@ -1044,8 +927,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         return first
     }
 
-    private fun presetListId() = if (presetType == "moon") R.id.moon_presetList else R.id.edit_presetList
-    private fun presetScrollId() = if (presetType == "moon") R.id.moon_presetScroll else R.id.edit_presetScroll
+    private fun presetListId() = R.id.edit_presetList
+    private fun presetScrollId() = R.id.edit_presetScroll
 
     private fun openPresetScreen(type: String) {
         editingPlanCcm = false
@@ -1064,11 +947,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val p = presetByName(selPresetName) ?: presetCcms.firstOrNull() ?: return
         selPresetName = p.optString("name")
         ccmJson = JSONObject()
-        if (presetType == "moon") {
-            ccmJson!!.put("moon", p)
-            preferredTypeCcm("night")?.let { ccmJson!!.put("night", it) }
-            openMoonEdit()
-        } else {
+        run {
             ccmJson!!.put(presetType, p)
             openCcmEdit(presetType)
         }
@@ -1121,7 +1000,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private fun rebuildPresetList() { buildPresetList(presetListId()) }
-    private fun persistCurrentPreset() { if (presetType == "moon") persistMoonEdit() else persistCcmEdit() }
+    private fun persistCurrentPreset() { persistCcmEdit() }
 
     private fun selectPreset(name: String) {
         if (name == selPresetName) return   // 同じ行の再タップは編集(フォーカス)のみ
@@ -1307,10 +1186,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun camArray(json: String): JSONArray = try { JSONArray(json) } catch (e: Exception) { JSONArray() }
 
-    private fun openCameraList() { buildCameraList(); buildCameraDetail(); setInitialSplit(R.id.cameralist_listScroll, R.id.cameralist_container); flipper.displayedChild = 6 }
-    private fun openCameraAdd()  { checkedCamAdd.clear(); buildCameraAdd(); flipper.displayedChild = 7 }
-    private fun openLensList()   { buildLensList(); buildLensDetail(); setInitialSplit(R.id.lenslist_listScroll, R.id.lenslist_container); flipper.displayedChild = 8 }
-    private fun openLensAdd()    { checkedLensAdd.clear(); expandedMakers.clear(); buildLensAdd(); flipper.displayedChild = 9 }
+    private fun openCameraList() { buildCameraList(); buildCameraDetail(); setInitialSplit(R.id.cameralist_listScroll, R.id.cameralist_container); flipper.displayedChild = 5 }
+    private fun openCameraAdd()  { checkedCamAdd.clear(); buildCameraAdd(); flipper.displayedChild = 6 }
+    private fun openLensList()   { buildLensList(); buildLensDetail(); setInitialSplit(R.id.lenslist_listScroll, R.id.lenslist_container); flipper.displayedChild = 7 }
+    private fun openLensAdd()    { checkedLensAdd.clear(); expandedMakers.clear(); buildLensAdd(); flipper.displayedChild = 8 }
 
     // 分割バーの初期高さ(上=リスト)。リストが短ければ内容ぴったりまで上に詰め、
     // 多い場合(内容が画面の1/4超)は1/4で止める。ほとんどは1件なので上寄せになる。
@@ -1629,7 +1508,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .setNegativeButton("キャンセル", null).show()
     }
 
-    private fun leaveCameraList() { stopDirtyWatch(); persistCameraDetail(false); flipper.displayedChild = 5 }
+    private fun leaveCameraList() { stopDirtyWatch(); persistCameraDetail(false); flipper.displayedChild = 4 }
 
     // リスト選択(タップ)。同じ行の再タップは編集(フォーカス)のみ。別の行なら前の詳細を保存して切替。
     private fun selectCamera(name: String) {
@@ -1759,7 +1638,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         return sb.toString()
     }
 
-    private fun leaveLensList() { stopDirtyWatch(); persistLensDetail(false); flipper.displayedChild = 5 }
+    private fun leaveLensList() { stopDirtyWatch(); persistLensDetail(false); flipper.displayedChild = 4 }
 
     private fun selectLens(name: String) {
         if (name == selLens) return
@@ -1943,19 +1822,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
         editingPlanCcm = true
         ccmJson = try { JSONObject(HgeNative.nativeGetPlanCcm()) } catch (e: Exception) { null }
         if (ccmJson == null) return
-        if (key == "moon") openMoonEdit() else openCcmEdit(key)
+        openCcmEdit(key)
     }
 
-    private val ccmTypeToKey = mapOf(1 to "night", 2 to "sunrise", 3 to "sunset", 4 to "day", 5 to "moon")
+    // 撮影制御方法の型番号(C++ hgc::ccmType と一致させること)。月は廃止したので 5=夜間前移行。
+    private val ccmTypeToKey = mapOf(1 to "night", 2 to "sunrise", 3 to "sunset", 4 to "day")
     private val ccmTypeName = mapOf(1 to "夜間撮影", 2 to "朝日撮影", 3 to "夕日撮影", 4 to "日中撮影",
-                                    5 to "月の影響", 6 to "夜間前移行", 7 to "夜間後移行")
+                                    5 to "夜間前移行", 6 to "夜間後移行")
 
     // 撮影制御方法の編集ボタン(全5種)を常に定位置(スケジュールの下)に並べる。タップで編集画面へ。
     // 3列グリッド(夜間/朝日/夕日 と 日中/月)。色分けして「ボタンらしい」見た目にする。
     private fun buildCcmEditButtons() {
         val parent = findViewById<LinearLayout>(R.id.plan_ccmButtons)
         parent.removeAllViews()
-        // 項目3: 月(タイプ5)は撮影計画の撮影制御方法から削除(1=夜間 2=朝日 3=夕日 4=日中)。
+        // 1=夜間 2=朝日 3=夕日 4=日中(月は廃止)。
         val groups = listOf(listOf(1, 2, 3), listOf(4))
         for (group in groups) {
             val row = LinearLayout(this)
@@ -2308,13 +2188,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 再構築(reloadExpoEditors: カメラ/レンズ変更・計画選択)ごとにエディタがコンテナへ行を
         // 追加するため、先にクリアしないとスライダーが1セットずつ積み増しされる(夜間撮影に5セット等)。
         val fixC = findViewById<LinearLayout>(R.id.edit_fix_container); fixC.removeAllViews()
-        val moonC = findViewById<LinearLayout>(R.id.moon_init_container); moonC.removeAllViews()
         val limC = findViewById<LinearLayout>(R.id.edit_limit_container); limC.removeAllViews()
-        val moonLimC = findViewById<LinearLayout>(R.id.moon_limit_container); moonLimC.removeAllViews()
         fixEditor = ExposureEditor(fixC)
-        moonInitEditor = ExposureEditor(moonC)
         editLimit = LimitEditor(limC)
-        moonLimit = LimitEditor(moonLimC)
     }
 
     // 左=暗(月)→右=明(太陽) を示す明暗バー(仕様5)。スライダーの下地に敷く。
@@ -2442,7 +2318,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         private val keys = listOf("iso", "ss", "fn")
         private var initMode = 0                          // 基準: 0=明所限界 1=中間点 2=暗所限界(仕様4d)
         private var dayMode = false                       // 日中=3択ピッカー(明所/中間/暗所)。他=チェックボックス
-        private var moonMode = false                      // 月撮影時露出限界(暗所=夜間値で固定・明所のみ編集・仕様6d/e)
         private val cards = mutableListOf<View>()
         private val dividers = mutableListOf<View>()
         private val darkTvs = HashMap<Int, TextView>(); private val brightTvs = HashMap<Int, TextView>()
@@ -2450,14 +2325,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
         private var dragFrom = -1
 
         fun set(brightObj: JSONObject?, darkObj: JSONObject?, prio: JSONArray?, initialObj: JSONObject?,
-                moonMode: Boolean = false, nightLimit: JSONObject? = null, dayMode: Boolean = false) {
+                dayMode: Boolean = false) {
             order.clear()
             if (prio != null) for (i in 0 until prio.length()) order.add(prio.optInt(i))
             if (order.sorted() != listOf(0, 1, 2)) { order.clear(); order.addAll(listOf(0, 1, 2)) }
-            this.moonMode = moonMode
             for (t in 0..2) {
-                // 月モードでは暗所限界=夜間撮影の設定値(固定)。通常は limitBright。
-                darkPlace[t] = (if (moonMode) nightLimit?.optString(keys[t]) else brightObj?.optString(keys[t])) ?: ""
+                darkPlace[t] = brightObj?.optString(keys[t]) ?: ""     // limitBright = 暗所限界
                 brightPlace[t] = darkObj?.optString(keys[t]) ?: ""     // limitDark = 明所限界
             }
             this.dayMode = dayMode
@@ -2508,22 +2381,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
         private fun render() {
             container.removeAllViews()
             cards.clear(); dividers.clear(); darkTvs.clear(); brightTvs.clear(); initTvs.clear()
-            if (!moonMode) {   // 月モードは基準チェックも暗所/基準/明所の見出しも無し(明所限界のみ)
-                if (dayMode) {   // 日中: 明所限界→中間点→暗所限界 をタップで巡回
-                    val tv = TextView(this@MainActivity)
-                    fun lbl() = "基準(タップで切替): " + when (initMode) { 0 -> "明所限界"; 1 -> "中間点"; else -> "暗所限界" }
-                    tv.text = lbl(); tv.textSize = 14f; tv.setPadding(dp(8), dp(8), dp(8), dp(8))
-                    tv.setBackgroundColor(0xFFD1C4E9.toInt()); tv.setTextColor(0xFF222222.toInt())
-                    tv.setOnClickListener { initMode = (initMode + 1) % 3; tv.text = lbl(); refreshInit() }
-                    container.addView(tv)
-                } else {   // 朝日/夕日: 明所限界 or 暗所限界 のチェックボックス(従来どおり)
-                    val cb = CheckBox(this@MainActivity)
-                    cb.text = "明所限界を基準にする"; cb.isChecked = (initMode == 0)
-                    cb.setOnCheckedChangeListener { _, c -> initMode = if (c) 0 else 2; refreshInit() }
-                    container.addView(cb)
-                }
-                container.addView(headerRow())
+            if (dayMode) {   // 日中: 明所限界→中間点→暗所限界 をタップで巡回
+                val tv = TextView(this@MainActivity)
+                fun lbl() = "基準(タップで切替): " + when (initMode) { 0 -> "明所限界"; 1 -> "中間点"; else -> "暗所限界" }
+                tv.text = lbl(); tv.textSize = 14f; tv.setPadding(dp(8), dp(8), dp(8), dp(8))
+                tv.setBackgroundColor(0xFFD1C4E9.toInt()); tv.setTextColor(0xFF222222.toInt())
+                tv.setOnClickListener { initMode = (initMode + 1) % 3; tv.text = lbl(); refreshInit() }
+                container.addView(tv)
+            } else {   // 朝日/夕日: 明所限界 or 暗所限界 のチェックボックス(従来どおり)
+                val cb = CheckBox(this@MainActivity)
+                cb.text = "明所限界を基準にする"; cb.isChecked = (initMode == 0)
+                cb.setOnCheckedChangeListener { _, c -> initMode = if (c) 0 else 2; refreshInit() }
+                container.addView(cb)
             }
+            container.addView(headerRow())
             for (i in 0..order.size) {
                 val div = View(this@MainActivity)
                 div.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(4))
@@ -2561,12 +2432,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             name.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.5f)
             val brightTv = makeValTv(0xFF222222.toInt())
             valRow.addView(name)
-            if (moonMode) {
-                valRow.addView(brightTv)   // 明所限界のみ(センター付近)
-                val rspacer = View(this@MainActivity); rspacer.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.5f)
-                valRow.addView(rspacer)
-                brightTvs[t] = brightTv
-            } else {
+            run {
                 val darkTv = makeValTv(0xFF222222.toInt()); val initTv = makeValTv(0xFF1565C0.toInt())
                 val rspacer = View(this@MainActivity); rspacer.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                 valRow.addView(darkTv); valRow.addView(initTv); valRow.addView(brightTv); valRow.addView(rspacer)
@@ -2593,27 +2459,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
             rs.valueFrom = 0f; rs.valueTo = (vals.size - 1).coerceAtLeast(1).toFloat(); rs.stepSize = 1f
             rs.isTickVisible = false; rs.labelBehavior = LabelFormatter.LABEL_GONE
             rs.trackActiveTintList = transparentTint; rs.trackInactiveTintList = transparentTint
-            // 月モード: 左=グレー●(夜間値で固定)/右=月。通常: 左=月(暗所)/右=太陽(明所)。
-            if (moonMode) rs.setCustomThumbDrawablesForValues(R.drawable.thumb_dot_gray, R.drawable.ic_moon)
-            else rs.setCustomThumbDrawablesForValues(R.drawable.ic_moon, R.drawable.ic_sun)
-            val di = vals.indexOf(darkPlace[t]).let { if (it < 0) 0 else it }   // 暗所限界(月モードは夜間値=固定位置)
+            // 左=月(暗所限界)/右=太陽(明所限界)。
+            rs.setCustomThumbDrawablesForValues(R.drawable.ic_moon, R.drawable.ic_sun)
+            val di = vals.indexOf(darkPlace[t]).let { if (it < 0) 0 else it }   // 暗所限界
             val bi = vals.indexOf(brightPlace[t]).let { if (it < 0) vals.size - 1 else it }
             rs.values = listOf(minOf(di, bi).toFloat(), maxOf(di, bi).toFloat())
             var lock = false
             rs.addOnChangeListener { _, _, _ ->
                 if (lock) return@addOnChangeListener
                 val v = rs.values
-                if (moonMode) {
-                    if (v[0].toInt() != di) {   // 左(暗所=夜間値)が動いたら固定位置へ戻す
-                        lock = true
-                        rs.values = listOf(di.toFloat(), maxOf(v[1], di.toFloat()))
-                        lock = false
-                    }
-                    brightPlace[t] = vals.getOrElse(rs.values[1].toInt()) { "" }
-                } else {
-                    darkPlace[t] = vals.getOrElse(v[0].toInt()) { "" }
-                    brightPlace[t] = vals.getOrElse(v[1].toInt()) { "" }
-                }
+                darkPlace[t] = vals.getOrElse(v[0].toInt()) { "" }
+                brightPlace[t] = vals.getOrElse(v[1].toInt()) { "" }
                 updateVals(t)
             }
             frame.addView(rs); slRow.addView(frame)
@@ -3636,9 +3492,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun openPlacesList() {
         buildPlacesList(); buildPlaceDetail()
         setInitialSplit(R.id.places_listScroll, R.id.places_container)
-        flipper.displayedChild = 12
+        flipper.displayedChild = 11
     }
-    private fun leavePlacesList() { stopDirtyWatch(); persistPlaceDetail(false); flipper.displayedChild = 5; buildGearMenu() }
+    private fun leavePlacesList() { stopDirtyWatch(); persistPlaceDetail(false); flipper.displayedChild = 4; buildGearMenu() }
 
     // ============================================================
     //  650 カメラ予約表(項目17)
@@ -3751,7 +3607,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun openReserveTable() {
         buildReserveTable()
-        flipper.displayedChild = 13
+        flipper.displayedChild = 12
     }
 
     private fun buildReserveTable() {
@@ -3866,7 +3722,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
     }
 
-    private fun openHistory() { buildHistory(); flipper.displayedChild = 14 }
+    private fun openHistory() { buildHistory(); flipper.displayedChild = 13 }
 
     private val histDateFmt = SimpleDateFormat("yyyy.MM.dd (E)", Locale.JAPAN)
     private val histTimeFmt = SimpleDateFormat("HH:mm", Locale.JAPAN)
@@ -3923,7 +3779,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun openReportList() {
         buildReportList(); buildReportDetail()
         setInitialSplit(R.id.report_listScroll, R.id.report_container)
-        flipper.displayedChild = 15
+        flipper.displayedChild = 14
     }
 
     // 所見コード → 表示文言(dataManager::noteCode と対応)。
@@ -4382,9 +4238,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // 型→色テーブルキー。
     private fun keyType(key: String): Int = when (key) {
-        "night" -> 1; "sunrise" -> 2; "sunset" -> 3; "day" -> 4; "moon" -> 5; "preNight" -> 6; "postNight" -> 7; else -> 0
+        "night" -> 1; "sunrise" -> 2; "sunset" -> 3; "day" -> 4; "preNight" -> 5; "postNight" -> 6; else -> 0
     }
-    private val colorTypeNames = mapOf(1 to "night", 2 to "sunrise", 3 to "sunset", 4 to "day", 5 to "moon", 6 to "preNight", 7 to "postNight")
+    private val colorTypeNames = mapOf(1 to "night", 2 to "sunrise", 3 to "sunset", 4 to "day", 5 to "preNight", 6 to "postNight")
 
     // システム共通の色を Entity から読み込む(0xRRGGBB)。
     private fun loadColors() {
@@ -4974,7 +4830,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         scannedPop = ""; scannedName = ""
         buildEdgeList(); buildEdgeForm()
         setInitialSplit(R.id.edge_listScroll, R.id.edge_container)
-        flipper.displayedChild = 16
+        flipper.displayedChild = 15
     }
 
     // 上段: 登録済み一覧。先頭は新規追加行。タップで設定対象を切り替える。

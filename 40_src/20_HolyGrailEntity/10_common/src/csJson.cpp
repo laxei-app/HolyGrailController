@@ -185,19 +185,6 @@ namespace csjson
 				j["ev"] = d.ev;
 				break;
 			}
-			case hgc::ccmType::moon:
-			{
-				const auto& m = static_cast<const hgc::ccmMoon&>(c);
-				j["mode"] = static_cast<int>(m.mode);
-				j["startLuminance"] = m.startLuminance;
-				j["ev"] = m.ev;
-				j["initialExposure"] = expToJson(m.initialExposure);
-				j["atmosphericExtinction"] = m.atmosphericExtinction;
-				j["extinctionCoef"] = m.extinctionCoef;
-				j["geocentricCorrection"] = m.geocentricCorrection;
-				j["skyBrightnessCoef"] = m.skyBrightnessCoef;
-				break;
-			}
 			default: break;	// linear/invalid は基本フィールドのみ
 			}
 			return j;
@@ -238,19 +225,6 @@ namespace csjson
 				auto d = std::make_shared<hgc::ccmDay>();
 				d->ev = j.value("ev", 0.0);
 				c = d; break;
-			}
-			case hgc::ccmType::moon:
-			{
-				auto m = std::make_shared<hgc::ccmMoon>();
-				m->mode = static_cast<hgc::moonMode>(j.value("mode", 0));
-				m->startLuminance = j.value("startLuminance", 0.0);
-				m->ev = j.value("ev", 0.0);
-				if (j.contains("initialExposure")) { m->initialExposure = expFromJson(j["initialExposure"]); }
-				m->atmosphericExtinction = j.value("atmosphericExtinction", false);
-				m->extinctionCoef = j.value("extinctionCoef", 0.2);
-				m->geocentricCorrection = j.value("geocentricCorrection", false);
-				m->skyBrightnessCoef = j.value("skyBrightnessCoef", 100.0);
-				c = m; break;
 			}
 			case hgc::ccmType::preNight:
 				c = std::make_shared<hgc::ccmBase>(hgc::ccmType::preNight); break;

@@ -9,7 +9,6 @@
     <include layout="@layout/screen_capturing" />
     <include layout="@layout/screen_ccm_menu" />
     <include layout="@layout/screen_ccm_edit" />
-    <include layout="@layout/screen_ccm_moon" />
     <include layout="@layout/screen_gear_menu" />
     <include layout="@layout/screen_camera_list" />
     <include layout="@layout/screen_camera_add" />

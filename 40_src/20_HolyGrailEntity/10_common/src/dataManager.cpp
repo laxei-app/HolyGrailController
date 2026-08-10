@@ -67,36 +67,16 @@ astro::ccmSet dataManager::factoryCcmSet(void)
 	return set;
 }
 
-// 出荷時設定の月の影響への対処(データ構造仕様書43 §3.6.2)。
-std::shared_ptr<hgc::ccmMoon> dataManager::factoryMoon(void)
-{
-	auto m = std::make_shared<hgc::ccmMoon>();
-	m->name = "moon";
-	m->mode = hgc::moonMode::none;
-	m->startLuminance = 0.0;
-	m->ev = 0.0;
-	m->initialExposure = hgc::exposure{ "100", "1/125", "11" };	// 満月の目安(looney 11)
-	m->atmosphericExtinction = false;
-	m->extinctionCoef = 0.2;
-	m->geocentricCorrection = false;
-	m->skyBrightnessCoef = 100.0;
-	m->limitBright = hgc::exposure{ "3200", "8", "1.4" };
-	m->limitDark   = hgc::exposure{ "100", "1/4000", "16" };
-	return m;
-}
-
 // ============================================================================
 //  撮影制御方法の初期値(/asset/ccmDefaults.json。仕様書43 §7.6)
 // ============================================================================
 namespace
 {
 	astro::ccmSet                 g_ccmDefaults;
-	std::shared_ptr<hgc::ccmMoon> g_moonDefault;
 	bool                          g_defaultsLoaded = false;
 
-	// JSON文字列を ccmSet(night/sunrise/sunset/day)+moon へ復元する。
-	// 4種揃わなければ失敗(false)。moon は任意(無ければ nullptr)。
-	bool parseDefaults(const std::string& s, astro::ccmSet& set, std::shared_ptr<hgc::ccmMoon>& moon)
+	// JSON文字列を ccmSet(night/sunrise/sunset/day)へ復元する。4種揃わなければ失敗(false)。
+	bool parseDefaults(const std::string& s, astro::ccmSet& set)
 	{
 		json j = json::parse(s, nullptr, false);
 		if (j.is_discarded() || !j.is_object()) { return false; }
@@ -110,7 +90,6 @@ namespace
 		set.sunrise = std::static_pointer_cast<hgc::ccmSunrise>(get("sunrise", hgc::ccmType::sunrise));
 		set.sunset  = std::static_pointer_cast<hgc::ccmSunset>(get("sunset", hgc::ccmType::sunset));
 		set.day     = std::static_pointer_cast<hgc::ccmDay>(get("day", hgc::ccmType::day));
-		moon        = std::static_pointer_cast<hgc::ccmMoon>(get("moon", hgc::ccmType::moon));
 		return set.night && set.sunrise && set.sunset && set.day;
 	}
 
@@ -120,8 +99,7 @@ namespace
 		g_defaultsLoaded = true;
 		// 撮影制御方法の初期値は参照専用。ファイルを持たずコード上の出荷時設定から取得する。
 		g_ccmDefaults = dataManager::factoryCcmSet();
-		g_moonDefault = dataManager::factoryMoon();	// moon は常に用意
-	}
+		}
 }
 
 astro::ccmSet dataManager::currentCcmSet(void)
@@ -130,7 +108,7 @@ astro::ccmSet dataManager::currentCcmSet(void)
 	return g_ccmDefaults;
 }
 
-std::string dataManager::ccmSetToJson(const astro::ccmSet& set, const std::shared_ptr<hgc::ccmMoon>& moon)
+std::string dataManager::ccmSetToJson(const astro::ccmSet& set)
 {
 	json j;
 	j["version"] = 1;
@@ -138,19 +116,18 @@ std::string dataManager::ccmSetToJson(const astro::ccmSet& set, const std::share
 	if (set.sunrise) { j["sunrise"] = json::parse(csjson::ccmToJson(*set.sunrise)); }
 	if (set.sunset)  { j["sunset"]  = json::parse(csjson::ccmToJson(*set.sunset)); }
 	if (set.day)     { j["day"]     = json::parse(csjson::ccmToJson(*set.day)); }
-	if (moon)        { j["moon"]    = json::parse(csjson::ccmToJson(*moon)); }
 	return j.dump();
 }
 
-bool dataManager::parseCcmSetJson(const std::string& jsonStr, astro::ccmSet& set, std::shared_ptr<hgc::ccmMoon>& moon)
+bool dataManager::parseCcmSetJson(const std::string& jsonStr, astro::ccmSet& set)
 {
-	return parseDefaults(jsonStr, set, moon);
+	return parseDefaults(jsonStr, set);
 }
 
 std::string dataManager::ccmDefaultsJson(void)
 {
 	ensureLoaded();
-	return ccmSetToJson(g_ccmDefaults, g_moonDefault);
+	return ccmSetToJson(g_ccmDefaults);
 }
 
 // ============================================================================
@@ -859,7 +836,6 @@ namespace
 		c["sunrise"]   = mk(0xFFF59Du);
 		c["sunset"]    = mk(0xFFCC80u);
 		c["day"]       = mk(0x90CAF9u);
-		c["moon"]      = mk(0xCE93D8u);
 		c["preNight"]  = mk(0xA5D6A7u);
 		c["postNight"] = mk(0x80CBC4u);
 		return c;
@@ -990,7 +966,7 @@ namespace
 {
 	json g_presets;
 	bool g_presetsLoaded = false;
-	const char* kPresetTypes[5] = { "night", "sunrise", "sunset", "day", "moon" };
+	const char* kPresetTypes[4] = { "night", "sunrise", "sunset", "day" };
 	// 種まきプリセットの名前(型ごと)。全型「標準」だと重複名回避で「標準1」等になり、
 	// スケジュールやログ(CCMSW)でどの制御方法か分からなかった(2026-07-26 ユーザー指示で型別名へ)。
 	const char* presetSeedName(const std::string& t)
@@ -999,7 +975,6 @@ namespace
 		if (t == "sunrise") { return "朝日"; }
 		if (t == "sunset")  { return "夕日"; }
 		if (t == "day")     { return "日中"; }
-		if (t == "moon")    { return "月"; }
 		return "標準";
 	}
 
