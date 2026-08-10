@@ -4488,32 +4488,35 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
 
         // 薄明ブロック(=薄明ページ)。ページ0=フォームなので block i → ページ i+1。
-        data class Nav(val page: Int, val morning: Boolean)
+        data class Nav(val page: Int, val morning: Boolean, val tStart: Long, val tEnd: Long)
         val navs = ArrayList<Nav>()
         o.optJSONArray("blocks")?.let { arr ->
             for (i in 0 until arr.length()) {
                 val b = arr.getJSONObject(i)
-                navs.add(Nav(i + 1, b.optString("axis") != "down"))
+                navs.add(Nav(i + 1, b.optString("axis") != "down",
+                             b.optLong("tStart", 0L) * 1000L, b.optLong("tEnd", 0L) * 1000L))
             }
         }
-        // 移動ボックスの差し込み位置: 朝=日の出(code9)の前、夕方=日の入(code2)の後。
-        // 薄明ブロック・日の出/日の入は共に時系列。日付で対応付けると同日内の朝の日付が
-        // ずれて誤配置になるため、順番(i番目の朝→i番目の日の出)で対応付ける。
-        // 対応するイベントが無ければ End(code12)の前(例: プランがEndで切れる夕方薄明)。
+        // 移動ボックスの差し込み位置は**時刻で決める**(2026-08-11 改定)。
+        //  朝のブロック   … ブロックが終わる時刻以降で最初のイベントの前
+        //  夕方のブロック … ブロックが始まる時刻以前で最後のイベントの後
+        // 【なぜ変えたか】以前は「i番目の朝 → i番目の日の出」と順番で対応付けていた。
+        //  日の出/日の入が撮影窓の外にあると対応先が無くなり、End の前へ落ちる。
+        //  5:00〜21:00 の計画(日の出4:56が窓の外)で「朝の薄明」が右列の End 直前に
+        //  出てしまう不具合が実際に起きた。時刻で決めれば窓の内外に関係なく正しい位置になる。
         val before = HashMap<Int, MutableList<Nav>>()
         val after = HashMap<Int, MutableList<Nav>>()
-        val endIdx = evs.indexOfLast { it.code == 12 }
-        val sunriseIdx = evs.indices.filter { evs[it].code == 9 }   // 日の出(時系列)
-        val sunsetIdx = evs.indices.filter { evs[it].code == 2 }    // 日の入(時系列)
-        var mi = 0; var si = 0
         for (nv in navs) {
             if (nv.morning) {
-                val at = sunriseIdx.getOrNull(mi++) ?: endIdx
-                if (at >= 0) before.getOrPut(at) { mutableListOf() }.add(nv)
+                // 朝は「その薄明が明けた後」に置きたいので、終了時刻以降の最初のイベントの前。
+                var at = evs.indexOfFirst { it.t >= nv.tEnd }
+                if (at < 0) at = evs.size - 1                      // 後ろに何も無ければ最後の前
+                before.getOrPut(at) { mutableListOf() }.add(nv)
             } else {
-                val at = sunsetIdx.getOrNull(si++)
-                if (at != null) after.getOrPut(at) { mutableListOf() }.add(nv)
-                else if (endIdx >= 0) before.getOrPut(endIdx) { mutableListOf() }.add(nv)
+                // 夕方は「その薄明が始まる前」に置きたいので、開始時刻以前の最後のイベントの後。
+                var at = evs.indexOfLast { it.t <= nv.tStart }
+                if (at < 0) at = 0                                  // 前に何も無ければ先頭の後
+                after.getOrPut(at) { mutableListOf() }.add(nv)
             }
         }
 

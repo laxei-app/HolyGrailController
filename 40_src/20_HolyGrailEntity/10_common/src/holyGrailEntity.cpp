@@ -326,6 +326,12 @@ namespace
 			out += "{\"title\":\"" + std::string(down ? "\\u5915\\u65b9\\u306e\\u8a08\\u753b" : "\\u671d\\u306e\\u8a08\\u753b") + "\"";
 			out += ",\"axis\":\"" + std::string(down ? "down" : "up") + "\"";
 			out += ",\"date\":\"" + std::string(multiDay ? md(sm[a].t) : "") + "\"";
+			// ブロックの時間範囲(UNIX秒)。概要スケジュールで「どのイベントの隣に置くか」を
+			// 時刻で決めるために出す(2026-08-11)。以前はスマホ側が「i番目の朝 → i番目の日の出」と
+			// 順番で対応付けていたため、対応する日の出/日の入が撮影窓の外にあるとき
+			// (例: 5:00開始で日の出4:56が窓の外)に End の前へ落ちてしまっていた。
+			out += ",\"tStart\":" + std::to_string(static_cast<long long>(sm[a].t));
+			out += ",\"tEnd\":"   + std::to_string(static_cast<long long>(sm[b].t));
 			// segments(ccm をポインタ同一でグループ化、高度範囲)。後処理のため一旦集める。
 			struct Seg { int type; std::string name; double altTop; double altBottom; };
 			std::vector<Seg> segs;
