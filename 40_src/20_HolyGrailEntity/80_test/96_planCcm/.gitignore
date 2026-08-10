@@ -1,0 +1,4 @@
+# build_and_run.bat が生成する成果物(.exe/.obj)は追跡しない
+build/
+*.obj
+*.exe
