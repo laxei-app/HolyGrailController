@@ -28,8 +28,10 @@ namespace astro
 		double v = 0.0;	// 垂直画角[°]
 	};
 
-	// スケジュール生成に使う撮影制御方法のプロトタイプ一式。
-	// buildSchedule はこれらを clone して各区間に割り当てる。
+	// 撮影制御方法のプロトタイプ一式(初期値/プリセットの受け渡しに使う)。
+	// 【注意】buildSchedule はこれを受け取らない。区間に入れる実体は計画自身が所有する
+	//  hgc::cs::ccm から取る(2026-08-11 改定)。外部の一式を注入できる口を残すと、別計画の
+	//  設定が紛れ込む事故が起きるため(2026-08-08 実害)。
 	struct ccmSet
 	{
 		std::shared_ptr<hgc::ccmNight>   night;
@@ -58,11 +60,12 @@ namespace astro
 	fov calcFov(const hgc::camera& cam, const hgc::lens& lens, bool landscape);
 
 	// 撮影計画のスケジュールを生成する。
-	//  plan       : start/end/place/azimuth/elevation/camera/lens/landscape を入力とし、
-	//               events と ccmList を生成して書き込む。
-	//  set        : 各撮影制御方法のプロトタイプ。
+	//  plan       : start/end/place/azimuth/elevation/camera/lens/landscape と **plan.ccm** を
+	//               入力とし、events と ccmList を生成して書き込む。窓に入れる撮影制御方法は
+	//               plan.ccm が所有する実体を**複製せずに指す**。
 	//  utcOffsetMin : ローカル時刻のUTCオフセット[分]。
-	errCode buildSchedule(hgc::cs& plan, const ccmSet& set, int utcOffsetMin);
+	//  戻り値は必ず確認すること。終了≤開始のときは何も作らずに ERR_HGC_INVALID_ARG を返す。
+	errCode buildSchedule(hgc::cs& plan, int utcOffsetMin);
 }
 
 #endif // _ASTRO_SCHED_H_

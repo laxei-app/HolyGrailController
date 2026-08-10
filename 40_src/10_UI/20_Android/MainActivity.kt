@@ -4556,8 +4556,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // §7.3.2 薄明ページ(横スライド)を再構築する。blocks[] の各要素=1ページ(ScheduleView)。
     // ページ0(フォーム)は残し、以前の薄明ページを差し替える。ページ番号(タイトル)も更新。
     private fun rebuildTwilightPages(o: JSONObject) {
-        curSunriseMode = o.optInt("sunriseMode", 0)
-        curSunsetMode = o.optInt("sunsetMode", 0)
+        // 朝日/夕日を「使う」かは計画が持つ(2026-08-11 改定)。1=使う / 2=使わない で保持する
+        // (setBand が送る値と揃える。C++ 側は 2 以外を「使う」とみなす)。
+        curSunriseMode = if (o.optBoolean("useSunrise", true)) 1 else 2
+        curSunsetMode  = if (o.optBoolean("useSunset",  true)) 1 else 2
         for (p in twilightPages) planPager.removeView(p)
         twilightPages.clear()
         schedulePages.clear()
@@ -4691,7 +4693,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<LinearLayout>(R.id.plan_ccmButtons).let { for (i in 0 until it.childCount) it.getChildAt(i).isEnabled = ed }
     }
 
-    // 夕日/朝日の帯を挿入(insert=true)/排除(insert=false)。他方の帯モードは保持する。
+    // 夕日/朝日を使う(insert=true)/使わない(insert=false)。他方の指定は保持する。
+    // 「使わない」にしても計画が持つ実体は消えないので、また使うことにすれば以前の編集内容が戻る。
     private fun setBand(rising: Boolean, insert: Boolean) {
         var sr = curSunriseMode
         var ss = curSunsetMode

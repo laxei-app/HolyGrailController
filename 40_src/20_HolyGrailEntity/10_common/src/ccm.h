@@ -87,6 +87,83 @@ namespace hgc
 		ccmDay() : ccmBase(ccmType::day) {}
 		std::unique_ptr<ccmBase> clone() const override { return std::make_unique<ccmDay>(*this); }
 	};
+	// 3.7 撮影計画が所有する撮影制御方法一式(2026-08-11 改定)
+	//
+	// 【なぜ計画が持つか】以前は撮影制御方法をグローバルに1組だけ持ち、スケジュールを引き直すたびに
+	//  そこから窓の中身を作り直していた。計画ごとに違う設定を持てないうえ、エッジでは受信した計画に
+	//  「直前に受け取った別の計画」の設定が貼り付いて保存される事故が起きた(2026-08-08 実害)。
+	//  計画が実体を所有し、ここだけを権威とする。窓(ccmWindow)はこの実体を指すだけで複製しない。
+	//
+	// 【初期値から取り込むのは2か所だけ】計画の新規作成時と、ユーザーが初期値リストから選んだとき。
+	//  画角・撮影場所・開始時刻・機材を変えても取り込み直さない(窓の時刻を引き直すだけ)。
+	//
+	// 【使う/使わない】4種とも同じ形で used を持つ。使わないことにしても実体は保持し続けるので、
+	//  もう一度使うことにしたときユーザーが編集した内容がそのまま復活する(初期値へは戻さない)。
+	//  夜間/日中を使わないと時間帯に穴が空くため、UI では朝日/夕日だけを切り替えさせる。
+	struct ccmOwned
+	{
+		std::shared_ptr<ccmNight>   night;
+		std::shared_ptr<ccmSunrise> sunrise;
+		std::shared_ptr<ccmSunset>  sunset;
+		std::shared_ptr<ccmDay>     day;
+		bool useNight   = true;
+		bool useSunrise = true;
+		bool useSunset  = true;
+		bool useDay     = true;
+
+		// 4種そろっているか(欠けていたら初期値の取り込みが必要)。
+		bool complete(void) const { return night && sunrise && sunset && day; }
+
+		std::shared_ptr<ccmBase> get(ccmType t) const
+		{
+			switch (t)
+			{
+			case ccmType::night:   return night;
+			case ccmType::sunrise: return sunrise;
+			case ccmType::sunset:  return sunset;
+			case ccmType::day:     return day;
+			default:               return nullptr;
+			}
+		}
+
+		bool used(ccmType t) const
+		{
+			switch (t)
+			{
+			case ccmType::night:   return useNight;
+			case ccmType::sunrise: return useSunrise;
+			case ccmType::sunset:  return useSunset;
+			case ccmType::day:     return useDay;
+			default:               return true;	// 移行(夜間前/後)は常に使う
+			}
+		}
+
+		void setUsed(ccmType t, bool v)
+		{
+			switch (t)
+			{
+			case ccmType::night:   useNight   = v; break;
+			case ccmType::sunrise: useSunrise = v; break;
+			case ccmType::sunset:  useSunset  = v; break;
+			case ccmType::day:     useDay     = v; break;
+			default: break;
+			}
+		}
+
+		// 型に対応する実体を差し替える(初期値リストからの選択で使う)。used は変えない。
+		void set(ccmType t, const std::shared_ptr<ccmBase>& c)
+		{
+			if (!c) { return; }
+			switch (t)
+			{
+			case ccmType::night:   night   = std::static_pointer_cast<ccmNight>(c);   break;
+			case ccmType::sunrise: sunrise = std::static_pointer_cast<ccmSunrise>(c); break;
+			case ccmType::sunset:  sunset  = std::static_pointer_cast<ccmSunset>(c);  break;
+			case ccmType::day:     day     = std::static_pointer_cast<ccmDay>(c);     break;
+			default: break;
+			}
+		}
+	};
 }
 
 #endif // _CCM_H_

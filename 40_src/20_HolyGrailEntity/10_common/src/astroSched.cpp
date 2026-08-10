@@ -73,22 +73,18 @@ namespace astro
 			return rising ? hgc::ccmType::postNight : hgc::ccmType::preNight;
 		}
 
-		// 種別から区間用の撮影制御方法を生成する(プロトタイプを深いコピー)。
-		std::shared_ptr<hgc::ccmBase> makeCcm(const ccmSet& set, hgc::ccmType ct)
+		// 種別から区間に入れる撮影制御方法を返す。
+		// 夜間/朝日/夕日/日中は**計画が所有する実体をそのまま指す**(複製しない)。計画の ccm を
+		// 編集すれば同じ型の窓すべてに反映される。移行(夜間前/後)はユーザー設定を持たないのでその場で作る。
+		std::shared_ptr<hgc::ccmBase> makeCcm(const hgc::ccmOwned& own, hgc::ccmType ct)
 		{
 			switch (ct)
 			{
 			case hgc::ccmType::night:
-				if (set.night)   { return set.night->clone(); }
-				break;
 			case hgc::ccmType::sunrise:
-				if (set.sunrise) { return set.sunrise->clone(); }
-				break;
 			case hgc::ccmType::sunset:
-				if (set.sunset)  { return set.sunset->clone(); }
-				break;
 			case hgc::ccmType::day:
-				if (set.day)     { return set.day->clone(); }
+				if (auto c = own.get(ct)) { return c; }
 				break;
 			case hgc::ccmType::preNight:
 			{
@@ -191,7 +187,7 @@ namespace astro
 		return { fovH, fovW };			// 縦位置は長辺・短辺が入れ替わる
 	}
 
-	errCode buildSchedule(hgc::cs& plan, const ccmSet& set, int utcOffsetMin)
+	errCode buildSchedule(hgc::cs& plan, int utcOffsetMin)
 	{
 		const int off = utcOffsetMin;
 		astro_observer_t obs = Astronomy_MakeObserver(plan.place.latitude, plan.place.longitude, plan.place.altitude);
@@ -243,7 +239,11 @@ namespace astro
 			{
 				const double h = samples[i].h;
 				hgc::ccmType ct;
-				if (h < nightAlt)             { ct = hgc::ccmType::night; }
+				// 夜間を「使わない」なら移行として扱う(4種とも使う/使わないを持つため。ただし
+				// 夜間/日中を外すと時間帯に穴が空くので UI では切り替えさせない)。
+				if (h < nightAlt)             { ct = plan.ccm.used(hgc::ccmType::night)
+				                                     ? hgc::ccmType::night
+				                                     : (samples[i].rising ? hgc::ccmType::postNight : hgc::ccmType::preNight); }
 				else if (h > sunDirectMaxAlt) { ct = hgc::ccmType::day; }
 				else /* nightAlt..twiAlt 薄明 */ { ct = samples[i].rising ? hgc::ccmType::postNight : hgc::ccmType::preNight; }
 				types[i] = ct;
@@ -259,14 +259,11 @@ namespace astro
 			{
 				++j;
 			}
-			// 帯モード(7.3.2): auto=太陽高度の帯をそのまま朝日/夕日とする / on=挿入(強制) / off=排除(日中)。
-			// 【項目11】かつての auto は「太陽が画角に入るか(画角ゲート)」で朝日/夕日か日中かを決めていたが、
-			// 帯はユーザーが挿入/削除できるようになったためゲートを廃止した。これにより、画角の向き次第で
-			// 朝日帯が日中を分断する既知の副作用も解消する(方向/仰角は撮影シミュレーションで確認する)。
-			const hgc::bandMode mode = rising ? plan.sunriseMode : plan.sunsetMode;
-			hgc::ccmType ct;
-			if (mode == hgc::bandMode::off) { ct = hgc::ccmType::day; }
-			else                            { ct = rising ? hgc::ccmType::sunrise : hgc::ccmType::sunset; }
+			// 朝日/夕日を「使う」かは計画が持つ(2026-08-11)。使わないなら日中として扱う。
+			// かつては「太陽が画角に入るか」で自動判定していたが、ユーザーが決める方式へ変えたので廃止した。
+			// これにより画角の向き次第で朝日帯が日中を分断する既知の副作用も無くなった。
+			const hgc::ccmType want = rising ? hgc::ccmType::sunrise : hgc::ccmType::sunset;
+			const hgc::ccmType ct   = plan.ccm.used(want) ? want : hgc::ccmType::day;
 			for (size_t k = i; k < j; ++k) { types[k] = ct; }
 			i = j;
 		}
@@ -280,7 +277,8 @@ namespace astro
 			hgc::ccmWindow w;
 			w.start = fromAstro(runStart, off);
 			w.end   = fromAstro(runEnd, off);
-			w.ccm   = makeCcm(set, runType);
+			w.type  = runType;
+			w.ccm   = makeCcm(plan.ccm, runType);
 			plan.ccmList.push_back(std::move(w));
 		};
 		for (size_t i = 0; i < samples.size(); ++i)
@@ -360,7 +358,7 @@ namespace astro
 				                           inFrame(s, plan.azimuth, plan.elevation, f), nightAlt, twiAlt);
 				if (ct != firstType && ct != hgc::ccmType::invalid)
 				{
-					plan.startLeadCcm = makeCcm(set, ct);
+					plan.startLeadCcm = makeCcm(plan.ccm, ct);
 					break;
 				}
 			}
@@ -385,11 +383,11 @@ namespace astro
 
 		// 夜間撮影の固定露出・移行目標evを、夜間ウィンドウの有無に関わらず常に保持する(仕様3.7/3.9)。
 		// 夜間前/後移行のクランプ(暗所限界)・基準(home)・ss上限の基準として captureRunner が使う。
-		if (set.night)
+		if (plan.ccm.night)
 		{
-			plan.nightFixedExposure = set.night->limitBright;	// 夜間=固定露出(limitBright==limitDark)
-			plan.nightPreNightEv    = set.night->preNightEv;
-			plan.nightPostNightEv   = set.night->postNightEv;
+			plan.nightFixedExposure = plan.ccm.night->limitBright;	// 夜間=固定露出(limitBright==limitDark)
+			plan.nightPreNightEv    = plan.ccm.night->preNightEv;
+			plan.nightPostNightEv   = plan.ccm.night->postNightEv;
 		}
 
 		return ERR_HGC_OK;

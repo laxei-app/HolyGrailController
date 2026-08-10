@@ -251,9 +251,21 @@ namespace csjson
 		j["azimuth"]   = plan.azimuth;
 		j["elevation"] = plan.elevation;
 		j["landscape"] = plan.landscape;
-		// スケジュール手動編集(7.3.2)
-		j["sunriseMode"] = static_cast<int>(plan.sunriseMode);
-		j["sunsetMode"]  = static_cast<int>(plan.sunsetMode);
+		// この計画が所有する撮影制御方法一式(2026-08-11 改定。ここだけが権威)。
+		// 窓(ccmList)は型と時刻だけを持ち、実体はここから引く。以前は窓ごとに実体を複製して
+		// 書き出していたが、実体は毎回 planCcm から作り直されるため二重管理になっていた。
+		{
+			json jc;
+			if (plan.ccm.night)   { jc["night"]   = ccmToJsonObj(*plan.ccm.night); }
+			if (plan.ccm.sunrise) { jc["sunrise"] = ccmToJsonObj(*plan.ccm.sunrise); }
+			if (plan.ccm.sunset)  { jc["sunset"]  = ccmToJsonObj(*plan.ccm.sunset); }
+			if (plan.ccm.day)     { jc["day"]     = ccmToJsonObj(*plan.ccm.day); }
+			jc["useNight"]   = plan.ccm.useNight;
+			jc["useSunrise"] = plan.ccm.useSunrise;
+			jc["useSunset"]  = plan.ccm.useSunset;
+			jc["useDay"]     = plan.ccm.useDay;
+			j["ccm"] = jc;
+		}
 		json bl = json::array();
 		for (const auto& b : plan.boundaries)
 		{
@@ -276,7 +288,9 @@ namespace csjson
 			json wj;
 			wj["start"] = dtToJson(w.start);
 			wj["end"]   = dtToJson(w.end);
-			if (w.ccm) { wj["ccm"] = ccmToJsonObj(*w.ccm); }
+			// 実体は書かない(計画所有の ccm から引くため)。型だけ持つ。
+			wj["type"]  = static_cast<int>(w.type != hgc::ccmType::invalid ? w.type
+			                               : (w.ccm ? w.ccm->type : hgc::ccmType::invalid));
 			wl.push_back(wj);
 		}
 		j["ccmList"] = wl;
@@ -306,8 +320,6 @@ namespace csjson
 		plan.elevation = j.value("elevation", 0.0);
 		plan.landscape = j.value("landscape", true);
 		// スケジュール手動編集(7.3.2)
-		plan.sunriseMode = static_cast<hgc::bandMode>(j.value("sunriseMode", 0));
-		plan.sunsetMode  = static_cast<hgc::bandMode>(j.value("sunsetMode", 0));
 		if (j.contains("boundaries") && j["boundaries"].is_array())
 		{
 			for (const auto& b : j["boundaries"])
@@ -333,6 +345,21 @@ namespace csjson
 				plan.events.push_back(it);
 			}
 		}
+		// 計画所有の撮影制御方法一式(窓より先に読む。窓はここから実体を引くため)。
+		if (j.contains("ccm") && j["ccm"].is_object())
+		{
+			const auto& jc = j["ccm"];
+			auto pick = [&](const char* k) -> std::shared_ptr<hgc::ccmBase>
+			{ return jc.contains(k) ? ccmFromJsonObj(jc[k]) : nullptr; };
+			plan.ccm.set(hgc::ccmType::night,   pick("night"));
+			plan.ccm.set(hgc::ccmType::sunrise, pick("sunrise"));
+			plan.ccm.set(hgc::ccmType::sunset,  pick("sunset"));
+			plan.ccm.set(hgc::ccmType::day,     pick("day"));
+			plan.ccm.useNight   = jc.value("useNight",   true);
+			plan.ccm.useSunrise = jc.value("useSunrise", true);
+			plan.ccm.useSunset  = jc.value("useSunset",  true);
+			plan.ccm.useDay     = jc.value("useDay",     true);
+		}
 		if (j.contains("ccmList") && j["ccmList"].is_array())
 		{
 			for (const auto& w : j["ccmList"])
@@ -340,7 +367,15 @@ namespace csjson
 				hgc::ccmWindow win;
 				if (w.contains("start")) { win.start = dtFromJson(w["start"]); }
 				if (w.contains("end"))   { win.end   = dtFromJson(w["end"]); }
-				if (w.contains("ccm"))   { win.ccm   = ccmFromJsonObj(w["ccm"]); }
+				win.type = static_cast<hgc::ccmType>(w.value("type", 0));
+				// 実体は計画所有の一式から引く(複製しない)。移行(夜間前/後)はその場で作る。
+				win.ccm  = plan.ccm.get(win.type);
+				if (!win.ccm && win.type != hgc::ccmType::invalid)
+				{
+					win.ccm = std::make_shared<hgc::ccmBase>(win.type);
+					win.ccm->name = (win.type == hgc::ccmType::preNight) ? "preNight"
+					              : (win.type == hgc::ccmType::postNight) ? "postNight" : "";
+				}
 				plan.ccmList.push_back(std::move(win));
 			}
 		}

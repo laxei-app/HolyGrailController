@@ -40,12 +40,11 @@ namespace hgc
 	{
 		dateTime start;					// 適用開始時刻
 		dateTime end;					// 適用終了時刻
-		std::shared_ptr<ccmBase> ccm;	// 撮影制御方法(実体)
+		ccmType  type = ccmType::invalid;	// どの撮影制御方法か(保存はこれだけ。実体は cs::ccm 側)
+		// 計画が所有する実体(cs::ccm)への参照。**複製しない**ので、計画の ccm を編集すれば
+		// 同じ型の窓すべてに反映される。移行(preNight/postNight)は実体を持たないのでその場で作る。
+		std::shared_ptr<ccmBase> ccm;
 	};
-
-	// 7.3.2 スケジュール手動編集
-	// 朝日/夕日の帯モード。auto=画角侵入で自動判定 / on=挿入(強制で朝日/夕日) / off=排除(強制で日中)。
-	enum class bandMode : uint8_t { autoDetect = 0, on = 1, off = 2 };
 
 	// 撮影制御方法の境目(隣接する窓の境界)の時刻を手動で上書きする指定。
 	// (before→after) の型ペアの occ 番目(0始まり)の境目を when の時刻へ動かす。
@@ -76,10 +75,11 @@ namespace hgc
 		double      elevation = 0.0;	// 開始時の仰角[°] -90.0～90.0
 		bool        landscape = true;	// 横向きで撮る(ランドスケープ)
 		std::vector<eventItem> events;	// 撮影計画のイベント
-		std::vector<ccmWindow> ccmList;	// 撮影制御方法(実体をコピー)
-		// --- スケジュール手動編集(7.3.2。UIの帯ドラッグで設定) ---
-		bandMode sunriseMode = bandMode::autoDetect;	// 朝日撮影の挿入/排除
-		bandMode sunsetMode  = bandMode::autoDetect;	// 夕日撮影の挿入/排除
+		// この計画が所有する撮影制御方法一式。**ここだけが権威**(仕様3.7)。
+		// 初期値から取り込むのは新規作成時と初期値リスト選択時だけ。
+		ccmOwned ccm;
+		// 適用区間。ccm を材料に buildSchedule が組み立てる派生物(保存は時刻+型のみ)。
+		std::vector<ccmWindow> ccmList;
 		std::vector<boundaryOverride> boundaries;		// 境目の時刻上書き
 		// 撮影開始(start)直前に効いていたはずの撮影制御方法。開始が移行(夜間前/後)の途中のとき、
 		// 1枚目の初期露出のシードに使う(夜間前=日中/夕日, 夜間後=夜間)。無ければ null。

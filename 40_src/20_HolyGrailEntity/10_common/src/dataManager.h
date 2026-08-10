@@ -139,7 +139,7 @@ public:
 	static bool cameraModelMatches(const device& dev, const hgc::camera& cam);
 
 	// --- 撮影計画の永続化(案A /plan。1計画1ファイル plan_<id>.json。§7.4) ---
-	// 撮影計画(cs)の自己完結JSON(ラッパー {"plan":..,"planCcm":..})を保存/読込/削除する。
+	// 撮影計画(cs)の自己完結JSONを保存/読込/削除する(撮影制御方法も cs が持つ)。
 	// id は作成時刻 yyyyMMdd-HHmmss(衝突時 -NN)。dataManager は id の規則は関知しない。
 	static bool savePlanFile(const std::string& id, const std::string& wrappedJson);
 	static bool loadPlanFile(const std::string& id, std::string& out);
@@ -167,9 +167,6 @@ public:
 	static std::string ccmSetToJson(const astro::ccmSet& set);
 	static bool parseCcmSetJson(const std::string& json, astro::ccmSet& set);
 
-	// 保存ラッパー {"plan":..,"planCcm":..} を分解する。plan必須、planCcmは任意(空文字)。
-	// 旧形式(素のcs JSON)もそのまま plan として返す。
-	static bool splitSavedPlan(const std::string& wrapped, std::string& planOut, std::string& ccmOut);
 
 	// --- 動作ログ(データ構造仕様書43 §8) ---
 	// 固定長128Bのテキストレコードを日付ごとのファイル(hg_YYYY-MM-DD.log)へ追記する。

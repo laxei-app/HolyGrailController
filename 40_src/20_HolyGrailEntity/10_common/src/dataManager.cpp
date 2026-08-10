@@ -230,21 +230,6 @@ bool dataManager::removeLegacyPlan(void)
 	return osfile::removeFile("plan", "plan.json");
 }
 
-bool dataManager::splitSavedPlan(const std::string& wrapped, std::string& planOut, std::string& ccmOut)
-{
-	ccmOut.clear();
-	json w = json::parse(wrapped, nullptr, false);
-	if (w.is_discarded() || !w.is_object()) { return false; }
-	if (w.contains("plan"))		// ラッパー形式 {"plan":..,"planCcm":..}
-	{
-		planOut = w["plan"].dump();
-		if (w.contains("planCcm")) { ccmOut = w["planCcm"].dump(); }
-		return true;
-	}
-	planOut = wrapped;			// 旧形式: 素の cs JSON
-	return true;
-}
-
 // 出荷時設定の露出平滑化(データ構造仕様書43 §5.10 の出荷時設定)。
 hgc::exposureSmoothing dataManager::factorySmoothing(void)
 {
