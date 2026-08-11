@@ -1,0 +1,13 @@
+起点 IMG_0076.CR3  露光8"  周期15s  待ち1.0s  予定50分
+    20 07:06:49 cyc= 10367 post=  72 lv=  47 fetch= 1366 r2 http=200 Y=0.01830 
+    40 07:11:49 cyc= 10600 post=  71 lv=  51 fetch= 1599 r2 http=200 Y=0.02140 
+    60 07:16:48 cyc=  9702 post=  80 lv=  48 fetch=  700 r1 http=200 Y=0.02222 
+    80 07:21:48 cyc=  9610 post=  77 lv=  48 fetch=  609 r1 http=200 Y=0.02367 
+   100 07:26:48 cyc=  9605 post=  71 lv=  53 fetch=  604 r1 http=200 Y=0.02580 
+   120 07:31:48 cyc=  9624 post=  71 lv=  45 fetch=  621 r1 http=200 Y=0.03043 
+   140 07:36:49 cyc= 10252 post=  64 lv=  44 fetch= 1251 r2 http=200 Y=0.02341 
+   160 07:41:49 cyc= 10553 post=  69 lv=  48 fetch= 1552 r2 http=200 Y=0.02850 
+   180 07:46:48 cyc=  9575 post=  81 lv=  46 fetch=  573 r1 http=200 Y=0.03827 
+   200 07:51:48 cyc=  9618 post=  74 lv=  44 fetch=  616 r1 http=200 Y=0.02970 
+
+終了: 200コマ 取得失敗0 最大周期10631ms  → 50_tools/camera/soak_out/soak_R100_thumb.csv

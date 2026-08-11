@@ -79,7 +79,7 @@ def lv_ready(body: bytes) -> bool:
 
 
 # ---------------------------------------------------------------- 準備
-def setup(cam, verbose=True):
+def setup(cam, verbose=True, liveview=True):
     st_, b, _ = cam.get('/ccapi')
     if st_ != 200: raise SystemExit('CCAPI に接続できません')
     api = json.loads(b.decode())
@@ -94,11 +94,18 @@ def setup(cam, verbose=True):
     for key in ('functions/autopoweroff',):
         if key in paths:
             cam.put(paths[key], {'value': 'disable'})
-    # ライブビュー開始(busy 判定に使う)
     lv = paths.get('shooting/liveview')
-    for disp in ('keep', 'on', 'off'):
-        s, _, _ = cam.post(lv, {'liveviewsize': 'small', 'cameradisplay': disp})
-        if s in (200, 201): break
+    if liveview:
+        # ライブビュー開始(busy 判定に使う)
+        for disp in ('keep', 'on', 'off'):
+            s, _, _ = cam.post(lv, {'liveviewsize': 'small', 'cameradisplay': disp})
+            if s in (200, 201): break
+    else:
+        # 明示的に止める。サムネイル測光ではライブビューは不要で、アプリも
+        # liveViewNeededWhileCapturing が false なら releaseLiveView で離す(captureRunner.cpp:210)。
+        # 長秒露光を繰り返す間ライブビューを掴み続けるのが R10 の停止に効いている疑いがあるため、
+        # 通常運用と同じ「離した」状態で確かめる(2026-08-11)。
+        cam.post(lv, {'liveviewsize': 'off', 'cameradisplay': 'on'})
     return paths
 
 
@@ -110,17 +117,25 @@ def shoot(cam):
     return s, (time.perf_counter() - t0) * 1000.0
 
 
-def wait_busy(cam, limit_ms=15000):
-    """露光終了→測光できる体裁になるまで[ms]。アプリの busy と同じ意味。"""
+def wait_busy(cam, limit_ms=15000, max_tries=20):
+    """露光終了→測光できる体裁になるまで[ms]。アプリの busy と同じ意味。
+
+    【連打しないこと】カメラが応答しなくなったとき、以前は 50ms おきに上限まで叩き続け、
+    1コマあたり約400回のリクエストを浴びせていた(2026-08-11)。壊れた原因ではないが、
+    壊れた後の状態を悪化させ「電源を入れ直さないと戻らない」状況を作った疑いがある。
+    回数を絞り、間隔も広げていく。
+    """
     p = cam.p['shooting/liveview/flipdetail'] + '?kind=info'
     t0 = time.perf_counter()
     tries = 0
-    while (time.perf_counter() - t0) * 1000.0 < limit_ms:
+    wait = 0.05
+    while tries < max_tries and (time.perf_counter() - t0) * 1000.0 < limit_ms:
         tries += 1
         s, b, _ = cam.get(p)
         if s == 200 and lv_ready(b):
             return (time.perf_counter() - t0) * 1000.0, tries
-        time.sleep(0.05)
+        time.sleep(wait)
+        wait = min(wait * 1.6, 1.0)          # 50ms → 80 → 128 … 最大1秒
     return -1.0, tries
 
 

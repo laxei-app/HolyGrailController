@@ -54,7 +54,12 @@ def main():
     ap.add_argument('--iso', default='1600')
     ap.add_argument('--av', default='f1.4')
     ap.add_argument('--interval', type=float, default=15.0)
-    ap.add_argument('--settle', type=float, default=1.0)   # 露光終了後の待ち[秒]
+    ap.add_argument('--settle', type=float, default=2.5)   # 露光終了後の待ち[秒]
+    # 何コマ前のサムネを取るか。0=今撮ったコマ / 1=1コマ前。
+    # 1 にすると「15秒前に撮り終わって確実に存在するファイル」を取るので、生成中の
+    # ファイルを掴む可能性が構造的にゼロになる。露出制御は15秒周期で夜明けの明るさ変化は
+    # 分単位なので1コマ遅れは実害にならない(2026-08-11: R10 が生成中を叩いて固着したため)。
+    ap.add_argument('--back', type=int, default=1)
     ap.add_argument('--out', default='soak_r10_thumb.csv')
     a = ap.parse_args()
 
@@ -67,8 +72,8 @@ def main():
     base, err = B.latest_path_by_listing(cam)
     if not base: print('起点の取得に失敗: %s' % err); return 1
     mm = re.match(r'(.*?)(\d+)(\.[A-Za-z0-9]+)$', base); seq = int(mm.group(2))
-    print('起点 %s  露光%s  周期%.0fs  待ち%.1fs  予定%.0f分'
-          % (base.split('/')[-1], a.ss, a.interval, a.settle, a.minutes))
+    print('起点 %s  露光%s  周期%.0fs  待ち%.1fs  %dコマ前  予定%.0f分'
+          % (base.split('/')[-1], a.ss, a.interval, a.settle, a.back, a.minutes))
 
     f = open(a.out, 'w', encoding='utf-8', newline='')
     f.write('frame,wallclock,cycle_ms,post_ms,lv_ms,fetch_ms,retry,http,bytes,medY,meanY,p90,sat,note\n')
@@ -83,12 +88,15 @@ def main():
         rest = wait_to - (time.perf_counter() - t0)
         if rest > 0: time.sleep(rest)
         seq += 1
-        path = '%s%0*d%s' % (mm.group(1), len(mm.group(2)), seq, mm.group(3))
+        tgt = seq - a.back
+        path = '%s%0*d%s' % (mm.group(1), len(mm.group(2)), tgt, mm.group(3))
         retry = 0; sc = 0; body = b''
         t1 = time.perf_counter()
-        for _ in range(4):                       # 503 は 0.5秒おきに最大3回だけ
+        # 503(記録中)だけ短くリトライする。404 は「まだ生成されていない/名前が違う」で、
+        # 連打しても出てこないうえ R10 の撮影エンジンを固めた実績があるので即諦める。
+        for _ in range(4):
             sc, body, _ = cam.get(path + '?kind=thumbnail')
-            if sc == 200: break
+            if sc != 503: break
             retry += 1; time.sleep(0.5)
         fetch_ms = (time.perf_counter() - t1) * 1000.0
         note = ''
@@ -97,7 +105,7 @@ def main():
             try: med, mean, p90, sat = lum(body)
             except Exception as e: note = 'decode:%s' % type(e).__name__
         else:
-            ng += 1; note = 'fetchNG'
+            ng += 1; note = 'fetchNG(%d)' % sc
             q, e2 = B.latest_path_by_listing(cam)   # 外れたら並べ直す
             if q:
                 mm = re.match(r'(.*?)(\d+)(\.[A-Za-z0-9]+)$', q); seq = int(mm.group(2))

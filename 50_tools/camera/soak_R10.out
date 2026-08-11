@@ -1,0 +1,32 @@
+# Canon EOS R10 serial=011031000158 ip=192.168.1.3
+# dir=http://192.168.1.3:8080/ccapi/ver130/contents/card1/100CANON
+# 周期15.0s 待ち3.0s サムネあり 240.0分  → Z:\projects\cameraControl\projects\HolyGrailController\HolyGrailController\50_tools\camera\soak_R10_bigcard_192.168.1.3.csv
+# n  時刻      shut  wait   polls list  thumb  size    note
+    1 20:35:40    76   1833    1   536     46    4931  
+   21 20:40:40    93   1827    1   746     38    4897  
+   41 20:45:40   897    938    1   876     50    4915  
+   61 20:50:39    84     45    1  1061     34    4940  
+   81 20:55:39   341    510    1   252     46    4912  
+  101 21:00:40   868    924    1   471     51    4898  
+  109 21:02:50  1790  11171   16     0      0       0  nogrow
+  110 21:03:05    88  10937   17     0      0       0  nogrow
+  111 21:03:20   834  11167   12     0      0       0  nogrow
+  112 21:03:35    97  10925   15     0      0       0  nogrow
+!! 21:03:40 初回 contents 503 During shooting or recording  n=113
+  113 21:03:49   809  10154   16     0      0       0  contents503;contents503;contents503;contents503;contents503;contents503;contents503;contents503;contents503;contents503;contents503;contents503;contents503;contents503;contents503;contents503;nogrow
+!! 21:04:03 初回 shutter 応答なし  n=114  port8080=TimeoutError port49152=TimeoutError
+  114 21:04:22 12152  10205    1     0      0       0  shutter-1;contents_dead;nogrow
+  115 21:04:45 10003  10211    1     0      0       0  shutter-1;contents_dead;nogrow
+  116 21:05:08 10006  10215    1     0      0       0  shutter-1;contents_dead;nogrow
+
+!! 21:05:08 2分間まったく記録が進みません。中断します。
+   カメラの様子: port8080=TimeoutError port49152=TimeoutError
+
+===== 集計  Canon EOS R10 192.168.1.3 =====
+  116コマ / 29.7分   正常 108
+  シャッター503 0 / 応答なし 3
+  記録待ち時間切れ 8 / サムネ失敗 0
+  初回 contents 503(記録中): 21:03:40 (開始から 28.1分)
+  初回 応答なし: 21:04:03 (開始から 28.5分)
+  終了時のカメラ: port8080=TimeoutError port49152=TimeoutError
+  CSV: Z:\projects\cameraControl\projects\HolyGrailController\HolyGrailController\50_tools\camera\soak_R10_bigcard_192.168.1.3.csv

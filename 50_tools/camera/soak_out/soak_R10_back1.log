@@ -1,0 +1,12 @@
+起点 IMG_0237.CR3  露光8"  周期15s  待ち2.5s  1コマ前  予定45分
+    20 07:55:35 cyc= 10552 post=  70 lv=  21 fetch=   50 r0 http=200 Y=0.00052 
+    40 08:00:35 cyc= 10536 post= 137 lv=  24 fetch=   35 r0 http=200 Y=0.00051 
+    60 08:05:35 cyc= 10540 post= 146 lv=  23 fetch=   39 r0 http=200 Y=0.00051 
+    80 08:10:35 cyc= 10550 post=  72 lv=  19 fetch=   49 r0 http=200 Y=0.00052 
+   100 08:15:35 cyc= 10557 post= 102 lv=  20 fetch=   54 r0 http=200 Y=0.00051 
+   120 08:20:35 cyc= 10537 post= 112 lv=  23 fetch=   36 r0 http=200 Y=0.00051 
+   140 08:25:35 cyc= 10540 post= 124 lv=  21 fetch=   38 r0 http=200 Y=0.00051 
+   160 08:30:35 cyc= 10539 post= 136 lv=  22 fetch=   39 r0 http=200 Y=0.00050 
+   180 08:35:35 cyc= 10545 post= 165 lv=  24 fetch=   43 r0 http=200 Y=0.00050 
+
+終了: 180コマ 取得失敗0 最大周期10567ms  → 50_tools/camera/soak_out/soak_R10_back1.csv
