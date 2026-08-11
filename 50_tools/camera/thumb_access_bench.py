@@ -26,18 +26,45 @@ sys.stdout.reconfigure(encoding='utf-8')
 # ---------------------------------------------------------------- HTTP
 # アプリはセッションを使い回す(1リクエスト1接続にすると R10 が connect 詰まりを起こした
 # 経緯がある: 2026-08-03)。ここでも keep-alive を使う。
-import http.client
+import http.client, socket, threading
 
 
 class Cam:
-    def __init__(self, ip, port=8080):
+    """CCAPI クライアント。**必ず戻ってくる**ことを保証する。
+
+    【なぜ見張りが要るか】ソケットの timeout だけでは足りない(2026-08-11)。
+     カメラが busy のまま固まると、接続は生きたまま応答が来ず、しかも
+     event/polling?continue=on のような保持型の応答では読み出しがブロックし続けて
+     socket timeout が発火しないことがある。実際に**2時間戻ってこなかった**。
+     そこで別スレッドから、期限を過ぎたソケットを強制的に閉じて読み出しを叩き起こす。
+    """
+
+    def __init__(self, ip, port=8080, timeout=10, hard=20):
         self.ip = ip; self.port = port
         self.conn = None
-        self.base = None
+        self.timeout = timeout          # ソケットのタイムアウト[秒]
+        self.hard = hard                # 1リクエストの上限[秒]。超えたら外から閉じる
+        self._inflight = None           # (期限, conn)
+        self._lk = threading.Lock()
+        self._wd = threading.Thread(target=self._watch, daemon=True)
+        self._wd.start()
+
+    def _watch(self):
+        while True:
+            time.sleep(0.25)
+            with self._lk:
+                cur = self._inflight
+            if cur and time.time() > cur[0]:
+                try: cur[1].sock.shutdown(socket.SHUT_RDWR)   # 読み出しを叩き起こす
+                except Exception: pass
+                try: cur[1].close()
+                except Exception: pass
+                with self._lk:
+                    if self._inflight is cur: self._inflight = None
 
     def _c(self):
         if self.conn is None:
-            self.conn = http.client.HTTPConnection(self.ip, self.port, timeout=15)
+            self.conn = http.client.HTTPConnection(self.ip, self.port, timeout=self.timeout)
         return self.conn
 
     def reset(self):
@@ -47,17 +74,22 @@ class Cam:
             pass
         self.conn = None
 
-    def req(self, method, path, body=None, ctype='application/json'):
-        """(status, bytes, elapsed_ms) を返す。失敗は (0, b'', ms)。"""
+    def req(self, method, path, body=None, ctype='application/json', hard=None):
+        """(status, bytes, elapsed_ms) を返す。失敗は (0, b'', ms)。必ず戻る。"""
         t0 = time.perf_counter()
+        limit = self.hard if hard is None else hard
         for attempt in (0, 1):
             try:
                 c = self._c()
                 hdr = {'Connection': 'keep-alive'}
                 if body is not None: hdr['Content-Type'] = ctype
-                c.request(method, path, body=body, headers=hdr)
-                r = c.getresponse()
-                data = r.read()
+                with self._lk: self._inflight = (time.time() + limit, c)
+                try:
+                    c.request(method, path, body=body, headers=hdr)
+                    r = c.getresponse()
+                    data = r.read()
+                finally:
+                    with self._lk: self._inflight = None
                 return r.status, data, (time.perf_counter() - t0) * 1000.0
             except Exception:
                 self.reset()

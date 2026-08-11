@@ -38,7 +38,10 @@ def main():
     # サムネイル取得のあと、次のシャッターまで空ける時間[秒]。
     # 15秒周期のときはここに約6秒の空白があり180コマ完走したが、0秒にしたら42コマで
     # シャッターPOSTが返らなくなった(カメラは生きたまま。2026-08-11)。境目を探る。
-    ap.add_argument('--gap', type=float, default=0.0)
+    ap.add_argument('--gap', type=float, default=2.0)
+    # 露光が終わってから event/polling を始めるまでの待ち[秒]。
+    # 記録が終わる前に通知を引きに行ってカメラを急かさないため(2026-08-12)。
+    ap.add_argument('--settle', type=float, default=2.0)
     ap.add_argument('--out', default='soak_tight.csv')
     a = ap.parse_args()
 
@@ -53,7 +56,7 @@ def main():
           % (a.ip, a.ss, '/'.join(isos), a.gap, a.minutes))
 
     f = open(a.out, 'w', encoding='utf-8', newline='')
-    f.write('frame,wallclock,cycle_ms,iso,iso_ms,post_ms,post_http,notify_ms,polls,'
+    f.write('frame,wallclock,cycle_ms,iso,iso_ms,post_ms,post_http,notify_http,notify_ms,polls,'
             'fetch_ms,fetch_http,file,medY,meanY,note\n')
     t_end = time.time() + a.minutes * 60
     n = 0; ng = 0; stuck = 0; prev = None
@@ -62,14 +65,15 @@ def main():
         iso = isos[n % len(isos)]
         s_iso, _b, iso_ms = cam.put(SET + 'iso', {'value': iso})
         post_http, post_ms = B.shoot(cam)
-        rest = expo - (time.perf_counter() - t0)
-        if rest > 0: time.sleep(rest)                    # 露光ぶんだけ。これ以外の待ちは入れない
+        rest = expo + a.settle - (time.perf_counter() - t0)
+        if rest > 0: time.sleep(rest)                    # 露光ぶん + settle(記録が終わるのを待つ)
         te = time.perf_counter()
 
-        path = None; polls = 0
+        path = None; polls = 0; notify_http = 0
         while polls < a.maxpoll:
             polls += 1
             s, b, _ms = cam.get(p['event/polling'] + '?continue=on')
+            notify_http = s
             if s != 200: break
             mo = ADDED.search(b.decode('utf-8', 'replace'))
             if mo:
@@ -96,17 +100,21 @@ def main():
         if path: prev = path
         n += 1
         cyc = (time.perf_counter() - t0) * 1000.0
-        f.write('%d,%s,%.0f,%s,%.0f,%.0f,%d,%.0f,%d,%.0f,%d,%s,%.5f,%.5f,%s\n'
+        f.write('%d,%s,%.0f,%s,%.0f,%.0f,%d,%d,%.0f,%d,%.0f,%d,%s,%.5f,%.5f,%s\n'
                 % (n, time.strftime('%H:%M:%S'), cyc, iso, iso_ms, post_ms, post_http,
-                   notify_ms, polls, fetch_ms, sc, (prev or '').split('/')[-1], med, mean, note))
+                   notify_http, notify_ms, polls, fetch_ms, sc, (prev or '').split('/')[-1],
+                   med, mean, note))
         f.flush()
         if n % 25 == 0 or note:
             print('  %4d %s cyc=%6.0f ISO%s(%.0fms) post=%.0f 通知=%.0f(%d) 取得=%.0f %s %s'
                   % (n, time.strftime('%H:%M:%S'), cyc, iso, iso_ms, post_ms, notify_ms,
                      polls, fetch_ms, (prev or '').split('/')[-1], note))
-        stuck = stuck + 1 if note else 0
-        if stuck >= 3:
-            print('  !! 停止と判断して中断 コマ%d %s' % (n, time.strftime('%H:%M:%S')))
+        # 【重要】通知が来ない等の異常が出たら、その場で終わる。以前は3コマ続くまで回していたが、
+        # busy のカメラにシャッターを投げ続けることになり、固着を深めた疑いがある
+        # (コマ221で通知が来ず、続くコマ222/223のシャッターが 503 になった。2026-08-11)。
+        if note:
+            print('  !! %s のため終了 コマ%d %s（これ以上シャッターを投げない）'
+                  % (note, n, time.strftime('%H:%M:%S')))
             break
         if a.gap > 0: time.sleep(a.gap)      # 次のシャッターまでの空き
     f.close()
