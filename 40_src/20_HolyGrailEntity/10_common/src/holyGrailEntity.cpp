@@ -1150,7 +1150,10 @@ namespace
 						if (c.metered < 0.0) { ++R.meterFail; }	// 試みたが取得できなかった(露出据え置き)
 					}
 					if (!c.setOk)        { ++R.setFail; }		// リトライしても露出設定できず
-					if (c.meterTry > 1)  { ++R.meterRetryFrames; }
+					// 測光の「やり直し」= サムネイルを取り直した回数。meterTry は登録通知を
+					// 引いた回数(1コマ6〜8回が普通)なので、これを使うと全コマが「リトライ」に
+					// なってしまい意味を失う(2026-08-13 実測で判明)。
+					if (c.meterFetchTries > 1) { ++R.meterRetryFrames; }
 					if (c.applyTry > 1)  { ++R.applyRetryFrames; }
 					if (c.staleSkip > 0) { ++R.staleFrames; R.staleTotal += c.staleSkip; }
 					if (c.lateMs >= 0)

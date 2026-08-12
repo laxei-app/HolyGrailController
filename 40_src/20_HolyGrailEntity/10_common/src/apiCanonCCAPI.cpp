@@ -1596,31 +1596,41 @@ errCode apiCanonCCAPI::thumbMeterCore(meterResult& out, int budgetMs, const std:
 	const std::string base = apiHostBase();
 	if (base.empty()) { out.failStage = 2; out.rdyMs = out.waitMs; return ERR_HGC_RDY_METARING; }
 
-	// ② サムネイル取得。記録直後のカメラは 503 で弾くことがあるので予算内でリトライする。
+	// ② サムネイル取得 → ③ 復号。この2つは1組で予算内リトライする。
+	//
+	// 【なぜ復号失敗もリトライするか(2026-08-13 実機で判明)】記録直後のカメラは 503 で
+	//  弾くことがあるのでリトライしていたが、**HTTP 200 なのに中身が復号できない**ケースが
+	//  R10 で 63コマ中4回(約6%)出た。まだ書き終わっていない JPEG を掴んでいると考えられる。
+	//  従来はこれを1回で諦めて測光失敗(露出据え置き)にしていた。取り直せば済むので取り直す。
+	//  取得回数は R10 の固着予算に効くが、6%のためにコマを捨てる方が損である。
 	void* tf = tool::startElapse();
 	const std::string url = base + path + "?kind=thumbnail";
 	std::string jpg;
-	bool got = false;
+	uint16_t hist[256];
+	int  w = 0, h = 0;
+	bool got = false, dec = false;
+	int  decodeMs = 0;
 	while (true)
 	{
 		++out.fetchTries;
 		jpg.clear();
-		if (netThread::httpGet(url, jpg) && !jpg.empty()) { got = true; break; }
+		got = (netThread::httpGet(url, jpg) && !jpg.empty());
+		if (got)
+		{
+			void* td = tool::startElapse();
+			dec = jpglm::lumaHistogram(reinterpret_cast<const uint8_t*>(jpg.data()), jpg.size(),
+			                           hist, w, h, kThumbCropRatio);
+			decodeMs += static_cast<int>(tool::getElapse(td));
+			if (dec) { break; }
+		}
 		if (keepGoing && !keepGoing()) { break; }
 		if (static_cast<int>(tool::getElapse(t0)) >= budgetMs) { break; }	// 総予算切れ
 		meterSleep(kThumbFetchRetryMs, keepGoing);
 	}
-	out.fetchMs = static_cast<int>(tool::getElapse(tf));
-	if (!got) { out.failStage = 3; out.rdyMs = static_cast<int>(tool::getElapse(t0)); return ERR_HGC_RDY_METARING; }
-
-	// ③ 復号→輝度ヒストグラム(レターボックス黒帯は上下6%を捨てて除去)。
-	void* td = tool::startElapse();
-	uint16_t hist[256];
-	int w = 0, h = 0;
-	const bool dec = jpglm::lumaHistogram(reinterpret_cast<const uint8_t*>(jpg.data()), jpg.size(),
-	                                      hist, w, h, kThumbCropRatio);
-	out.decodeMs = static_cast<int>(tool::getElapse(td));
+	out.fetchMs  = static_cast<int>(tool::getElapse(tf)) - decodeMs;	// 取得だけの時間
+	out.decodeMs = decodeMs;
 	out.rdyMs    = static_cast<int>(tool::getElapse(t0));
+	if (!got) { out.failStage = 3; return ERR_HGC_RDY_METARING; }
 	if (!dec) { out.failStage = 4; return ERR_HGC_API_ANALIZE; }
 
 	// ④ 中央値→リニア。診断(p99/pMax/チェックサム)も同型で埋める。
