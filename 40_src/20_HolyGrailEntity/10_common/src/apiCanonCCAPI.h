@@ -162,8 +162,14 @@ public:
 	//  旧方式の測光ss切替・張り付き学習・反映待ちは、この方式では不要になったので削除した
 	//  (履歴が要るときは 2026-08-13 以前の apiCanonCCAPI を参照)。
 	//
-	// 【R10 では使わない】生成直後のファイルに触ると R10 は撮影エンジンが固着する(取得元 CR3 で
-	//  約49回、JPG で約179回。R100 は 300コマ完走で無傷=2026-08-13 実測)。この方式の対象は R100。
+	// 【EOS R10 の不具合について】この方式は機種を選ばない汎用の測光である。ただし EOS R10 は
+	//  生成直後のファイルに触ると撮影エンジンが固着するという**カメラ側の不具合**を持つ
+	//  (取得元 CR3 で約49回、JPG で約179回。R100 は同条件で300コマ完走=2026-08-13 実測)。
+	//  そのため取得元は JPG を優先する(R10 の持ちが約3.7倍になり、壊れ方も浅くなる)。
+	//  固着したカメラは「シャッターは通るのに画像が記録されない」状態になり、情報系も
+	//  ライブビューも生きているので接続の生死では見分けられない。そこで新しい画像が現れなかった
+	//  ことを meterResult::shotMissing で上位へ申告し、captureRunner がオフライン提示へ回す
+	//  (captureRunner::kMaxNoRecordFrames)。R10 を外すのではなく、壊れたら気づける形にしてある。
 	errCode meterScene(const hgc::exposure& shotExp, meterResult& out,
 	                   const std::function<bool()>& keepGoing) override;
 	errCode meterHere(meterResult& out, const std::function<bool()>& keepGoing) override;

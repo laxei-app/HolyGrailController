@@ -1480,6 +1480,10 @@ std::string apiCanonCCAPI::waitAddedByEvent(int budgetMs, const std::function<bo
 	if (!(funcList[funcNum::EVENT_POLL].verb == verb::GET)) { diag.step = 1; return std::string(); }
 	void* t0 = tool::startElapse();
 	bool triedRecover = false;	// このコマで「DELETEして再判定」を試したか(1回だけ)
+	// 通知の取得そのものは通ったか。1回でも通っていれば「カメラは応答しているのに画像が
+	// 現れない」と言い切れる(上位はこれを見てオフライン判定へ回す)。途中の一過性の失敗で
+	// この判断を落とさないよう、最後の1回ではなく「1回でも通ったか」で持つ。
+	bool anyPollOk = false;
 
 	while (static_cast<int>(tool::getElapse(t0)) < budgetMs)
 	{
@@ -1513,7 +1517,8 @@ std::string apiCanonCCAPI::waitAddedByEvent(int budgetMs, const std::function<bo
 			ok = netThread::httpGet(pollUrl(pollMode_), body);
 		}
 
-		if (!ok) { netThread::lastHttpFailure(diag.http, diag.body); diag.step = 6; }
+		if (ok) { anyPollOk = true; }
+		else    { netThread::lastHttpFailure(diag.http, diag.body); diag.step = 6; }
 		if (ok && !body.empty())
 		{
 			// {"addedcontents":["/ccapi/.../IMG_xxxx.CR3", ...], ...} を軽量に抽出(DOM化しない)。
@@ -1552,7 +1557,10 @@ std::string apiCanonCCAPI::waitAddedByEvent(int budgetMs, const std::function<bo
 		// 見つからなかった/失敗した → 必ず間隔を空ける(連打しない)。
 		meterSleep(kPollGapMs, keepGoing);
 	}
-	if (diag.step == 0) { diag.step = 7; }	// 時間内に通知が来なかった
+	// 通知は引けていたのに画像が現れなかった = カメラが撮影を完了していない疑い(step=7)。
+	// 一度も引けていない = 通信の問題(step=6 のまま。上位はシャッター失敗の方で気づく)。
+	if (anyPollOk) { diag.step = 7; }
+	else if (diag.step == 0) { diag.step = 6; }
 	return std::string();
 }
 
@@ -1573,7 +1581,17 @@ errCode apiCanonCCAPI::thumbMeterCore(meterResult& out, int budgetMs, const std:
 	out.waitBody = diag.body;
 	out.tries  = tries;
 	out.waitMs = static_cast<int>(tool::getElapse(t0));
-	if (path.empty()) { out.failStage = 1; out.rdyMs = out.waitMs; return ERR_HGC_RDY_METARING; }
+	if (path.empty())
+	{
+		out.failStage = 1;
+		out.rdyMs     = out.waitMs;
+		// 通知そのものは取れていた(=カメラは応答している)のに、予算内で新しい画像が
+		// 現れなかった。シャッターは受け付けたのに撮影が完了していない疑いを上位へ渡す。
+		// 通信自体が失敗している場合(waitStep=1/6)は、撮れていないのか届いていないのかを
+		// ここでは区別できないので申告しない(上位はシャッター失敗の方で気づく)。
+		out.shotMissing = (diag.step == 7);
+		return ERR_HGC_RDY_METARING;
+	}
 
 	const std::string base = apiHostBase();
 	if (base.empty()) { out.failStage = 2; out.rdyMs = out.waitMs; return ERR_HGC_RDY_METARING; }

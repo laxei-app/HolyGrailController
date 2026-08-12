@@ -152,6 +152,7 @@ bool captureRunner::meterFrame(const hgc::exposure& shotExp, apiBase::meterResul
 	lvPinnedLog_   = mr.pinned;
 	meterUsableLog_ = mr.usable;
 	lvMeanLinLog_ = mr.meanLin; lvP75Log_ = mr.p75; lvP90Log_ = mr.p90; lvSatLog_ = mr.satRatio;
+	shotMissing_   = mr.shotMissing;
 	meterWaitMs_   = mr.waitMs;
 	meterFetchMs_  = mr.fetchMs;
 	meterDecodeMs_ = mr.decodeMs;
@@ -259,7 +260,8 @@ hgc::exposure captureRunner::appliedOrConverge(void) const
 //  もう一点、503 は「カメラが応答している」証拠なので接続断に数えてはいけない。従来は数えて
 //  いたため、つながっているカメラを切断と判定していた(直後のログに「再接続成功」が並ぶ)。
 //  接続断として数えるのは応答が返らなかった場合(status<=0)だけにする。
-errCode captureRunner::fireShutter(const hgc::exposure& shotExp, double intervalSec, int& failStreak)
+errCode captureRunner::fireShutter(const hgc::exposure& shotExp, double intervalSec, int& failStreak,
+                                   bool quick)
 {
 	// そのコマに使える時間 = 周期 - 露光 - 余裕。次のコマの時刻を追い越さないための上限。
 	double ssSec = expo::parseValue(shotExp.ss, expo::expoKind::ss);
@@ -267,6 +269,9 @@ errCode captureRunner::fireShutter(const hgc::exposure& shotExp, double interval
 	int budgetMs = static_cast<int>(intervalSec * 1000.0 - ssSec * 1000.0) - kShutterMarginMs;
 	if (budgetMs > kShutterBusyMaxMs) { budgetMs = kShutterBusyMaxMs; }
 	if (budgetMs < 0)                 { budgetMs = 0; }
+	// 既に「撮れていない」と判定済みのカメラには粘らない。busy のカメラへシャッターを
+	// 投げ続けると固着が深まる(2026-08-11 実測)。復帰を拾うため1回だけは投げる。
+	if (quick) { budgetMs = 0; }
 
 	void*   t0     = tool::startElapse();
 	errCode err    = ERR_HGC_OK;
@@ -738,7 +743,11 @@ errCode captureRunner::loop(void)
 	hgc::exposure lastShotExp{};	// 直近に実際に撮影した露出。窓切替の「直前から継続」はこちらを使う
 	// (lastExp を使うと切替直後の1コマが測光ssで撮れてしまう。7/24-25実測: 夕日/preNight/postNight
 	//  入りが数段暗く、朝の日中入りは+4.7段明るく写った。向きと大きさ=測光ssと撮影ssの差そのもの)
-	int meterFailStreak = 0;	// 連続測光失敗数(ライブビュー停止の検出/回復用)
+	int meterFailStreak = 0;	// 連続測光失敗数(測光の回復用)
+	// 「応答するのに撮れていない」カメラの検出(ヘッダ kMaxNoRecordFrames の説明を参照)。
+	int  noRecordStreak = 0;	// 撮影結果が現れなかったコマの連続数
+	int  noRecordRounds = 0;	// それが上限に達した回数(1回目は静かに張り直す)
+	bool cameraOffline  = false;	// 「オンラインでない」と提示済みか
 	int frame = 0;
 	double curEvT = 0.0;		// 実効目標ev(項目8: 自動露出→自動露出の切替で 1/3 段/枚 緩やかに移行)
 	bool   preNightConverge = false;	// 夜間前移行: 終端へ向けた夜間露出への収束フェーズか
@@ -878,7 +887,7 @@ errCode captureRunner::loop(void)
 			}
 			shotExp = pending;
 			shutterMs = tool::epochMs();	// シャッター投下直前の壁時計(ms精度)
-			err = this->fireShutter(shotExp, interval, shootFailStreak);
+			err = this->fireShutter(shotExp, interval, shootFailStreak, cameraOffline);
 			++frame;
 			if (onProgress_) { onProgress_(progressInfo{ frame, total, static_cast<int>(endSec - now), static_cast<int>(now - startSec) }); }
 			// 準備を始める時刻まで待つ。
@@ -951,6 +960,7 @@ errCode captureRunner::loop(void)
 		// 測光の内訳もリセットする。前コマの値が残ると、測光しないコマ(夜間の固定露出)で
 		// 前の busy/取得時間をそのまま報告してしまう。
 		meterWaitMs_ = -1; meterFetchMs_ = -1; meterDecodeMs_ = -1; meterFetchTries_ = 0;
+		shotMissing_ = false;	// 測光しないコマは「撮れていない」の判定ができない=据え置き
 
 		// ② このコマの ev0 中心bmを太陽高度から決める(薄明ほど暗く保つ)。測光を使う制御方法(preNight/postNight/auto)で効く。
 		//    now=文脈時刻(実時刻)、plan_.place=撮影地。夜間(固定露出)では ev0 を使わないので影響しない。
@@ -1420,25 +1430,67 @@ errCode captureRunner::loop(void)
 		//  実機で、シャッターは1枚も失敗していないのに測光(サムネイル取得)だけが連続失敗し、
 		//  接続断と誤判定 → 探索ループに入って撮影を完全に停止した(2時間20分の空白)。
 		//  カメラが撮れている以上つながっているので、測光失敗では露出を据え置いて撮影を続ける。
+		//  「撮れていない」の判定は下の noRecordStreak が別に行う(そちらは根拠が違う)。
 		if (meterFailStreak >= kMaxMeterFail)
 		{
 			meterFailStreak = 0;	// 数え直すだけ。セッションは張り直さない(撮影を止めない)
 			avgBuf.clear(); this->resetStepLock();
 		}
-		// シャッターの連続失敗 → 再接続。相対アンカーなので再アンカー不要(次コマが即[A]起点=overrun許容)。
-		if (shootFailStreak >= kMaxConsecutiveFail)
+
+		// --- このコマは「撮影結果が現れた」か(ヘッダ kMaxNoRecordFrames の説明を参照) ---
+		//  シャッターが失敗した/カメラ実装が「撮影結果が現れない」と申告した のどちらかなら、
+		//  そのコマは撮れていない。測光しないコマ(夜間の固定露出)は判定できないので据え置く。
+		if (err != ERR_HGC_OK || shotMissing_)
 		{
-			bool recovered = (onReconnect_ && onReconnect_() && establishSession());
-			if (!recovered)
-			{	// 静かな復帰に失敗 → NOCAMERA を提示し、中止まで再接続を続ける。
+			++noRecordStreak;
+		}
+		else if (meterTry_ > 0)
+		{	// 画像が現れた = カメラは撮れている。
+			noRecordStreak = 0;
+			noRecordRounds = 0;
+			if (cameraOffline)
+			{	// 復帰した(電源入れ直し等)。提示を撮影中へ戻す。
+				cameraOffline = false;
+				if (onState_) { onState_(ST_CAPTURING); }
+				if (onError_) { onError_(ERR_HGC_OK, "カメラの撮影が復帰しました"); }
+			}
+		}
+
+		// シャッターの連続失敗(=届いていない)、または撮った画像が現れない(=届くのに撮れていない)
+		// → 手を打つ。この2つは症状も対処も違うので分けて扱う。
+		const bool noRecord = (noRecordStreak >= kMaxNoRecordFrames);
+		const bool lostLink = (shootFailStreak >= kMaxConsecutiveFail);
+		if (lostLink || noRecord)
+		{
+			if (noRecord) { noRecordStreak = 0; ++noRecordRounds; }
+			// セッションは毎回張り直しておく(電源を入れ直された後はこれが唯一の戻り道)。
+			const bool established = (onReconnect_ && onReconnect_() && establishSession());
+			// ただし「応答するのに撮れていない」状態では establishSession は**成功してしまう**
+			// (情報系もライブビューも生きているため)。1回目だけは復帰したものとして様子を
+			// 見るが、2回目以降は成功を復帰の証拠にしない。撮れた画像が現れることだけが証拠。
+			const bool trustEstablish = !(noRecord && noRecordRounds > 1);
+			bool recovered = established && trustEstablish;
+			if (!recovered && !cameraOffline)
+			{	// ユーザーへ「オンラインでない」と提示する(✖点灯)。
+				cameraOffline = true;
 				if (onState_) { onState_(ST_NOCAMERA); }
-				if (onError_) { onError_(ERR_HGC_NOT_FOUND, "撮影中にカメラ接続が切れました。再接続を試行します(中止するまで継続)"); }
+				if (onError_)
+				{
+					onError_(ERR_HGC_NOT_FOUND, noRecord
+					         ? "カメラが撮影を完了しません(シャッターは通るのに画像が記録されない)。オフラインとして表示します"
+					         : "撮影中にカメラ接続が切れました。再接続を試行します(中止するまで継続)");
+				}
+			}
+			if (!recovered && lostLink)
+			{	// 本当に届いていない → 中止まで再接続を続ける(従来どおり)。
 				while (running_)
 				{
 					if (onReconnect_ && onReconnect_() && establishSession()) { recovered = true; break; }
 					interruptibleSleep(kReconnectWaitMs);
 				}
 				if (!recovered) { break; }	// 中止された → 終了処理へ
+				cameraOffline  = false;
+				noRecordRounds = 0;
 				if (onState_) { onState_(ST_CAPTURING); }
 			}
 			shootFailStreak = 0;
@@ -1449,7 +1501,9 @@ errCode captureRunner::loop(void)
 				const errCode ae = applyWithRetry(pending, t2);
 				if (ae != ERR_HGC_OK && onError_) { onError_(ae, this->withHttpDetail("setExposure failed after retry (reconnect)")); }
 			}
-			continue;	// 次コマは即[A]起点(再接続で時間を食った=周期超過扱い)
+			// 届いていない側は再接続で時間を食っているので、次コマは即[A]起点にする。
+			// 撮れていない側は通信できているので周期を崩さない(復帰したらそのまま定刻へ戻る)。
+			if (lostLink) { continue; }
 		}
 
 		// --- 次シャッター時刻(④c): [A]から周期後を狙う。超過なら即・未満なら残りを待つ(周期は縮めない/フレーム落とさない)。 ---

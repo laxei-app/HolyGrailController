@@ -137,6 +137,15 @@ public:
 	static constexpr int  kShutterMarginMs    = 1000;	// 次コマへ食い込まないための余裕
 	static constexpr int  kShutterBusyMaxMs   = 8000;	// 粘る上限(長周期でも延々待たない)
 	static constexpr int  kMaxConsecutiveFail  = 3;		// 撮影(シャッター)失敗が連続したら再接続を試みる回数
+	// --- 「応答するのに撮れていない」カメラの検出(2026-08-13) ---
+	// シャッターは 200 で受け付けられ、情報系もライブビューも生きているのに、撮った画像が
+	// 一枚も記録されなくなることがある(EOS R10 の不具合として実測。電源を入れ直すまで戻らない)。
+	// この状態は接続の生死では判定できない。判定できるのは「撮った画像が現れるか」だけである。
+	//  ・1回目は静かにセッションを張り直す(通知の取りこぼし等の一過性はこれで直る)。
+	//  ・張り直しても現れなければ「オンラインでない」(ST_NOCAMERA)として提示する。
+	//  ・提示後もシャッターは撃ち続ける。復帰(電源入れ直し等)を拾えるのはそれだけだから。
+	//    ただし1コマ内での 503 粘りはやめる(固まっているカメラへの追い打ちを避ける)。
+	static constexpr int  kMaxNoRecordFrames   = 3;		// 撮影結果が現れないコマがこれだけ続いたら手を打つ
 	static constexpr int  kMaxMeterFail        = 5;		// 測光(ライブビュー)が連続失敗したら再establishする回数。
 														// シャッターは通るがライブビューだけ死ぬと、従来は露出が固定のまま復帰しなかった(その対策)。
 	static constexpr int  kMaxReconnectTries   = 3;		// SSDP再探索の試行回数。これを超えたら諦める
@@ -243,7 +252,9 @@ private:
 	// 帯が歩幅より狭い制御方法(夕日/朝日=0.3段)で必ず起きていた往復振動の防止。
 	// 測光失敗のログ文を作る(待ちのどの通信でつまずいたかを含める。2026-07-30 診断)。
 	// シャッターを切る(503の間は締め切りまで粘る。503は接続断に数えない)。
-	errCode       fireShutter(const hgc::exposure& shotExp, double intervalSec, int& failStreak);
+	//  quick=true は粘らず1回だけ試す(既にカメラが応答しないと分かっている状態での追い打ち防止)。
+	errCode       fireShutter(const hgc::exposure& shotExp, double intervalSec, int& failStreak,
+	                          bool quick = false);
 	void          meterLostMsg(const apiBase::meterResult& mr, char* buf, size_t len) const;
 	// ヒステリシス帯の実効値(1歩=1/3段を下限とする。設定は書き換えない)。
 	// 移動平均バッファから「いまの場面の明るさ」を推定する(平均の遅れを傾きで補う)。
@@ -313,6 +324,9 @@ private:
 	double      lvP75Log_ = -1.0, lvP90Log_ = -1.0;
 	double      lvSatLog_ = -1.0;
 	int         meterWaitMs_ = -1, meterFetchMs_ = -1, meterDecodeMs_ = -1, meterFetchTries_ = 0;	// 測光所要の内訳(ログ用)
+	// カメラ実装からの申告: 直前のコマの撮影結果が現れなかった(撮れていない疑い)。
+	// 測光しないコマでは判定できないので false のまま(=据え置き扱い)。
+	bool        shotMissing_ = false;
 	double      asIsLinear_ = -1.0;		// 切替なしで測ったリニア値(ログ用。切替判断の材料そのもの)
 	int         firstApplyTries_ = 0;	// 1枚目の露出適用に要した回数(ログ用。セッション単位)
 	convergeInfo converge_{};			// 初期収束の結果(レポート用。セッション単位)
