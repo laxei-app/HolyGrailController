@@ -1,0 +1,19 @@
+起点 IMG_0001.CR3  露光8"  周期15s  待ち2.5s  1コマ前  予定90分
+    20 11:39:13 cyc= 10564 post= 118 lv=  27 fetch=   63 r0 http=200 Y=0.00048 
+    40 11:44:13 cyc= 10594 post= 147 lv=  24 fetch=   92 r0 http=200 Y=0.00048 
+    60 11:49:13 cyc= 10558 post= 165 lv=  26 fetch=   56 r0 http=200 Y=0.00048 
+    80 11:54:13 cyc= 10627 post= 123 lv=  23 fetch=  126 r0 http=200 Y=0.00048 
+   100 11:59:13 cyc= 10860 post= 142 lv=  22 fetch=  359 r0 http=200 Y=0.00048 
+   120 12:04:13 cyc= 10610 post= 168 lv=  22 fetch=  108 r0 http=200 Y=0.00048 
+   140 12:09:13 cyc= 10728 post= 187 lv=  23 fetch=  226 r0 http=200 Y=0.00048 
+   160 12:14:13 cyc= 10783 post=  79 lv=  33 fetch=  282 r0 http=200 Y=0.00049 
+   180 12:19:13 cyc= 10717 post=  83 lv=  24 fetch=  216 r0 http=200 Y=0.00055 
+   200 12:24:13 cyc= 10578 post= 101 lv=  24 fetch=   76 r0 http=200 Y=0.00049 
+   220 12:29:13 cyc= 10777 post= 110 lv=  26 fetch=  276 r0 http=200 Y=0.00048 
+   240 12:34:14 cyc= 11015 post=  25 lv=  28 fetch=   52 r0 http=404 Y=-1.00000 fetchNG(404)/reseed
+   242 12:34:49 cyc= 15864 post=  18 lv=  -1 fetch=   21 r0 http=404 Y=-1.00000 fetchNG(404)/reseed
+   244 12:35:21 cyc= 15963 post=  22 lv=  -1 fetch=   20 r0 http=404 Y=-1.00000 fetchNG(404)/reseed
+   246 12:35:52 cyc= 15878 post=  26 lv=  -1 fetch=   23 r0 http=404 Y=-1.00000 fetchNG(404)/reseed
+   248 12:36:24 cyc= 16033 post=  20 lv=  -1 fetch=   22 r0 http=404 Y=-1.00000 fetchNG(404)/reseed
+   250 12:36:55 cyc= 15853 post=  22 lv=  -1 fetch=   17 r0 http=404 Y=-1.00000 fetchNG(404)/reseed
+   252 12:37:27 cyc= 15857 post=  21 lv=  -1 fetch=   20 r0 http=404 Y=-1.00000 fetchNG(404)/reseed
