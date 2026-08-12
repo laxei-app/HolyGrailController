@@ -1,4 +1,4 @@
-package app.laxei.holygrail
+﻿package app.laxei.holygrail
 
 import android.Manifest
 import android.app.DatePickerDialog
@@ -3788,10 +3788,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         2 -> "ライブビューの更新が撮影周期に追いついていません。撮影周期を長くすると安定します。"
         3 -> "撮影周期を守れないコマが多いです。シャッター速度に対して周期が短い可能性があります。"
         4 -> "測光できないコマが多いです。露出が据え置かれるため明るさが追従しません。"
-        5 -> "カメラの記録が明けないまま準備開始に至ったコマがあります。周期に対して記録が遅いか、ライブビューが止まっています。"
+        5 -> "(欠番)"
         6 -> "撮影周期に余裕がありません。目安の最短周期を下回ると、遅れやコマ落ちが出ます。"
         7 -> "撮影周期にはまだ余裕があります。周期を短くすると滑らかな微速度になります。"
-        8 -> "busy を1コマも測れませんでした。周期が露光でほぼ埋まっています。"
+        8 -> "カメラの記録が明けるまでの時間を1コマも測れませんでした。測光したコマがありません。"
         9 -> "撮影前の露出合わせで一度も測光できず、基準値のまま撮り始めました。最初の数コマは露出が大きく外れています。"
         10 -> "撮影前の露出合わせが終わりきらないまま撮り始めました。最初の数コマは露出が合っていない可能性があります。"
         else -> "(不明な所見 $code)"
@@ -3913,6 +3913,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         repRow(box, "周期どおり", "%d / %d (%.1f%%)".format(tim.optInt("lateOk"), tim.optInt("lateCnt"), tim.optDouble("lateOkPct")),
                "遅れ100ms以内")
         repRow(box, "遅れ 平均/最大", "%.0f / %d ms".format(tim.optDouble("lateAvgMs"), tim.optInt("lateMaxMs")))
+        // 準備が周期に間に合わなかったコマは、終わり次第すぐシャッターを切る(=そのぶん遅れる)。
+        // 次のコマはその遅れた時刻を起点に正確な周期へ戻るので、遅れは積み上がらない。
+        repRow(box, "間に合わず遅れた", "%d コマ / 合計 %.1f 秒".format(
+                   tim.optInt("lateFrames"), tim.optInt("lateOverSumMs") / 1000.0),
+               "1コマあたり平均 %.0f ms。遅れた分は次コマへ持ち越さない".format(tim.optDouble("lateOverAvgMs")))
         repRow(box, "準備 平均/最大", "%.0f / %d ms".format(tim.optDouble("prepAvgMs"), tim.optInt("prepMaxMs")),
                "測光→露出計算→露出設定")
         repRow(box, "準備が間に合わず", "${tim.optInt("prepOver")} コマ",
@@ -3922,19 +3927,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
         repBand(box, "カメラの busy と周期の余裕")
         val busyCnt = bsy.optInt("cnt")
         if (busyCnt > 0) {
-            repRow(box, "露光終了→測光可", "平均 %.2f / 最大 %.2f 秒".format(bsy.optDouble("avgMs") / 1000.0, bsy.optInt("maxMs") / 1000.0),
+            repRow(box, "露光終了→撮影画像が取れる", "平均 %.2f / 最大 %.2f 秒".format(bsy.optDouble("avgMs") / 1000.0, bsy.optInt("maxMs") / 1000.0),
                    "${busyCnt}コマで実測。カメラが記録で塞がっている時間")
         } else {
-            repRow(box, "露光終了→測光可", "計測なし", "周期が露光で埋まっていて測る空きが無かった")
+            repRow(box, "露光終了→撮影画像が取れる", "計測なし", "測光したコマが無かった")
         }
-        if (bsy.optInt("stuck") > 0) { repRow(box, "明けなかったコマ", "${bsy.optInt("stuck")} コマ") }
         repRow(box, "測光の所要", "平均 %.2f / 最大 %.2f 秒".format(met.optDouble("avgMs") / 1000.0, met.optInt("maxMs") / 1000.0))
         repRow(box, "露出設定の所要", "平均 %.2f / 最大 %.2f 秒".format(apl.optDouble("avgMs") / 1000.0, apl.optInt("maxMs") / 1000.0))
         repRow(box, "この撮影の最長ss", "%.2f 秒".format(lim.optDouble("maxSsSec")))
         val minItv = lim.optDouble("minIntervalSec", -1.0)
         if (minItv >= 0.0) {
             repRow(box, "目安の最短周期", "%.1f 秒".format(minItv),
-                   "最長ss + busy最大 + 準備最大 + 余裕1秒。設定周期との差 %.1f 秒".format(lim.optDouble("marginSec")))
+                   "最長ss + 準備最大 + 余裕1秒。設定周期との差 %.1f 秒".format(lim.optDouble("marginSec")))
         }
 
         // 撮影開始前の露出合わせ(初期収束)がうまくいったか。ここが済んでいないと1枚目から露出が外れる。

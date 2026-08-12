@@ -126,13 +126,6 @@ errCode cameraController::rdyShutter(const class device& device, const cmdt::sho
 }
 
 // 露出を1項目ずつ設定(タイマ方式で変更のあった項目だけ適用するため)。null は無害にスキップ。
-// 直近 alzMetering が解析したフレームのカメラ側取得時刻[ms]。露光後の新鮮なフレームかの判定用。
-uint64_t cameraController::lastLvTimeMs(const class device& device)
-{
-	if (device.apiBase == nullptr) { return 0; }
-	return device.apiBase->lastLvTimeMs();
-}
-
 errCode cameraController::setFNumber(const class device& device, const std::string& fNumber)
 {
 	if (device.apiBase == nullptr) { return ERR_HGC_READY; }
@@ -208,12 +201,6 @@ apiBase::meterTiming cameraController::meterTimingHint(const class device& devic
 {
 	if (device.apiBase == nullptr) { return apiBase::meterTiming{}; }	// 既定=シャッター5秒前
 	return device.apiBase->meterTimingHint();
-}
-
-int cameraController::meterReadyProbe(const class device& device)
-{
-	if (device.apiBase == nullptr) { return -1; }	// カメラ未取得=計測しない
-	return device.apiBase->meterReadyProbe();
 }
 
 void cameraController::meterReset(const class device& device)

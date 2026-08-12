@@ -128,18 +128,16 @@ public:
 	errCode startShooting(void);						// 撮影開始
 	errCode stopLiveView(void) override;				// ライブビュー停止(撮影ループ中は掴まない)
 	// 撮影ループ中にライブビューが要るか。サムネ測光では不要(初期収束のときだけ使う)。
-	bool    liveViewNeededWhileCapturing(void) const override { return !kUseShotThumbMetering; }
+	bool    liveViewNeededWhileCapturing(void) const override { return false; }
 	bool    liveViewAlive(void);						// ライブビューが実際に流れているか(?kind=info。接続の生存確認)
-	bool    liveViewMeterReady(void);					// いま測光できるか(?kind=info の体裁まで見る。busy計測用)
 	errCode setupShootingModeManual(void) override;		// 撮影モードをM(ダイアル無視ON)へ。元値を保存
 	errCode restoreShootingMode(void) override;			// 保存した撮影モードへ戻す(ダイアル無視OFF)
-	errCode keepAlive(void) override;					// 接続維持用の無害なGET(/ccapi カタログ取得)
+	errCode keepAlive(void) override;					// 接続維持用の無害なGET(ついでに登録通知も流す)
 
 	// 情報を知る
 	errCode getSettings(cmdt::shotRange& settings);		// 設定値を取得する
 	errCode rdyMetering(void);							// 測光準備
 	errCode alzMetering(cmdt::HISTOGRAM& histoOut);		    // 測光解析
-	uint64_t lastLvTimeMs(void) override { return lvSysTimeMs_; }	// 直近フレームのカメラ側取得時刻[ms]
 
 	// 露出を1項目ずつ設定する(送信用テーブルで real に最も近いカメラ広告値を選んで送る)。
 	// 周期正確化リアーキ(タイマ方式)では rdyShutter を使わず、変更のあった項目だけを個別に呼ぶ。
@@ -148,109 +146,76 @@ public:
 	errCode setIso(const std::string& iso) override;				// ISO を設定する
 
 	// === 測光(apiBase の CCAPI 実装。2026-07-27 captureRunner から移設) ===
-	// 測り方は2方式(meterScene が kUseShotThumbMetering で切り替える):
-	//  A) 撮影画像フィードバック(既定): 直前に撮れた画像のサムネイルから輝度を得る。本露光の
-	//     積分そのものなので夜間でも真値(LVは~1.6秒相当で頭打ち=7/26布かぶせ実験で実証)。
-	//     測光ssの切替が不要になり、切替PUT/settle待ち(2.6秒)も消える。
-	//  B) LVヒストグラム(旧方式・即復活可): 暗所ではLVが積分できないため測光ssへ一時切替し、
-	//     場面の明るさへ割り戻す。測光ssの学習・張り付き検出などの適応状態もこの層が持つ。
-	// meterHere(現在露出のまま測る)は常にLV方式(シャッター前の初期収束用=まだ撮影画像が無い)。
-	// 2026-07-31: サムネ測光は採用を取り下げた。R10 で撮影と併用すると数十分で撮影エンジンが
-	//  固まり、バッテリを抜くまで戻らない(カード交換・接続方式・LV解放をすべて試して否定済み。
-	//  読み出しのみ1000回4時間は完走したので、書き込みとの競合が原因と切り分けた)。
-	//  速度面の利点も出ていない(サムネ取得に15秒かかることがある)。LV方式へ戻す。
-	static constexpr bool kUseShotThumbMetering = false;	// true でサムネ方式(採用しない)
+	//
+	// 【方式(2026-08-13 これ1本に確定)】直前に撮れた**最新の撮影画像のサムネイル**から輝度を出す。
+	//  1コマの流れ:
+	//    シャッター → 露光(ss) → event/polling で登録通知 → 最新ファイルのサムネイル取得
+	//    → リニア輝度 → 露出設定 → 撮影周期の残りを待つ → 次のシャッター
+	//  ・本露光そのものの積分なので、ライブビューが約1.6秒相当で頭打ちになる夜間でも真値が出る
+	//    (7/26 布かぶせ実験で頭打ちを実証、8/08 実写突合で中央値が最大4.35段暗いことを確認)。
+	//  ・測光のためにカメラの露出を触らないので、測光ss切替のPUTも反映待ち(実測2.6秒)も消える。
+	//  ・サムネイルは JPG があれば JPG、無ければ RAW から取る(pickThumbPath)。
+	//
+	// 【ライブビュー方式(旧)は廃止した】撮影ループ中はライブビューを掴みもしない。
+	//  唯一の例外が meterHere で、これは撮影窓の手前(まだ1コマも撮っていない=サムネイルの元に
+	//  なる画像が無い)の初期収束専用。ここだけは他に測る手段が無いのでライブビューを使う。
+	//  旧方式の測光ss切替・張り付き学習・反映待ちは、この方式では不要になったので削除した
+	//  (履歴が要るときは 2026-08-13 以前の apiCanonCCAPI を参照)。
+	//
+	// 【R10 では使わない】生成直後のファイルに触ると R10 は撮影エンジンが固着する(取得元 CR3 で
+	//  約49回、JPG で約179回。R100 は 300コマ完走で無傷=2026-08-13 実測)。この方式の対象は R100。
 	errCode meterScene(const hgc::exposure& shotExp, meterResult& out,
 	                   const std::function<bool()>& keepGoing) override;
 	errCode meterHere(meterResult& out, const std::function<bool()>& keepGoing) override;
-	// 測光をいつ呼んでほしいか(captureRunnerがこの申告に従う):
-	//  方式A(サムネ)=露光終了直後(ソースは直前の撮影画像なので最速で呼べる) /
-	//  方式B(LV)=シャッターの kMeterLeadLvMs 手前(一定時間前の輝度を見る設計)。
-	static constexpr int kMeterLeadLvMs = 5000;
-	meterTiming meterTimingHint(void) const override
-	{
-		return kUseShotThumbMetering ? meterTiming{ true, 0 } : meterTiming{ false, kMeterLeadLvMs };
-	}
+	// 測光をいつ呼んでほしいか: 露光が閉じ次第すぐ。ソースは直前の撮影画像なので待つ理由が無く、
+	// 早く測るほど「露出設定→撮影周期まで待つ」の余裕が増える(=周期を守りやすい)。
+	meterTiming meterTimingHint(void) const override { return meterTiming{ true, 0 }; }
 	void    meterReset(void) override;
-	// busy計測(2026-08-05): LV方式の測光はライブビューが流れていることが前提なので、
-	// その一点だけを ?kind=info の1往復で見る(カードには触らない)。
-	int     meterReadyProbe(void) override;
 
 protected:
 	// --- 測光の内部状態(セッション単位。meterReset で捨てる) ---
 	expo::expoTables tables_;			// 設定可能値テーブル(getSettingsでabilityから自前構築。
 										//  中身も表記もカメラ依存なのでこの層が作る。共通層は渡さない)
-	std::string      meterSs_;			// 次に使う測光ss(空=未決定→撮影ssから既定段数短く)
-	bool             lvNeedSwitch_ = false;	// 撮影ssのままでは測れない(測光ssへ切替が要る)
-	int              lvAsIsWait_   = 0;		// 切替なしを再試行するまでの残りコマ数
-	int              lvPinStreak_  = 0;		// 切替なし経路で応答が無かった連続回数(張り付き確定用)
-	// 撮影露出のままLV測光して使えるか(リニア輝度が使える範囲に入っているか)。
-	bool             lvUsableAsIs(double linear) const;
-	double           meterCeilStops_ = 1e9;	// 測光ssの長さ上限[段](張り付き検出で下がる天井)
-	double           meterPrevStops_ = 0.0;	// 前回測光の明るさ[段](張り付き判定用)
-	double           meterPrevLin_   = -1.0;	// 前回測光のリニア値(<0=無し)
-	uint64_t         lvFreshPrevMs_  = 0;	// 直近採用フレームのカメラ側時刻(鮮度判定)
+	// いまカメラに乗っている露出。getSettings(ability応答の value)で初期化し、以後 setSS 等の
+	// 成功で更新する。meterHere が測光露出の出発点に使う(上位から渡してもらう必要をなくすため)。
+	hgc::exposure    camExp_;
+	// 初期収束(meterHere)が使っている測光露出。呼ぶたびに白飛び/黒潰れを見てずらし、次回へ引き継ぐ。
+	hgc::exposure    hereExp_;
+	// 初期収束のライブビュー測光でフレームの鮮度を見る基準(露光前の古い映像を掴まないため)。
+	uint64_t         lvFreshPrevMs_  = 0;		// 直近採用フレームのカメラ側時刻
 	void*            lvFreshPrevAt_  = nullptr;	// その採用時点の実時刻アンカー
-	// 測光ssの決定と適応(旧 captureRunner::enterMeteringShutter / updateMeterShutter)。
-	// 測光ssへ切り替える価値があるか(切替後に測れなくなるなら切り替えない)。
-	bool        switchWorthIt(const hgc::exposure& shotExp, double asIsLinear) const;
-	std::string decideMeterSs(const hgc::exposure& shotExp) const;
-	// shotExp は測光ssの天井の「下限」を決めるのに使う(撮影ss-kMeterInitDropStops より下げない)。
-	void        adaptMeterSs(const hgc::exposure& meterExp, const hgc::exposure& shotExp,
-	                         double linear, bool& pinnedOut);
 	// 中断可能な待ち(keepGoing が false になったら早期に戻る)。
 	void        meterSleep(int ms, const std::function<bool()>& keepGoing) const;
-	// 測光ss切替がライブビューへ反映されるまで待つ(反映を確かめて早く抜ける。上限は budgetMs)。
-	int         waitLvReflect(double beforeLinear, double deltaStops,
-	                          int budgetMs, const std::function<bool()>& keepGoing);
-	// --- 撮影画像フィードバック測光(方式A) ---
-	// LV方式の meterScene 本体(方式B。コード温存・kUseShotThumbMetering=false で復活)。
-	errCode meterSceneLv(const hgc::exposure& shotExp, meterResult& out,
-	                     const std::function<bool()>& keepGoing);
-	// 直前に撮れた画像のサムネイルから測光する(方式A本体)。
+	// 測光露出をテーブル上で delta 段ずらす(結果の ss は capSec を超えない)。
+	void        shiftMeterSs(hgc::exposure& me, double delta, double capSec) const;
+	// ライブビューのヒストグラムを1回読む(取れるまで上限まで粘る)。初期収束の下請け。
+	errCode     readLvHistogram(meterResult& out, const std::function<bool()>& keepGoing);
+	// --- 撮影画像フィードバック測光 ---
+	// 直前に撮れた画像のサムネイルから測光する(本体)。
 	errCode meterSceneShot(const hgc::exposure& shotExp, meterResult& out,
 	                       const std::function<bool()>& keepGoing);
-	// 方式Aの中核: 新規画像を待ち→サムネイル取得→復号→輝度ヒスト統計まで(露出非依存の部分)。
+	// 中核: 新規画像を待ち→サムネイル取得→復号→輝度ヒスト統計まで(露出非依存の部分)。
 	errCode thumbMeterCore(meterResult& out, int budgetMs, const std::function<bool()>& keepGoing);
 	// 新規画像待ちの診断(どの通信でつまずいたか)。meterResult へそのまま載せる。
 	struct waitDiag { int step = 0; int http = 0; std::string body; };
-	// 新規画像の検知方式(2026-07-30 切り替え式に戻した。両方のコードを残してある)。
-	//  contentsCount: コンテンツ総数の増加で検知。ディレクトリを1コマ10〜13回読む。
-	//  eventPolling : カメラからの登録通知を待つ。**ディレクトリを一切読まない**。
-	// 【2026-07-30 実機結果】eventPolling を試したところ症状が変わった:
-	//  ・Canon の Err70(撮影処理の異常。電源かバッテリの入れ直しを促す表示)が一瞬出た
-	//  ・「カメラが見つかりません」も出た。どちらもシャッターボタンで復帰したが、
-	//    アプリからは復帰できず、元の症状と別物になった。
-	// カード接触は減るはずだが改善しなかったので contentsCount へ戻す。
-	// 切り替えはこの定数1つ。両方式のコードは残してある。
-	enum class newImageDetect : uint8_t { contentsCount = 0, eventPolling = 1 };
-	static constexpr newImageDetect kNewImageDetect = newImageDetect::contentsCount;
-
-	// 露光終了からカードを触り始めるまでの待ち[ms](2026-07-30 の実験)。
-	// カメラが記録中(busy)の間にこちらからアクセスするのが不具合の引き金か確かめるため。
-	// 0 にすると従来どおり露光終了直後から取りに行く。測光の予算(kThumbBudgetMs)から引かれる。
-	static constexpr int kCardSettleMs = 3000;
-
-	// 新規画像が記録されるのを待ってそのパスを返す。空=時間内に現れなかった(理由は diag)。
-	std::string waitAddedContents(int budgetMs, const std::function<bool()>& keepGoing,
-	                              int& triesOut, waitDiag& diag);
-	// 方式A: コンテンツ総数の増加で検知する
-	std::string waitAddedByCount(int budgetMs, const std::function<bool()>& keepGoing,
-	                             int& triesOut, waitDiag& diag);
-	// 方式B: event/polling の登録通知で検知する
+	// 新規画像の検知は event/polling(カメラからの登録通知)。ディレクトリを一切読まないので、
+	// 記録中のカードを叩かずに済む。2026-08-12〜13 の実測ではこの流れで R100 が 300コマ完走した。
+	//  ※総数ポーリング方式(1コマ10〜13回ディレクトリを読む)は 2026-08-13 に削除した。
 	std::string waitAddedByEvent(int budgetMs, const std::function<bool()>& keepGoing,
 	                             int& triesOut, waitDiag& diag);
+	// addedcontents の中から取得元を選ぶ。JPG+RAW記録だと1コマで2つ通知されるため。
+	//  JPG があれば JPG(埋め込みサムネイルをそのまま返せる)、無ければ RAW。
+	static std::string pickThumbPath(const std::vector<std::string>& names);
 	// event/polling の待ち方(CCAPI Reference 4.13.1)。カメラのCCAPIバージョンで指定方法が違う:
 	//  ver110〜: ?timeout=short(約10秒待つ) / ver100: ?continue=on(100 Continueで待つ)
 	//  無指定は「待たずに即返る」が既定のため、こちらが連打してしまう(1コマ50回前後を実測)。
 	enum class pollMode : uint8_t { unknown = 0, timeoutShort = 1, continueOn = 2, immediate = 3 };
 	pollMode    pollMode_ = pollMode::unknown;
-	std::string contentsDir_;	// 撮影画像の保存先(絶対URL。セッション中は使い回す)
-	// 保存先を /contents から辿って得る(セッション中キャッシュ)。失敗時は step/http/body に理由。
-	std::string contentsDirUrl(int& step, int& http, std::string& body);
-	uint32_t    contentsBase_ = 0xFFFFFFFFu;	// 新規画像検知の基準となる総数(0xFFFFFFFF=未取得)
 	std::string pollUrl(pollMode m) const;	// 方式に応じたURL(クエリ付き)を作る
 	void        stopEventPolling(void);		// DELETE /event/polling(イベント取得の停止。セッション終了時)
+	// 溜まっている通知を1回で流す(セッション開始時)。前の撮影の登録通知が残っていると、
+	// 1枚目で「古い画像のサムネイル」を掴んでしまう。
+	void        flushEventPolling(void);
 	// funcList のURLから "http://host:port" 部分を得る(コンテンツパスの絶対URL化に使う)。
 	std::string apiHostBase(void) const;
 
@@ -276,7 +241,9 @@ protected:
 
 	// データ解析
 	errCode analizeUseFunction(class device& device, std::string& catalog);			// 使用するコマンドを探す
-	errCode getJsonAbility(funcNum number, std::vector <std::string>& abilitys);
+	// ability(設定可能値)を取る。curRaw != nullptr なら同じ応答に入っている現在値(生文字列)も返す。
+	// 現在値は「いまカメラに何が乗っているか」(camExp_)の初期化に使う。GETは1回のままで済む。
+	errCode getJsonAbility(funcNum number, std::vector <std::string>& abilitys, std::string* curRaw = nullptr);
 	errCode setJsonvalue(funcNum number, float val);
 
 protected:

@@ -207,7 +207,7 @@ public:
 		NOTE_STALE_MANY     = 2,	// ライブビューの更新が撮影周期に追いついていない
 		NOTE_LATE_MANY      = 3,	// 撮影周期を守れないコマが多い
 		NOTE_METER_FAIL     = 4,	// 測光できないコマが多い(明るさが追従しない)
-		NOTE_BUSY_STUCK     = 5,	// 記録が明けないまま準備開始に至ったコマがある
+		NOTE_BUSY_STUCK     = 5,	// (欠番。旧busyプローブ用。番号は再利用しない)
 		NOTE_INTERVAL_TIGHT = 6,	// 目安の最短周期に対して設定周期の余裕がない
 		NOTE_INTERVAL_ROOM  = 7,	// 周期にまだ余裕がある(もっと詰められる)
 		NOTE_BUSY_NO_DATA   = 8,	// busy を1コマも測れなかった(周期が露光で埋まっている等)
@@ -225,10 +225,16 @@ public:
 		long     staleTotal  = 0;	// 捨てた延べ回数
 		int      meterRetryFrames = 0;	// 測光をリトライしたコマ数
 		int      applyRetryFrames = 0;	// 露出設定をリトライしたコマ数
-		int      lateOk    = 0;		// 撮影周期を守れたコマ(遅れ<=100ms)
+		int      lateOk    = 0;		// 撮影周期を守れたコマ(遅れ <= captureRunner::kLateOkMs)
 		int      lateCnt   = 0;		// 遅れを計測できたコマ(1枚目を除く)
 		long     lateSum   = 0;		// 遅れの合計[ms]
 		int      lateMax   = 0;		// 最大の遅れ[ms]
+		// 「間に合わなかったコマ」だけの集計(ユーザー指示 2026-08-13)。
+		// 準備(登録通知待ち→サムネイル取得→露出設定)が撮影周期に間に合わないと、その回は
+		// 終わり次第すぐシャッターを切る=そのぶん遅れる。何回・何ms遅れたのかを載せる。
+		// lateSum は守れたコマ(遅れ0)も含む合計で平均が薄まるため、分けて数える。
+		int      lateOverCnt   = 0;	// 遅れたコマ数(= lateCnt - lateOk)
+		long     lateOverSumMs = 0;	// そのコマだけの遅れの合計[ms]
 		long     prepSum   = 0;		// 準備(測光→計算→設定)の合計[ms]
 		int      prepMax   = 0;		// 準備の最大[ms]
 		int      prepOver  = 0;		// 準備がリードに収まらなかったコマ数

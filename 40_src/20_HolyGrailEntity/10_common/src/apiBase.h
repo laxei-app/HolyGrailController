@@ -26,9 +26,6 @@ public:
 	virtual errCode getSettings(cmdt::shotRange& settings)	{ return ERR_HGC_NOT_SUPPORTED; }
 	virtual errCode rdyMetering(void)						{ return ERR_HGC_NOT_SUPPORTED; };
 	virtual errCode alzMetering(cmdt::HISTOGRAM& hist)		{ return ERR_HGC_NOT_SUPPORTED; };
-	// 直近 alzMetering が解析したライブビューフレームの「カメラ側取得時刻」[ms]。0=不明。
-	// 露光後に撮られた新鮮なフレームか、露光前の古いフレームかの判定に使う。
-	virtual uint64_t lastLvTimeMs(void)						{ return 0; };
 	// 撮影開始時にカメラを当アプリ都合(マニュアル露出)に設定し、終了時に元へ戻す(仕様8/CCAPI)。
 	virtual errCode setupShootingModeManual(void)			{ return ERR_HGC_NOT_SUPPORTED; };
 	virtual errCode restoreShootingMode(void)				{ return ERR_HGC_NOT_SUPPORTED; };
@@ -37,10 +34,17 @@ public:
 	virtual errCode keepAlive(void)							{ return ERR_HGC_NOT_SUPPORTED; };
 
 	// === 測光(場面のリニア輝度の取得) ===
-	// 「測光してリニア輝度を得る」という機能はどのカメラでも同じで、**どう測るか**が
-	// カメラに依存する(CCAPI=LVヒストグラム+暗所では測光ssへの一時切替、等)。そのため
-	// 測り方の実装詳細はこの層(apiBaseの実装クラス)に閉じ、上位(captureRunner)は結果だけを使う。
-	// 別方式(撮影画像サムネイル等)への差し替えもこの層の実装交換で行う(2026-07-27 構造見直し)。
+	// 「測光して場面の明るさを得る」という機能はどのカメラでも同じで、**どう測るか**が
+	// カメラに依存する。そのため測り方の実装詳細はこの層(apiBaseの実装クラス)に完全に閉じ、
+	// 上位(captureRunner)は結果 sceneRef(露出非依存の場面の明るさ)だけを使う。
+	//
+	// 【上位が知ってよいこと・知ってはいけないこと(2026-08-13 徹底)】
+	//  知ってよい : sceneRef / usable / meterExp / 診断の各msと段数。これだけで露出制御は書ける。
+	//  知らない   : ライブビューを使うのか撮影画像のサムネイルを使うのか、そのために
+	//               カメラの露出を触るのか、何回リトライするのか、といった一切の手段。
+	//  したがって別メーカー/別方式のカメラを足すときは、この2関数(meterScene/meterHere)と
+	//  meterTimingHint を実装するだけでよく、captureRunner には一行も手を入れない。
+	// CCAPI 実装(apiCanonCCAPI)は「直前に撮れた画像のサムネイルから輝度を出す」方式である。
 	struct meterResult
 	{
 		bool          ok       = false;	// 測光値が得られたか(false=露出は据え置きを推奨)
@@ -55,10 +59,15 @@ public:
 		double        x        = -1.0;	// ヒストグラム中央値(0..1 sRGB)
 		hgc::exposure meterExp;			// 実際に測光した露出(ev0の逆算はこれを使う)
 		// --- カメラ露出状態の申告(差分適用キャッシュとの整合用。露出を触ったら必ず申告する) ---
-		std::string   appliedSs;		// この測光でカメラへ適用したss(空=カメラの露出に触れていない)
-		bool          ssSwitchFailed = false;	// 測光ss切替を送ったが失敗(遅延適用の恐れ→呼び出し側はssを必ず再送)
+		// 測光のために実装がカメラの露出を動かした場合、**何を乗せて帰ってきたか**をここへ入れる。
+		// 空の軸=触れていない。呼び出し側はこれで「カメラに何が乗っているか」の記憶を更新する
+		// (更新しないと、次の差分適用で本来送るべき軸を送らず、露出がずれたまま撮ってしまう)。
+		hgc::exposure appliedExp;
+		bool          applyFailed = false;	// 露出を送ったが失敗(遅延適用の恐れ→呼び出し側は次の適用で全軸を再送)
 		// --- 診断(ログ用) ---
-		std::string   meterSsUsed;		// 切替に使った測光ss(空=撮影露出のまま測った)
+		// meterSsUsed / pinned / asIsLinear は旧LV方式(測光ssへ一時切替する方式)の診断だった。
+		// サムネイル測光では使わないが、ログの列とそれを読む解析スクリプトを壊さないよう残す。
+		std::string   meterSsUsed;		// 測光に使った特別な露出(空=撮影露出のまま測った)
 		double        p99 = -1.0, pMax = -1.0;	// ヒストの明るい側(99%点/最大ビン)
 		// --- 測光統計量の比較用(2026-08-08 診断。制御には使わない) ---
 		// 【なぜ足すか】夜明けに露出の追従が約1時間遅れた。原因は測光に使っている中央値が
@@ -74,33 +83,38 @@ public:
 		uint64_t      lvTimeMs = 0;		// フレームのカメラ側取得時刻[ms]
 		int           staleSkip = 0;	// 古いフレームを捨てた回数
 		int           tries     = 0;	// 取得試行回数
-		int           settleMs  = -1;	// ss切替→LV反映の待ち[ms](-1=切替なし)
+		int           settleMs  = -1;	// 測光のために待った時間[ms](-1=待っていない)
 		int           rdyMs     = -1;	// 測光全体の実測[ms](下の内訳の合計)
 		// 内訳(2026-07-28 計測用): 遅くなっているのがカメラの記録待ちか通信かを切り分けるため。
 		int           waitMs    = -1;	// 新しい画像の登録通知を待った時間[ms]
 		int           fetchMs   = -1;	// サムネイル取得(HTTP GET)の時間[ms]
 		int           decodeMs  = -1;	// JPEG復号+ヒストグラム計算の時間[ms]
 		int           fetchTries = 0;	// サムネイル取得の試行回数(1=一発成功)
-		bool          pinned    = false;	// 張り付き検出(測光値は信用しない)
-		// 切替なし(撮影露出のまま)で測ったときのリニア値。測光ssへ切替えた場合も、その判断の
-		// 材料になった値をここへ残す(2026-08-05 診断)。-1=切替なし経路を通らなかった。
-		// 「なぜ切替えたのか」がログから分からず、2.6秒の反映待ちを毎コマ払う原因を追えなかった。
-		double        asIsLinear = -1.0;
-		int           failStage = 0;	// 失敗した工程(0=成功/実装定義の段番号。ログで原因を特定するため)
-		// 新規画像待ちの内訳(2026-07-30 診断用)。failStage=1(待ちで空)のとき、どの通信で
-		// つまずいたかを残す。0=該当なし
-		//  1=/contents が取れない  2=カード配下(ディレクトリ一覧)が取れない
-		//  3=総数(kind=number)が取れない  4=時間内に総数が増えない  5=最新パス(kind=list)が取れない
+		bool          pinned    = false;	// 張り付き検出(旧LV方式の診断。現方式では常に false)
+		double        asIsLinear = -1.0;	// 同上(現方式では常に -1)
+		// 失敗した工程(0=成功)。番号の意味は実装が決める。ログで原因を特定するために残す。
+		// apiCanonCCAPI: 1=登録通知が来ない 2=ホスト不明 3=サムネイル取得失敗 4=復号失敗
+		//                5=ヒストグラムが空 / 20〜23=初期収束(20:出発点の露出が無い
+		//                21:測光露出を適用できない 22:LVヒストが取れない 23:張り付きを抜けられない)
+		int           failStage = 0;
+		// 新規画像待ちの内訳(診断用)。failStage=1(通知が来ない)のとき、どこでつまずいたかを残す。
+		//  0=該当なし  1=event/polling が使えない  6=通知の取得が失敗した  7=時間内に来なかった
 		int           waitStep  = 0;
 		int           waitHttp  = 0;	// その通信のHTTPステータス(0=応答なし/接続失敗)
 		std::string   waitBody;			// 応答本文の先頭(CCAPIは理由をここに返す)
 	};
-	// 撮影露出 shotExp を基準に測光し場面輝度を返す(測光ssの選択・切替・適応は実装側の責務)。
+	// 【撮影中の測光】直前に撮った1コマ(その露出が shotExp)を手がかりに場面の明るさを測る。
+	//  実装がどう測るかは自由(撮影画像のサムネイル/ライブビュー/外部センサー…)。呼び出し側は
+	//  out.sceneRef と out.usable だけを見る。
 	//  keepGoing: 中断判定(falseを返したら速やかに諦める)。
 	virtual errCode meterScene(const hgc::exposure& shotExp, meterResult& out,
 	                           const std::function<bool()>& keepGoing)
 	{ (void)shotExp; (void)out; (void)keepGoing; return ERR_HGC_NOT_SUPPORTED; }
-	// カメラの現在の露出のまま測る(初期収束などシャッター前の反復用。露出には触れない)。
+	// 【シャッターを切る前の測光】まだ1コマも撮っていない状態で場面の明るさを測る
+	//  (撮影窓の手前で1枚目の露出を決める初期収束で使う)。
+	//  撮影画像が存在しないので、実装はこの用途に限りカメラを自由に使ってよい。測るために露出を
+	//  動かしたときは out.appliedExp へ申告すること(呼び出し側の露出キャッシュ整合のため)。
+	//  返すのは meterScene と同じ「露出非依存の場面の明るさ」= out.sceneRef。
 	virtual errCode meterHere(meterResult& out, const std::function<bool()>& keepGoing)
 	{ (void)out; (void)keepGoing; return ERR_HGC_NOT_SUPPORTED; }
 	// 「いつ測光(meterScene)を呼んでほしいか」の申告(2026-07-27)。captureRunner はこの指示に従って
@@ -115,22 +129,12 @@ public:
 		int  leadMs            = 5000;	// false時: シャッターの何ms前に測光を開始するか
 	};
 	virtual meterTiming meterTimingHint(void) const { return meterTiming{}; }
-	// 測光の適応状態(測光ssの学習・張り付き天井・フレーム鮮度基準)を捨てる(セッション確立/再接続時)。
+	// 測光の内部状態(学習値・鮮度基準・通知の待ち方など)を捨てる(セッション確立/再接続時)。
 	virtual void meterReset(void) {}
 	// ライブビューを止める(既定は何もしない)。撮影ループ中に掴み続けないため。
 	virtual errCode stopLiveView(void) { return ERR_HGC_NOT_SUPPORTED; }
 	// 撮影ループ中にライブビューが必要か(既定は必要=従来動作)。
 	virtual bool liveViewNeededWhileCapturing(void) const { return true; }
-
-	// 「いま測光を始められるか」の軽い問い合わせ(busy計測。2026-08-05)。
-	// 露光が終わってからこれが「可」を返すまでが、カメラが記録で塞がっている時間である。
-	// 撮影周期をどこまで SS へ近づけられるかは、この時間が決めるので機種ごとに実測したい。
-	//  ・呼ばれるのは撮影ループが何もしていない空白区間だけ(撮影の進行には影響しない)。
-	//  ・実装はカードに触らないこと。記録中のカード接触は R10 の撮影エンジン固着を招いた
-	//    経緯があり(2026-07-31)、計測のためにその踏み方を再現してはいけない。
-	//  return: 1=測光可能 / 0=まだ塞がっている / -1=この実装では計測しない(既定)
-	virtual int meterReadyProbe(void) { return -1; }
-
 };
 
 #endif // _API_BASE_H_

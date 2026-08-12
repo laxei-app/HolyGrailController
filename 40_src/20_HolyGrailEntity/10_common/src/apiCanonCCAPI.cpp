@@ -2,9 +2,10 @@
 #include "apiCanonCCAPI.h"
 #include "netThread.h"
 #include "exposureMath.h"
-#include "jpegLuma.h"	// 撮影画像サムネイルの輝度ヒストグラム化(方式A測光)
+#include "jpegLuma.h"	// 撮影画像サムネイルの輝度ヒストグラム化(測光)
 #include <json/nlohmann/json.hpp>
 #include <cmath>
+#include <cstring>	// pickThumbPath の拡張子比較
 
 using json = nlohmann::json;
 
@@ -274,19 +275,11 @@ errCode apiCanonCCAPI::stopLiveView(void)
     return ERR_HGC_HTTP_POST;
 }
 
-// 「いま測光を始められるか」(busy計測用。2026-08-05)。
-//  LV方式(現行)の測光はライブビューが流れていることが前提なので、その一点だけを見る。
-//  露光と記録の間 CCAPI はライブビューを止めるため、これが戻る時刻 = 記録が明けた時刻。
-//  ・?kind=info の GET 1往復だけ。カードには一切触らない(記録中のカード接触は
-//    R10 の撮影エンジン固着を招いた。計測でその踏み方を再現しない)。
-//  ・サムネ方式では測光元が撮影画像でこの尺度が当てはまらないので計測しない。
 namespace
 {
 	// ライブビュー付帯情報(?kind=info)の体裁チェック。中身(ヒストグラム)は解析しない。
 	//  return 0=正常 / 1=マーカ不一致(付帯情報ではない) / 2=長さフィールドが本文に収まらない
-	// 「いま測光できるか」(liveViewMeterReady)と「ヒストを解析してよいか」(alzMetering)で
-	// 同じ物差しを使うための共通化。従来 alzMetering は先頭3バイトを長さ確認なしで読んで
-	// いたので、その境界検査もここへ寄せた。
+	// 従来 alzMetering は先頭3バイトを長さ確認なしで読んでいたので、その境界検査もここへ寄せた。
 	int checkLiveViewInfo(const std::string& body)
 	{
 		if (body.size() < 10) { return 1; }
@@ -301,13 +294,6 @@ namespace
 	}
 }
 
-int apiCanonCCAPI::meterReadyProbe(void)
-{
-	if (kUseShotThumbMetering) { return -1; }
-	if (!(funcList[funcNum::LIVE_DETAIL].verb == verb::GET)) { return -1; }
-	return this->liveViewMeterReady() ? 1 : 0;
-}
-
 // ライブビューが実際に動いているか(軽い ?kind=info で確認する)。
 //  これは「接続の生存確認」で、撮影中の再接続判断(startLiveView の『既に開始済み』/
 //  stopLiveView の『既に止まっている』)に使う。中身の体裁までは見ない。
@@ -317,25 +303,6 @@ bool apiCanonCCAPI::liveViewAlive(void)
     std::string body;
     if (!netThread::httpGet(funcList[funcNum::LIVE_DETAIL].url + "?kind=info", body)) { return false; }
     return !body.empty();
-}
-
-// いま測光できるか(ヒストグラムが取れる体裁で ?kind=info が返るか)。
-//
-// 【なぜ liveViewAlive と分けるか(2026-08-07)】busy(露光終了→測光可)の計測に
-//  liveViewAlive を使っていたが、あちらは「本文が空でない」だけで真を返す。EOS R100 は
-//  8秒露光の後 約2.2秒のあいだ、HTTPには応答するが LV付帯情報の体裁になっていないものを
-//  返す。そのため busy=0ms と記録される一方、meterHere は12〜17回リトライして 2.3秒 を
-//  費やしていた(2026-08-06 通し: R100 の ss=8s 566コマすべて。R10 は同条件で try=1)。
-//  busy が過小報告されると撮影レポートの最小周期が誤る(R100 で約2.2秒ぶん短く出る)。
-//  一方 liveViewAlive を厳しくすると startLiveView の「既に開始済み」判定を巻き込み、
-//  撮影中の再接続を塞ぐ恐れがある(2026-07-30 に塞がって撮影が止まった実績がある)。
-//  聞いている質問が違うので、関数を分ける。
-bool apiCanonCCAPI::liveViewMeterReady(void)
-{
-    if (!(funcList[funcNum::LIVE_DETAIL].verb == verb::GET)) { return false; }
-    std::string body;
-    if (!netThread::httpGet(funcList[funcNum::LIVE_DETAIL].url + "?kind=info", body)) { return false; }
-    return checkLiveViewInfo(body) == 0;
 }
 
 // シャッターを切る準備
@@ -422,11 +389,12 @@ std::string apiCanonCCAPI::sendFor(const std::vector<sendMap>& map, double real)
 errCode apiCanonCCAPI::getSettings(cmdt::shotRange& settings)
 {
     std::vector<std::string> isoRaw, ssRaw, fnRaw;
-    errCode err = getJsonAbility(funcNum::ISO, isoRaw);
+    std::string isoCur, ssCur, fnCur;	// 同じ応答に入っている現在値(camExp_ の初期化に使う)
+    errCode err = getJsonAbility(funcNum::ISO, isoRaw, &isoCur);
     if (err != ERR_HGC_OK) { return err; }
-    err = getJsonAbility(funcNum::SS, ssRaw);
+    err = getJsonAbility(funcNum::SS, ssRaw, &ssCur);
     if (err != ERR_HGC_OK) { return err; }
-    err = getJsonAbility(funcNum::F_NUMBER, fnRaw);
+    err = getJsonAbility(funcNum::F_NUMBER, fnRaw, &fnCur);
     if (err != ERR_HGC_OK) { return err; }
 
     // 生文字列 raw から { 表示用 settings, 送信用テーブル } を作る。
@@ -452,6 +420,13 @@ errCode apiCanonCCAPI::getSettings(cmdt::shotRange& settings)
     tables_.ss  = expo::buildTable(settings.ss,   expo::expoKind::ss);
     tables_.fn  = expo::buildTable(settings.fNum, expo::expoKind::fn);
 
+    // いまカメラに乗っている露出を控える。初期収束(meterHere)がライブビュー測光の出発点に使う。
+    // これが無いと「測光したいがカメラが何段の設定なのか分からない」ため上位から渡してもらう
+    // ことになり、測り方の都合が captureRunner へ漏れる。ここで持てば漏れない。
+    camExp_.iso = toDisp(isoCur, expo::expoKind::iso);
+    camExp_.ss  = toDisp(ssCur,  expo::expoKind::ss);
+    camExp_.fn  = toDisp(fnCur,  expo::expoKind::fn);
+
     return ERR_HGC_OK;
 }
 
@@ -469,7 +444,7 @@ errCode apiCanonCCAPI::setFNumber(const std::string& fNumber)
     json["value"] = val;
     std::string body = json.dump();
     std::string resp;
-    if (netThread::httpPut(funcList[func].url, body, resp)) { return ERR_HGC_OK; }
+    if (netThread::httpPut(funcList[func].url, body, resp)) { camExp_.fn = fNumber; return ERR_HGC_OK; }
 
     DBGLN(col::RED, "setFNumber NG %s %s", body.c_str(), resp.c_str());
     return ERR_HGC_HTTP_PUT;	// 失敗を握りつぶさず返す
@@ -486,7 +461,7 @@ errCode apiCanonCCAPI::setSS(const std::string& ss)
     json["value"] = val;
     std::string body = json.dump();
     std::string resp;
-    if (netThread::httpPut(funcList[func].url, body, resp)) { return ERR_HGC_OK; }
+    if (netThread::httpPut(funcList[func].url, body, resp)) { camExp_.ss = ss; return ERR_HGC_OK; }
 
     DBGLN(col::RED, "setSS NG %s %s", body.c_str(), resp.c_str());
     return ERR_HGC_HTTP_PUT;	// 失敗を握りつぶさず返す
@@ -503,7 +478,7 @@ errCode apiCanonCCAPI::setIso(const std::string& iso)
     json["value"] = val;
     std::string body = json.dump();
     std::string resp;
-    if (netThread::httpPut(funcList[func].url, body, resp)) { return ERR_HGC_OK; }
+    if (netThread::httpPut(funcList[func].url, body, resp)) { camExp_.iso = iso; return ERR_HGC_OK; }
 
     DBGLN(col::RED, "setIso NG %s %s", body.c_str(), resp.c_str());
     return ERR_HGC_HTTP_PUT;	// 失敗を握りつぶさず返す
@@ -639,11 +614,24 @@ errCode apiCanonCCAPI::restoreShootingMode(void)
     return rc;
 }
 
-// 接続維持用の無害なGET。/ccapi カタログを1回取得するだけ。撮影窓まで待機中などに定期送出して
+// 接続維持用の無害なGET。撮影窓まで待機中や、測光しないコマ(夜間の固定露出)で定期送出して
 // 無通信でカメラのWi-Fi/CCAPIセッションが切れるのを防ぐ。到達できれば ERR_HGC_OK。
+//
+// 【ついでに登録通知を流す】この方式では撮影画像の登録通知(event/polling)を測光のたびに
+//  引いている。ところが夜間の固定露出は測光しないので、その間 通知がカメラ側に溜まり続ける
+//  (1コマ2件×数千コマ)。溜まったぶんは夜明けの最初の測光で一度に返ってくるので、応答が
+//  大きくなり、エッジ端末のメモリを圧迫する。keepAlive は「無害なGETを1回投げる」ものなので、
+//  その1回を event/polling にすれば、追加の通信なしに溜まりを流せる。
+//  event/polling を持たないカメラでは従来どおり /ccapi カタログを取る。
 errCode apiCanonCCAPI::keepAlive(void)
 {
     std::string resp;
+    auto it = funcList.find(funcNum::EVENT_POLL);
+    if (it != funcList.end() && (it->second.verb == verb::GET))
+    {   // クエリ無し=待たずに即返る。溜まっていた通知はこの応答で捨てられる。
+        if (netThread::httpGet(it->second.url, resp)) { return ERR_HGC_OK; }
+        return ERR_HGC_HTTP_GET;
+    }
     if (netThread::httpGet(device.urlAccess, resp) && resp.length() > 0) { return ERR_HGC_OK; }
     return ERR_HGC_HTTP_GET;
 }
@@ -691,8 +679,9 @@ errCode apiCanonCCAPI::getShotPicture(std::vector<std::byte>& jpg)
 // 機能番号の ability を取得する
 // nunber  : 機能番号
 // ability : 取得した ability
-errCode apiCanonCCAPI::getJsonAbility(funcNum number, std::vector<std::string>& abilitys)
+errCode apiCanonCCAPI::getJsonAbility(funcNum number, std::vector<std::string>& abilitys, std::string* curRaw)
 {
+    if (curRaw != nullptr) { curRaw->clear(); }
     if (!(funcList[number].verb == verb::GET)) { return ERR_HGC_NOT_SUPPORTED; }
     std::string answer;
     auto success = netThread::httpGet(funcList[number].url, answer);
@@ -705,6 +694,11 @@ errCode apiCanonCCAPI::getJsonAbility(funcNum number, std::vector<std::string>& 
         auto takeAbi = json.at(key).get<std::vector<std::string>>();
         if (takeAbi.size() == 0) { return ERR_HGC_TAKE_FAIL; }
         abilitys = takeAbi;
+        // 同じ応答の "value" が現在値。取れなくても ability は返す(現在値は任意の付録)。
+        if (curRaw != nullptr && json.contains("value") && json.at("value").is_string())
+        {
+            *curRaw = json.at("value").get<std::string>();
+        }
     }
     catch(json::exception& e)
     {
@@ -1085,83 +1079,56 @@ errCode apiCanonCCAPI::alzMetering(cmdt::HISTOGRAM& histoOut)
 
 // ============================================================================
 //  測光(apiBase::meterScene / meterHere の CCAPI 実装)
-//  2026-07-27 captureRunner から移設。「測光してリニア輝度(場面の明るさ)を得る」機能の
-//  実装詳細(LVヒストグラム・暗所での測光ss切替・張り付き検出)はカメラ依存なのでこの層に置く。
-//  別方式(撮影画像サムネイル等)への差し替えはこの2関数の実装交換で行う。
+//
+//  【方式】直前に撮れた最新の撮影画像のサムネイルから、場面のリニア輝度を出す。
+//   1コマ:  シャッター → 露光(ss) → event/polling で登録通知 → 最新ファイルのサムネイル取得
+//           → リニア輝度 → 露出設定 → 撮影周期の残りを待つ → 次のシャッター
+//   本露光そのものの積分なので、ライブビューが約1.6秒相当で頭打ちになる夜間でも真値が出る。
+//
+//  【この層に閉じていること】測り方の一切(何を読むか・カメラをどう使うか・何回粘るか)。
+//   上位(captureRunner)へ渡すのは meterResult の sceneRef / usable と診断だけである。
+//   別メーカーのカメラは、まったく違う測り方でこの2関数を実装すればよい。
+//
+//  【ライブビューは初期収束だけ】meterHere は撮影窓の手前で1枚目の露出を決めるためのもので、
+//   その時点ではまだ1コマも撮っていない=サムネイルの元になる画像が無い。他に測る手段が
+//   無いのでここだけライブビューを使う。撮影ループに入ったら掴みもしない。
 // ============================================================================
 namespace
 {
-	// --- 測光の調整定数(実測から決定。captureRunner から移設) ---
-	constexpr int    kMeterSettleMaxMs    = 2600;	// Tv変更がLVに反映されるまでの待ち上限[ms](実測R10=1.3〜2.1秒)
-	// --- 反映の検知(2026-08-06) ---
-	// 上限まで寝るのをやめ、実際に反映されたら抜ける。実測1.3〜2.1秒に対し2.6秒を毎回払っており、
-	// 薄明の遷移帯では毎コマ効く。判定は「指示した向きへ指示量の一定割合だけ動いたか」。
-	// ノイズでヒストグラムは毎フレーム微妙に変わるので「中身が変わった」だけでは早すぎる。
-	constexpr int    kMeterReflectPollMs   = 200;	// 反映を確かめる間隔[ms]
-	constexpr double kMeterReflectRatio    = 0.5;	// 指示量のこの割合だけ動いたら反映とみなす
-	constexpr double kMeterReflectMinStops = 1.0;	// これ未満の指示量では判定しない(ノイズと区別できない)
-	// --- 反映の検知: 第2の抜け条件(2026-08-07) ---
-	// 上の比率判定は「指示した段数の半分以上動く」ことを求めるが、LVの中央値はヒストグラムの
-	// 最下位ビンより下がれず(上は飽和で頭打ち)、深い切替では要求が限界を超えて**構造的に
-	// 成立しなくなる**。実測(2026-08-06 夕R10)では要求下落 3.45段までは 623〜1020ms で抜け、
-	// 3.95段以上は全コマ上限 2641〜2876ms だった。そこで「これ以上変わらない」も反映とみなす。
-	constexpr int    kMeterReflectMinWaitMs   = 600;	// この時間は必ず待つ(切替直後の未反映で抜けない)
-	constexpr double kMeterReflectStableStops = 0.10;	// 連続2回の差がこれ以内なら底/天井に達したとみなす
-	constexpr double kMeterUsableLoX      = 0.020;	// 中央値がこれ未満は暗すぎて信用しない(sRGB)
-	constexpr double kMeterUsableHiX      = 0.850;	// これ超は明るすぎ(飽和寄り)
-	// --- 測光ssを選ぶときの狙い(2026-08-06) ---
-	// 上の「使える帯」は測光値を信用してよいかの判定で、8.8段幅もある。その端に着地しても
-	// 「内側」なので従来は直さなかった。実測では 5段の決め打ち切替で 0.0016(下限の3%上)に
-	// 張り付き、ヒストグラム中央値が256ビン中の5番目=ほぼ真っ黒のまま測り続けていた。
-	// 隣のビンへ1つずれるだけで0.8段動く位置で、量子化とノイズが支配的になる。
-	// そこで「測光値の採否」とは別に「測光ssをどこへ置きたいか」を持ち、端に寄ったら寄せ直す。
-	// 狙いの範囲に入っている間は動かさないので、安定しているときは1段も動かない。
-	constexpr double kMeterAimLoX         = 0.10;	// これ未満なら明るい側へ寄せる(sRGB。256ビン中26番目)
-	constexpr double kMeterAimHiX         = 0.70;	// これ超なら暗い側へ寄せる
-	constexpr double kMeterAimX           = 0.40;	// 寄せ先(実測で良好だった 0.44〜0.54 の少し下)
-	constexpr double kMeterAimMaxStep     = 1.0;	// 寄せは1コマ1段まで(急に動かして振動させない)
-	constexpr double kMeterRespondRatio   = 0.50;	// 「Δss段」に対しΔ測光段がこの比未満なら張り付き
-	// 応答比を判定するのに必要な最小の露出変化[段]。従来は 0.5 固定だったため、
-	// 撮影中の 1歩=1/3段(0.333) では張り付き判定が一度も働かなかった(2026-08-03 判明)。
-	constexpr double kMeterRespondMinStops = 0.30;
-	// 張り付きと確定するまでの連続回数。1コマのノイズで切替へ落ちないようにする。
-	constexpr int    kMeterPinConfirm      = 2;
-	// 測光ssの初期値(2026-08-08 改)。従来は「撮影ss-5段」の決め打ちだった。
-	// 測光ss切替の目的は「LVが正直に積分できる長さまで短くする」ことなので、必要以上に
-	// 短くすると信号を失うだけで損しかない。実測(2026-08-07 夕R100): 撮影8秒に対し 1/4秒
-	// (-5段)へ落とした結果、ヒストグラム中央値がビン2(1ビン=0.58段)に沈み、測光値が
-	// 測光ssの揺れをそのまま拾って撮影露出が±3段うねった。1.6秒(-2.3段)ならビン9相当で
-	// 済んだ(同じ場面の実測から算出)。そこで「LVの積分上限」を基準にする。
-	//  実測値: R10/R100 とも約1.6秒相当で頭打ち(2026-07-26)。機種名では分岐しない。
-	constexpr double kLvIntegrateCeilSec  = 1.6;	// LVが正直に積分できる上限[秒](実測)
-	constexpr int    kMeterInitDropStops  = 5;		// 測光ss天井の下限に使う後退量[段](暴走の backstop)
-	// 切替後の測光値がこれ未満になる見込みなら、切り替えても悪化するだけなので切り替えない。
-	// sRGB 0.031 = 256階調のビン8。ここなら1ビン=0.17段で連続量として扱える(ビン2では0.58段)。
-	constexpr double kMeterSwitchMinX     = 0.031;
-	constexpr int    kMeterRetryMs        = 100;	// ヒスト取得リトライ間隔[ms]
-	constexpr int    kMeterMaxMs          = 5000;	// ヒスト取得リトライ上限[ms]
-	constexpr int    kLvFreshMarginMs     = 2000;	// 古いLVフレーム判定の許容[ms](生成周期+揺らぎ)
-	constexpr double kMeterPinBackoffStops = 1.0;	// 張り付き検出時、天井をこの段数だけ短く下げる
-	constexpr double kMeterMaxLenStep      = 1.0;	// 暗すぎるとき1コマで伸ばす上限[段](pin突入を防ぐ)
-	// 切替なし経路でLVが取れなかったコマの段番号(ログ stage=)。方式Aの 1〜5 と区別する。
-	constexpr int    kLvFailAsIsStage      = 10;
-	constexpr int    kLvRetryAsIsFrames    = 20;	// 切替なしを再試行するまでの間隔[コマ]
-	// 天井を毎コマこれだけ緩め、条件変化へ追従する。
-	// 【0.10 → 1/3 段(2026-08-07)】0.10 には2つ問題があった。
-	//  ・遅すぎる: 15秒周期だと1段の復帰に25秒。実測(2026-08-06 夕R10)では下端から戻るのに
-	//    約35分かかり、星景(固定露出)へ切り替わるまで復帰できなかった。
-	//  ・張り付き判定が働かなくなる: 緩和が 0.10 だと1コマの露出変化も 0.10 段にしかならず、
-	//    判定の最小変化量 kMeterRespondMinStops(0.30) に届かない。つまり天井を緩めている
-	//    あいだ「伸ばしたのに上がらない」を一度も検出できず、天井が青天井に伸びる。
-	//  1歩(1/3段)にすれば毎コマ判定が働き、積分上限に当たった時点で正しく止まる。
-	constexpr double kMeterCeilRelaxStops  = 1.0 / 3.0;
-	// --- 撮影画像フィードバック測光(方式A)の予算 ---
-	// 露光終了→カメラの記録完了→サムネイル取得 までを含む総予算。記録は実測2.0〜2.6秒だが、
-	// カメラが混んでいると伸びる。取得が503等で弾かれても諦めず、この予算内でリトライする
-	// (2026-07-28: 1回で諦めていたため測光失敗→誤って接続断と判定していた)。
+	// --- 撮影画像フィードバック測光の予算 ---
+	// 露光終了 → カメラの記録完了 → 登録通知 → サムネイル取得 までを含む総予算。
+	// 記録は実測2.0〜2.6秒だが、カメラが混んでいると伸びる。取得が503等で弾かれても
+	// 諦めずこの予算内でリトライする(1回で諦めると測光失敗を接続断と誤判定した経緯がある)。
 	constexpr int    kThumbBudgetMs        = 10000;	// 測光全体(待ち+取得リトライ)の上限[ms]
 	constexpr int    kThumbFetchRetryMs    = 200;	// サムネイル取得のリトライ間隔[ms]
 	constexpr int    kPollGapMs            = 200;	// event/polling の再試行間隔[ms](連打防止)
+	// サムネイルのレターボックス黒帯を捨てる比率(上下それぞれ)。160x120サムネは3:2画像に
+	// 黒帯が付くため、捨てないと中央値が約0.2段下がる(実測)。
+	constexpr double kThumbCropRatio       = 0.06;
+
+	// --- 初期収束(meterHere)のライブビュー測光の調整定数 ---
+	constexpr int    kMeterRetryMs        = 100;	// ヒスト取得リトライ間隔[ms]
+	constexpr int    kMeterMaxMs          = 5000;	// ヒスト取得リトライ上限[ms]
+	constexpr int    kLvFreshMarginMs     = 2000;	// 古いLVフレーム判定の許容[ms](生成周期+揺らぎ)
+	// 測光ssの上限[秒]。これより長いとLVが積分できず張り付く(実測: 0.6sはpin=0、2sで時々pin=1)。
+	constexpr double kInitMeterMaxSsSec   = 0.5;
+	// ヒストグラム中央値がこの範囲外なら明暗に張り付き(その値は使わず測光露出をずらす)。
+	constexpr double kPegBright           = 0.99;
+	constexpr double kPegDark             = 0.01;
+	// 張り付きを抜けるための測光露出のずらし。飽和側は「どれだけ超えているか」の情報が無い
+	// (真昼にISO1600/0.5sだと十数段超え)ので大股で降りる。-2段刻みでは真昼に時間内で
+	// 抜けられなかった(2026-07-26 09:00 実測)。
+	constexpr double kPegBrightStep       = -4.0;
+	constexpr double kPegDarkStep         = +2.0;
+	constexpr int    kHereMaxShift        = 4;		// 1回の meterHere で張り付きを抜ける試行の上限
+	constexpr int    kHereSettleMs        = 700;	// 測光露出を変えてからLVが追従するまでの待ち[ms]
+	constexpr int    kHereApplyRetryMs    = 300;	// 測光露出の適用に失敗したときの間隔[ms]
+
+	// 露出の3軸がそろっているか。
+	bool validExp(const hgc::exposure& e)
+	{
+		return !e.iso.empty() && !e.ss.empty() && !e.fn.empty();
+	}
 }
 
 void apiCanonCCAPI::meterSleep(int ms, const std::function<bool()>& keepGoing) const
@@ -1176,80 +1143,39 @@ void apiCanonCCAPI::meterSleep(int ms, const std::function<bool()>& keepGoing) c
 
 void apiCanonCCAPI::meterReset(void)
 {
-	meterSs_.clear();
-	meterCeilStops_ = 1e9;
-	meterPrevStops_ = 0.0;
-	meterPrevLin_   = -1.0;
-	// 再接続でLVセッションが作り直されるため鮮度基準も捨てる(前セッションと比べると誤判定する)。
-	lvFreshPrevMs_  = 0;
-	lvFreshPrevAt_  = nullptr;
-	contentsBase_   = 0xFFFFFFFFu;	// 新規画像検知の基準も取り直す
-	contentsDir_.clear();			// 保存先も取り直す
-	lvNeedSwitch_   = false;	// 撮影ssのままでいけるか、次コマでまた試す
-	lvAsIsWait_     = 0;
+	hereExp_       = hgc::exposure{};	// 初期収束の測光露出は取り直す
+	lvFreshPrevMs_ = 0;					// 再接続でLVセッションが作り直されるため鮮度基準も捨てる
+	lvFreshPrevAt_ = nullptr;
+	pollMode_      = pollMode::unknown;	// 待ち方はセッションごとに判定し直す
+	// 前の撮影の登録通知が残っていると、1枚目で古い画像のサムネイルを掴む。ここで流す。
+	this->flushEventPolling();
 }
 
-// 測光ssへ切替えた変更が、ライブビューに反映されるまで待つ。
-//
-// 【なぜ上限まで寝ないのか(2026-08-06)】従来は kMeterSettleMaxMs をまるごと寝ていた。
-//  実測の反映は1.3〜2.1秒なので毎回0.5〜1.3秒を捨てており、切替が要る薄明の遷移帯では
-//  毎コマ効いてくる(準備のリードを食い、撮影周期を詰められない)。
-//  フレームの時刻(systemtime)は変更直後でも進むため反映の合図に使えない
-//  (中身が変更前のまま時刻だけ新しいフレームが返る。実測)。そこで中身そのものを見る。
-//  ただし「中身が変わった」だけではノイズで毎フレーム変わってしまい早すぎるので、
-//  「指示した向きへ、指示量の kMeterReflectRatio 以上動いたか」で判定する。
-//  検知できないうちは従来どおり上限まで待つので、今より遅くなることはない。
-//  beforeLinear: 切替前に測れていたリニア輝度 / deltaStops: 指示した露出変化[段]
-//  return: 実際に待った時間[ms]
-int apiCanonCCAPI::waitLvReflect(double beforeLinear, double deltaStops,
-                                 int budgetMs, const std::function<bool()>& keepGoing)
+// 測光露出をテーブル上で delta 段ずらす(結果の ss は capSec を超えない)。
+// iso/fn は動かさず ss だけで作る。ISO を動かすと測光のノイズ特性まで変わるため。
+void apiCanonCCAPI::shiftMeterSs(hgc::exposure& me, double delta, double capSec) const
 {
-	void* t0 = tool::startElapse();
-	// 基準が無い/指示量が小さくて判定できない → 従来どおり上限まで待つ。
-	if (!(beforeLinear > 0.0) || std::fabs(deltaStops) < kMeterReflectMinStops)
+	if (tables_.ss.empty()) { return; }
+	hgc::exposure t = me;
+	const double wantStops = expo::brightnessStops(me, tables_) + delta;
+	std::string pick; double best = 1e9;
+	for (const auto& e : tables_.ss)
 	{
-		meterSleep(budgetMs, keepGoing);
-		return static_cast<int>(tool::getElapse(t0));
+		if (capSec > 0.0 && e.real > capSec) { continue; }
+		t.ss = e.value;
+		const double d = std::fabs(expo::brightnessStops(t, tables_) - wantStops);
+		if (d < best) { best = d; pick = e.value; }
 	}
-	double prevLin = -1.0;	// 直前のポーリング値(安定判定用)
-	for (;;)
-	{
-		// 予算チェックはスリープ+LV取得の**前**に行う。従来は先頭で見てから寝て取りに行って
-		// いたため、1周期ぶん(200ms + 取得100〜300ms)超過していた(実測 stl=2951ms > 上限2600)。
-		const int elapsed = static_cast<int>(tool::getElapse(t0));
-		if (elapsed + kMeterReflectPollMs >= budgetMs) { break; }
-		if (keepGoing && !keepGoing()) { break; }
-		meterSleep(kMeterReflectPollMs, keepGoing);
-		cmdt::HISTOGRAM h;
-		if (rdyMetering() != ERR_HGC_OK || alzMetering(h) != ERR_HGC_OK) { continue; }
-		const double lin = expo::srgbToLinear(expo::histMedian(h.y, cmdt::hist_bin));
-		if (!(lin > 0.0)) { continue; }
-		// 割り算で向きも一緒に見る(同じ向きなら正、逆向きなら負になる)。
-		if ((std::log2(lin / beforeLinear) / deltaStops) >= kMeterReflectRatio) { break; }
-		// 【第2の抜け条件(2026-08-07)】上の比率判定は「指示した段数の半分以上、測光値が動く」
-		//  ことを求める。ところが LV の中央値はヒストグラムの最下位ビン(Y≒0.0002)より下がれず、
-		//  上は飽和で頭打ちになる。深く切替えるほど要求される変化量が大きくなるので、要求が
-		//  限界を超えた瞬間にこの条件は**構造的に成立しなくなり、必ず上限まで待つ**。
-		//  実測(2026-08-06 夕R10): 要求下落 3.45段までは 623〜1020ms で抜け、3.95段以上は
-		//  全コマ 2641〜2876ms(上限)。境目がきれいに出ていた。
-		//  そこで「これ以上待っても変わらない」を直接見る。連続する2回のポーリングが 0.1段
-		//  以内なら底(または天井)に達しているので、反映は済んだものとして抜ける。
-		//  切替直後にまだ動いていないだけの状態で抜けないよう、最低待ち時間を設ける
-		//  (正常時の実測は 623ms 以上なので、この下限で早すぎる離脱は起きない)。
-		if (prevLin > 0.0
-		 && static_cast<int>(tool::getElapse(t0)) >= kMeterReflectMinWaitMs
-		 && std::fabs(std::log2(lin / prevLin)) <= kMeterReflectStableStops) { break; }
-		prevLin = lin;
-	}
-	return static_cast<int>(tool::getElapse(t0));
+	if (!pick.empty()) { me.ss = pick; }
 }
 
-// カメラの現在の露出のまま、LVヒストグラムからリニア輝度(中央値)を得る。
-//  古いフレームは捨てて再取得し、上限まで粘る(長秒露光後はLVが使えるまで実測3.3秒かかる機種がある)。
-errCode apiCanonCCAPI::meterHere(meterResult& out, const std::function<bool()>& keepGoing)
+// ライブビューのヒストグラムを1枚ぶん読む(取れるまで kMeterMaxMs まで粘る)。
+//  長秒露光の直後はLVが使えるようになるまで実測3.3秒かかる機種があるので粘る。
+//  古いフレーム(時刻の進みが実経過に足りない)は捨てて取り直す。
+//  露出には一切触れない。呼び出し側(meterHere)が測光露出を決める。
+errCode apiCanonCCAPI::readLvHistogram(meterResult& out, const std::function<bool()>& keepGoing)
 {
 	void* t0 = tool::startElapse();
-	out = meterResult{};
 	cmdt::HISTOGRAM hist;
 	for (;;)
 	{
@@ -1275,7 +1201,7 @@ errCode apiCanonCCAPI::meterHere(meterResult& out, const std::function<bool()>& 
 				}
 			}
 			if (lv != 0) { lvFreshPrevMs_ = lv; lvFreshPrevAt_ = tool::startElapse(); }
-			// チェックサム+明側診断(p99/pMax)。
+			// チェックサム+明側診断(p99/pMax)+統計量の比較用(制御には使わない)。
 			uint32_t s = 0; double total = 0.0;
 			for (int i = 0; i < cmdt::hist_bin; ++i) { s = s * 31u + hist.y[i]; total += hist.y[i]; }
 			out.histSum = s;
@@ -1284,14 +1210,9 @@ errCode apiCanonCCAPI::meterHere(meterResult& out, const std::function<bool()>& 
 				const double thr = total * 0.99; double cum = 0.0; int p99i = cmdt::hist_bin - 1, pmax = 0;
 				for (int i = 0; i < cmdt::hist_bin; ++i) { cum += hist.y[i]; if (cum >= thr) { p99i = i; break; } }
 				for (int i = cmdt::hist_bin - 1; i >= 0; --i) { if (hist.y[i] > 0) { pmax = i; break; } }
-				out.p99  = static_cast<double>(p99i) / static_cast<double>(cmdt::hist_bin - 1);
-				out.pMax = static_cast<double>(pmax) / static_cast<double>(cmdt::hist_bin - 1);
-				// --- 測光統計量の比較用(2026-08-08 診断。制御には使わない) ---
-				// 夜明けに露出の追従が約1時間遅れた。原因は測光に使っている中央値が実写より
-				// 最大4.35段暗く出ることだが(2026-08-08 朝R10 実測)、統計量を変えれば早く反応する
-				// のか・どれだけかを、ログに中央値/p99/pMx しか無いため算出できなかった。
-				// 同じヒストグラムから候補を作って残すだけで、追加の通信もカメラ操作も無い。
 				const double last  = static_cast<double>(cmdt::hist_bin - 1);
+				out.p99  = static_cast<double>(p99i) / last;
+				out.pMax = static_cast<double>(pmax) / last;
 				const double thr75 = total * 0.75, thr90 = total * 0.90;
 				int  p75i = cmdt::hist_bin - 1, p90i = cmdt::hist_bin - 1;
 				bool got75 = false, got90 = false;
@@ -1321,356 +1242,128 @@ errCode apiCanonCCAPI::meterHere(meterResult& out, const std::function<bool()>& 
 	}
 }
 
-// 使う測光ssを決める(未学習なら撮影ssから既定段数短く。学習値は撮影ssより長くしない)。
-//  空を返したら「切替不要=撮影露出のまま測る」。
-std::string apiCanonCCAPI::decideMeterSs(const hgc::exposure& shotExp) const
+// 【シャッター前の測光】撮影窓の手前で1枚目の露出を決める初期収束用。
+//
+// まだ1コマも撮っていないのでサムネイルが無い。ここだけライブビューで測る。
+// 測るのに都合のよい露出(=測光露出)はこの関数が自分で決める:
+//  ・出発点は前回の続き(hereExp_)、無ければカメラに乗っている値(camExp_)。
+//  ・ss は kInitMeterMaxSsSec を超えない。これより長いとLVが積分できず張り付いて測れない。
+//  ・白飛び/黒潰れならその値は使わず、測光露出をずらして測り直す。
+// 返すのは meterScene と同じ「露出非依存の場面の明るさ」sceneRef なので、呼び出し側は
+// どちらで測ったのかを知らなくてよい。カメラへ乗せた露出は appliedExp で申告する。
+//
+// failStage: 20=出発点の露出が無い / 21=測光露出を適用できない / 22=LVヒストが取れない
+//            23=張り付きを抜けられなかった
+errCode apiCanonCCAPI::meterHere(meterResult& out, const std::function<bool()>& keepGoing)
 {
-	if (tables_.ss.empty()) { return std::string(); }
-	std::string want = meterSs_;
-	if (want.empty())
+	out = meterResult{};
+	out.settleMs = 0;
+
+	// 撮影ループ中はライブビューを掴んでいない(離してある)ので、要るときだけ張る。
+	if (!this->liveViewAlive()) { this->startShooting(); }
+
+	// 測光露出の出発点。
+	hgc::exposure me = validExp(hereExp_) ? hereExp_ : camExp_;
+	if (!validExp(me)) { out.failStage = 20; return ERR_HGC_RDY_METARING; }
+	if (expo::parseValue(me.ss, expo::expoKind::ss) > kInitMeterMaxSsSec)
 	{
-		// 未学習時の初期値。LVが正直に積分できる上限(kLvIntegrateCeilSec)まで短くする。
-		// 撮影ssがもともとそれより短ければ切替は要らない(下の want==shotExp.ss で空を返す)。
-		const double shotSec0 = expo::parseValue(shotExp.ss, expo::expoKind::ss);
-		const double aimSec   = (shotSec0 > 0.0 && shotSec0 < kLvIntegrateCeilSec) ? shotSec0 : kLvIntegrateCeilSec;
-		const double target   = expo::brightnessStops(shotExp, tables_)
-		                      + ((shotSec0 > 0.0) ? std::log2(aimSec / shotSec0) : 0.0);
-		double best = 1e9;
-		for (const auto& e : tables_.ss)
+		this->shiftMeterSs(me, 0.0, kInitMeterMaxSsSec);
+	}
+
+	for (int shift = 0; shift < kHereMaxShift; ++shift)
+	{
+		if (keepGoing && !keepGoing()) { break; }
+
+		// 測光露出をカメラへ乗せる(変わっていない軸は送らない)。
+		errCode ae = ERR_HGC_OK, r;
+		if (me.fn  != camExp_.fn)  { r = this->setFNumber(me.fn); if (r != ERR_HGC_OK) { ae = r; } }
+		if (me.ss  != camExp_.ss)  { r = this->setSS(me.ss);      if (r != ERR_HGC_OK) { ae = r; } }
+		if (me.iso != camExp_.iso) { r = this->setIso(me.iso);    if (r != ERR_HGC_OK) { ae = r; } }
+		out.appliedExp = camExp_;	// 実際にカメラへ乗った値(成功した軸だけ更新されている)
+		if (ae != ERR_HGC_OK)
 		{
-			hgc::exposure t = shotExp; t.ss = e.value;
-			const double d = std::fabs(expo::brightnessStops(t, tables_) - target);
-			if (d < best) { best = d; want = e.value; }
+			// 乗っていない露出で測ると、割り戻す分母が嘘になり場面の明るさを取り違える。
+			// 測らずにやり直す(連打はしない)。
+			out.applyFailed = true;
+			out.failStage   = 21;
+			meterSleep(kHereApplyRetryMs, keepGoing);
+			continue;
 		}
-	}
-	if (want.empty() || want == shotExp.ss) { return std::string(); }
-	// 測光ssは撮影ssより長くしない(測光ssの存在意義は「LVが積分できる短さで忠実に測る」ことだけ。
-	// 夜明けに学習値が縮まず撮影ssと5段逆転→窓切替で+4.7段の明るい1コマが撮れた 7/25実測)。
-	const double wantSec = expo::parseValue(want, expo::expoKind::ss);
-	const double shotSec = expo::parseValue(shotExp.ss, expo::expoKind::ss);
-	if (wantSec <= 0.0 || (shotSec > 0.0 && wantSec >= shotSec)) { return std::string(); }
-	return want;
-}
+		meterSleep(kHereSettleMs, keepGoing);	// LVが新しい露出へ追従するのを待つ
+		out.settleMs += kHereSettleMs;
 
-// 測光結果から次コマの測光ssを学習し、張り付き(露出を変えても値が動かない)を判定する。
-//  短い側・忠実優先: 暗すぎる時だけ控えめに伸ばし、明るすぎたら縮め、張り付いたら天井を下げる。
-void apiCanonCCAPI::adaptMeterSs(const hgc::exposure& meterExp, const hgc::exposure& shotExp,
-                                 double linear, bool& pinnedOut)
-{
-	pinnedOut = false;
-	if (tables_.ss.empty()) { return; }
-	const double curStops = expo::brightnessStops(meterExp, tables_);
-	const double x = (linear > 0.0) ? linear : 0.0;
-
-	if (meterPrevLin_ > 0.0 && x > 0.0)
-	{
-		const double dSs = curStops - meterPrevStops_;			// 指示した変化[段]
-		// 【向きを見る(2026-08-07)】ここでの張り付きは「伸ばしたのに上がらない=LVの積分上限」を
-		//  指し、対処は「1段短くする」。判定に fabs を使っていたため、**短くしたのに指示ほど
-		//  下がらなかったコマ**にも成立していた。暗所では黒の底(ヒストグラム最下位ビン)に
-		//  当たって応答が鈍るのでこれが毎コマ成立し、対処がさらに1段短縮 → また成立、という
-		//  自己増幅で ss表の下端まで走る。
-		//  実測(2026-08-06 夕R10 19:02〜19:12): 0.5s→1/4→1/8→1/15→1/30→…→1/16000 と
-		//  1段/コマの下り階段。撮影露出もこれに追随して 8s→1/20(-8.3段)まで落ち、
-		//  19:12〜20:24 の 305コマが真っ黒になった。復帰は天井の緩和 0.1段/コマ だけなので
-		//  約35分かかり、星景(固定露出)へ切り替わるまで戻れなかった。
-		//  そこで判定を「伸ばした側」だけにする。縮めて反応が鈍いのは黒の底に当たっている
-		//  ことであって、対処は短縮ではない(むしろ逆)。これで下り階段は原理的に起きない。
-		//  なお meterSceneLv の①経路(切替なし)の張り付き判定は別物で、あちらの対処は
-		//  「測光ssへ切替」なので向きを問わないのが正しい(暗所のLV自動ゲイン検出。触らない)。
-		if (dSs >= kMeterRespondMinStops)
+		meterResult h;
+		h.tries = out.tries;	// 試行回数は通算で数える
+		if (this->readLvHistogram(h, keepGoing) != ERR_HGC_OK || !(h.linear > 0.0))
 		{
-			const double dLin = std::log2(x / meterPrevLin_);	// 実際に動いた[段]
-			if ((dLin / dSs) < kMeterRespondRatio) { pinnedOut = true; }
+			out.tries    = h.tries;
+			out.rdyMs    = h.rdyMs;
+			out.staleSkip += h.staleSkip;
+			out.failStage = 22;
+			continue;
 		}
-	}
-	meterPrevStops_ = curStops;
-	meterPrevLin_   = x;
+		// 測れた。張り付きで捨てる回もログには残したいので、見えていた値をそのまま out へ移す
+		// (通算で数えているもの=試行回数・捨てた回数・待ち・適用値 は引き継ぐ)。
+		h.staleSkip += out.staleSkip;
+		h.settleMs   = out.settleMs;
+		h.appliedExp = out.appliedExp;
+		out = h;
 
-	// 天井の下限(2026-08-07)。測光ssは「撮影ssより短く、LVが積分できる範囲で最も忠実に測れる
-	// 位置」を探すもので、初期値(撮影ss-kMeterInitDropStops)より下へ行く意味は無い。
-	// 下限が無かったため、張り付きの誤検出が連鎖したときに ss表の下端(1/16000)まで走れた。
-	const double ceilFloor = expo::brightnessStops(shotExp, tables_) - static_cast<double>(kMeterInitDropStops);
-
-	double wantStops;
-	if (pinnedOut)
-	{	// 張り付き=このssは長すぎてLVが積分できない。天井として記録し短い側へ後退。
-		meterCeilStops_ = curStops - kMeterPinBackoffStops;
-		if (meterCeilStops_ < ceilFloor) { meterCeilStops_ = ceilFloor; }
-		wantStops = meterCeilStops_;
-	}
-	else
-	{
-		const double loLin = expo::srgbToLinear(kMeterUsableLoX);
-		const double hiLin = expo::srgbToLinear(kMeterUsableHiX);
-		if (x > 0.0 && x < loLin)
-		{	// 暗すぎ → 信号を得るため少しだけ伸ばす(pin突入を防ぐため1コマ1段まで)。
-			double d = std::log2(loLin / x);
-			if (d > kMeterMaxLenStep) { d = kMeterMaxLenStep; }
-			wantStops = curStops + d;
-		}
-		else if (x > hiLin)
-		{	// 明るすぎ(飽和寄り) → 縮める。
-			double d = std::log2(hiLin / x);
-			if (d < -3.0) { d = -3.0; }
-			wantStops = curStops + d;
-		}
-		else
-		{	// 帯の内側。ただし端に寄りすぎていると測定点として悪い(下端は256ビン中の数番目で
-			// 量子化とノイズが支配的、上端は飽和寄り)。狙いの範囲を外れていたら中心へ寄せる。
-			// 範囲内なら従来どおり動かさない(安定しているときに毎コマ動かして振動させない)。
-			const double aimLoLin = expo::srgbToLinear(kMeterAimLoX);
-			const double aimHiLin = expo::srgbToLinear(kMeterAimHiX);
-			if (x < aimLoLin || x > aimHiLin)
+		// 白飛び: 大股で降りる。ss が最短側に達して降りきれないときは ISO を下げて抜ける。
+		if (h.x >= kPegBright)
+		{
+			const double before = expo::brightnessStops(me, tables_);
+			this->shiftMeterSs(me, kPegBrightStep, kInitMeterMaxSsSec);
+			if (before - expo::brightnessStops(me, tables_) < 1.0)
 			{
-				double d = std::log2(expo::srgbToLinear(kMeterAimX) / x);	// +=明るく(伸ばす) -=暗く(縮める)
-				if (d >  kMeterAimMaxStep) { d =  kMeterAimMaxStep; }
-				if (d < -kMeterAimMaxStep) { d = -kMeterAimMaxStep; }
-				wantStops = curStops + d;
+				hgc::exposure t = me;
+				const double wantB = before + kPegBrightStep;
+				std::string pick; double best = 1e9;
+				for (const auto& e : tables_.iso)
+				{
+					t.iso = e.value;
+					const double d = std::fabs(expo::brightnessStops(t, tables_) - wantB);
+					if (d < best) { best = d; pick = e.value; }
+				}
+				if (!pick.empty()) { me.iso = pick; }
 			}
-			else { wantStops = curStops; }
+			out.failStage = 23;
+			continue;
 		}
-		meterCeilStops_ += kMeterCeilRelaxStops;	// 天井は毎コマ少し緩めて条件変化へ追従
-		if (meterCeilStops_ < ceilFloor) { meterCeilStops_ = ceilFloor; }
-		if (wantStops > meterCeilStops_) { wantStops = meterCeilStops_; }
+		// 黒潰れ: まだ伸ばせるなら忠実上限まで伸ばして測り直す。
+		// 伸ばしきっても黒い(=本当に真っ暗な夜)ならその値で進める。投影は明側限界へ
+		// クランプされ、夜間露出へ落ち着く。
+		if (h.x <= kPegDark
+		 && expo::parseValue(me.ss, expo::expoKind::ss) < kInitMeterMaxSsSec * 0.99)
+		{
+			this->shiftMeterSs(me, kPegDarkStep, kInitMeterMaxSsSec);
+			out.failStage = 23;
+			continue;
+		}
+
+		// 採用。次回の出発点として覚える(呼ぶたびに最初から探し直さない)。
+		hereExp_       = me;
+		out.meterExp   = me;
+		out.sceneRef   = h.linear / std::pow(2.0, expo::brightnessStops(me, tables_));
+		out.ok         = true;
+		out.usable     = true;
+		out.failStage  = 0;
+		return ERR_HGC_OK;
 	}
-	std::string pick; double best = 1e9;
-	for (const auto& e : tables_.ss)
-	{
-		hgc::exposure t = meterExp; t.ss = e.value;
-		const double d = std::fabs(expo::brightnessStops(t, tables_) - wantStops);
-		if (d < best) { best = d; pick = e.value; }
-	}
-	if (!pick.empty()) { meterSs_ = pick; }
+
+	// 張り付きを抜けられなかった/適用できなかった。ずらした結果は hereExp_ へ残し、
+	// 次の呼び出しが続きから探せるようにする(呼び出し側は自分の予算内で測り直す)。
+	hereExp_   = me;
+	out.ok     = false;
+	out.usable = false;
+	return ERR_HGC_RDY_METARING;
 }
 
-// 測光ssへ切り替える価値があるか(2026-08-08)。
-//  切替は「LVが露出変化に反応しない」問題を「絵が暗すぎてヒストグラムの分解能が無い」問題と
-//  取り換える手段でしかない。取り換えた先が測れないなら切り替えてはいけない。
-//  asIsLinear: いま撮影露出のまま測れている値。ここへ (測光ss/撮影ss) を掛けたものが切替後の見込み。
-//  return: 切り替える価値があるか(切替不要=測光ss==撮影ss のときも true=従来動作を妨げない)
-bool apiCanonCCAPI::switchWorthIt(const hgc::exposure& shotExp, double asIsLinear) const
-{
-	if (!(asIsLinear > 0.0)) { return true; }	// 判断材料が無い → 従来どおり
-	const std::string want = this->decideMeterSs(shotExp);
-	if (want.empty()) { return true; }			// 切替不要(=撮影ssのまま)。妨げない
-	const double wantSec = expo::parseValue(want, expo::expoKind::ss);
-	const double shotSec = expo::parseValue(shotExp.ss, expo::expoKind::ss);
-	if (!(wantSec > 0.0) || !(shotSec > 0.0)) { return true; }
-	const double predicted = asIsLinear * (wantSec / shotSec);
-	return predicted >= expo::srgbToLinear(kMeterSwitchMinX);
-}
-
-// 測光の入口。方式A(撮影画像フィードバック)/方式B(LVヒスト)を切り替える。
-//  Aが失敗したときの自動フォールバックはしない(据え置き=従来の測光失敗時と同じ挙動。
-//  こっそりBへ落ちると評価が濁り、測光ss切替の副作用も混入するため)。
+// 【撮影中の測光】直前に撮れた最新画像のサムネイルから場面の明るさを得る。
 errCode apiCanonCCAPI::meterScene(const hgc::exposure& shotExp, meterResult& out,
                                   const std::function<bool()>& keepGoing)
 {
-	if (kUseShotThumbMetering) { return meterSceneShot(shotExp, out, keepGoing); }
-	return meterSceneLv(shotExp, out, keepGoing);
-}
-
-// 撮影露出のままLV測光して使えるか(リニア輝度が「使える範囲」に入っているか)。
-//  判定の土俵は adaptMeterSs と同じ: リニア値 vs srgbToLinear(しきい値)。
-//  中央値がどこにあるかを見るので「明るすぎて動かない」「暗すぎて動かない」
-//  「積分上限で動かない」を取り違えない(張り付きそのものの判定は adaptMeterSs が持つ)。
-bool apiCanonCCAPI::lvUsableAsIs(double linear) const
-{
-	if (!(linear > 0.0)) { return false; }
-	return (linear >= expo::srgbToLinear(kMeterUsableLoX))
-	    && (linear <= expo::srgbToLinear(kMeterUsableHiX));
-}
-
-// 方式B: LVヒストグラム測光(旧方式。kUseShotThumbMetering=false で復活)。
-//
-// 【2026-07-31 変更】従来は毎コマ必ず測光ssへ切替えてから測っていた。切替の PUT と
-//  LV反映待ち(kMeterSettleMaxMs=2.6秒)が毎コマ乗るため、SSと撮影周期を近づけられない。
-//  撮影ssのままLVで測れるなら切替は要らないので、まず切替なしで測って中央値を見る。
-//   ・使える範囲に入っていた → そのまま採用(PUTなし・待ちなし)
-//   ・範囲外だった           → 従来どおり測光ssへ切替えて測り直す
-//  カメラがLVで何秒まで積分できるかは機種で違う(R10/R100は約1.6秒相当で頭打ち=7/26実測)。
-//  機種名で分岐しないので、8秒でも積分できる機種なら自動で切替なしのまま回る。
-//
-//  切替が要ると分かったら lvNeedSwitch_ を立て、以後は最初から切替える(明るさは急に変わらない
-//  ので、無駄な1回目をほぼ出さない)。ただし明るさは1日で大きく動くため、
-//   ・切替後の測光値から「撮影ssならどう写るか」を予測し、使える範囲に入る見込みが立ち、
-//   ・かつ前回の試行から kLvRetryAsIsFrames コマ以上あいている
-//  ときだけ、切替なしをもう一度試す。予測はLVが忠実に積分できる前提の上限値なので、
-//  「予測が範囲外＝撮影ssでは絶対に無理」は確実に弾ける。逆は試してみないと分からない。
-errCode apiCanonCCAPI::meterSceneLv(const hgc::exposure& shotExp, meterResult& out,
-                                    const std::function<bool()>& keepGoing)
-{
-	out = meterResult{};
-	hgc::exposure meterExp = shotExp;
-	// 測光ssへ切替えたとき「反映されたか」を判定する基準(切替前のリニア輝度)。
-	// ①で測れていればそれを使う。使えないときは②で1回だけ測る。
-	double preSwitchLinear = -1.0;
-
-	if (lvAsIsWait_ > 0) { --lvAsIsWait_; }
-
-	// --- ① 切替なしで測ってみる ---
-	if (!lvNeedSwitch_ || lvAsIsWait_ == 0)
-	{
-		meterResult asIs;
-		const errCode e0 = meterHere(asIs, keepGoing);
-		out.tries += asIs.tries;
-
-		// 【2026-08-04 追加】「測れなかった」と「測れたが撮影ssでは測光に向かない」を分ける。
-		//  測光ssへの切替は「撮影ssではLVが忠実に積分できない場面」への対処であって、
-		//  通信やLVの一過性の失敗に効く手ではない。失敗を切替の合図にすると害しかない:
-		//   ・測光ssが未学習だと初期値は撮影ss-5段。日中に当てると真っ黒な測光になる
-		//   ・詰まっている最中に setSS の PUT を投げる(応答が返らず遅延適用される危険が最も高い場面)
-		//   ・lvAsIsWait_ が立ち、以後 kLvRetryAsIsFrames コマのあいだ切替経路に固定される
-		//  実測(2026-08-03 17:28 夕R10): 通信のスタールでこの経路へ落ち、19コマ 1/16000 に居座った。
-		//  切替なしへ戻った瞬間の実測は 1/16000 の測光からの予測より 1.50段 明るく、写真は最大
-		//  1.3段 明るくなっていた。真っ暗になって切替が要る場合は測光値が下限を大きく割るので
-		//  adaptMeterSs が1段/コマ伸ばして数コマで復帰する。失敗を切替に混ぜる必要はない。
-		//  測光できなかったコマは露出据え置きが既定の方針(呼び出し側が露出を動かさない)。
-		//  lvNeedSwitch_/lvAsIsWait_ を触らないので、次コマでまた切替なしから判断し直す。
-		//  なお meterHere はヒストグラムが空でも ERR_HGC_OK を返す(ok=false/linear<=0 になるだけ)。
-		//  戻り値だけでは判別できないので、linear<=0 も「測れなかった」に含める。
-		if (e0 != ERR_HGC_OK || !(asIs.linear > 0.0))
-		{
-			out.linear = asIs.linear; out.x = asIs.x; out.p99 = asIs.p99; out.pMax = asIs.pMax;
-				out.meanLin = asIs.meanLin; out.p75 = asIs.p75; out.p90 = asIs.p90; out.satRatio = asIs.satRatio;
-			out.histSum = asIs.histSum; out.lvTimeMs = asIs.lvTimeMs; out.staleSkip = asIs.staleSkip;
-			out.rdyMs    = asIs.rdyMs;
-			out.meterExp = meterExp;
-			out.failStage = kLvFailAsIsStage;	// ログで「切替なし経路のLV取得失敗」と分かるようにする
-			out.ok = false;
-			return (e0 != ERR_HGC_OK) ? e0 : ERR_HGC_RDY_METARING;
-		}
-		out.asIsLinear = asIs.linear;	// 切替の可否を決めた値(ログ ai=)。切替えた理由の追跡用
-		preSwitchLinear = asIs.linear;	// 切替えた場合の「反映されたか」の基準に使う
-		if (this->lvUsableAsIs(asIs.linear))
-		{
-			// 【2026-08-03 追加】中央値が使える範囲にあることと、露出変更に反応することは別物。
-			//  暗所ではカメラがライブビューに自動でゲインをかけ、設定した露出と表示の明るさが
-			//  切り離される(張り付き)。この状態で切替なし経路を使い続けると、絞っても測光値が
-			//  下がらないため「まだ明るい」と判断し続け、限界まで絞り続ける開ループになる。
-			//  実測(postNight 04:11〜04:12): ISO1250→320 と7コマ絞る間ずっと応答比 -0.2、
-			//  写真は4.2段暗くなった。値の範囲だけを見ていたので気づけなかった。
-			//  応答比 = Δ測光値[段] / Δ露出[段]。1.0 が正常、kMeterRespondRatio 未満で張り付き。
-			const double curStops = expo::brightnessStops(meterExp, tables_);
-			bool pinned = false;
-			if (meterPrevLin_ > 0.0 && asIs.linear > 0.0)
-			{
-				const double dSs = curStops - meterPrevStops_;
-				if (std::fabs(dSs) >= kMeterRespondMinStops)
-				{
-					const double dLin = std::log2(asIs.linear / meterPrevLin_);
-					if ((dLin / dSs) < kMeterRespondRatio) { ++lvPinStreak_; }
-					else                                   { lvPinStreak_ = 0; }
-					pinned = (lvPinStreak_ >= kMeterPinConfirm);
-				}
-				else
-				{	// 【古い証拠を持ち越さない(2026-08-08)】従来は露出が動かないコマで
-					//  カウンタを素通りさせていたため、何分も前の1回と今回の1回が足されて
-					//  「連続」扱いになりえた。判定できないコマが挟まったら数え直す。
-					lvPinStreak_ = 0;
-				}
-			}
-			meterPrevStops_ = curStops;
-			meterPrevLin_   = asIs.linear;
-
-			// 【切替の事前判定(2026-08-08)】張り付きを検出しても、切替後に測れなくなるなら
-			//  切り替えてはいけない。切替は「LVが露出変化に反応しない」問題を「絵が暗すぎて
-			//  ヒストグラムの分解能が無い」問題と取り換える手段で、暗い場面では取り換えた後の
-			//  ほうが悪い。実測(2026-08-07 夕R100 19:30-20:20 同一場面):
-			//    撮影露出のまま=中央値ビン7.2 / 測光ssへ切替=ビン2.0(1.9段暗い)
-			//  ビン2では1ビン=0.58段の飛び飛びになり、測光ssを動かすたび場面推定が±1段ずれて
-			//  撮影露出が±3段うねり、約1時間ぶんが4段アンダーになった。
-			if (pinned && !this->switchWorthIt(shotExp, asIs.linear)) { pinned = false; }
-
-			if (!pinned)
-			{	// 撮影露出のまま使えた。切替の PUT も反映待ちも発生しない。
-				out.linear = asIs.linear; out.x = asIs.x; out.p99 = asIs.p99; out.pMax = asIs.pMax;
-				out.meanLin = asIs.meanLin; out.p75 = asIs.p75; out.p90 = asIs.p90; out.satRatio = asIs.satRatio;
-				out.histSum = asIs.histSum; out.lvTimeMs = asIs.lvTimeMs; out.staleSkip = asIs.staleSkip;
-				out.rdyMs = asIs.rdyMs;
-				out.meterExp = meterExp;
-				out.meterSsUsed.clear();	// 切替なし(ログの mss= が "-" になる)
-				out.settleMs = -1;
-				out.ok = true;
-				out.sceneRef = asIs.linear / std::pow(2.0, expo::brightnessStops(meterExp, tables_));
-				lvNeedSwitch_ = false;
-				return ERR_HGC_OK;
-			}
-			out.pinned  = true;		// 張り付き → 測光ssへ切替えて測り直す
-			lvPinStreak_ = 0;
-		}
-		lvNeedSwitch_ = true;			// 切替が要る
-		lvAsIsWait_   = kLvRetryAsIsFrames;	// 次に試すまで間を空ける
-	}
-
-	// --- ② 測光ssへ切替えて測る(従来の経路) ---
-	const std::string want = decideMeterSs(shotExp);
-	if (!want.empty())
-	{
-		// 反映を確かめるための基準を用意する。①を通っていなければここで1回だけ測る。
-		// LV取得1回(約100ms)で、以降の待ちを1秒前後縮められるので割に合う。
-		if (!(preSwitchLinear > 0.0))
-		{
-			meterResult before;
-			if (meterHere(before, keepGoing) == ERR_HGC_OK && before.linear > 0.0)
-			{ preSwitchLinear = before.linear; }
-		}
-		const double beforeStops = expo::brightnessStops(meterExp, tables_);
-		if (setSS(want) != ERR_HGC_OK)
-		{
-			// 切替失敗。応答が返らないだけでカメラに遅延適用されることがある(IMG_3920事故)。
-			// 「失敗=未適用」とは仮定せず申告し、呼び出し側に次の適用でssを必ず再送させる。
-			out.ssSwitchFailed = true;
-		}
-		else
-		{
-			meterExp.ss     = want;
-			out.appliedSs   = want;
-			out.meterSsUsed = want;
-			// 反映待ち: 反映されたら抜ける(検知できなければ上限まで待つ=従来と同じ)。
-			const double delta = expo::brightnessStops(meterExp, tables_) - beforeStops;
-			out.settleMs = this->waitLvReflect(preSwitchLinear, delta, kMeterSettleMaxMs, keepGoing);
-		}
-	}
-	else
-	{	// 切替不要(測光ss=撮影ss)。次コマは切替なしから入ってよい。
-		lvNeedSwitch_ = false;
-	}
-
-	meterResult here;
-	const errCode e = meterHere(here, keepGoing);
-	// meterHere の診断を統合(切替系のフィールドは維持)。
-	out.linear = here.linear; out.x = here.x; out.p99 = here.p99; out.pMax = here.pMax;
-	out.meanLin = here.meanLin; out.p75 = here.p75; out.p90 = here.p90; out.satRatio = here.satRatio;
-	out.histSum = here.histSum; out.lvTimeMs = here.lvTimeMs; out.staleSkip = here.staleSkip;
-	out.tries += here.tries; out.rdyMs = here.rdyMs;
-	out.meterExp = meterExp;
-	if (e != ERR_HGC_OK || here.linear <= 0.0) { out.ok = false; return (e != ERR_HGC_OK) ? e : ERR_HGC_RDY_METARING; }
-
-	out.ok       = true;
-	out.sceneRef = here.linear / std::pow(2.0, expo::brightnessStops(meterExp, tables_));
-	// 測光ssを切替えて測ったコマだけ学習する(撮影露出のまま測ったコマは従来どおり学習しない)。
-	if (!out.meterSsUsed.empty())
-	{
-		bool pinned = false;
-		adaptMeterSs(meterExp, shotExp, here.linear, pinned);
-		out.pinned = pinned;
-
-		// 撮影ssならどう写るかを予測する。LVが忠実に積分できる前提の上限値なので、
-		// これが範囲外なら撮影ssでは確実に無理。範囲内なら試す価値がある。
-		const double predicted = out.sceneRef * std::pow(2.0, expo::brightnessStops(shotExp, tables_));
-		if (!this->lvUsableAsIs(predicted)) { lvAsIsWait_ = kLvRetryAsIsFrames; }
-	}
-	// 【採否(2026-08-07)】切替経路には①経路の lvUsableAsIs に当たる採否判定が無く、
-	//  帯の外の値でも ok=true / sceneRef をそのまま返していた。①と②で非対称だった。
-	//  実測(2026-08-06 夕R10 19:12〜20:24): 測光ssが 1/16000 まで走った状態で Y=0.0002
-	//  (下限 0.001548 を 3段下回る)を返し続け、「1/16000 でこれだけ写る=非常に明るい場面」
-	//  と解釈されて撮影露出が 1/20 秒まで絞られた。305コマが真っ黒になった直接の経路がここ。
-	//  値そのものはログに残したいので ok は落とさず、usable だけを下げる(呼び出し側は据え置き)。
-	//  学習(adaptMeterSs)は上で済ませてある。止めると測光ssが復帰できなくなるため。
-	out.usable = this->lvUsableAsIs(here.linear);
-	return ERR_HGC_OK;
+	return this->meterSceneShot(shotExp, out, keepGoing);
 }
 
 // funcList のURL(絶対URL)から "http://host:port" を切り出す。
@@ -1717,193 +1410,75 @@ void apiCanonCCAPI::stopEventPolling(void)
 	pollMode_ = pollMode::unknown;	// 次のセッションで待ち方を判定し直す
 }
 
-// 撮影画像が記録されるディレクトリ(絶対URL)を得る。セッション中は変わらないので覚えておく。
-//  /contents → カード → ディレクトリ、と辿る(実験6で両機の動作を確認した経路)。
-//  devicestatus/currentstorage は使わない。R10 は「ホスト無しの相対パス」を返し、
-//  R100 はエンドポイント自体を持たない(ver110非搭載)ため、どちらでも当てにならない。
-std::string apiCanonCCAPI::contentsDirUrl(int& step, int& http, std::string& body)
+// 溜まっている登録通知を1回で流す(セッション開始時)。
+//  前の撮影で撮った画像の通知が残っていると、1枚目の測光がその古い画像を掴む。
+//  クエリ無しの GET は「待たずに即返る」ので、1往復で溜まったぶんを捨てられる。
+void apiCanonCCAPI::flushEventPolling(void)
 {
-	step = 0; http = 0; body.clear();
-	if (!contentsDir_.empty()) { return contentsDir_; }
-	if (!(funcList[funcNum::L_FILE].verb == verb::GET)) { step = 1; return std::string(); }
-	const std::string host = this->apiHostBase();
-
-	// path 配列の最後の要素を得る(相対で返ってきたらホストを補って絶対URLにする)。
-	auto lastPath = [&](const std::string& url, std::string& out) -> bool
-	{
-		std::string resp;
-		if (!netThread::httpGet(url, resp) || resp.empty())
-		{	// 断られたのか届かなかったのかをログに残す(status=0 は応答なし)
-			netThread::lastHttpFailure(http, body);
-			return false;
-		}
-		try
-		{
-			auto j = json::parse(resp);
-			if (!j.contains("path") || !j.at("path").is_array() || j.at("path").empty())
-			{	http = -1; body = resp.substr(0, 60); return false; }	// 中身が想定外(-1=解析できた応答だが path が無い)
-			out = j.at("path").back().get<std::string>();
-		}
-		catch (json::exception&) { http = -2; body = resp.substr(0, 60); return false; }
-		if (!out.empty() && out[0] == '/') { out = host + out; }
-		return !out.empty();
-	};
-
-	std::string card, dir;
-	if (!lastPath(funcList[funcNum::L_FILE].url, card)) { step = 1; return std::string(); }
-	if (!lastPath(card, dir))                          { step = 2; return std::string(); }
-	contentsDir_ = dir;
-	return contentsDir_;
+	auto it = funcList.find(funcNum::EVENT_POLL);
+	if (it == funcList.end() || !(it->second.verb == verb::GET)) { return; }
+	std::string body;
+	netThread::httpGet(it->second.url, body);	// 結果は捨てる(流すのが目的)
 }
 
-// 新しい画像が記録されるのを待ち、そのパス(ホスト無しの相対パス)を返す。空=時間内に現れなかった。
+// 登録通知の中から、サムネイルを取る1枚を選ぶ。
 //
-// 【2026-07-29 event/polling を使わない方式へ変更(実験で原因を特定)】
-//  event/polling と画像取得(contents)を併用すると R10 が 29〜48回で応答不能になり、
-//  電源を入れ直すまで復帰しなくなる。実験で以下を確認した(いずれも8秒露光・15秒周期):
-//    polling のみ(取得なし)      48コマ 正常
-//    取得のみ(polling不使用)     64コマ 正常  ← 本方式
-//    polling + 取得(毎コマ)      29〜48回目で破綻
-//  そこで polling をやめ、コンテンツ総数の増加で新規画像を検知する。
-//  総数取得は 37バイト/約25〜43ms と軽く(実測 R10/R100)、ファイル数が増えても変わらない。
-//  副次効果: ?timeout の非対応(HTTP400)、continue=on の長時間ブロック、
-//            DELETE 忘れによる 503 "Already started" もすべて発生しなくなる。
-std::string apiCanonCCAPI::waitAddedByCount(int budgetMs, const std::function<bool()>& keepGoing,
-                                           int& triesOut, waitDiag& diag)
+// 【なぜ選ぶ必要があるか】JPG+RAW記録だと1コマの撮影で2つ通知される(CR3 と JPG)。
+// 【なぜ JPG を優先するか(2026-08-13 実測)】同じ絵でも取得元で持ちが違う。露光1/60・
+//  最新ファイル・300コマ上限の同一条件で、R10 は CR3 なら48回、JPG なら179回で止まった
+//  (R100 はどちらも300コマ完走)。CR3 は縮小画像を出すのに RAW の解析が要るのに対し、
+//  JPG は埋め込みサムネイルをそのまま返せる、と考えると筋は通る。
+//  どちらも無ければ最後の1つ(=最新)を使う。
+std::string apiCanonCCAPI::pickThumbPath(const std::vector<std::string>& names)
 {
-	triesOut = 0;
-	diag = waitDiag{};
-
-	// 露光が終わってもカメラはまだ記録中(RAWで約25MB)。その最中にカードを叩くのが
-	// 引き金ではないかを確かめるため、kCardSettleMs だけ待ってから触りに行く
-	// (2026-07-30 の実験。実測の書き込み完了は露光終了から中央2.0〜2.6秒)。
-	// 待つぶん総数ポーリングの回数も減る(実測10〜13回 → 1〜2回になる見込み)。
-	this->meterSleep(kCardSettleMs, keepGoing);
-
-	const std::string dir = this->contentsDirUrl(diag.step, diag.http, diag.body);
-	if (dir.empty()) { return std::string(); }
-
-	// 総数とページ数を得る(37バイト程度の軽い応答)。
-	uint32_t lastNum = 0;
-	auto countOf = [&](uint32_t& num, uint32_t& page) -> bool
+	auto endsWithAny = [](const std::string& s, const char* const* exts, int n) -> bool
 	{
-		std::string body;
-		if (!netThread::httpGet(dir + "?type=all&kind=number", body) || body.empty())
-		{	diag.step = 3; netThread::lastHttpFailure(diag.http, diag.body); return false; }
-		try
+		for (int i = 0; i < n; ++i)
 		{
-			auto j = json::parse(body);
-			if (!j.contains("contentsnumber")) { diag.step = 3; diag.http = -1; diag.body = body.substr(0, 60); return false; }
-			num  = j.at("contentsnumber").get<uint32_t>();
-			page = j.contains("pagenumber") ? j.at("pagenumber").get<uint32_t>() : 1;
-		}
-		catch (json::exception&) { diag.step = 3; diag.http = -2; diag.body = body.substr(0, 60); return false; }
-		lastNum = num;
-		return true;
-	};
-
-	// 最新の1件(最終ページの末尾)のパスを得る。呼び出し側がホストを足すので相対に揃える。
-	auto newestPath = [&](uint32_t page) -> std::string
-	{
-		std::string body;
-		char q[64];
-		std::snprintf(q, sizeof(q), "?type=all&kind=list&page=%u", static_cast<unsigned>(page));
-		if (!netThread::httpGet(dir + q, body) || body.empty())
-		{	diag.step = 5; netThread::lastHttpFailure(diag.http, diag.body); return std::string(); }
-		try
-		{
-			auto j = json::parse(body);
-			const char* key = j.contains("url") ? "url" : "path";	// バージョンで名前が違う
-			if (!j.contains(key) || !j.at(key).is_array() || j.at(key).empty())
-			{	diag.step = 5; diag.http = -1; diag.body = body.substr(0, 60); return std::string(); }
-			std::string p = j.at(key).back().get<std::string>();
-			if (p.compare(0, 4, "http") == 0)
-			{	// 絶対URLで返ってきたらホスト部を落とす
-				const size_t h = p.find("//");
-				const size_t s = (h == std::string::npos) ? std::string::npos : p.find('/', h + 2);
-				if (s != std::string::npos) { p = p.substr(s); }
+			const size_t el = std::strlen(exts[i]);
+			if (s.size() < el) { continue; }
+			bool same = true;
+			for (size_t k = 0; k < el; ++k)
+			{
+				char c = s[s.size() - el + k];
+				if (c >= 'a' && c <= 'z') { c = static_cast<char>(c - 'a' + 'A'); }
+				if (c != exts[i][k]) { same = false; break; }
 			}
-			const size_t qm = p.find('?');
-			if (qm != std::string::npos) { p = p.substr(0, qm); }	// クエリは落とす
-			return p;
+			if (same) { return true; }
 		}
-		catch (json::exception&) { diag.step = 5; diag.http = -2; diag.body = body.substr(0, 60); return std::string(); }
+		return false;
 	};
-
-	// 基準の総数。未取得(セッション最初のコマ)なら待たずに「今の最新」を直前の撮影画像とみなす。
-	uint32_t base = contentsBase_;
-	if (base == 0xFFFFFFFFu)
-	{
-		uint32_t page = 1;
-		if (!countOf(base, page)) { return std::string(); }
-		contentsBase_ = base;
-		++triesOut;
-		return newestPath(page);
-	}
-
-	void* t0 = tool::startElapse();
-	while (static_cast<int>(tool::getElapse(t0)) < budgetMs)
-	{
-		if (keepGoing && !keepGoing()) { break; }
-		++triesOut;
-		uint32_t now = 0, page = 1;
-		if (countOf(now, page) && now > base)
-		{
-			contentsBase_ = now;	// 次コマの基準
-			return newestPath(page);
-		}
-		meterSleep(kPollGapMs, keepGoing);
-	}
-	// 時間内に増えなかった。ディレクトリが変わった(100CANON→101CANON等)可能性があるので
-	// 覚えた保存先と基準を捨て、次コマで取り直す。
-	// 総数が一度でも読めていたなら、その値を次コマの基準にする。
-	// 【2026-07-30 実機】ここで基準を捨てると、次コマは「基準未取得」の近道に入り
-	//  待たずに“今の最新”を返してしまう。カメラが書き出しを止めていた間、同じ画像を
-	//  何度も測光していた(hs=2a831284 が繰り返し出る)。古い画像で露出が動くので直す。
-	if (lastNum != 0)
-	{
-		contentsBase_ = lastNum;
-	}
-	else
-	{	// 一度も読めていない = 保存先そのものが怪しい。取り直させる。
-		contentsDir_.clear();
-		contentsBase_ = 0xFFFFFFFFu;
-	}
-	if (diag.step == 0) { diag.step = 4; diag.http = 0; }	// 通信は通ったが総数が増えなかった
-	return std::string();
+	static const char* const kJpg[] = { ".JPG", ".JPEG" };
+	static const char* const kRaw[] = { ".CR3", ".CRAW", ".CR2" };
+	for (size_t i = names.size(); i > 0; --i)
+	{ if (endsWithAny(names[i - 1], kJpg, 2)) { return names[i - 1]; } }
+	for (size_t i = names.size(); i > 0; --i)
+	{ if (endsWithAny(names[i - 1], kRaw, 3)) { return names[i - 1]; } }
+	return names.empty() ? std::string() : names.back();
 }
 
-// 新規画像の検知。方式は kNewImageDetect で切り替える(両方式ともコードを残してある)。
-std::string apiCanonCCAPI::waitAddedContents(int budgetMs, const std::function<bool()>& keepGoing,
-                                            int& triesOut, waitDiag& diag)
-{
-	triesOut = 0;
-	diag = waitDiag{};
-	return (kNewImageDetect == newImageDetect::eventPolling)
-	     ? this->waitAddedByEvent(budgetMs, keepGoing, triesOut, diag)
-	     : this->waitAddedByCount(budgetMs, keepGoing, triesOut, diag);
-}
-
-// 【方式B】event/polling で新規画像(addedcontents)のパスを待つ。空=時間内に来なかった。
+// 新しい画像が記録されるのを待ち、そのパス(ホスト無しの相対パス)を返す。空=時間内に来なかった。
 //
-// 2026-07-29 に一度廃止した方式だが、2026-07-30 のカメラFW更新を受けて再評価するため復活させた。
-// 廃止の理由は「event/polling と contents 取得の併用で R10 が 29〜48コマで応答不能になる」と
-// いう実験結果(旧FW)。一方この方式には利点がある: **ディレクトリを一切読まない**。
-// 総数ポーリング方式は1コマあたり 10〜13回 ディレクトリを読みに行くため、RAW(約25MB)の書き込み中の
-// カードを繰り返し叩く。2026-07-30 に R10 が書き出しを止めた事象(250コマ目で突然、劣化の前兆なし、
-// 無負荷で1分放置しても復帰せず)の引き金として、このカード接触が疑われている。
+// event/polling は「カメラからの登録通知を待つ」方式で、**ディレクトリを一切読まない**のが
+// 利点である。総数ポーリング方式は1コマあたり10〜13回ディレクトリを読みに行くため、RAW
+// (約25MB)の書き込み中のカードを繰り返し叩くことになる。2026-08-12〜13 の実測では、この
+// 流れ(露光 → 即通知 → 取得)で R100 が 300コマを完走した。
 //
 // 仕様(CCAPI Reference 4.13.1):
 //  ・GET は「イベント取得の開始」で、対の DELETE で停止する状態付きAPI。停止し忘れると以後
 //    503 {"message":"Already started"} で全滅する(旧FWのR100で残存を実機確認)。
 //  ・待ち方は ver110〜 ?timeout=short / ver100 ?continue=on。無指定は「待たずに即返る」ため
 //    指定しないと連打になる(旧実装は1コマ44〜59回叩いていた)。判定はセッションで一度だけ。
+//
+// 複数たまっていた場合(通信が詰まった等)は最後の1件=最新を使う。JPG と RAW の選択は
+// pickThumbPath に任せる。
 std::string apiCanonCCAPI::waitAddedByEvent(int budgetMs, const std::function<bool()>& keepGoing,
                                            int& triesOut, waitDiag& diag)
 {
+	triesOut = 0;
+	diag = waitDiag{};
 	if (!(funcList[funcNum::EVENT_POLL].verb == verb::GET)) { diag.step = 1; return std::string(); }
 	void* t0 = tool::startElapse();
-	std::string last;
 	bool triedRecover = false;	// このコマで「DELETEして再判定」を試したか(1回だけ)
 
 	while (static_cast<int>(tool::getElapse(t0)) < budgetMs)
@@ -1919,7 +1494,7 @@ std::string apiCanonCCAPI::waitAddedByEvent(int budgetMs, const std::function<bo
 			for (const pollMode m : cand)
 			{
 				if (netThread::httpGet(pollUrl(m), body)) { pollMode_ = m; ok = true; break; }
-				if (keepGoing && !keepGoing()) { return last; }
+				if (keepGoing && !keepGoing()) { return std::string(); }
 			}
 			if (!ok)
 			{	// 全滅 → イベント取得が開始済みで残っている疑い。一度だけ停止して再判定する。
@@ -1945,6 +1520,7 @@ std::string apiCanonCCAPI::waitAddedByEvent(int budgetMs, const std::function<bo
 			const size_t key = body.find("\"addedcontents\"");
 			if (key != std::string::npos)
 			{
+				std::vector<std::string> names;
 				size_t p = body.find('[', key);
 				const size_t e = (p == std::string::npos) ? std::string::npos : body.find(']', p);
 				while (p != std::string::npos && e != std::string::npos)
@@ -1953,9 +1529,10 @@ std::string apiCanonCCAPI::waitAddedByEvent(int budgetMs, const std::function<bo
 					if (q1 == std::string::npos || q1 > e) { break; }
 					const size_t q2 = body.find('"', q1 + 1);
 					if (q2 == std::string::npos || q2 > e) { break; }
-					last = body.substr(q1 + 1, q2 - q1 - 1);
+					names.push_back(body.substr(q1 + 1, q2 - q1 - 1));
 					p = q2;
 				}
+				std::string last = pickThumbPath(names);
 				if (!last.empty())
 				{
 					// CCAPIのJSONはスラッシュを \/ とエスケープして返す。生抽出なので戻す
@@ -1976,10 +1553,10 @@ std::string apiCanonCCAPI::waitAddedByEvent(int budgetMs, const std::function<bo
 		meterSleep(kPollGapMs, keepGoing);
 	}
 	if (diag.step == 0) { diag.step = 7; }	// 時間内に通知が来なかった
-	return last;
+	return std::string();
 }
 
-// 方式Aの中核(露出非依存の部分): 新規画像の登録を待ち、サムネイルを取得・復号して
+// 測光の中核(露出非依存の部分): 新規画像の登録を待ち、サムネイルを取得・復号して
 // 輝度ヒストグラム統計(中央値/p99/pMax/チェックサム)まで作る。
 //  meterExp/sceneRef は呼び出し側(meterSceneShot)が撮影露出で確定する。
 errCode apiCanonCCAPI::thumbMeterCore(meterResult& out, int budgetMs, const std::function<bool()>& keepGoing)
@@ -1990,7 +1567,7 @@ errCode apiCanonCCAPI::thumbMeterCore(meterResult& out, int budgetMs, const std:
 	// ① 新しい画像の登録通知を待つ(カメラが露光後の記録を終えるまで)。
 	int tries = 0;
 	waitDiag diag;
-	const std::string path = waitAddedContents(budgetMs, keepGoing, tries, diag);
+	const std::string path = waitAddedByEvent(budgetMs, keepGoing, tries, diag);
 	out.waitStep = diag.step;
 	out.waitHttp = diag.http;
 	out.waitBody = diag.body;
@@ -2023,7 +1600,7 @@ errCode apiCanonCCAPI::thumbMeterCore(meterResult& out, int budgetMs, const std:
 	uint16_t hist[256];
 	int w = 0, h = 0;
 	const bool dec = jpglm::lumaHistogram(reinterpret_cast<const uint8_t*>(jpg.data()), jpg.size(),
-	                                      hist, w, h, 0.06);
+	                                      hist, w, h, kThumbCropRatio);
 	out.decodeMs = static_cast<int>(tool::getElapse(td));
 	out.rdyMs    = static_cast<int>(tool::getElapse(t0));
 	if (!dec) { out.failStage = 4; return ERR_HGC_API_ANALIZE; }
@@ -2047,9 +1624,9 @@ errCode apiCanonCCAPI::thumbMeterCore(meterResult& out, int budgetMs, const std:
 	return ERR_HGC_OK;
 }
 
-// 方式A: 撮影画像フィードバック測光。直前に撮れた画像のサムネイルから輝度を得る。
+// 撮影画像フィードバック測光。直前に撮れた最新画像のサムネイルから輝度を得る。
 //  ・本露光の積分そのものなので、LVが頭打ちになる夜間でも真値が得られる(7/26実験: LVより約3.75段深い)。
-//  ・露出には一切触れない(ss切替なし=appliedSs空・settleなし)。
+//  ・露出には一切触れない(測光ss切替なし=appliedExp空・settleなし)。
 //  ・呼び出しタイミングは meterTimingHint の申告どおり(露光終了直後)。captureRunner が従う。
 //  ・shotExp = このサムネイルを撮った露出(呼び出し側の直前コマ)。sceneRef の割り戻しに使う。
 errCode apiCanonCCAPI::meterSceneShot(const hgc::exposure& shotExp, meterResult& out,

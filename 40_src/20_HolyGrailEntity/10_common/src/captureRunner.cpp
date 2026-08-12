@@ -34,8 +34,6 @@ namespace
 	}
 
 	// --- 最初の補正(仕様 4.4)の反復収束パラメータ ---
-	// 露出を変えてからライブビューが追従するまでの待ち[ms]。実機で調整可。
-	constexpr long   kMeterSettleMs        = 700;
 	// 反復回数の上限。旧4回では未収束のまま打ち切られ1.6〜3.3段外れて撮影開始していた
 	// (2026-07-24 17:05 実測)。投影方式(下記)は通常2回で収束するが、張り付き探索も含め余裕を持つ。
 	constexpr int    kInitConvergeTries    = 8;
@@ -46,11 +44,6 @@ namespace
 	// 「露光終了直後に測光」型(meterTimingHint.afterShutterClose)のとき、露光終了から
 	// この余裕[ms]を置いて準備を始める。露光中は画像取得ができないため。
 	constexpr long   kAfterShutterMarginMs = 300;
-	// 初期収束の測光ssの上限[秒]。これより長いとLVが積分できず張り付く(実測: 0.6sはpin=0、2sで時々pin=1)。
-	constexpr double kInitMeterMaxSsSec    = 0.5;
-	// ヒストグラム中央値がこの範囲外なら明暗に張り付き(測光値を信用しない)とみなす。
-	constexpr double kPegBright = 0.99;
-	constexpr double kPegDark   = 0.01;
 }
 
 captureRunner::~captureRunner()
@@ -133,22 +126,18 @@ void captureRunner::pokeAcquire(void)
 	if (dev_ != nullptr && dev_->apiBase == nullptr) { wake_ = true; }
 }
 
-// 1コマぶんの測光。実装(LVヒストグラム・暗所での測光ss切替・張り付き検出・鮮度判定)は
-// カメラ依存なので apiBase 側(cameraController::meterScene / meterHere)へ移設した(2026-07-27)。
+// 1コマぶんの測光。**どう測るか**はカメラ依存なので、実装はすべて apiBase 側
+// (cameraController::meterScene / meterHere)にある。ここが知っているのは結果だけである。
 // ここで行うのは:
 //  ・結果の診断をログ用メンバへ展開(SHOT/LVHISTログの互換を保つ)
-//  ・カメラ露出状態の申告(appliedSs/ssSwitchFailed)を差分適用キャッシュへ反映(実機とのズレ防止)
-// allowSwitch=false は測光ssへ切替えない(ウォームアップ中=従来動作の維持)。
-bool captureRunner::meterFrame(const hgc::exposure& shotExp, apiBase::meterResult& mr, bool allowSwitch)
+//  ・カメラ露出状態の申告(appliedExp/applyFailed)を差分適用キャッシュへ反映(実機とのズレ防止)
+// haveShot=false は「まだ1コマも撮っていない」= 撮影画像を手がかりにできない状況
+// (撮影窓の手前の初期収束)。カメラ実装は別の測り方でよい。
+bool captureRunner::meterFrame(const hgc::exposure& shotExp, apiBase::meterResult& mr, bool haveShot)
 {
 	auto keep = [this]() { return running_.load(); };
-	if (allowSwitch) { cameraController::meterScene(*dev_, shotExp, mr, keep); }
-	else
-	{
-		cameraController::meterHere(*dev_, mr, keep);
-		mr.meterExp = shotExp;	// 露出に触れていないので測光露出=撮影露出
-		if (mr.ok) { mr.sceneRef = this->sceneRefFromMetered(mr.linear, shotExp); }
-	}
+	if (haveShot) { cameraController::meterScene(*dev_, shotExp, mr, keep); }
+	else          { cameraController::meterHere(*dev_, mr, keep); }
 	// ログ用診断の展開(従来メンバ互換)。
 	meterMs_       = mr.rdyMs;
 	meterOk_       = mr.ok;
@@ -168,28 +157,22 @@ bool captureRunner::meterFrame(const hgc::exposure& shotExp, apiBase::meterResul
 	meterDecodeMs_ = mr.decodeMs;
 	meterFetchTries_ = mr.fetchTries;
 	asIsLinear_    = mr.asIsLinear;
-	// カメラ露出状態の整合(契約: 露出を触ったら必ず申告される)。
-	if (!mr.appliedSs.empty()) { lastSsApplied_ = mr.appliedSs; }
-	else if (mr.ssSwitchFailed)
-	{	// 切替失敗=遅延適用の恐れ(IMG_3920事故)。適用記憶を無効化し次の適用でssを必ず再送させる。
-		lastSsApplied_.clear();
-		if (onError_) { onError_(ERR_HGC_RDY_METARING, "meter ss switch failed → next apply resends ss"); }
+	// カメラ露出状態の整合(契約: 測光のために露出を触ったら必ず申告される)。
+	if (!mr.appliedExp.fn.empty())  { lastFnApplied_  = mr.appliedExp.fn; }
+	if (!mr.appliedExp.ss.empty())  { lastSsApplied_  = mr.appliedExp.ss; }
+	if (!mr.appliedExp.iso.empty()) { lastIsoApplied_ = mr.appliedExp.iso; }
+	if (mr.applyFailed)
+	{	// 適用失敗=遅延適用の恐れ(IMG_3920事故)。適用記憶を捨て、次の適用で全軸を必ず再送させる。
+		lastFnApplied_.clear(); lastSsApplied_.clear(); lastIsoApplied_.clear();
+		if (onError_) { onError_(ERR_HGC_RDY_METARING, "meter exposure apply failed → next apply resends all"); }
 	}
 	return mr.ok;
 }
 
-// 測光リニア値から露出成分を割り戻し、露出に依存しない「場面の明るさ」を得る。
-//  測光は撮影とは別の露出(測光シャッター)で行うので、測光値をそのまま撮影露出の目標と
-//  比べてはいけない(両者の段差ぶんずれ、比較が永久に閉じず露出が暴走する)。
-//  linear ∝ 場面の明るさ × 2^brightnessStops(測光露出) なので、割り戻せば露出に依存しない。
-double captureRunner::sceneRefFromMetered(double linear, const hgc::exposure& meterExp) const
-{
-	if (linear <= 0.0) { return -1.0; }
-	if (!validExposure(meterExp)) { return linear; }	// 割り戻せない → 従来どおり
-	return linear / std::pow(2.0, expo::brightnessStops(meterExp, tables_));
-}
-
-// 「場面の明るさ」を、その露出で撮ったときのリニア輝度へ投影する(上の逆変換)。
+// 「場面の明るさ」を、その露出で撮ったときのリニア輝度へ投影する。
+//  測光は撮影とは別の条件で行われるので、測光値をそのまま撮影露出の目標と比べてはいけない
+//  (段差ぶんずれ、比較が永久に閉じず露出が暴走する)。カメラ実装が返す sceneRef は露出に
+//  依存しない場面の明るさなので、こちらで候補露出へ投影してから比べる(土俵合わせ)。
 double captureRunner::linearAtExposure(double sceneRef, const hgc::exposure& e) const
 {
 	if (sceneRef <= 0.0) { return -1.0; }
@@ -246,7 +229,7 @@ hgc::exposure captureRunner::appliedExposure(void) const
 // 1枚目の露出適用が失敗したときに使う。従来はここで「撮ったつもりの露出」をそのまま
 // 撮影露出として扱っていたため、被害が1コマで終わらなかった:
 //   カメラは露出X、アプリは露出Yのつもり
-//    → そのコマの測光値を Y で割り戻す(sceneRefFromMetered)ので場面の明るさを取り違える
+//    → そのコマの測光値を Y で割り戻すので場面の明るさを取り違える
 //    → 次コマの露出も誤る
 // 実機の状態を使えば測光が正しい土俵に乗り、次コマから正常へ戻れる。
 //
@@ -312,49 +295,22 @@ errCode captureRunner::fireShutter(const hgc::exposure& shotExp, double interval
 	return err;
 }
 
-// シャッター後、カメラが記録で塞がっている時間を測る(2026-08-05)。
-//
-// 【なぜ要るか】撮影周期をどこまで SS へ近づけられるかは、露光が終わってからカメラが
-//  次の測光を受け付けるまでの時間で決まる。これが機種ごとにどれだけ違うかを知りたい。
-//  従来この時間は測れていなかった: SS が速いコマほど露光は早く終わるのに、準備開始は
-//  常に「周期 - リード」に固定されているため、busy はとうに明けてから測光していた。
-//
-// 【どこで測るか】露光終了 〜 準備開始(prepAt) の空白。ここは従来まったく通信していない
-//  区間なので、プローブを入れてもシャッター時刻・測光・露出設定のどれも動かない。
-//  露光中は必ず塞がっていて情報が増えないので、露光が閉じるまでは黙って待つ。
-//
-// return: 露光終了から測光可までの ms(0=待ちなし)。測れない場合は kBusyNotMeasured、
-//         空白を使い切っても明けなければ kBusyNotCleared。
-int captureRunner::measureBusy(void* anchorA, double ssSec, long prepAt)
-{
-	if (anchorA == nullptr || kBusyProbeMs <= 0 || dev_ == nullptr) { return kBusyNotMeasured; }
-	const long endExp = static_cast<long>(((ssSec > 0.0) ? ssSec : 0.0) * 1000.0);	// [A]起点の露光終了
-	if (endExp >= prepAt) { return kBusyNotMeasured; }	// 空白が無い(周期が露光で埋まっている)
-	this->sleepUntilElapse(anchorA, endExp);				// 露光が閉じるまで待つ
-	if (!running_) { return kBusyNotMeasured; }
-	for (int i = 0; i < kBusyProbeMaxTry; ++i)
-	{
-		// 「その時刻にカメラが受け付けたか」を記録したいので、問い合わせの前に時刻を採る
-		// (プローブ1往復ぶんだけ実際より小さめに出るが、遅れを水増ししない側へ倒す)。
-		const long at = static_cast<long>(tool::getElapse(anchorA));
-		if (at >= prepAt) { break; }						// 空白を使い切った
-		const int r = cameraController::meterReadyProbe(*dev_);
-		if (r < 0)  { return kBusyNotMeasured; }			// このカメラ実装は計測に対応しない
-		if (r == 1) { return static_cast<int>(at - endExp); }
-		this->interruptibleSleep(kBusyProbeMs);
-		if (!running_) { return kBusyNotMeasured; }
-	}
-	return kBusyNotCleared;
-}
-
-// 測光失敗のログ文を作る。原因を後から特定できるよう、待ちのどこでつまずいたかまで残す。
-//  step 1=/contents が取れない 2=カード配下が取れない 3=総数が取れない
-//       4=時間内に総数が増えない 5=最新パスが取れない
+// 測光失敗のログ文を作る。原因を後から特定できるよう、どこでつまずいたかまで残す。
+//  stage/step の番号の意味はカメラ実装が決める(apiBase::meterResult のコメントに一覧がある)。
 //  http 0=応答なし(届いていない) 正数=カメラが断った(その番号) -1=応答の中身が想定外 -2=JSONとして壊れている
 void captureRunner::meterLostMsg(const apiBase::meterResult& mr, char* buf, size_t len) const
 {
-	static const char* kStep[] = { "-", "contents", "dirlist", "number", "nogrow", "list" };
-	const char* st = (mr.waitStep >= 0 && mr.waitStep <= 5) ? kStep[mr.waitStep] : "?";
+	// waitStep の意味はカメラ実装が決める(apiBase::meterResult のコメント参照)。ここは
+	// 番号をそのまま出し、よく出るものにだけ短い名前を添える。
+	const char* st = "?";
+	switch (mr.waitStep)
+	{
+		case 0: st = "-";        break;
+		case 1: st = "noevent";  break;	// 登録通知APIが使えない
+		case 6: st = "pollng";   break;	// 通知の取得が失敗した
+		case 7: st = "timeout";  break;	// 時間内に通知が来なかった
+		default: break;
+	}
 	int n = std::snprintf(buf, len, "metering lost (stage=%d %dms try=%d, keep exposure)",
 	                     mr.failStage, mr.rdyMs, mr.tries);
 	if (mr.waitStep != 0 && n > 0 && static_cast<size_t>(n) < len)
@@ -555,139 +511,74 @@ hgc::exposure captureRunner::nightGoalAfter(long long nowSec) const
 
 // 最初の補正(仕様 4.4)。撮影開始直後は初期露出が不定なので、1枚目の露出を測光で決める。
 //
-// 2026-07-26 全面改定: 旧実装は「候補露出そのもの」で測光していたため長秒でLVが張り付き、
-// 明暗限界の広いブラケット(十数段)を二分探索する羽目になり、4回打ち切りで1.6〜3.3段
-// 外れたまま撮影を始めていた(7/24 17:05 実測: 1/60で開始→5〜10コマかけて1/20へ)。
-// 新実装は定常運転と同じ土俵合わせを使う:
-//  1. LVが忠実に積分できる短いss(≤kInitMeterMaxSsSec)で測光する(張り付いたらssをずらして再測)
-//  2. 場面の明るさ sceneRef へ割り戻し、目標リニア輝度へ「一気に」投影する(二分探索不要)
-//  3. もう一度測光して誤差 ≤ kInitConvergeTolStops(1/3段) を確認できたら収束
-// 通常は測光2回(7〜8秒)で1/3段以内に入る。収束するまで撮影は始めない(時間予算内)。
+// 【ここは「どう測るか」を知らない(2026-08-13)】撮影窓の手前ではまだ1コマも撮っていないので、
+//  カメラ実装は撮影画像以外の手段で測ることになる(CCAPIならライブビュー)。その手段の都合
+//  ——測るのに使う露出をどう選ぶか、白飛び/黒潰れをどうずらして抜けるか、反映を何ms待つか——は
+//  すべて cameraController::meterHere の中にある。ここが受け取るのは「露出非依存の場面の
+//  明るさ」sceneRef だけで、旧実装がここに持っていた測光ssの操作は無くなった。
+//
+// 収束のやり方(2026-07-26 改定のまま):
+//  1. 場面の明るさ sceneRef を測る
+//  2. 候補露出で撮ったらどう写るかを投影し、目標リニア輝度へ「一気に」寄せる(二分探索不要)
+//  3. もう一度測って誤差 ≤ kInitConvergeTolStops(1/3段) を確認できたら収束
+// 通常は測光2回で1/3段以内に入る。収束するまで撮影は始めない(時間予算内)。
 // ctl は呼び出し前に init 済みであること。戻り値=1枚目の露出(ctl もその値になる)。
 hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::exposure& initial, double evT)
 {
-	// 仕様 4.4 の基準(iso/ss/fn)から開始する。
-	//  初期収束はライブビューで測るので、離してあれば張り直す(2026-07-30)。
-	if (!cameraController::liveViewNeededWhileCapturing(*dev_)) { cameraController::startShooting(*dev_); }
-	ctl.setCurrent(initial);
+	ctl.setCurrent(initial);	// 仕様 4.4 の基準(iso/ss/fn)から開始する
 	void* t0 = tool::startElapse();
 
-	// 【診断 2026-08-05】収束中の露出適用(rdyShutter)は従来まったく戻り値を見ていなかった。
-	// 失敗しても気づかず「設定したつもりの露出」で測るので、答えが静かに狂う。さらに
-	// 「収束中も失敗し続けているのか、最後の1回だけなのか」が分からず原因を切り分けられない。
-	// 毎回ログへ出すと溢れるので、何回目で失敗したかを溜めてループの後に1行だけ出す。
-	// 【診断 2026-08-05 追加】各回の所要時間も測る。失敗が毎回「2回目」に出るため、
-	// 「1回目は速く2回目だけ突出して遅い」のか「回を追うごとに伸びる」のかで原因が分かれる:
-	//  ・2回目だけ遅い → 直前の接続の後始末待ち(TCPのクローズ処理/PCBの解放)
-	//  ・だんだん伸びる → 積み上がり(資源の枯渇)
-	// 例 "適用ms=118,1520!,96,105" ('!'=その回は失敗)。
-	int     applyNg     = 0;			// 収束中に露出適用が失敗した回数(その回は測らずやり直す)
-	int     meterNg     = 0;			// 収束中に測光が失敗した回数(その値は使わずやり直す)
-	bool    converged   = false;		// 目標へ収まった(または露出限界に到達した)か
-	errCode applyNgLast = ERR_HGC_OK;	// 最後に失敗したときのコード
-	char    applyMs[112] = {0};			// 各回の所要[ms](失敗は '!' 付き)
-	int     applyMsLen  = 0;
+	// 【診断 2026-08-05】収束が「できたのか・できないまま撮り始めたのか」を後から切り分ける。
+	// 毎回ログへ出すと溢れるので、回数と各回の所要をためてループの後に1行だけ出す。
+	// 例 "測光ms=1180,860!,910" ('!'=その回は値を採用できなかった)。
+	int     applyNg    = 0;			// 測光のためのカメラ操作が失敗した回数(実装からの申告)
+	int     meterNg    = 0;			// 測光できず値を採用できなかった回数
+	bool    converged  = false;		// 目標へ収まった(または露出限界に到達した)か
+	errCode lastErr    = ERR_HGC_OK;	// 最後に失敗したときのコード
+	char    meterMs[112] = {0};
+	int     meterMsLen = 0;
 
-	// 測光ssをテーブル上で delta 段ずらす(結果は capSec を超えない)。
-	auto shiftMeterSs = [&](hgc::exposure& me, double delta, double capSec)
-	{
-		hgc::exposure t = me;
-		const double wantStops = expo::brightnessStops(me, tables_) + delta;
-		std::string pick; double best = 1e9;
-		for (const auto& e : tables_.ss)
-		{
-			if (capSec > 0.0 && e.real > capSec) { continue; }
-			t.ss = e.value;
-			const double d = std::fabs(expo::brightnessStops(t, tables_) - wantStops);
-			if (d < best) { best = d; pick = e.value; }
-		}
-		if (!pick.empty()) { me.ss = pick; }
-	};
-
-	// 測光露出の初期値: 基準のssが長ければLV忠実上限へ短縮(iso/fnは基準のまま)。
-	hgc::exposure meterE = ctl.current();
-	if (expo::parseValue(meterE.ss, expo::expoKind::ss) > kInitMeterMaxSsSec)
-	{
-		shiftMeterSs(meterE, 0.0, kInitMeterMaxSsSec);
-	}
-
-	// 収束の試行回数(measure できた回だけ数える)。露出を適用できなかった回は「やり直し」であって
+	// 収束の試行回数(measure できた回だけ数える)。測光できなかった回は「やり直し」であって
 	// 収束の1歩ではないので、通信の失敗で収束の機会を奪わない。全体は時間予算で頭打ちにする。
 	int step = 0;
 	while (step < kInitConvergeTries && running_)
 	{
 		if (static_cast<int>(tool::getElapse(t0)) >= kInitConvergeBudgetMs) { break; }	// 予算切れ→最良推定で開始
 
-		// 測光露出をカメラへ反映し、ライブビューが追従するのを待ってから測光する。
-		cmdt::shotSet shot(meterE.ss, meterE.fn, meterE.iso);
-		void*         ta = tool::startElapse();
-		const errCode re = cameraController::rdyShutter(*dev_, shot);
-		const long    ms = static_cast<long>(tool::getElapse(ta));
-		if (applyMsLen < static_cast<int>(sizeof(applyMs)) - 12)
+		apiBase::meterResult mr;
+		void*         tm = tool::startElapse();
+		const errCode me = cameraController::meterHere(*dev_, mr, [this]() { return running_.load(); });
+		const long    ms = static_cast<long>(tool::getElapse(tm));
+		const bool    okThis = (me == ERR_HGC_OK) && mr.ok && mr.usable && (mr.sceneRef > 0.0);
+		if (meterMsLen < static_cast<int>(sizeof(meterMs)) - 12)
 		{
-			applyMsLen += std::snprintf(applyMs + applyMsLen, sizeof(applyMs) - applyMsLen,
-			                            "%s%ld%s", (applyMsLen > 0) ? "," : "", ms,
-			                            (re != ERR_HGC_OK) ? "!" : "");
+			meterMsLen += std::snprintf(meterMs + meterMsLen, sizeof(meterMs) - meterMsLen,
+			                            "%s%ld%s", (meterMsLen > 0) ? "," : "", ms, okThis ? "" : "!");
 		}
-		if (re != ERR_HGC_OK)
+
+		// 測光のためにカメラの露出が動いていたら、実機の状態としてここへ写す。
+		//  ・差分適用キャッシュ: 次の適用で送るべき軸を取りこぼさないため
+		//  ・convergeLastApplied_: 1枚目の適用が失敗したとき、通信せず実機の露出を復元するため
+		if (!mr.appliedExp.fn.empty())  { lastFnApplied_  = mr.appliedExp.fn;  convergeLastApplied_.fn  = mr.appliedExp.fn; }
+		if (!mr.appliedExp.ss.empty())  { lastSsApplied_  = mr.appliedExp.ss;  convergeLastApplied_.ss  = mr.appliedExp.ss; }
+		if (!mr.appliedExp.iso.empty()) { lastIsoApplied_ = mr.appliedExp.iso; convergeLastApplied_.iso = mr.appliedExp.iso; }
+		if (mr.applyFailed)
 		{
-			// 【2026-08-06】適用できていない=カメラは別の露出のまま。ここで測ると
-			//  「設定したつもりの露出で測った」ことになり、露出成分を割り戻す分母が嘘になって
-			//  場面の明るさを取り違える。誤差もその上で計算されるので、答えが静かに狂う。
-			//  従来はこの失敗を検知せず(戻り値を捨てていた)そのまま測って進めていた。
-			//  測らずにやり直す。少し置いてから再試行する(連打しない)。
-			++applyNg; applyNgLast = re;
+			// 測光露出を乗せられていない = カメラは別の露出のまま。この状態で得た値は
+			// 割り戻す分母が嘘になり、場面の明るさを取り違える。使わずにやり直す。
+			++applyNg; lastErr = me;
 			interruptibleSleep(kApplyRetryMs);
 			continue;	// step は増やさない(収束の1歩として数えない)
 		}
+		if (!okThis) { ++meterNg; lastErr = me; continue; }	// 測光失敗 → 予算内で再試行
+
 		++step;
-		// 実際にカメラへ乗った露出を覚えておく。1枚目の適用が失敗したとき、カメラはこの露出の
-		// ままなので、通信せずに「実機の状態」を復元できる(appliedOrConverge)。
-		convergeLastApplied_ = meterE;
-		interruptibleSleep(kMeterSettleMs);
-
-		apiBase::meterResult mr;
-		// 測光も戻り値を見る(従来は捨てていた)。失敗した回の値は使わず、予算内でやり直す。
-		//  meterHere はヒストグラムが空でも ERR_HGC_OK を返すことがあるので linear<=0 も失敗に含める。
-		const errCode me = cameraController::meterHere(*dev_, mr, [this]() { return running_.load(); });
-		const double x = mr.x, linear = mr.linear;
-		if (me != ERR_HGC_OK || linear <= 0.0) { ++meterNg; continue; }	// 測光失敗 → 予算内で再試行
-
-		// 張り付き(飽和/黒潰れ)は値を使わず測光ssをずらして測り直す。
-		// 飽和側は「どれだけ超えているか」の情報が無い(真昼にISO1600/0.5sだと十数段超え)ので
-		// 大股(-4段)で抜ける。-2段刻みでは真昼に時間予算内で飽和を抜けられなかった(7/26 09:00 実測)。
-		if (x >= kPegBright)
-		{
-			const double before = expo::brightnessStops(meterE, tables_);
-			shiftMeterSs(meterE, -4.0, kInitMeterMaxSsSec);
-			if (before - expo::brightnessStops(meterE, tables_) < 1.0)
-			{	// ss が最短側に達して暗くしきれない(高ISOシード×真昼) → ISO を下げて抜ける
-				hgc::exposure t = meterE;
-				const double wantB = before - 4.0;
-				std::string pick; double best = 1e9;
-				for (const auto& e : tables_.iso)
-				{
-					t.iso = e.value;
-					const double d = std::fabs(expo::brightnessStops(t, tables_) - wantB);
-					if (d < best) { best = d; pick = e.value; }
-				}
-				if (!pick.empty()) { meterE.iso = pick; }
-			}
-			continue;
-		}
-		if (x <= kPegDark && expo::parseValue(meterE.ss, expo::expoKind::ss) < kInitMeterMaxSsSec * 0.99)
-		{
-			shiftMeterSs(meterE, +2.0, kInitMeterMaxSsSec);	// 暗すぎ → 忠実上限まで伸ばして再測
-			continue;
-		}
-		// (忠実上限まで伸ばしても黒い夜はその値で進める → 投影は明側限界にクランプされ夜間露出へ落ち着く)
-
 		// ev0 のリニア輝度は環境光依存(§4.3.3/4.3.4)。測光値と測光時の露出から都度求める。
-		const double lin0     = expo::ev0LinearForMeasure(linear, meterE, ev0cfg_);
-		const double linT     = expo::linearFromEvBase(evT, lin0);		// 目標リニア輝度
-		const double sceneRef = this->sceneRefFromMetered(linear, meterE);	// 露出に依存しない場面の明るさ
-		const double curB     = expo::brightnessStops(ctl.current(), tables_);
-		const double predicted = sceneRef * std::pow(2.0, curB);		// 候補露出で写る明るさ
+		const hgc::exposure& mex = validExposure(mr.meterExp) ? mr.meterExp : ctl.current();
+		const double lin0      = expo::ev0LinearForMeasure(mr.linear, mex, ev0cfg_);
+		const double linT      = expo::linearFromEvBase(evT, lin0);		// 目標リニア輝度
+		const double curB      = expo::brightnessStops(ctl.current(), tables_);
+		const double predicted = mr.sceneRef * std::pow(2.0, curB);		// 候補露出で写る明るさ
 		if (predicted <= 0.0 || linT <= 0.0) { break; }
 		const double err = std::log2(predicted / linT);	// +:明るすぎ / -:暗すぎ
 
@@ -701,13 +592,6 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 		// 次の反復で新しい測光により誤差を再確認する(確認が取れたら上で break)。
 	}
 
-
-	// 【診断】収束中に露出適用が1回でも失敗していたら、その回数と「何回目か」を1行残す。
-	//  ・回が散らばる/序盤から出る → 通信の使い方そのものが怪しい(接続の張り直し等)
-	//  ・失敗0で最後の1回だけ落ちる → 収束の直後だけに起きる別の要因
-	// どちらなのかがこの1行で決まる。動作は変えていない(従来どおり結果を返して撮影へ進む)。
-	// 失敗が無くても所要は毎回出す。冷えた状態(放置後)と温まった状態(連続実行)を
-	// 同じ物差しで比べたいので、正常時の値が無いと比較にならない。
 	// 撮影レポート用に結果を残す。「収束できたのか、できないまま撮り始めたのか」が要点。
 	converge_.steps   = step;
 	converge_.applyNg = applyNg;
@@ -719,22 +603,23 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 		char eb[280];
 		if (applyNg > 0 || meterNg > 0)
 		{
-			// 失敗した回は測光値を採用せずやり直している。step=実際に収束へ使えた回数。
+			// 失敗した回は値を採用せずやり直している。step=実際に収束へ使えた回数。
 			// step=0 は「一度も測れなかった」= 露出は基準値のまま撮り始めることを意味する。
-			std::snprintf(eb, sizeof(eb), "%s (収束: 有効%d回 適用失敗%d 測光失敗%d 適用ms=%s)",
-			              this->withHttpDetail("初期収束").c_str(), step, applyNg, meterNg, applyMs);
+			std::snprintf(eb, sizeof(eb), "%s (収束: 有効%d回 適用失敗%d 測光失敗%d 測光ms=%s)",
+			              this->withHttpDetail("初期収束").c_str(), step, applyNg, meterNg, meterMs);
 		}
 		else
 		{
-			std::snprintf(eb, sizeof(eb), "初期収束 有効%d回 適用ms=%s", step, applyMs);
+			std::snprintf(eb, sizeof(eb), "初期収束 有効%d回 測光ms=%s", step, meterMs);
 		}
-		onError_(applyNgLast, eb);
+		onError_(lastErr, eb);
 	}
-	// 収束中の露出変更(rdyShutter直)は差分適用キャッシュを通らない。ここで無効化して次の適用に
-	// 全軸を必ず送らせる(キャッシュと実機がズレたまま1枚目を撮る事故の防止)。
+	// 収束中にカメラ実装が動かした露出は差分適用キャッシュの外である。ここで無効化して
+	// 次の適用に全軸を必ず送らせる(キャッシュと実機がズレたまま1枚目を撮る事故の防止)。
 	lastFnApplied_.clear(); lastSsApplied_.clear(); lastIsoApplied_.clear();
 	return ctl.current();	// 最後の投影(または収束点)が最良推定=撮影1枚目の露出
 }
+
 
 // ライブビュー開始 + M設定(ダイアル無視/オートパワーオフ抑止) + 設定可能値テーブル構築。
 // 撮影開始時と、撮影中の再接続後の両方で使う。return: ライブビュー開始に成功したか。
@@ -744,8 +629,8 @@ bool captureRunner::establishSession(void)
 	if (dev_ == nullptr || dev_->apiBase == nullptr) { return false; }
 	// 再接続でライブビューのセッションが作り直されるので、古いフレーム判定の基準を捨てる。
 	// 前セッションの時刻と比べると、復帰後の正常なフレームまで「古い」と誤判定してしまう。
-	// 測光の適応状態(測光ss学習・張り付き天井・LVフレーム鮮度基準)はカメラ依存層が持つ。
-	// セッション(LV)が作り直されるのでまとめて捨てさせる。
+	// 測光の内部状態(学習値・鮮度基準・撮影画像の登録通知の待ち方)はカメラ依存層が持つ。
+	// セッションが作り直されるのでまとめて捨てさせる。
 	cameraController::meterReset(*dev_);
 
 	// 変更分のみ適用のキャッシュをクリア(再接続直後はカメラ状態が不定なので次回フル適用させる)。
@@ -848,7 +733,7 @@ errCode captureRunner::loop(void)
 	expo::exposureCtl preCtl;		// 夜間前移行用(自動露出→夜間)
 	expo::exposureCtl postCtl;		// 夜間後移行用(夜間→次の自動露出)
 	std::vector<double> avgBuf;		// リニア輝度の移動平均バッファ
-	bool pinPrev = false;			// 前コマでライブビューの張り付きを検出していたか
+	bool pinPrev = false;			// 前コマで測光の張り付きを検出していたか(カメラ実装からの申告)
 	hgc::exposure lastExp{};		// 直近の「測光時の」露出(ev0の逆算専用。ssが測光用に差し替わっている)
 	hgc::exposure lastShotExp{};	// 直近に実際に撮影した露出。窓切替の「直前から継続」はこちらを使う
 	// (lastExp を使うと切替直後の1コマが測光ssで撮れてしまう。7/24-25実測: 夕日/preNight/postNight
@@ -982,7 +867,7 @@ errCode captureRunner::loop(void)
 				const hgc::ccmWindow* wS = activeWindow(now);
 				if (wS == nullptr || !wS->ccm) { interruptibleSleep(500); continue; }	// 隙間は撮らない
 			}
-			// 直前の露出適用が失敗していると、カメラは測光シャッターのままで、このまま撮ると
+			// 直前の露出適用が失敗していると、カメラは古い露出のままで、このまま撮ると
 			// そのコマだけ露出が飛ぶ(2026-07-20 の IMG_1092/IMG_1100)。落とす前に1回だけ試し直す。
 			//  ここは露光も記録も終わっている区間なので 503 で弾かれにくい。リトライループは使わず
 			//  1パスだけ(シャッターを遅らせないため)。通れば pending を本来の露出へ戻す。
@@ -996,7 +881,7 @@ errCode captureRunner::loop(void)
 			err = this->fireShutter(shotExp, interval, shootFailStreak);
 			++frame;
 			if (onProgress_) { onProgress_(progressInfo{ frame, total, static_cast<int>(endSec - now), static_cast<int>(now - startSec) }); }
-			// 周期-リードまで待つ。ここまで待てば露光は終わりカメラは記録も終えている(=設定が通る)。
+			// 準備を始める時刻まで待つ。
 			//  周期 <= リード や 周期-リード < SS のような厳しい設定でも、遅れて実行されるだけで破綻はしない
 			//  (許可する仕様。カメラ単体のインターバル撮影と同様に周期が伸びる)。
 			{
@@ -1019,8 +904,6 @@ errCode captureRunner::loop(void)
 				if (prepAt < 0)  { prepAt = 0; }
 				if (prepAt > im) { prepAt = im; }	// 露光が周期一杯 → 遅れ許容(従来どおり)
 				leadUsed = static_cast<int>(im - prepAt);	// 実際に準備へ与えたリード(方式で変わる)
-				// 空白のあいだにカメラの busy 明けを測る(毎コマ)。撮影の進行には触れない。
-				busyMs = this->measureBusy(anchorA, expo::parseValue(shotExp.ss, expo::expoKind::ss), prepAt);
 				sleepUntilElapse(anchorA, prepAt);
 			}
 			if (!running_) { break; }
@@ -1047,9 +930,9 @@ errCode captureRunner::loop(void)
 		int     applyTry = 0;
 		errCode applyErr = ERR_HGC_OK;
 		void*   prep = warmedUp ? tool::startElapse() : nullptr;
-		// 測光シャッターへ切り替える(撮影露出のままでは暗所でライブビューが張り付いて測れない)。
-		//  meterExp = 実際に測光を行う露出。ev0 の逆算にはこれを使う(ここが従来の誤りの本体:
-		//  1秒相当しか写っていない値を 8秒露光として換算していた)。撮影露出へは後段の適用で戻る。
+		//  meterExp = 実際に測光を行った露出(カメラ実装が申告する)。ev0 の逆算にはこれを使う
+		//  (ここが従来の誤りの本体: 1秒相当しか写っていない値を 8秒露光として換算していた)。
+		//  サムネイル測光では「直前に撮ったコマの露出」そのものになる。
 		hgc::exposure meterExp = shotExp;	// 実際の測光露出は meterFrame(各分岐)が更新する
 		if (warmedUp) { lastShotExp = shotExp; }	// 窓切替の継続用は「実際に撮影した露出」
 
@@ -1062,9 +945,12 @@ errCode captureRunner::loop(void)
 
 		hgc::exposure target{};
 		double meteredLinear = -1.0;	// 測光したリニア輝度(自動補正時のみ。<0=測光なし)
-		meterMs_  = -1;	// このコマの rdyMetering 実測msをリセット(測光しないコマは -1 のまま)
+		meterMs_  = -1;	// このコマの測光実測msをリセット(測光しないコマは -1 のまま)
 		meterOk_  = true;	// 測光成否をリセット(測光しないコマは「成功扱い」でログ非表示)
 		meterTry_ = 0;	// 測光試行回数をリセット(測光しないコマは 0)
+		// 測光の内訳もリセットする。前コマの値が残ると、測光しないコマ(夜間の固定露出)で
+		// 前の busy/取得時間をそのまま報告してしまう。
+		meterWaitMs_ = -1; meterFetchMs_ = -1; meterDecodeMs_ = -1; meterFetchTries_ = 0;
 
 		// ② このコマの ev0 中心bmを太陽高度から決める(薄明ほど暗く保つ)。測光を使う制御方法(preNight/postNight/auto)で効く。
 		//    now=文脈時刻(実時刻)、plan_.place=撮影地。夜間(固定露出)では ev0 を使わないので影響しない。
@@ -1344,7 +1230,7 @@ errCode captureRunner::loop(void)
 
 			if (!didInitConverge)
 			{
-				// 測光(ライブビューのヒストグラム)→ リニア輝度(仕様 4.3)
+				// 測光(実装はカメラ依存層)→ 場面の明るさ(仕様 4.3)
 				apiBase::meterResult mr;
 				this->meterFrame(shotExp, mr, warmedUp);	// 測光(実装はカメラ依存層。ウォームアップ中は切替なし=従来動作)
 				meterExp = mr.meterExp;
@@ -1357,7 +1243,7 @@ errCode captureRunner::loop(void)
 				{
 					// 露出補正(仕様 4.5): 移動平均とヒステリシス帯(項目7: ccm 個別値を優先)
 					// 測光値は「測光露出で写る明るさ」なので、露出成分を割り戻した場面の明るさを
-					// 平均する(測光ssはコマ毎に変わるため、生の測光値を平均すると別条件が混ざる)。
+					// 平均する(測光の条件はコマ毎に変わり得るので、生の測光値を平均すると別条件が混ざる)。
 					if (stepLock_ > 0) { --stepLock_; }	// 反転抑制の残りコマ(測光できたコマだけ数える)
 					// 張り付きを検出したコマでは、それまでのバッファは「露出変更に反応しないLV」で測った値。
 					// そのまま傾きを外挿すると偽のトレンド(絞っているのに明るくなり続ける)を増幅してしまう。
@@ -1403,9 +1289,8 @@ errCode captureRunner::loop(void)
 				}
 				else
 				{
-					// 測光失敗。ライブビュー停止やカメラの一時不応答が起きると、以降ずっと測光
-					// できず露出が凍結し日中に白飛びする(実機 06/15 で発生)。ライブビューを
-					// 再開して次フレームで測光を回復させる。移動平均は陳腐化するので破棄する。
+					// 測光失敗。カメラの一時不応答などが続くと露出が凍結し日中に白飛びする
+					// (実機 06/15 で発生)。移動平均は陳腐化するので破棄し、次コマで測り直す。
 					if (meterFailStreak == 0)
 					{
 						avgBuf.clear(); this->resetStepLock();
@@ -1432,11 +1317,9 @@ errCode captureRunner::loop(void)
 			// これを省くと1枚目が pending と違う露出(初期収束の最後の試行値=測光露出)で撮れてしまう。
 			//
 			// 【2026-08-05 実測で判明】ここが失敗したまま撮り始めると、被害は1枚目に留まらない:
-			//  カメラは初期収束で最後に使った測光露出のまま1枚目を撮り、その露出でライブビューを
-			//  測るので飽和する(実測 ai=0.987 / 使える上限は 0.692)。すると「撮影ssでは測れない」と
-			//  判断して測光ssへ切替える経路に落ち、以後20コマのあいだ毎コマ2.6秒の反映待ちを払う。
-			//  実測では準備が 0.15秒 → 3.0秒 に化けた。露出調整が済んでいないのに撮り始めたことが
-			//  すべての起点なので、乗るまで待つ。
+			//  カメラは初期収束で最後に使った測光露出のまま1枚目を撮ってしまい、以後のコマまで
+			//  巻き添えにする(その1枚を測光した値で次の露出を決めるため)。露出調整が済んで
+			//  いないのに撮り始めたことがすべての起点なので、乗るまで待つ。
 			// 撮影中の適用と違い、ここは次コマの締め切りが無いので長く待てる(kFirstApplyMaxMs)。
 			{
 				int t1 = 0;
@@ -1495,8 +1378,21 @@ errCode captureRunner::loop(void)
 			}
 		}
 		const int prepMs = (prep != nullptr) ? static_cast<int>(tool::getElapse(prep)) : -1;
+		// busy(露光終了 → カメラが測光に応じられるまで)。サムネイル測光では「新しい画像の
+		// 登録通知を待った時間」がそれに当たる。準備は露光終了 + kAfterShutterMarginMs から
+		// 始めているので、その余裕を足したものが露光終了からの実測になる。
+		// 撮影周期をどこまで SS へ詰められるかを決めるのはこの時間なので、レポートへ残す。
+		if (warmedUp && meterWaitMs_ >= 0)
+		{
+			busyMs = static_cast<int>(kAfterShutterMarginMs) + meterWaitMs_;
+		}
+		// このコマは測光していない(夜間の固定露出)。カメラと一度も話さないまま何時間も続くので、
+		// 無害なGETを1回だけ入れて接続を保つ。カメラ実装によっては、この1回で測光方式が
+		// ためこんでいる状態(CCAPIなら撮影画像の登録通知)も一緒に流れる。
+		// 露光も記録も終わっている区間なので、撮影の進行には影響しない。
+		if (warmedUp && meterTry_ == 0) { cameraController::keepAlive(*dev_); }
 		// 次シャッターで撮る露出。適用に成功していれば target。
-		// 失敗しているならカメラは測光シャッターのまま(軸ごとに一部だけ適用されることもある)なので、
+		// 失敗しているならカメラは古い露出のまま(軸ごとに一部だけ適用されることもある)なので、
 		// target で撮ったことにしてはいけない。実際に適用できている値を次コマの露出とする。
 		// これでアプリの露出モデル・ログ・実写が一致する(2026-07-20 IMG_1092/IMG_1100 の食い違いを根治)。
 		applyFailed_ = (warmedUp && applyErr != ERR_HGC_OK);

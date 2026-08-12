@@ -1331,15 +1331,16 @@ std::string dataManager::writeCaptureReport(const captureReport& r, const hgc::c
 	if (r.frames > 1 && r.lastShutterMs > r.firstShutterMs)
 	{ actual = static_cast<double>(r.lastShutterMs - r.firstShutterMs) / 1000.0 / static_cast<double>(r.frames - 1); }
 
-	// 目安の最短周期 = 最長ss + busyの最大 + 準備の最大 + 余裕1秒。
-	// 1コマは「シャッター→露光→記録が明ける→測光→露出設定→次のシャッター」の順で進むので、
-	// この4つを足した値より短い周期は原理的に守れない。最大値で見るのは安全側に倒すため。
-	// busy を1コマも測れていないときは目安を出さない(-1)。憶測の数字を出さない。
+	// 目安の最短周期 = 最長ss + 準備の最大 + 余裕1秒。
+	// 1コマは「シャッター→露光→記録が明ける→測光→露出設定→次のシャッター」の順で進む。
+	// 準備(prep)は「記録が明けるのを待つ+測光+露出設定」を丸ごと含むので、露光と足せば
+	// 1周に要る時間になる(busy は準備の内数なので二重に足さない)。最大値で見るのは安全側へ倒すため。
+	// 準備を1コマも測れていないときは目安を出さない(-1)。憶測の数字を出さない。
 	char timeBuf[24];
 	std::snprintf(timeBuf, sizeof(timeBuf), "%s", timeStr);
 	double minInterval = -1.0;
-	if (r.busyCnt > 0)
-	{ minInterval = r.maxSsSec + (r.busyMaxMs / 1000.0) + (r.prepMax / 1000.0) + 1.0; }
+	if (r.frames > 0 && r.prepMax > 0)
+	{ minInterval = r.maxSsSec + (r.prepMax / 1000.0) + 1.0; }
 
 	json j;
 	j["version"] = 1;
@@ -1368,12 +1369,16 @@ std::string dataManager::writeCaptureReport(const captureReport& r, const hgc::c
 	                  { "applyRetryFrames", r.applyRetryFrames } };
 
 	j["interval"] = { { "setSec", plan.interval }, { "actualSec", actual } };
+	// lateFrames/lateOverSumMs = 撮影周期に間に合わず遅れて切ったコマの回数と、その遅れの合計。
 	j["timing"]   = { { "lateOk", r.lateOk }, { "lateCnt", r.lateCnt }, { "lateOkPct", pct(r.lateOk, r.lateCnt) },
 	                  { "lateAvgMs", avg(r.lateSum, r.lateCnt) }, { "lateMaxMs", r.lateMax },
+	                  { "lateFrames", r.lateOverCnt }, { "lateOverSumMs", r.lateOverSumMs },
+	                  { "lateOverAvgMs", avg(r.lateOverSumMs, r.lateOverCnt) },
 	                  { "prepAvgMs", avg(r.prepSum, r.frames) },  { "prepMaxMs", r.prepMax },
 	                  { "prepOver", r.prepOver }, { "leadMs", r.leadMs } };
 
-	// busy = 露光終了からカメラが測光を受け付けるまで。周期の下限を決めている本体。
+	// busy = 露光終了からカメラが測光を受け付けるまで(サムネイル測光では登録通知が来るまで)。
+	// 周期の下限を決めている本体。
 	j["busy"]  = { { "cnt", r.busyCnt }, { "avgMs", avg(r.busySumMs, r.busyCnt) },
 	               { "maxMs", r.busyMaxMs }, { "stuck", r.busyStuck } };
 	j["meter"] = { { "cnt", r.meterCnt }, { "avgMs", avg(r.meterSumMs, r.meterCnt) }, { "maxMs", r.meterMaxMs } };
@@ -1391,11 +1396,10 @@ std::string dataManager::writeCaptureReport(const captureReport& r, const hgc::c
 	if (r.staleFrames > 0 && pct(r.staleFrames, r.frames) > 10.0) { notes.push_back(static_cast<int>(NOTE_STALE_MANY)); }
 	if (r.lateCnt > 0 && pct(r.lateOk, r.lateCnt) < 90.0)         { notes.push_back(static_cast<int>(NOTE_LATE_MANY)); }
 	if (r.meterFail > 0 && pct(r.meterFail, r.meterTried) > 5.0)  { notes.push_back(static_cast<int>(NOTE_METER_FAIL)); }
-	if (r.busyStuck > 0)                                          { notes.push_back(static_cast<int>(NOTE_BUSY_STUCK)); }
 	if (r.cvOutcome == 2)                                         { notes.push_back(static_cast<int>(NOTE_CONVERGE_NONE)); }
 	else if (r.cvOutcome == 1)                                    { notes.push_back(static_cast<int>(NOTE_CONVERGE_PART)); }
 	if (r.busyCnt == 0)                                           { notes.push_back(static_cast<int>(NOTE_BUSY_NO_DATA)); }
-	else if (minInterval >= 0.0)
+	if (minInterval >= 0.0)
 	{
 		// 余裕が1秒未満なら詰まりすぎ、5秒以上あるならまだ詰められる、という目安。
 		const double margin = plan.interval - minInterval;

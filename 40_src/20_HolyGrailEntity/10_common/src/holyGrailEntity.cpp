@@ -1156,27 +1156,29 @@ namespace
 					if (c.lateMs >= 0)
 					{
 						++R.lateCnt; R.lateSum += c.lateMs;
-						if (c.lateMs <= 100) { ++R.lateOk; }
+						if (c.lateMs <= captureRunner::kLateOkMs) { ++R.lateOk; }
+						else { ++R.lateOverCnt; R.lateOverSumMs += c.lateMs; }	// 間に合わなかったコマだけを別に数える
 						if (c.lateMs > R.lateMax) { R.lateMax = c.lateMs; }
 					}
 					if (c.prepMs >= 0)
 					{
 						R.prepSum += c.prepMs;
 						if (c.prepMs > R.prepMax) { R.prepMax = c.prepMs; }
-						if (c.prepMs > captureRunner::kPrepLeadMs) { ++R.prepOver; }
+						// 準備に使えた時間(リード)は測光方式で変わる。サムネイル測光では
+						// 「周期 - (露光 + 余裕)」なので、固定値ではなくそのコマの実値と比べる。
+						if (c.leadMs > 0 && c.prepMs > c.leadMs) { ++R.prepOver; }
 					}
 					if (c.shutterMs > 0)
 					{
 						if (R.firstShutterMs == 0) { R.firstShutterMs = c.shutterMs; }
 						R.lastShutterMs = c.shutterMs;
 					}
-					// busy(露光終了→測光可)。>=0 が実測、-2 は空白のあいだ明けなかったコマ。
+					// busy(露光終了→測光可=新しい画像の登録通知が来るまで)。>=0 が実測。
 					if (c.busyMs >= 0)
 					{
 						++R.busyCnt; R.busySumMs += c.busyMs;
 						if (c.busyMs > R.busyMaxMs) { R.busyMaxMs = c.busyMs; }
 					}
-					else if (c.busyMs == captureRunner::kBusyNotCleared) { ++R.busyStuck; }
 					// 準備の内訳。測光と露出設定を分けて持つ(どちらがリードを食っているかを見るため)。
 					if (c.rdyMeteringMs >= 0)
 					{
