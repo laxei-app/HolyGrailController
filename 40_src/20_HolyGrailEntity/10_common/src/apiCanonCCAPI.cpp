@@ -1146,7 +1146,6 @@ void apiCanonCCAPI::meterReset(void)
 	hereExp_       = hgc::exposure{};	// 初期収束の測光露出は取り直す
 	lvFreshPrevMs_ = 0;					// 再接続でLVセッションが作り直されるため鮮度基準も捨てる
 	lvFreshPrevAt_ = nullptr;
-	pollMode_      = pollMode::unknown;	// 待ち方はセッションごとに判定し直す
 	// 前の撮影の登録通知が残っていると、1枚目で古い画像のサムネイルを掴む。ここで流す。
 	this->flushEventPolling();
 }
@@ -1382,22 +1381,11 @@ std::string apiCanonCCAPI::apiHostBase(void) const
 	return (path == std::string::npos) ? url : url.substr(0, path);
 }
 
-// event/polling で新規画像の登録(addedcontents)を待ち、最後(最新)のコンテンツパスを返す。
-//  ・撮影→現像→SD書込の完了は露光終了から実測2.0〜2.6秒(7/26 R10)。ロングポールなので
-//    既に登録済みならすぐ返り、未登録なら登録まで待つ。
-//  ・複数たまっていた場合(夜間の測光なしコマ等)は最後の1件=最新を使う。
-// 方式に応じた event/polling のURLを作る(CCAPI Reference 4.13.1)。
-std::string apiCanonCCAPI::pollUrl(pollMode m) const
+// event/polling の URL。クエリは付けない(=待たずに即返る)。理由はヘッダの説明を参照。
+std::string apiCanonCCAPI::pollUrl(void) const
 {
 	auto it = funcList.find(funcNum::EVENT_POLL);
-	if (it == funcList.end()) { return std::string(); }
-	const std::string& u = it->second.url;
-	switch (m)
-	{
-		case pollMode::timeoutShort: return u + "?timeout=short";	// ver110〜: 約10秒待つ
-		case pollMode::continueOn:   return u + "?continue=on";		// ver100 : 100 Continue で待つ
-		default:                     return u;						// 無指定 = 即返る
-	}
+	return (it == funcList.end()) ? std::string() : it->second.url;
 }
 
 // イベント取得を停止する(GET で開始したものの対。セッション終了時に必ず送る)。
@@ -1407,7 +1395,6 @@ void apiCanonCCAPI::stopEventPolling(void)
 	if (it == funcList.end() || !(it->second.verb == verb::DEL)) { return; }
 	std::string resp;
 	netThread::httpDelete(it->second.url, resp);	// 旧方式の残骸掃除(念のため)
-	pollMode_ = pollMode::unknown;	// 次のセッションで待ち方を判定し直す
 }
 
 // 溜まっている登録通知を1回で流す(セッション開始時)。
@@ -1491,30 +1478,13 @@ std::string apiCanonCCAPI::waitAddedByEvent(int budgetMs, const std::function<bo
 		++triesOut;
 
 		std::string body;
-		bool ok = false;
-		if (pollMode_ == pollMode::unknown)
-		{	// 待ち方の判定(セッションで一度だけ)。仕様の新しい順に試す。
-			const pollMode cand[3] = { pollMode::timeoutShort, pollMode::continueOn, pollMode::immediate };
-			for (const pollMode m : cand)
-			{
-				if (netThread::httpGet(pollUrl(m), body)) { pollMode_ = m; ok = true; break; }
-				if (keepGoing && !keepGoing()) { return std::string(); }
-			}
-			if (!ok)
-			{	// 全滅 → イベント取得が開始済みで残っている疑い。一度だけ停止して再判定する。
-				if (!triedRecover)
-				{
-					triedRecover = true;
-					stopEventPolling();		// DELETE(内部で pollMode_ を unknown へ戻す)
-					meterSleep(kPollGapMs, keepGoing);
-					continue;
-				}
-				pollMode_ = pollMode::immediate;	// 以後は無指定で叩く(判定の繰り返しはしない)
-			}
-		}
-		else
-		{
-			ok = netThread::httpGet(pollUrl(pollMode_), body);
+		bool ok = netThread::httpGet(pollUrl(), body);
+		if (!ok && !triedRecover)
+		{	// イベント取得が開始済みで残っている疑い(503 Already started)。一度だけ止めて張り直す。
+			triedRecover = true;
+			stopEventPolling();
+			meterSleep(kPollGapMs, keepGoing);
+			continue;
 		}
 
 		if (ok) { anyPollOk = true; }

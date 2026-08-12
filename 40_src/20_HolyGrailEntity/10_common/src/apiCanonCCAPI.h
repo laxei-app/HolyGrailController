@@ -212,12 +212,20 @@ protected:
 	// addedcontents の中から取得元を選ぶ。JPG+RAW記録だと1コマで2つ通知されるため。
 	//  JPG があれば JPG(埋め込みサムネイルをそのまま返せる)、無ければ RAW。
 	static std::string pickThumbPath(const std::vector<std::string>& names);
-	// event/polling の待ち方(CCAPI Reference 4.13.1)。カメラのCCAPIバージョンで指定方法が違う:
-	//  ver110〜: ?timeout=short(約10秒待つ) / ver100: ?continue=on(100 Continueで待つ)
-	//  無指定は「待たずに即返る」が既定のため、こちらが連打してしまう(1コマ50回前後を実測)。
-	enum class pollMode : uint8_t { unknown = 0, timeoutShort = 1, continueOn = 2, immediate = 3 };
-	pollMode    pollMode_ = pollMode::unknown;
-	std::string pollUrl(pollMode m) const;	// 方式に応じたURL(クエリ付き)を作る
+	// 登録通知の引き方は「クエリ無し(待たずに即返る)を間隔をあけて繰り返す」に固定する。
+	//
+	// 【なぜ長ポール(?continue=on / ?timeout=short)を使わないか(2026-08-13 実機で確定)】
+	//  ・?continue=on に対し CCAPI はまず **100 Continue** を返してから、イベントが起きるまで
+	//    接続を保持する。当方の httpGet は最終ステータスしか見ないので 100 を失敗と判定し、
+	//    間隔をあけて次の要求を出す。**カメラは保持していた接続へイベントを流すので、
+	//    こちらが捨てた接続と一緒に通知が消える**。
+	//  ・実測(StickS3+R100 80コマ): 測光失敗 52コマ=65%、通知待ちの平均 7.5秒。
+	//    同じカメラをクエリ無しで引いた CoreS3 は 36コマ中1コマ(2.8%)・平均2.0秒だった。
+	//  ・どの方式に落ち着くかは「判定を試した瞬間に通知が溜まっていたか」で決まるため、
+	//    走行ごとに結果が変わる(再現しないバグになる)。方式の自動判定そのものをやめる。
+	//  ・クエリ無しは1コマ6〜10往復になるが、カードには触らない軽い要求である。
+	//    中断(keepGoing)を効かせられる利点もあり、固まったカメラの検出が速い。
+	std::string pollUrl(void) const;	// クエリ無しの event/polling URL
 	void        stopEventPolling(void);		// DELETE /event/polling(イベント取得の停止。セッション終了時)
 	// 溜まっている通知を1回で流す(セッション開始時)。前の撮影の登録通知が残っていると、
 	// 1枚目で「古い画像のサムネイル」を掴んでしまう。
