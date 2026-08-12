@@ -48,6 +48,9 @@ def main():
     # 何コマ前のサムネイルを取るか。取得対象が新しいほど早く固着することが分かったので
     # (直後=19〜49回 / 2.8秒前=145回 / 15秒前=238回 / 数時間前=500回でも無事)、
     # 遅らせて予算が伸びるかを見る(2026-08-12)。露出制御は分単位なので数コマ遅れは無害。
+    # JPG+RAW のとき、どちらのサムネイルを取るか。同じ絵でも取得元で挙動が違う疑いが
+    # あるため分けられるようにした(2026-08-13)。
+    ap.add_argument('--pick', default='jpg', choices=('jpg', 'raw'))
     ap.add_argument('--back', type=int, default=1)
     ap.add_argument('--out', default='soak_flow2.csv')
     a = ap.parse_args()
@@ -75,6 +78,7 @@ def main():
         print('  連番の起点: %s' % base.split('/')[-1], flush=True)
     print('%s 露光%s ISO%s交互  名前=%s / 名前取得後%.1fs で取得 / 露出設定後%.1fs でシャッター  予定%.0f分'
           % (a.ip, a.ss, '/'.join(isos), a.name, a.w1, a.w2, a.minutes), flush=True)
+    print('  取得元=%s / %dコマ前' % (a.pick, a.back), flush=True)
 
     f = open(a.out, 'w', encoding='utf-8', newline='')
     f.write('frame,wallclock,cycle_ms,post_ms,post_http,notify_http,notify_ms,polls,'
@@ -104,6 +108,10 @@ def main():
                 mo = ADDED.search(b.decode('utf-8', 'replace'))
                 if mo:
                     names = [x.replace('\\/', '/') for x in re.findall(r'"([^"]+)"', mo.group(1))]
+                    # JPG+RAW だと1コマで2つ返る(CR3とJPG)。サムネイルは JPG から取る。
+                    ext = ('.JPG', '.JPEG') if a.pick == 'jpg' else ('.CR3', '.CRAW', '.CR2')
+                    pk = [x for x in names if x.upper().endswith(ext)]
+                    if pk:    path = pk[-1]; break
                     if names: path = names[-1]; break
         notify_ms = (time.perf_counter() - te) * 1000.0
 
