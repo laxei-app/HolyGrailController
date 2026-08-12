@@ -70,6 +70,10 @@ def main():
     expo_s = float(a.ss.rstrip('"')) if a.ss.rstrip('"').replace('.', '').isdigit() else 0.0
 
     base, err = B.latest_path_by_listing(cam)
+    if not base:
+        # カードを初期化した直後は1枚も無く起点が取れない。1枚だけ撮って作る(2026-08-12)。
+        B.shoot(cam); time.sleep(expo_s + 4.0)
+        base, err = B.latest_path_by_listing(cam)
     if not base: print('起点の取得に失敗: %s' % err); return 1
     mm = re.match(r'(.*?)(\d+)(\.[A-Za-z0-9]+)$', base); seq = int(mm.group(2))
     print('起点 %s  露光%s  周期%.0fs  待ち%.1fs  %dコマ前  予定%.0f分'

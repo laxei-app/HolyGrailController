@@ -45,6 +45,7 @@ class Cam:
         self.timeout = timeout          # ソケットのタイムアウト[秒]
         self.hard = hard                # 1リクエストの上限[秒]。超えたら外から閉じる
         self._inflight = None           # (期限, conn)
+        self.reconnects = 0             # 接続を張り直した回数(0のまま=ずっと同じ接続)
         self._lk = threading.Lock()
         self._wd = threading.Thread(target=self._watch, daemon=True)
         self._wd.start()
@@ -64,6 +65,9 @@ class Cam:
 
     def _c(self):
         if self.conn is None:
+            # 2本目以降=張り直し。keep-alive が切れていないかを外から見るために数える。
+            if getattr(self, '_opened', 0): self.reconnects += 1
+            self._opened = getattr(self, '_opened', 0) + 1
             self.conn = http.client.HTTPConnection(self.ip, self.port, timeout=self.timeout)
         return self.conn
 
