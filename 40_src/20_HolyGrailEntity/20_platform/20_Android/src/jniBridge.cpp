@@ -36,6 +36,10 @@ namespace
 	}
 }
 
+// エッジとの BLE 通信は Android の API なので Kotlin 側にしかない。ネイティブ(edgeClient)から
+// そこへ呼び返すために VM を共有する。extern "C" の外に置く(宣言は commonAndroid.h)。
+JavaVM* hgeJavaVm(void) { return g_vm; }
+
 extern "C" {
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/)

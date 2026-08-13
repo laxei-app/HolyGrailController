@@ -1,4 +1,4 @@
-package app.laxei.holygrail
+﻿package app.laxei.holygrail
 
 // holyGrailEntity(extern "C") への JNI ブリッジ窓口。
 // ネイティブ実装は 20_platform/20_Android/src/jniBridge.cpp。
@@ -134,6 +134,19 @@ object HgeNative {
     external fun nativeSetPreferredCcm(type: String, name: String): Int
 
     // --- エッジ端末(ETP §6) ---
+    // 通信路の切替(スマホだけが決める。2026-08-14 指示)。true=BLE。
+    // エッジは常に Wi-Fi と BLE の両方で待ち受けているので、切替をエッジへ知らせる必要は無い。
+    // **BLE のときは以降の host 引数に IP ではなくエッジの端末名を渡すこと**
+    // (BLE にはブロードキャストが無く、探索も接続も名前で行うため)。
+    external fun nativeEdgeSetBle(useBle: Boolean)
+
+    // ネイティブ(edgeClient.cpp)から呼び返される BLE の1往復。
+    //  Android の BLE API は Kotlin にしかないので、ここで受けて EdgeBleLink へ渡す。
+    //  ネイティブの作業スレッドから同期で呼ばれる(UIスレッドではない)。
+    @JvmStatic
+    fun bleExchange(target: String, frame: ByteArray, timeoutMs: Int): ByteArray? =
+        EdgeBleLink.exchange(target, frame, timeoutMs)
+
     external fun nativeEdgeSearch(timeoutMs: Int): String           // edgeInfo の JSON 配列
     external fun nativeEdgeStart(host: String, port: Int, datetime: String, offMin: Int, nameBmp: ByteArray, planId: String, planJson: String): Int
     external fun nativeEdgeStop(host: String, port: Int, planId: String): Int

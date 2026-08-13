@@ -215,6 +215,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // エッジ端末
     private data class Edge(val name: String, val ip: String, val port: Int)
+    // ネイティブへ渡す「相手の指定」。Wi-Fi なら IP、BLE なら端末名。
+    //  BLE にはブロードキャストが無く、探索も接続も名前で行うため(edgeClient.cpp と対)。
+    private fun Edge.addr(): String = if (edgeUseBle()) name else ip
+    // その端末に話しかけられる見込みがあるか。Wi-Fi は IP 未解決だと無理だが、BLE は名前だけで足りる。
+    private fun Edge.reachable(): Boolean = if (edgeUseBle()) name.isNotEmpty() else ip.isNotEmpty()
     private val edges = mutableListOf<Edge>()   // 登録済みエッジ端末(設定で追加、prefsに永続化、オフラインでも選択可)
     // 常時スイープ(edgeSweep)によるエッジ生存状態。true=オンライン/false=オフライン/未登録=不明(起動直後)。
     private val edgeOnline = mutableMapOf<String, Boolean>()
@@ -272,6 +277,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         copyMasterAssets(baseDir)   // インストール同梱の機材マスタを /master へ展開(nativeInit より前)
         HgeNative.nativeSetLogDir(baseDir.absolutePath)
         HgeNative.nativeInit()
+        // スマホ⇄エッジの通信路(2026-08-14 指示)。選ぶのはスマホだけ。エッジは常に両方で待ち受ける。
+        EdgeBleLink.init(this)
+        HgeNative.nativeEdgeSetBle(edgeUseBle())
         HgeNative.nativeSetListener(this)
         // 起動時のログ整理(当日以外が5件以上なら古い順に削除、最新4件まで残す)。端末TZで「当日」を判定。
         val tzOffMin = java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60000
@@ -339,7 +347,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             for (ed in found) {
                 runOnUiThread { updateEdgeIp(ed.name, ed.ip, ed.port); refreshEdgeSpinner() }   // 発見したエッジは撮影有無に関わらず登録
                 for (pid in localPlans) {
-                    val pj = try { HgeNative.nativeEdgeProgress(ed.ip, ed.port, pid) } catch (_: Exception) { "" }
+                    val pj = try { HgeNative.nativeEdgeProgress(ed.addr(), ed.port, pid) } catch (_: Exception) { "" }
                     if (pj.isEmpty()) continue
                     val st = try { JSONObject(pj).optInt("state", HgeNative.ST_IDLE) } catch (_: Exception) { HgeNative.ST_IDLE }
                     val active = st == HgeNative.ST_CAPTURING || st == HgeNative.ST_SEARCHING || st == HgeNative.ST_WAITING ||
@@ -667,6 +675,33 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.addView(thinDivider())
     }
 
+    // スライドスイッチ付きのメニュー項目。
+    private fun gearSwitchItem(box: LinearLayout, title: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.setPadding(dp(28), dp(6), dp(12), dp(6))
+        val tv = TextView(this)
+        tv.text = title; tv.textSize = 16f; tv.setTextColor(Color.BLACK)
+        tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        tv.gravity = android.view.Gravity.CENTER_VERTICAL
+        val sw = android.widget.Switch(this)
+        sw.isChecked = checked
+        sw.setOnCheckedChangeListener { _, v -> onChange(v) }
+        row.addView(tv); row.addView(sw)
+        box.addView(row)
+        box.addView(thinDivider())
+    }
+
+    // --- スマホ⇄エッジの通信路(BLE か Wi-Fi か)。スマホだけが決める ---
+    private fun edgeUseBle(): Boolean = hgcPrefs().getBoolean("edgeUseBle", false)
+    private fun setEdgeUseBle(on: Boolean) {
+        hgcPrefs().edit().putBoolean("edgeUseBle", on).apply()
+        EdgeBleLink.close()                 // 経路を変えるので掴んでいた接続は捨てる
+        HgeNative.nativeEdgeSetBle(on)
+        Toast.makeText(this, if (on) "エッジとはBLEで通信します" else "エッジとはWi-Fiで通信します",
+                       Toast.LENGTH_SHORT).show()
+    }
+
     // 色の設定の項目: 現在の色(背景/文字)で四角く囲って表示(設計書イメージ)。
     private fun gearColorItem(box: LinearLayout, typeKey: String, label: String) {
         val t = keyType(typeKey)
@@ -711,6 +746,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 2026-08-08 UI依頼: 「登録」と「設定」を1画面へ統合した(登録は画面内の
         // 「＋ 新規エッジ端末」から行う)。
         gearItem(box, "エッジ端末設定") { openEdgeSettings() }
+        // 通信路の切替。エッジは常に Wi-Fi と BLE の両方で待ち受けているので、
+        // ここを倒すだけで切り替わる(エッジへ知らせる必要は無い)。
+        //  ・屋外でエッジが AP のときは BLE にすると SSID を切り替えずに全台と話せる
+        //  ・エッジ側にモードを持たせないので、戻せなくなって現地へ行く経路は無い
+        gearSwitchItem(box, "エッジ端末とBLEで通信する", edgeUseBle()) { on -> setEdgeUseBle(on) }
         gearBand(box, "ログ")
         // 撮影中/開始要求中はグレー表示で不可(コピー処理が撮影と競合しないように)。
         gearItem(box, "ログ取得", enabled = !isCaptureBusy()) { retrieveLogs() }
@@ -2962,7 +3002,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .setPositiveButton("継続") { d, _ ->
                 d.dismiss(); nocamDialogs.remove(id)
                 // 即再探索(取得フェーズの60秒待ちを前倒し)。ネットワークI/Oは別スレッド。
-                Thread { if (e == null) HgeNative.nativePokeAcquire(id) else HgeNative.nativeEdgeResearch(e.ip, e.port, id) }.start()
+                Thread { if (e == null) HgeNative.nativePokeAcquire(id) else HgeNative.nativeEdgeResearch(e.addr(), e.port, id) }.start()
                 // 猶予後もまだ未検出なら再度ポップアップ(継続の間は nocamDialogShown を維持して多重表示を防ぐ)。
                 handler.postDelayed({
                     if (disconnectedPlans.contains(id) && !stoppingPlans.contains(id)) { nocamDialogShown.remove(id); showNoCameraDialog(id) }
@@ -2996,7 +3036,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             runOnUiThread { updateEdgeIp(name, e.ip, e.port) }
             // #4: 停止は撮影を止めるだけ。エッジからは削除せず、計画のエッジ選択も勝手に変えない。
             //  → エッジは計画を保有し続ける=ロック維持。編集したいときは「エッジ端末から削除」(#2)で明示的に外す。
-            val r = HgeNative.nativeEdgeStop(e.ip, e.port, id)
+            val r = HgeNative.nativeEdgeStop(e.addr(), e.port, id)
             if (r != 0) { runOnUiThread { onEdgeStopFailed(id, "停止をエッジ端末へ送れませんでした (code=${r})。") } }
         }
     }
@@ -3036,8 +3076,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             }
             runOnUiThread { updateEdgeIp(name, e.ip, e.port) }
             runCatching {
-                HgeNative.nativeEdgeStop(e.ip, e.port, id)          // 走っていなければ無害
-                HgeNative.nativeEdgeDeletePlan(e.ip, e.port, id)    // エッジから削除
+                HgeNative.nativeEdgeStop(e.addr(), e.port, id)          // 走っていなければ無害
+                HgeNative.nativeEdgeDeletePlan(e.addr(), e.port, id)    // エッジから削除
             }
         }.start()
         // 即時ロック解除(保有台帳から外す)+過渡集合の掃除。削除失敗なら次スイープで再出現し自己修復。
@@ -3830,21 +3870,21 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 取得しただけで消すと、保存に失敗したぶんが永久に失われる。削除まで届かなかったものは
     // 次のスイープでまた拾う(同名で上書きするだけなので重複しない)。
     private fun collectEdgeReports(edge: Edge) {
-        val arr = try { JSONArray(HgeNative.nativeEdgeReportList(edge.ip, edge.port)) } catch (_: Exception) { JSONArray() }
+        val arr = try { JSONArray(HgeNative.nativeEdgeReportList(edge.addr(), edge.port)) } catch (_: Exception) { JSONArray() }
         val dir = java.io.File(getExternalFilesDir(null), "log")
         if (!dir.exists() && !dir.mkdirs()) return
         var got = 0
         for (i in 0 until arr.length()) {
             val name = arr.optJSONObject(i)?.optString("name").orEmpty()
             if (!name.startsWith("report_") || !name.endsWith(".json")) continue
-            val body = try { HgeNative.nativeEdgeReportRead(edge.ip, edge.port, name) } catch (_: Exception) { "" }
+            val body = try { HgeNative.nativeEdgeReportRead(edge.addr(), edge.port, name) } catch (_: Exception) { "" }
             if (body.isEmpty()) continue
             // 途中で切れたものを保存して消させないため、中身を検査してから書く。
             val o = try { JSONObject(body) } catch (_: Exception) { null } ?: continue
             if (!o.has("capture")) continue
             o.put("edge", edge.name)   // どの端末で撮ったかを一覧と内容に出せるようにする
             try { java.io.File(dir, name).writeText(o.toString()) } catch (_: Exception) { continue }
-            try { HgeNative.nativeEdgeReportDelete(edge.ip, edge.port, name) } catch (_: Exception) {}
+            try { HgeNative.nativeEdgeReportDelete(edge.addr(), edge.port, name) } catch (_: Exception) {}
             got++
         }
         if (got > 0) runOnUiThread {
@@ -4964,7 +5004,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
         })
         box.addView(Button(ctx).apply {
             text = "設定を送信"
-            setOnClickListener { sendEdgeProvision() }
+            setOnClickListener {
+                // 撮影中は AP/STA を切り替えさせない。切り替えるとエッジとカメラの回線が切れて
+                // 撮影が壊れる(2026-08-14 指示)。エッジ側でも同じ判定で断るが、ここで止めれば
+                // 理由をユーザーに見せられる。
+                if (isCaptureBusy()) {
+                    Toast.makeText(ctx, "撮影中はエッジ端末のネットワーク設定を変更できません。撮影を止めてから行ってください",
+                                   Toast.LENGTH_LONG).show()
+                } else {
+                    sendEdgeProvision()
+                }
+            }
         })
 
         // 新規は「登録だけ」もできる(エッジが手元に無くても計画で選べるようにするため)。
@@ -5313,9 +5363,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
             if (active.isEmpty()) { return }   // アクティブなエッジ計画が無ければ停止(次の start/restore で再開)
             for (pid in active) {
                 val e = planEdge(pid) ?: continue
-                if (e.ip.isEmpty()) continue   // IP未解決(名称のみ)はスキップ
+                if (!e.reachable()) continue   // 話しかけられない(Wi-Fi:IP未解決 / BLE:名前なし)はスキップ
                 Thread {
-                    val pj = HgeNative.nativeEdgeProgress(e.ip, e.port, pid)   // 計画別: この計画idの状態だけを取る(1エッジ複数カメラの誤検出防止)
+                    val pj = HgeNative.nativeEdgeProgress(e.addr(), e.port, pid)   // 計画別: この計画idの状態だけを取る(1エッジ複数カメラの誤検出防止)
                     runOnUiThread { reconcileEdgePlan(pid, pj) }
                 }.start()
             }
@@ -5445,8 +5495,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     val miss = (edgeMiss[ed.name] ?: 0) + 1
                     edgeMiss[ed.name] = miss
                     if (miss < 2) continue
-                    val alive = ed.ip.isNotEmpty() &&
-                        (try { HgeNative.nativeEdgeProgress(ed.ip, ed.port, "") } catch (_: Exception) { "" }).isNotEmpty()
+                    val alive = ed.reachable() &&
+                        (try { HgeNative.nativeEdgeProgress(ed.addr(), ed.port, "") } catch (_: Exception) { "" }).isNotEmpty()
                     if (alive) tcpOnline.add(ed.name) else offline.add(ed.name)
                 }
                 runOnUiThread {
@@ -5551,7 +5601,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 val now = Calendar.getInstance()
                 val s = fmtIso.format(now.time)
                 val off = TimeZone.getDefault().getOffset(now.timeInMillis) / 60000
-                Thread { try { HgeNative.nativeEdgeSyncTime(e.ip, e.port, s, off) } catch (_: Exception) {} }.start()
+                Thread { try { HgeNative.nativeEdgeSyncTime(e.addr(), e.port, s, off) } catch (_: Exception) {} }.start()
             }
             handler.postDelayed(this, 30000)   // 30秒ごと
         }
@@ -5616,7 +5666,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             // 【2026-08-06 廃止】開始前のカメラIP通知はやめた(理由は pushPresenceToActiveEdges の跡地を参照)。
             //  エッジは自分でカメラを見つけるので、スマホが見ているIPを渡す必要がない。
             //  探索に1秒余分にかかっても、間違ったネットワークのIPを渡すより良い。
-            val r = HgeNative.nativeEdgeStart(e.ip, e.port, s, off, nameBmp, planId, planJson)
+            val r = HgeNative.nativeEdgeStart(e.addr(), e.port, s, off, nameBmp, planId, planJson)
             // 開始が失敗コードを返しても、エッジ側では実際に走っている場合がある:
             //  ・既に同じ計画がエッジで走行中 → C_ACTION が INVALID_STATE で NAK(-4)
             //  ・2台順次開始のETP競合や ACK 取りこぼしで NAK/タイムアウト
@@ -5624,7 +5674,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             // なのにスマホは開始前)。失敗時はこの計画の実状態を問い合わせ、走っていれば開始成功として扱う。
             // ネットワークI/Oはこのスレッド上で行う(UIを固めない)。
             val running = if (r == 0) true else {
-                val pj = try { HgeNative.nativeEdgeProgress(e.ip, e.port, planId) } catch (_: Exception) { "" }
+                val pj = try { HgeNative.nativeEdgeProgress(e.addr(), e.port, planId) } catch (_: Exception) { "" }
                 if (pj.isEmpty()) true   // エッジ無応答=判定不能 → 除去せず edgePoll に委ねる(誤って開始前へ戻さない)
                 else {
                     val st = try { JSONObject(pj).optInt("state", HgeNative.ST_IDLE) } catch (_: Exception) { HgeNative.ST_IDLE }
@@ -5656,6 +5706,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // エッジ計画の停止。停止確定(IDLE)まで抑止しつつ非同期停止する共通経路(beginStop)へ委譲。
     // これにより NOCAMERA ダイアログの無限再表示や、停止途中のポーリング競合を防ぐ。
     private fun stopOnEdge(e: Edge, planId: String) {
-        beginStop(planId) { HgeNative.nativeEdgeStop(e.ip, e.port, planId) }
+        beginStop(planId) { HgeNative.nativeEdgeStop(e.addr(), e.port, planId) }
     }
 }

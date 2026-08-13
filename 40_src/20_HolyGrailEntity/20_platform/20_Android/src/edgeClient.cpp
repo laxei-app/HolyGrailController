@@ -20,8 +20,9 @@
 #include <android/log.h>
 
 #include "etp.h"
+#include <atomic>
 #include "holyGrailEntity.h"
-#include "commonAndroid.h"
+#include "commonAndroid.h"	// hgeJavaVm(BLE は Kotlin 側にしかないので呼び返す)
 
 // 診断ログ(スマホ→エッジ開始の各段の可視化)。adb logcat -s HGEdgeCli で確認。
 #define ELOG(...) __android_log_print(ANDROID_LOG_INFO, "HGEdgeCli", __VA_ARGS__)
@@ -149,6 +150,66 @@ namespace
 		while (recv(fd, b, sizeof(b), MSG_DONTWAIT) > 0) { /* discard */ }
 	}
 
+	// --- トランスポートの選択(スマホだけが決める。2026-08-14 指示) ---
+	//
+	// 【なぜスマホだけが決めるか】エッジは Wi-Fi と BLE の両方で常に待ち受ける。エッジ側に
+	//  モードを持たせると「Wi-Fi専用にしたら届かなくなって戻せない」状態が作れてしまい、
+	//  屋外では現地へ行くしかなくなる。選ぶのはスマホの状態だけにしておけば、失敗しても
+	//  スマホ側で戻せる。
+	//
+	// 【host の意味】ここから下では host は「相手の指定」であって IP とは限らない。
+	//  Wi-Fi のときは IP、BLE のときは BLE の端末名(HGC-<名前> の <名前>)が入る。
+	//  BLE にはブロードキャストが無く、探索も接続も名前で行うため。どちらを渡すかは
+	//  Kotlin 側が(このフラグと同じ判断で)決める。
+	std::atomic<bool> g_useBle{false};
+
+	// BLE で 1 往復する。Android の BLE API は Kotlin にしかないので、そちらへ呼び返す。
+	//  return: method(ACK/NAK) or 0(失敗)。
+	int bleRequest(const std::string& target, uint16_t cmd, uint16_t method,
+	               const std::string& data, std::string& out)
+	{
+		JavaVM* vm = hgeJavaVm();
+		if (vm == nullptr) { return 0; }
+		JNIEnv* env = nullptr;
+		bool attached = false;
+		if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK)
+		{
+			if (vm->AttachCurrentThread(&env, nullptr) != JNI_OK) { return 0; }
+			attached = true;
+		}
+		int result = 0;
+		jclass cls = env->FindClass("app/laxei/holygrail/HgeNative");
+		jmethodID mid = (cls != nullptr)
+		              ? env->GetStaticMethodID(cls, "bleExchange", "(Ljava/lang/String;[BI)[B")
+		              : nullptr;
+		if (mid != nullptr)
+		{
+			const std::vector<uint8_t> frame = etp::encode(cmd, method, data);
+			jstring    jt = env->NewStringUTF(target.c_str());
+			jbyteArray ja = env->NewByteArray(static_cast<jsize>(frame.size()));
+			env->SetByteArrayRegion(ja, 0, static_cast<jsize>(frame.size()),
+			                        reinterpret_cast<const jbyte*>(frame.data()));
+			// 応答は Kotlin 側が ETP のフレーム長ぶん組み立ててから返す(分割の面倒は向こうで見る)。
+			jobject  jr = env->CallStaticObjectMethod(cls, mid, jt, ja, static_cast<jint>(15000));
+			if (env->ExceptionCheck()) { env->ExceptionClear(); jr = nullptr; }
+			if (jr != nullptr)
+			{
+				jbyteArray rb = static_cast<jbyteArray>(jr);
+				const jsize n = env->GetArrayLength(rb);
+				std::vector<uint8_t> rx(static_cast<size_t>(n));
+				if (n > 0) { env->GetByteArrayRegion(rb, 0, n, reinterpret_cast<jbyte*>(rx.data())); }
+				etp::packet pk;
+				if (etp::decode(rx.data(), rx.size(), pk) > 0) { out = pk.data; result = pk.method; }
+				env->DeleteLocalRef(jr);
+			}
+			env->DeleteLocalRef(ja);
+			env->DeleteLocalRef(jt);
+		}
+		if (cls != nullptr) { env->DeleteLocalRef(cls); }
+		if (attached) { vm->DetachCurrentThread(); }
+		return result;
+	}
+
 	// 永続接続で「操作の最初の1コマンド」を送る。使い回し接続が死んでいたら 1 度だけ張り直して再送。
 	// return: method(ACK/NAK) or 0(失敗)。要 g_connMtx。
 	int firstReq(const std::string& host, int port, uint16_t cmd, uint16_t method,
@@ -170,9 +231,34 @@ namespace
 		if (!m) { closeConn(); }
 		return m;
 	}
+
+	// ETP を 1 往復する唯一の関門。ここでトランスポートを選ぶ。
+	//  以降のコマンド実装はどちらで話しているかを知らない。
+	int edgeXchg(const std::string& host, int port, uint16_t cmd, uint16_t method,
+	             const std::string& data, std::string& out)
+	{
+		if (g_useBle.load()) { return bleRequest(host, cmd, method, data, out); }
+		return firstReq(host, port, cmd, method, data, out);
+	}
 }
 
 extern "C" {
+
+// スマホ⇄エッジの通信路を切り替える(スマホだけが決める。2026-08-14 指示)。
+// true = BLE で話す。以降 host 引数には IP ではなく BLE の端末名を渡すこと。
+// エッジ側は常に両方で待ち受けているので、切り替えにエッジへの通知は要らない。
+JNIEXPORT void JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeEdgeSetBle(JNIEnv*, jobject, jboolean useBle)
+{
+	const bool v = (useBle == JNI_TRUE);
+	std::lock_guard<std::mutex> lk(g_connMtx);
+	if (g_useBle.load() != v)
+	{
+		closeConn();	// 経路を変えるので、掴んでいた TCP は捨てる
+		g_useBle.store(v);
+		ELOG("edge transport -> %s", v ? "BLE" : "WiFi");
+	}
+}
 
 // エッジ端末を検索する。timeoutMs だけ応答を集め、edgeInfo の JSON 配列を返す。
 JNIEXPORT jstring JNICALL
@@ -242,14 +328,21 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring
 	std::string rd;
 	// 1) 時刻同期(操作の先頭。使い回し接続が死んでいれば firstReq が張り直して再送)
 	std::string timeJson = "{\"datetime\":\"" + dtS + "\",\"utcOffsetMin\":" + std::to_string(offMin) + "}";
-	int mTime = firstReq(hostS, port, etp::C_TIME, etp::M_PUT, timeJson, rd);
+	int mTime = edgeXchg(hostS, port, etp::C_TIME, etp::M_PUT, timeJson, rd);
 	ELOG("edgeStart C_TIME method=%d fd=%d", mTime, g_connFd);
 	if (mTime != etp::M_ACK) { closeConn(); return -2; }
-	int fd = g_connFd;	// 以降は確立済みの同一接続で送る
+	int fd = g_connFd;	// 以降は確立済みの同一接続で送る(TCPのとき)
+	// 以降の 2)〜3) はトランスポートを問わず同じ手順で送る。TCP なら確立済みの fd を使い回し、
+	// BLE なら Kotlin 経由で 1 往復する。撮影開始の手順自体は変えていない。
+	auto step = [&](uint16_t cmd, uint16_t method, const std::string& body, std::string& o) -> int
+	{
+		if (g_useBle.load()) { return bleRequest(hostS, cmd, method, body, o); }
+		return tcpRequest(fd, cmd, method, body, o);
+	};
 	// C_CAPTURE_PLAN(約5.5KB)のインポートはエッジ側でSD書込み+スケジュール構築に~5秒かかり、
 	// さらに他セッションのカメラ確立と重なると遅れる。既定の受信5秒では2台目の順次開始が
 	// ちょうどタイムアウトして開始不発になるため、この操作の間だけ受信タイムアウトを延ばす。
-	setRcvTimeout(fd, 15000);
+	if (!g_useBle.load()) { setRcvTimeout(fd, 15000); }
 
 	// 2) 撮影計画。呼び出し側が渡した planJson を使う(選択中の計画に依存しない=項目5)。
 	//    互換: 空で渡された場合のみ従来どおり選択中の計画を取得する。
@@ -268,7 +361,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring
 		{
 			// data = "id\t{plan json}"。エッジは id ごとに計画を蓄積する。
 			std::string body = pidS + "\t" + planStr;
-			int mPlan = tcpRequest(fd, etp::C_CAPTURE_PLAN, etp::M_PUT, body, rd);
+			int mPlan = step(etp::C_CAPTURE_PLAN, etp::M_PUT, body, rd);
 			ELOG("edgeStart C_CAPTURE_PLAN bodyLen=%d method=%d", (int)body.size(), mPlan);
 			if (mPlan != etp::M_ACK)
 			{ result = -3; }
@@ -288,20 +381,23 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring
 			env->ReleaseByteArrayElements(nameBmp, nb, JNI_ABORT);
 			// 番兵: ETP decode の末尾空白/NUL除去からビットマップ末尾の黒画素(0x00)を守る(エッジ側で1バイト除去)。
 			bmpData.push_back('\x01');
-			tcpRequest(fd, etp::C_NAME_BMP, etp::M_PUT, bmpData, rd);
+			step(etp::C_NAME_BMP, etp::M_PUT, bmpData, rd);
 		}
 	}
 
 	// 3) 撮影開始(計画 id を渡してその計画を開始させる)
 	if (result == 0)
 	{
-		int mAct = tcpRequest(fd, etp::C_ACTION, etp::M_POST, pidS, rd);
+		int mAct = step(etp::C_ACTION, etp::M_POST, pidS, rd);
 		ELOG("edgeStart C_ACTION planId=%s method=%d", pidS.c_str(), mAct);
 		if (mAct != etp::M_ACK) { result = -4; }
 	}
 
-	if (result != 0) { closeConn(); }	// 失敗時は接続を破棄し、次回はクリーンに張り直す(残骸混入を防ぐ)
-	else { setRcvTimeout(fd, 5000); }	// 受信タイムアウトを既定(5秒)へ戻す(この接続は使い回される)
+	if (!g_useBle.load())
+	{
+		if (result != 0) { closeConn(); }	// 失敗時は接続を破棄し、次回はクリーンに張り直す(残骸混入を防ぐ)
+		else { setRcvTimeout(fd, 5000); }	// 受信タイムアウトを既定(5秒)へ戻す(この接続は使い回される)
+	}
 	ELOG("edgeStart result=%d", (int)result);
 	return result;
 }
@@ -318,7 +414,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeStop(JNIEnv* env, jobject, jstring 
 
 	std::lock_guard<std::mutex> lk(g_connMtx);
 	std::string rd;
-	int m = firstReq(hostS, port, etp::C_STOP, etp::M_POST, pidS, rd);
+	int m = edgeXchg(hostS, port, etp::C_STOP, etp::M_POST, pidS, rd);
 	return (m == etp::M_ACK) ? 0 : -2;
 }
 
@@ -336,7 +432,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeDeletePlan(JNIEnv* env, jobject, js
 
 	std::lock_guard<std::mutex> lk(g_connMtx);
 	std::string rd;
-	int m = firstReq(hostS, port, etp::C_DELETE_PLAN, etp::M_POST, pidS, rd);
+	int m = edgeXchg(hostS, port, etp::C_DELETE_PLAN, etp::M_POST, pidS, rd);
 	return (m == etp::M_ACK) ? 0 : -2;
 }
 
@@ -355,7 +451,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeSyncTime(JNIEnv* env, jobject, jstr
 	std::lock_guard<std::mutex> lk(g_connMtx);
 	std::string rd;
 	std::string timeJson = "{\"datetime\":\"" + dtS + "\",\"utcOffsetMin\":" + std::to_string(offMin) + "}";
-	int m = firstReq(hostS, port, etp::C_TIME, etp::M_PUT, timeJson, rd);
+	int m = edgeXchg(hostS, port, etp::C_TIME, etp::M_PUT, timeJson, rd);
 	return (m == etp::M_ACK) ? 0 : -2;
 }
 
@@ -372,7 +468,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeResearch(JNIEnv* env, jobject, jstr
 
 	std::lock_guard<std::mutex> lk(g_connMtx);
 	std::string rd;
-	int m = firstReq(hostS, port, etp::C_RESEARCH, etp::M_POST, pidS, rd);
+	int m = edgeXchg(hostS, port, etp::C_RESEARCH, etp::M_POST, pidS, rd);
 	return (m == etp::M_ACK) ? 0 : -2;
 }
 
@@ -389,7 +485,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeCameraInfo(JNIEnv* env, jobject, js
 
 	std::lock_guard<std::mutex> lk(g_connMtx);
 	std::string rd;
-	int m = firstReq(hostS, port, etp::C_CAMERA_INFO, etp::M_PUT, jsonS, rd);
+	int m = edgeXchg(hostS, port, etp::C_CAMERA_INFO, etp::M_PUT, jsonS, rd);
 	return (m == etp::M_ACK) ? 0 : -2;
 }
 
@@ -407,7 +503,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeProgress(JNIEnv* env, jobject, jstr
 
 	std::lock_guard<std::mutex> lk(g_connMtx);
 	std::string rd;
-	int m = firstReq(hostS, port, etp::C_PROGRESS, etp::M_GET, pidS, rd);
+	int m = edgeXchg(hostS, port, etp::C_PROGRESS, etp::M_GET, pidS, rd);
 	return env->NewStringUTF((m == etp::M_ACK) ? rd.c_str() : "");
 }
 
@@ -421,7 +517,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeLogList(JNIEnv* env, jobject, jstri
 
 	std::lock_guard<std::mutex> lk(g_connMtx);
 	std::string rd;
-	int m = firstReq(hostS, port, etp::C_LOG_LIST, etp::M_GET, "", rd);
+	int m = edgeXchg(hostS, port, etp::C_LOG_LIST, etp::M_GET, "", rd);
 	return env->NewStringUTF((m == etp::M_ACK) ? rd.c_str() : "[]");
 }
 
@@ -441,7 +537,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeLogRead(JNIEnv* env, jobject, jstri
 	{
 		std::lock_guard<std::mutex> lk(g_connMtx);
 		std::string data = nameS + "\t" + std::to_string((long)offset);
-		int m = firstReq(hostS, port, etp::C_LOG_READ, etp::M_GET, data, rd);
+		int m = edgeXchg(hostS, port, etp::C_LOG_READ, etp::M_GET, data, rd);
 		if (m != etp::M_ACK) { rd.clear(); }
 	}
 	if (!rd.empty() && rd.back() == '\x01') { rd.pop_back(); }	// 番兵を除去
@@ -465,7 +561,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeReportList(JNIEnv* env, jobject, js
 
 	std::lock_guard<std::mutex> lk(g_connMtx);
 	std::string rd;
-	int m = firstReq(hostS, port, etp::C_REPORT_LIST, etp::M_GET, "", rd);
+	int m = edgeXchg(hostS, port, etp::C_REPORT_LIST, etp::M_GET, "", rd);
 	return env->NewStringUTF((m == etp::M_ACK) ? rd.c_str() : "[]");
 }
 
@@ -482,7 +578,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeReportRead(JNIEnv* env, jobject, js
 
 	std::lock_guard<std::mutex> lk(g_connMtx);
 	std::string rd;
-	int m = firstReq(hostS, port, etp::C_REPORT_READ, etp::M_GET, nameS, rd);
+	int m = edgeXchg(hostS, port, etp::C_REPORT_READ, etp::M_GET, nameS, rd);
 	return env->NewStringUTF((m == etp::M_ACK) ? rd.c_str() : "");
 }
 
@@ -499,7 +595,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeReportDelete(JNIEnv* env, jobject, 
 
 	std::lock_guard<std::mutex> lk(g_connMtx);
 	std::string rd;
-	int m = firstReq(hostS, port, etp::C_REPORT_DELETE, etp::M_DELETE, nameS, rd);
+	int m = edgeXchg(hostS, port, etp::C_REPORT_DELETE, etp::M_DELETE, nameS, rd);
 	return (m == etp::M_ACK) ? 0 : -2;
 }
 
