@@ -50,6 +50,7 @@ public:
 	static apiBase::meterTiming meterTimingHint(const class device& device);
 	// 「いま測光を始められるか」の軽い問い合わせ(busy計測)。1=可 / 0=まだ / -1=計測しない。
 	static void    meterReset(const class device& device);
+	static void    meterArm(const class device& device);	// 1枚目のシャッター直前の構え直し
 	// 直近 alzMetering が解析したライブビューフレームのカメラ側取得時刻[ms]。0=不明。
 	// 撮影開始時にカメラをM(ダイアル無視)に設定し、終了時に元へ戻す(仕様8/CCAPI)。
 	static errCode setupShootingModeManual(const class device& device);

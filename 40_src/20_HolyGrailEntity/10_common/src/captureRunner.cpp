@@ -1367,6 +1367,11 @@ errCode captureRunner::loop(void)
 				interruptibleSleep(1000);
 			}
 			if (!running_) { break; }
+			// 1枚目のシャッターを切る直前に、測光の実装へ「構え直せ」と伝える。
+			//  ここまでの準備(撮影モード変更・設定取得・初期収束の露出適用)でカメラ側に
+			//  溜まった状態を捨てさせ、次の1コマの結果だけを見られるようにする。
+			//  これをしないと CCAPI では1コマ目の測光だけが必ず失敗した(2026-08-13 実測)。
+			cameraController::meterArm(*dev_);
 			if (onState_) { onState_(ST_CAPTURING); }
 			continue;	// 次反復が最初の実コマ([A]起点)
 		}

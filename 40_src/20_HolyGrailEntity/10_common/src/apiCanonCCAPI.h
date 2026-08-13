@@ -177,6 +177,7 @@ public:
 	// 早く測るほど「露出設定→撮影周期まで待つ」の余裕が増える(=周期を守りやすい)。
 	meterTiming meterTimingHint(void) const override { return meterTiming{ true, 0 }; }
 	void    meterReset(void) override;
+	void    meterArm(void) override;		// 1枚目の直前に溜まった通知を捨てる
 
 protected:
 	// --- 測光の内部状態(セッション単位。meterReset で捨てる) ---

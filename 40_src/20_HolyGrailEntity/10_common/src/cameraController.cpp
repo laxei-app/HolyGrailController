@@ -208,6 +208,11 @@ void cameraController::meterReset(const class device& device)
 	if (device.apiBase != nullptr) { device.apiBase->meterReset(); }
 }
 
+void cameraController::meterArm(const class device& device)
+{
+	if (device.apiBase != nullptr) { device.apiBase->meterArm(); }
+}
+
 errCode cameraController::setupShootingModeManual(const class device& device)
 {
 	if (device.apiBase == nullptr) { return ERR_HGC_READY; }
