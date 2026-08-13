@@ -5,6 +5,8 @@
 //  PoP は QR(視覚)経由でのみ渡す(BLEには載せない)=所有証明。鍵不一致なら GCM 認証で復号失敗。
 //  BLE は NimBLE(省RAM)。Bluedroid だと WiFi 併用で DRAM 枯渇しクラッシュするため。
 #include "edgeProv.h"
+#include "etpBle.h"		// ETP を BLE でも受ける経路(同じ NimBLE サーバへ相乗り)
+#include "holyGrailEntity.h"	// 撮影中かどうかの判定(hge_getState)
 #include <Arduino.h>
 #include <NimBLEDevice.h>
 #include <mbedtls/gcm.h>
@@ -54,11 +56,32 @@ namespace
 			g_credReq  = true;
 		}
 	};
+	// サーバのコールバックは NimBLE に 1 つしか登録できない。プロビジョニングと ETP の
+	// 両方がこのサーバを使うので、ここで受けて etpBle へ中継する。
 	class SrvCb : public NimBLEServerCallbacks
 	{
-		void onConnect(NimBLEServer*, NimBLEConnInfo&) override    { Serial.println("[PROV] BLE client connected"); }
-		void onDisconnect(NimBLEServer*, NimBLEConnInfo&, int) override { Serial.println("[PROV] BLE client disconnected"); NimBLEDevice::startAdvertising(); }
+		void onConnect(NimBLEServer*, NimBLEConnInfo&) override
+		{
+			Serial.println("[PROV] BLE client connected");
+			etpBle::onConnected();
+		}
+		void onDisconnect(NimBLEServer*, NimBLEConnInfo&, int) override
+		{
+			Serial.println("[PROV] BLE client disconnected");
+			etpBle::onDisconnected();
+			NimBLEDevice::startAdvertising();
+		}
+		void onMTUChange(uint16_t mtu, NimBLEConnInfo&) override { etpBle::onMtu(mtu); }
 	};
+
+	// いま撮影の最中か(武装〜撮影〜停止処理まで含む)。
+	// 撮影中に Wi-Fi モード(AP/STA)を切り替えるとカメラとの回線が切れて撮影が壊れるので、
+	// その間は設定の適用を断る(2026-08-14 指示)。スマホ側でも同じ判定でブロックする。
+	bool capturingNow(void)
+	{
+		const int st = hge_getState();
+		return (st != HGE_ST_IDLE) && (st != HGE_ST_ERROR);
+	}
 
 	// AES-256-GCM 復号。鍵=SHA256(PoP)。in=[IV(12)|CT|TAG(16)]。成功で out に平文。
 	bool decryptCreds(const std::string& pop, const std::string& in, std::string& out)
@@ -117,6 +140,7 @@ namespace edgeProv
 		setStatus("idle");
 
 		svc->start();
+		etpBle::attach(srv);	// ETP 用サービスを同じサーバへ追加する(BLE は常に使える)
 		NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
 		adv->addServiceUUID(UUID_SVC);
 		adv->enableScanResponse(true);
@@ -153,8 +177,19 @@ namespace edgeProv
 				std::string mode = pick(plain, "mode");	// "sta"(既定) / "ap"。スマホからのモード切替。
 				Serial.printf("[PROV] creds decrypted: name=%s ssid=%s passLen=%u mode=%s\n",
 				              name.c_str(), ssid.c_str(), (unsigned)pass.size(), mode.c_str());
-				setStatus("ok");
-				edgeProvApply(name.c_str(), ssid.c_str(), pass.c_str(), mode.c_str());
+				// 撮影中はネットワーク設定を適用しない。AP/STA を切り替えるとカメラとの回線が
+				// 切れて撮影が壊れるため(2026-08-14 指示)。スマホ側でもブロックするが、
+				// エッジ単体でも守れるようにここでも見る。
+				if (capturingNow())
+				{
+					Serial.println("[PROV] rejected: capturing");
+					setStatus("busy");
+				}
+				else
+				{
+					setStatus("ok");
+					edgeProvApply(name.c_str(), ssid.c_str(), pass.c_str(), mode.c_str());
+				}
 			}
 			else
 			{

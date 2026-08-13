@@ -163,14 +163,23 @@ namespace
 		return j.dump();
 	}
 
-	// 1 つの TCP 要求を処理して応答を返す。
-	void handleTcp(const etp::packet& pk)
+	// 1 つの要求を処理して応答フレームを組み立てて返す。
+	//
+	// 【トランスポートに依存しない(2026-08-14)】従来は最後に g_client.write() まで行っていたので
+	//  TCP 専用だった。BLE からも同じ処理を通すため、応答は「返す」だけにして、どこへ送るかは
+	//  呼んだ側(pollTcp / etpBle)に任せる。cmd の処理内容は一切変えていない。
+	std::vector<uint8_t> buildReply(const etp::packet& pk)
 	{
 		DBGLN(col::YEL, "etpEdge: rx cmd=%u m=%u len=%u", (unsigned)pk.cmd, (unsigned)pk.method, (unsigned)pk.data.size());
 		uint16_t rm = etp::M_ACK;
 		std::string rd;
 		switch (pk.cmd)
 		{
+		case etp::C_SEARCH:
+			// 検索応答。TCP では UDP 側(pollUdp)が受けるのでここへは来ないが、BLE には
+			// ブロードキャストが無いので、スマホは接続してから C_SEARCH で edgeInfo を取る。
+			rd = edgeInfoJson();
+			break;
 		case etp::C_TIME:
 			if (!applyTime(pk.data)) { rm = etp::M_NAK; }
 			break;
@@ -294,8 +303,7 @@ namespace
 			rm = etp::M_NAK;
 			break;
 		}
-		std::vector<uint8_t> out = etp::encode(pk.cmd, rm, rd);
-		g_client.write(out.data(), out.size());
+		return etp::encode(pk.cmd, rm, rd);
 	}
 
 	// UDP 検索のポーリング
@@ -359,7 +367,12 @@ namespace
 		{
 			etp::packet pk;
 			int c = etp::decode(g_rx.data() + pos, g_rx.size() - pos, pk);
-			if (c > 0)      { handleTcp(pk); pos += static_cast<size_t>(c); }
+			if (c > 0)
+			{
+				std::vector<uint8_t> out = buildReply(pk);
+				g_client.write(out.data(), out.size());
+				pos += static_cast<size_t>(c);
+			}
 			else if (c == 0){ break; }		// データ不足
 			else            { DBGLN(col::RED, "etpEdge: decode resync (bad byte, rxLen=%u)", (unsigned)(g_rx.size() - pos)); pos += 1; }	// 不正: 1バイト進めて再同期
 		}
@@ -378,6 +391,18 @@ namespace
 
 namespace etpEdge
 {
+	// BLE 経路から呼ぶ。1フレームを処理して応答フレームを返す(トランスポート非依存)。
+	std::vector<uint8_t> handleFrame(const etp::packet& pk)
+	{
+		return buildReply(pk);
+	}
+
+	// 検索応答と同じ edgeInfo。BLE でも同じものを返すので公開する。
+	std::string infoJson(void)
+	{
+		return edgeInfoJson();
+	}
+
 	void setup(const std::string& edgeName)
 	{
 		if (!edgeName.empty()) { g_name = edgeName; }

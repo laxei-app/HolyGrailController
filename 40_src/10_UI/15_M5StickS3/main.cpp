@@ -31,6 +31,7 @@
 #include "WiFi_Connect.h"
 #include "etpEdge.h"
 #include "edgeProv.h"
+#include "etpBle.h"	// ETP の BLE 経路(受信フレームの処理と応答送信)
 #include "edgeIcons.h"	// CoreS3 と共有する状態アイコン(ICON_START/CAPTURING/CAMERA_NG)
 #include "dataManager.h"
 #include "batteryLevel.h"	// バッテリ残量レベル(実測放電カーブから決めたしきい値)
@@ -1052,6 +1053,7 @@ void loop(void)
 	}
 
 	edgeProv::loop();
+	etpBle::loop();		// BLE で届いた ETP フレームを処理する(TCP と同じハンドラ)
 	handleButtons(now);
 
 	// 撮影中アイコンの点滅。

@@ -27,6 +27,7 @@
 #include "WiFi_Connect.h"
 #include "etpEdge.h"
 #include "edgeProv.h"
+#include "etpBle.h"	// ETP の BLE 経路(受信フレームの処理と応答送信)
 #include "dataManager.h"
 #include "batteryLevel.h"	// バッテリ残量レベル(実測放電カーブから決めたしきい値)
 #include "batteryIcon.h"	// 残量アイコンの描画
@@ -985,6 +986,7 @@ void loop(void)
 
 	// BLE 設定プロビジョニングの保留要求処理(仕様8.2.2)
 	edgeProv::loop();
+	etpBle::loop();		// BLE で届いた ETP フレームを処理する(TCP と同じハンドラ)
 
 	// タッチ操作(スクロール/タップ)
 	handleTouch();
