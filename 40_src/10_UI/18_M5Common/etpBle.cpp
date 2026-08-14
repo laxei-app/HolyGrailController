@@ -25,6 +25,8 @@ namespace
 
 	// 1回の notify で送れる量。MTU-3(ATTヘッダ)。接続時に更新する。
 	size_t                g_chunk = 20;
+	// 分割 notify の間隔。詰めて出すと相手が取りこぼす(sendReply のコメント参照)。
+	constexpr uint32_t    CHUNK_GAP_MS = 8;
 
 	class RxCb : public NimBLECharacteristicCallbacks
 	{
@@ -53,14 +55,29 @@ namespace
 	{
 		if (g_tx == nullptr || !g_connected) { return; }
 		size_t off = 0;
+		int    chunks = 0, retries = 0, dropped = 0;
+		const uint32_t t0 = millis();
 		while (off < out.size())
 		{
 			const size_t n = ((out.size() - off) < g_chunk) ? (out.size() - off) : g_chunk;
 			g_tx->setValue(out.data() + off, n);
 			// notify はキューが詰まると失敗する。少し待って詰め直す(落とすと応答が壊れるため)。
-			for (int i = 0; i < 20 && !g_tx->notify(); ++i) { delay(5); }
+			int i = 0;
+			for (; i < 20 && !g_tx->notify(); ++i) { delay(5); }
+			retries += i;
+			if (i >= 20) { ++dropped; }		// 20回粘っても入らなかった = このぶんは落ちた
+			++chunks;
 			off += n;
+			// 【間を空ける理由(2026-08-14 実測)】notify() は true を返しても、詰めて出すと
+			//  相手に1バイトも届かないことがある(1354B/6分割の応答がスマホ側 got=0B、
+			//  エッジ側は retry=0 drop=0 で「送れた」と見えていた)。ホストのキューには
+			//  入っても接続イベントに載りきらず捨てられているとみられる。
+			//  8ms 空けるだけで全量届くようになった。1KB あたり 40ms 程度の追加で済む。
+			if (off < out.size()) { delay(CHUNK_GAP_MS); }
 		}
+		// 大きい応答(レポート本文など)が届かない件の切り分け用。落ちた数がゼロでないなら送信側の負け。
+		DBGLN(col::CYN, "etpBle: tx %u B in %d chunks (%ums retry=%d drop=%d)",
+		      (unsigned)out.size(), chunks, (unsigned)(millis() - t0), retries, dropped);
 	}
 }
 
