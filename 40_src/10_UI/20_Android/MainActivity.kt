@@ -1411,6 +1411,60 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.addView(linkText("＋ 新規カメラ追加") { openCameraAdd() })
     }
 
+    // マスタに無いカメラを手入力で追加する(レンタル機など)。型番だけ聞き、残りは詳細画面で埋めてもらう。
+    private fun promptAddCustomCamera() {
+        val et = EditText(this)
+        et.hint = "例: EOS R50V"
+        et.setSingleLine()
+        val wrap = LinearLayout(this)
+        wrap.orientation = LinearLayout.VERTICAL
+        wrap.setPadding(dp(20), dp(8), dp(20), 0)
+        wrap.addView(et)
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("一覧に無いカメラを追加")
+            .setMessage("カメラの型番を入れてください。センサーサイズとISO/シャッター速度の範囲は仮の値が入るので、追加したあと詳細画面で実機に合わせてください。")
+            .setView(wrap)
+            .setPositiveButton("追加") { _, _ ->
+                val nm = et.text.toString().trim()
+                if (nm.isEmpty()) { Toast.makeText(this, "型番を入れてください", Toast.LENGTH_SHORT).show() }
+                else { addCustomCamera(nm) }
+            }
+            .setNegativeButton("キャンセル", null)
+            .show()
+    }
+
+    // 手入力のカメラを1台作る。nativeSetOwnedCameraDetail は「その名前が無ければ新規作成」なので、
+    //  専用のネイティブ関数は要らない。ただし**名称は所持カメラ一覧のキー**で、既存と衝突すると
+    //  追加ではなく上書きになってしまうため、ここで一意化する。
+    private fun addCustomCamera(rawName: String) {
+        Thread {
+            val arr = camArray(HgeNative.nativeGetOwnedCameras())
+            val used = (0 until arr.length())
+                .mapNotNull { arr.optJSONObject(it)?.optJSONObject("camera")?.optString("name") }.toSet()
+            var nm = rawName
+            var n = 2
+            while (nm in used) { nm = "$rawName ($n)"; n++ }
+            // model は接続したカメラと自動で紐づけるための照合キー。表示名(name)は後で変えられるので、
+            //  照合が壊れないよう model には入力した型番をそのまま入れる。
+            val o = JSONObject()
+                .put("name", nm)
+                .put("model", rawName)
+                .put("maker", "Canon")        // 現状の対応はCCAPI(Canon)のみ。違うなら詳細画面で直す
+                .put("sensorSize", 0.0)
+                .put("sensorSizeV", 0.0)
+                .put("sensorPixel", 0)
+                // 仮の範囲。空にすると計画側で使えないので入れておく。実機に合わせて詳細画面で直す。
+                .put("isoMin", "100").put("isoMax", "25600")
+                .put("ssMin", "1/4000").put("ssMax", "30")
+            HgeNative.nativeSetOwnedCameraDetail(nm, o.toString())
+            runOnUiThread {
+                selCamera = nm
+                openCameraList()
+                Toast.makeText(this, "「$nm」を追加しました。センサーとISO/SSを確認してください", Toast.LENGTH_LONG).show()
+            }
+        }.start()
+    }
+
     private fun arrMinMax(a: JSONArray?): Pair<String, String> {
         if (a == null || a.length() == 0) return Pair("", "")
         val lo = a.optString(0)
@@ -1608,6 +1662,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun buildCameraAdd() {
         val box = findViewById<LinearLayout>(R.id.cameraadd_container)
         box.removeAllViews()
+        // 機材マスタは出荷時の固定表なので、新しい機種やレンタル機は載っていない。
+        //  一覧に無いカメラを手で足せる入り口をここに置く(型番だけ聞いて、残りは詳細画面で埋めてもらう)。
+        box.addView(linkText("＋ 一覧に無いカメラを追加") { promptAddCustomCamera() })
+        box.addView(thinDivider())
         val arr = camArray(HgeNative.nativeGetMasterCameras())
         for (i in 0 until arr.length()) {
             val cam = arr.optJSONObject(i)?.optJSONObject("camera") ?: continue
