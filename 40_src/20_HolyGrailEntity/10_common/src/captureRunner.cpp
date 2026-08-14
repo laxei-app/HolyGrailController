@@ -4,6 +4,7 @@
 #include "debugOut.h"
 #include "astroSched.h"		// ② 太陽高度(sunHoriz)から ev0 中心bmを算出
 #include "netThread.h"		// 失敗した HTTP のステータス/応答をログへ添えるため
+#include "dataManager.h"		// 初期収束の診断ログ(CONV)を残すため
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -588,6 +589,22 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 		if (predicted <= 0.0 || linT <= 0.0) { break; }
 		const double err = std::log2(predicted / linT);	// +:明るすぎ / -:暗すぎ
 
+		// 【診断 2026-08-14】初期収束が誤った露出を出す件の切り分け(EOS R50 V で1枚目が 3.67段暗かった)。
+		//  各回の「何を乗せて測ったか / 何が見えたか / どこへ動かそうとしたか」を1行ずつ残す。
+		//  hs= はヒストグラムのチェックサム。**前の回と同じ値なら同じライブビューのフレームを
+		//  読んでいる** = 新しい測光露出がまだ映像に反映されていない、が確定する(反応の遅い機種の疑い)。
+		//  ref(場面の明るさ)が回ごとに大きく動くなら、測光そのものが信用できていない。
+		{
+			char cb[160];
+			std::snprintf(cb, sizeof(cb),
+			              "step=%d mss=%s mB=%.2f x=%.4f ref=%.6f cur=%.2f err=%+.2f "
+			              "settle=%dms rdy=%dms try=%d stale=%d hs=%08x",
+			              step, mex.ss.c_str(), expo::brightnessStops(mex, tables_), mr.x, mr.sceneRef,
+			              curB, err, mr.settleMs, mr.rdyMs, mr.tries, mr.staleSkip,
+			              static_cast<unsigned>(mr.histSum));
+			dataManager::logEvent("CONV", cb);
+		}
+
 		if (std::fabs(err) <= kInitConvergeTolStops) { converged = true; break; }	// 収束(1枚目から1/3段以内)
 
 		ctl.applyStops(-err);	// 目標へ直接投影(限界・1/3段テーブルへは applyStops がクランプ)
@@ -596,6 +613,16 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 		// 到達しているので、収束できなかった(時間切れ)とは区別して扱う。
 		if (std::fabs(newB - curB) < 1e-6) { converged = true; break; }
 		// 次の反復で新しい測光により誤差を再確認する(確認が取れたら上で break)。
+	}
+
+	// 【診断 2026-08-14】収束が最終的にどの露出を1枚目に渡したか。上の CONV 各行と突き合わせる。
+	{
+		char cb[128];
+		std::snprintf(cb, sizeof(cb), "done step=%d ng(apply=%d meter=%d) conv=%d -> iso=%s ss=%s fn=%s (%.2f段)",
+		              step, applyNg, meterNg, converged ? 1 : 0,
+		              ctl.current().iso.c_str(), ctl.current().ss.c_str(), ctl.current().fn.c_str(),
+		              expo::brightnessStops(ctl.current(), tables_));
+		dataManager::logEvent("CONV", cb);
 	}
 
 	// 撮影レポート用に結果を残す。「収束できたのか、できないまま撮り始めたのか」が要点。
