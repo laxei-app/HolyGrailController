@@ -210,6 +210,10 @@ protected:
 	void        meterSleep(int ms, const std::function<bool()>& keepGoing) const;
 	// 測光露出をテーブル上で delta 段ずらす(結果の ss は capSec を超えない)。
 	void        shiftMeterSs(hgc::exposure& me, double delta, double capSec) const;
+	// ライブビュー測光の本体。seed が有効ならその露出のまま測る(何も送らない)。
+	//  張り付いたときだけ測光専用の露出へ乗せ替える。詳しくは .cpp の説明を参照。
+	errCode     meterLvAt(const hgc::exposure& seed, meterResult& out,
+	                      const std::function<bool()>& keepGoing);
 	// ライブビューのヒストグラムを1回読む(取れるまで上限まで粘る)。初期収束の下請け。
 	errCode     readLvHistogram(meterResult& out, const std::function<bool()>& keepGoing);
 	// --- 撮影画像フィードバック測光 ---

@@ -1275,7 +1275,22 @@ errCode apiCanonCCAPI::readLvHistogram(meterResult& out, const std::function<boo
 //
 // failStage: 20=出発点の露出が無い / 21=測光露出を適用できない / 22=LVヒストが取れない
 //            23=張り付きを抜けられなかった
+// 初期収束(撮影前)の測光。撮り始めていないので出発点は自分の学習値しか無い。
 errCode apiCanonCCAPI::meterHere(meterResult& out, const std::function<bool()>& keepGoing)
+{
+	return this->meterLvAt(hgc::exposure{}, out, keepGoing);
+}
+
+// ライブビュー測光の本体。seed が有効ならそこから測り始める。
+//
+// 【seed を渡せるようにした理由(2026-08-14)】ライブビューの明るさを場面の明るさへ直すには
+//  「そのとき何段の露出で見ているか」で割り戻す必要があるので、測光は露出を確定させてから行う。
+//  初期収束では撮影露出がまだ無く、自分の学習値(hereExp_)を乗せるしかない。
+//  ところが撮影中も同じ経路を使うと、**撮影露出とは別系統の測光露出を毎コマ乗せ直す**ことになり、
+//  「撮る→ssが変わる→また戻る」が毎コマ起きる。撮影露出そのもので測れるなら乗せ替えは要らない。
+//  そこで撮影中は撮影露出を seed として渡し、ここで何も送らずに測る(送るのは張り付いたときだけ)。
+errCode apiCanonCCAPI::meterLvAt(const hgc::exposure& seed, meterResult& out,
+                                 const std::function<bool()>& keepGoing)
 {
 	out = meterResult{};
 	out.settleMs = 0;
@@ -1283,8 +1298,8 @@ errCode apiCanonCCAPI::meterHere(meterResult& out, const std::function<bool()>& 
 	// 撮影ループ中はライブビューを掴んでいない(離してある)ので、要るときだけ張る。
 	if (!this->liveViewAlive()) { this->startShooting(); }
 
-	// 測光露出の出発点。
-	hgc::exposure me = validExp(hereExp_) ? hereExp_ : camExp_;
+	// 測光露出の出発点。撮影露出(seed)が使えるならそれ、無ければ自分の学習値。
+	hgc::exposure me = validExp(seed) ? seed : (validExp(hereExp_) ? hereExp_ : camExp_);
 	if (!validExp(me)) { out.failStage = 20; return ERR_HGC_RDY_METARING; }
 	if (expo::parseValue(me.ss, expo::expoKind::ss) > kInitMeterMaxSsSec)
 	{
@@ -1296,10 +1311,16 @@ errCode apiCanonCCAPI::meterHere(meterResult& out, const std::function<bool()>& 
 		if (keepGoing && !keepGoing()) { break; }
 
 		// 測光露出をカメラへ乗せる(変わっていない軸は送らない)。
+		//  1つも送らなかったときは「いまカメラに乗っている露出のまま測る」ので、
+		//  ライブビューが追従するのを待つ理由も無い(撮影中の通常時はこの経路になる)。
+		const bool needFn  = (me.fn  != camExp_.fn);
+		const bool needSs  = (me.ss  != camExp_.ss);
+		const bool needIso = (me.iso != camExp_.iso);
+		const bool applied = needFn || needSs || needIso;
 		errCode ae = ERR_HGC_OK, r;
-		if (me.fn  != camExp_.fn)  { r = this->setFNumber(me.fn); if (r != ERR_HGC_OK) { ae = r; } }
-		if (me.ss  != camExp_.ss)  { r = this->setSS(me.ss);      if (r != ERR_HGC_OK) { ae = r; } }
-		if (me.iso != camExp_.iso) { r = this->setIso(me.iso);    if (r != ERR_HGC_OK) { ae = r; } }
+		if (needFn)  { r = this->setFNumber(me.fn); if (r != ERR_HGC_OK) { ae = r; } }
+		if (needSs)  { r = this->setSS(me.ss);      if (r != ERR_HGC_OK) { ae = r; } }
+		if (needIso) { r = this->setIso(me.iso);    if (r != ERR_HGC_OK) { ae = r; } }
 		out.appliedExp = camExp_;	// 実際にカメラへ乗った値(成功した軸だけ更新されている)
 		if (ae != ERR_HGC_OK)
 		{
@@ -1310,8 +1331,11 @@ errCode apiCanonCCAPI::meterHere(meterResult& out, const std::function<bool()>& 
 			meterSleep(kHereApplyRetryMs, keepGoing);
 			continue;
 		}
-		meterSleep(kHereSettleMs, keepGoing);	// LVが新しい露出へ追従するのを待つ
-		out.settleMs += kHereSettleMs;
+		if (applied)
+		{
+			meterSleep(kHereSettleMs, keepGoing);	// LVが新しい露出へ追従するのを待つ
+			out.settleMs += kHereSettleMs;
+		}
 
 		meterResult h;
 		h.tries = out.tries;	// 試行回数は通算で数える
@@ -1689,8 +1713,17 @@ errCode apiCanonCCAPI::meterSceneLvFirst(const hgc::exposure& shotExp, meterResu
 	}
 
 	// ② ライブビューで測る。ここが本線。
+	//    **撮影露出のまま測る**のが基本。ライブビューは積分の上限(kInitMeterMaxSsSec)を
+	//    超える ss を再現できないので、それより長い撮影露出のときだけ測光専用の露出へ
+	//    乗せ替える(乗せ替えると1コマごとに ss が動いて見えるうえ、追従待ちも要る)。
+	hgc::exposure seed;
+	if (validExp(shotExp) &&
+	    expo::parseValue(shotExp.ss, expo::expoKind::ss) <= kInitMeterMaxSsSec)
+	{
+		seed = shotExp;
+	}
 	meterResult lv;
-	const errCode le = this->meterHere(lv, keepGoing);
+	const errCode le = this->meterLvAt(seed, lv, keepGoing);
 	// ライブビューが「見えていない」判定: 測れてはいるが中央値が底に張り付いていて、
 	//  しかも測光ss を伸ばしきっている(=これ以上積分できない)。この状態の値は
 	//  場面の明るさではなく「LVの下限」なので、そのまま使うと露出が追随しなくなる。
