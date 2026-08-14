@@ -196,6 +196,9 @@ int32_t hge_getMasterLensesJson(char* buf, int32_t* inoutLen);
 // 所持機材(ユーザー資産)を JSON 配列で取得(バッファ規約)。
 int32_t hge_getOwnedCamerasJson(char* buf, int32_t* inoutLen);
 int32_t hge_getOwnedLensesJson(char* buf, int32_t* inoutLen);
+// 所持カメラのダイジェスト認証パスワードを平文で取得(バッファ規約)。編集画面の表示用。
+//  JSON には暗号文しか載せないので、UI へ中身を見せるにはこの経路を使う。
+int32_t hge_ownedCameraAuthPassJson(const char* name, char* buf, int32_t* inoutLen);
 // マスタ(名称一致)から所持へ追加して保存する。
 int32_t hge_addOwnedCamera(const char* name);
 int32_t hge_addOwnedLens(const char* name);

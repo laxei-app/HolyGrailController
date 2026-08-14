@@ -1510,6 +1510,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  機種(EOS R10)だけこれを入れ、普段はライブビューで測って足りないときだけサムネイルへ落ちる。
         val cbLv = CheckBox(this); cbLv.text = "ライブビューで測光する"; cbLv.isChecked = cam.optBoolean("meterLv", false)
         camMeterLv = cbLv; box.addView(cbLv)
+        // ダイジェスト認証。カメラ側の設定で有効にすると、CCAPI の全要求が 401 で弾かれる。
+        //  空のままなら認証なしの機体として扱う(要求は 401 を受けてから作るので、事前設定は不要)。
+        box.addView(thinDivider())
+        val ahdr = TextView(this); ahdr.text = "カメラの認証(設定している機体のみ)"; ahdr.textSize = 13f
+        ahdr.setTextColor(Color.GRAY); ahdr.setPadding(0, dp(8), 0, dp(4)); box.addView(ahdr)
+        box.addView(editRow("ユーザーID", "authUser", cam.optString("authUser")))
+        // パスワードは JSON では暗号文なので、平文はネイティブから別途もらう。
+        box.addView(editRowPass("パスワード", "authPass", HgeNative.nativeOwnedCameraAuthPass(sel)))
 
         // 組み合わせるレンズ(先頭=初期値)。並べ替えはハンドルをドラッグ(ss/iso/fnと同じ)。
         box.addView(thinDivider())
@@ -1870,6 +1878,27 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (numeric) et.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
         camFieldsOrLens(key, et)
         row.addView(lab); row.addView(et)
+        return row
+    }
+
+    // ラベル＋伏せ字の入力欄(パスワード)。「表示」で平文に切り替えられる。
+    //  カメラが繋がらないときに打ち間違いを確かめられないと原因が絞れないため、見る手段は残す。
+    private fun editRowPass(label: String, key: String, value: String): View {
+        val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL; row.gravity = Gravity.CENTER_VERTICAL
+        row.setPadding(0, dp(3), 0, dp(3))
+        val lab = TextView(this); lab.text = label; lab.textSize = 14f; lab.width = dp(118)
+        val et = EditText(this); et.setText(value); et.textSize = 14f
+        et.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        et.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        val cb = CheckBox(this); cb.text = "表示"; cb.textSize = 12f
+        cb.setOnCheckedChangeListener { _, on ->
+            val p = et.selectionStart
+            et.inputType = if (on) InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                           else InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            et.setSelection(p.coerceIn(0, et.text.length))
+        }
+        camFieldsOrLens(key, et)
+        row.addView(lab); row.addView(et); row.addView(cb)
         return row
     }
 

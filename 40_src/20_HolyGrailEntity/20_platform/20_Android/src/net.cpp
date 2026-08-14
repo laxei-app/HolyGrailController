@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include "httpAuth.h"		// ダイジェスト認証(401 を受けてから対応する)
 #include <string>
 #include <vector>
 
@@ -295,6 +296,21 @@ namespace net
 			}
 		}
 
+		// 応答ヘッダから1つ取り出す(名前の大小は無視)。無ければ空。
+		std::string headerValue(const std::string& header, const std::string& name)
+		{
+			std::string lo = header, ln = name;
+			for (auto& c : lo) { c = static_cast<char>(::tolower(c)); }
+			for (auto& c : ln) { c = static_cast<char>(::tolower(c)); }
+			size_t p = lo.find("\r\n" + ln + ":");
+			if (p == std::string::npos) { return std::string(); }
+			p += 2 + ln.size() + 1;
+			const size_t e = header.find("\r\n", p);
+			std::string v = header.substr(p, (e == std::string::npos) ? std::string::npos : e - p);
+			while (!v.empty() && (v.front() == ' ' || v.front() == '	')) { v.erase(v.begin()); }
+			return v;
+		}
+
 		int httpRequest(const std::string& method, const std::string& url,
 		                const std::string& body, bool hasBody, std::string& response)
 		{
@@ -304,67 +320,84 @@ namespace net
 			int port = 80;
 			if (!parseUrl(url, host, port, path)) { return 0; }
 
-			std::string req = method + " " + path + " HTTP/1.1\r\n";
-			req += "Host: " + host + ":" + std::to_string(port) + "\r\n";
-			req += "Connection: keep-alive\r\n";
-			if (hasBody)
-			{
-				req += "Content-Type: application/json\r\n";
-				req += "Content-Length: " + std::to_string(body.size()) + "\r\n";
-			}
-			req += "\r\n";
-			if (hasBody) { req += body; }
+			const std::string hostKey = host + ":" + std::to_string(port);
 
-			// 使い回している接続を相手が黙って閉じていることがある。その場合は送信か受信が
-			// 空振りするので、張り直して1度だけ再送する(張りたてで失敗したなら諦める)。
-			std::string raw;
-			int slot = -1;			// 借りているスロット(応答を読み終えるまで手放さない)
-			for (int attempt = 0; attempt < 2; ++attempt)
-			{
-				bool fresh = false;
-				int fd = -1;
-				slot = keepAcquire(host, port, fd, fresh);
-				if (slot < 0)
-				{
-					__android_log_print(ANDROID_LOG_WARN, HGE_LOG_TAG,
-					                    "net: connect failed host=%s port=%d errno=%d(%s)",
-					                    host.c_str(), port, errno, std::strerror(errno));
-					return 0;
-				}
-				raw.clear();
-				const bool sent = sendAll(fd, req.c_str(), req.size());
-				if (sent && recvResponse(fd, raw) && !raw.empty()) { break; }
-				keepRelease(slot, true);	// 死んでいた接続を捨てる
-				slot = -1;
-				if (fresh) { return 0; }	// 張りたてで駄目ならこちらの問題ではない
-			}
-			if (raw.empty()) { keepRelease(slot, true); return 0; }
-
-			// ヘッダと本体を分離
-			size_t he = raw.find("\r\n\r\n");
-			std::string header = (he == std::string::npos) ? raw : raw.substr(0, he);
-			std::string content = (he == std::string::npos) ? std::string() : raw.substr(he + 4);
-
-			// ステータスコード
+			// 401 を受けたら認証情報を覚えて1度だけ投げ直す(ダイジェスト認証。RFC 2617)。
+			//  「このカメラは認証が要る」と事前に知っておく必要は無い。要求はサーバから来る。
+			std::string header, content, lower;
 			int code = 0;
-			size_t sp = header.find(' ');
-			if (sp != std::string::npos) { code = std::atoi(header.substr(sp + 1, 3).c_str()); }
-
-			// chunked 判定(ヘッダを小文字化して検査)
-			std::string lower = header;
-			for (auto& c : lower) { c = static_cast<char>(::tolower(c)); }
-			if (lower.find("transfer-encoding: chunked") != std::string::npos)
+			for (int authTry = 0; authTry < 2; ++authTry)
 			{
-				content = dechunk(content);
+				std::string req = method + " " + path + " HTTP/1.1\r\n";
+				req += "Host: " + hostKey + "\r\n";
+				req += "Connection: keep-alive\r\n";
+				// 一度 401 を受けた相手には最初から付ける(毎回2往復にしない)。
+				const std::string auth = httpAuth::authorization(hostKey, method, path);
+				if (!auth.empty()) { req += "Authorization: " + auth + "\r\n"; }
+				if (hasBody)
+				{
+					req += "Content-Type: application/json\r\n";
+					req += "Content-Length: " + std::to_string(body.size()) + "\r\n";
+				}
+				req += "\r\n";
+				if (hasBody) { req += body; }
+
+				// 使い回している接続を相手が黙って閉じていることがある。その場合は送信か受信が
+				// 空振りするので、張り直して1度だけ再送する(張りたてで失敗したなら諦める)。
+				std::string raw;
+				int slot = -1;			// 借りているスロット(応答を読み終えるまで手放さない)
+				for (int attempt = 0; attempt < 2; ++attempt)
+				{
+					bool fresh = false;
+					int fd = -1;
+					slot = keepAcquire(host, port, fd, fresh);
+					if (slot < 0)
+					{
+						__android_log_print(ANDROID_LOG_WARN, HGE_LOG_TAG,
+						                    "net: connect failed host=%s port=%d errno=%d(%s)",
+						                    host.c_str(), port, errno, std::strerror(errno));
+						return 0;
+					}
+					raw.clear();
+					const bool sent = sendAll(fd, req.c_str(), req.size());
+					if (sent && recvResponse(fd, raw) && !raw.empty()) { break; }
+					keepRelease(slot, true);	// 死んでいた接続を捨てる
+					slot = -1;
+					if (fresh) { return 0; }	// 張りたてで駄目ならこちらの問題ではない
+				}
+				if (raw.empty()) { keepRelease(slot, true); return 0; }
+
+				// ヘッダと本体を分離
+				const size_t he = raw.find("\r\n\r\n");
+				header  = (he == std::string::npos) ? raw : raw.substr(0, he);
+				content = (he == std::string::npos) ? std::string() : raw.substr(he + 4);
+
+				// ステータスコード
+				code = 0;
+				const size_t sp = header.find(' ');
+				if (sp != std::string::npos) { code = std::atoi(header.substr(sp + 1, 3).c_str()); }
+
+				// chunked 判定(ヘッダを小文字化して検査)
+				lower = header;
+				for (auto& c : lower) { c = static_cast<char>(::tolower(c)); }
+				if (lower.find("transfer-encoding: chunked") != std::string::npos)
+				{
+					content = dechunk(content);
+				}
+
+				// この接続を次も使ってよいか。使ってはいけないのは次の2つ:
+				//  ・相手が Connection: close と言ってきた(相手はもう閉じる)
+				//  ・本文の長さが分からず EOF まで読んだ(境界が取れず、次の応答と混ざる)
+				const bool wantClose = (lower.find("connection: close") != std::string::npos);
+				const bool noLength  = (lower.find("content-length:") == std::string::npos) &&
+				                       (lower.find("transfer-encoding: chunked") == std::string::npos);
+				keepRelease(slot, wantClose || noLength);	// 使い回せないときだけ閉じて返す
+
+				if (code != 401 || authTry > 0) { break; }
+				// 401。チャレンジを覚えて、同じ要求を認証つきで投げ直す。
+				const std::string wa = headerValue(header, "WWW-Authenticate");
+				if (wa.empty() || !httpAuth::learn(hostKey, wa)) { break; }	// 資格情報が無い/尽きた
 			}
-			// この接続を次も使ってよいか。使ってはいけないのは次の2つ:
-			//  ・相手が Connection: close と言ってきた(相手はもう閉じる)
-			//  ・本文の長さが分からず EOF まで読んだ(境界が取れず、次の応答と混ざる)
-			// どちらも残すと次のリクエストが壊れるので、ここで捨てる。
-			const bool wantClose = (lower.find("connection: close") != std::string::npos);
-			const bool noLength  = (lower.find("content-length:") == std::string::npos) &&
-			                       (lower.find("transfer-encoding: chunked") == std::string::npos);
-			keepRelease(slot, wantClose || noLength);	// 使い回せないときだけ閉じて返す
 
 			response = content;
 			g_lastHttpStatus = code;

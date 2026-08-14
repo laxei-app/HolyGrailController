@@ -1,5 +1,7 @@
 ﻿#include "common.h"
 #include "dataManager.h"
+#include "secret.h"
+#include "httpAuth.h"
 #include "osFile.h"
 #include "csJson.h"
 #include "device.h"
@@ -513,6 +515,18 @@ std::string dataManager::masterLensesJson(void)
 	return csjson::ownedLensesToJson(g_masterLenses);
 }
 
+void dataManager::preloadOwned(void)
+{
+	ensureOwned();
+}
+
+std::string dataManager::ownedCameraAuthPass(const std::string& name)
+{
+	ensureOwned();
+	for (const auto& oc : g_ownedCameras) { if (oc.cam.name == name) { return oc.cam.authPass; } }
+	return std::string();
+}
+
 std::string dataManager::ownedCamerasJson(void)
 {
 	ensureOwned();
@@ -745,6 +759,10 @@ bool dataManager::setOwnedCameraDetailJson(const std::string& origName, const st
 	cam.sensorSizeV = j.value("sensorSizeV", cam.sensorSizeV);
 	cam.sensorPixel = j.value("sensorPixel", cam.sensorPixel);
 	cam.meterLv     = j.value("meterLv", cam.meterLv);	// ライブビューで測光する(機体ごとの上書き)
+	cam.authUser    = j.value("authUser", cam.authUser);	// ダイジェスト認証(空=認証なしの機体)
+	// UI からは平文で届く。空文字なら「変更なし」ではなく「消した」なので、キーの有無で見る。
+	if (j.contains("authPass")) { cam.authPass = secret::decrypt(j.value("authPass", std::string())); }
+	httpAuth::addCandidate(cam.authUser, cam.authPass);	// 編集直後から 401 に対応できるように
 
 	// ISO/SS: min/max が現状と変わったときだけ標準1/3段で再生成(マスタ/カメラ取得値は維持)。
 	std::string isoMin = j.value("isoMin", std::string());

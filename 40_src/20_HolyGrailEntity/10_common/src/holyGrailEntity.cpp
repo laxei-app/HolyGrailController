@@ -855,12 +855,19 @@ namespace
 	//  **スマホが計画へ載せて送った true を false へ塗り潰す**。実際 R10 がライブビュー主体に
 	//  ならず毎コマサムネイルを取りに行き、178コマで Device busy に陥った(R10 の取得回数上限)。
 	//  設定の出所はスマホだけ。受け取った側は計画を信用する。
-	void applyOwnedMeterLv(hgc::camera& cam)
+	//  測光方式と同じ理由で、ダイジェスト認証のユーザーID/パスワードもここで揃える。
+	//  どちらも「その機体の性質」で、計画ごとに変える設定ではない。
+	void applyOwnedCameraSettings(hgc::camera& cam)
 	{
 		if (!hge::role::ownedCamerasAuthoritative()) { return; }
 		hgc::camera oc;
 		const std::string key = cam.name.empty() ? cam.model : cam.name;
-		if (!key.empty() && dataManager::findOwnedCamera(key, oc)) { cam.meterLv = oc.meterLv; }
+		if (!key.empty() && dataManager::findOwnedCamera(key, oc))
+		{
+			cam.meterLv  = oc.meterLv;
+			cam.authUser = oc.authUser;
+			cam.authPass = oc.authPass;
+		}
 	}
 
 	void clampPlanCcmToGear(void) { clampOwnedToGear(g_plan.ccm, g_plan.camera, g_plan.lens); }
@@ -1304,7 +1311,7 @@ namespace
 			S->state = HGE_ST_NOCAMERA; notifyStateP(S->planId, HGE_ST_NOCAMERA); refreshAggregateState();
 		}
 		hgc::exposureSmoothing smooth = dataManager::currentSmoothing();
-		applyOwnedMeterLv(S->plan.camera);	// スマホ直結でも所持カメラの測光方式で撮る
+		applyOwnedCameraSettings(S->plan.camera);	// スマホ直結でも所持カメラの測光方式で撮る
 		errCode e = S->runner->ready(S->plan, &S->dev, smooth, g_offMin);
 		if (e != ERR_HGC_OK) { notifyError(e, "ready"); S->state = HGE_ST_ERROR; notifyStateP(S->planId, HGE_ST_ERROR); refreshAggregateState(); return e; }
 		// 撮影ループを本スレッド上で実行する(セッションあたり1スレッド)。runner 用の2本目の
@@ -1411,6 +1418,9 @@ int32_t hge_init(void)
 	if (g_inited) { return ERR_HGC_OK; }
 	netThread::init();
 	hge::role::loadPersisted();	// 無人再起動後の「前回IP直結」用に不揮発の既知カメラを読み込む(エッジ役)
+	// カメラを探し始める前に所持カメラを読んでおく。読み込みでダイジェスト認証の資格情報が
+	//  候補に入る(エッジ役は所持を持たないが、撮影計画の受信/読み込みで同じ入口を通る)。
+	dataManager::preloadOwned();
 	g_inited = true;
 	setState(HGE_ST_IDLE);
 	return ERR_HGC_OK;
@@ -1622,7 +1632,7 @@ int32_t hge_getPlanJson(char* buf, int32_t* inoutLen)
 		errCode e = loadFixedPlanImpl();
 		if (e != ERR_HGC_OK) { return e; }
 	}
-	applyOwnedMeterLv(g_plan.camera);
+	applyOwnedCameraSettings(g_plan.camera);
 	std::string s = csjson::toJson(g_plan);
 	int32_t need = static_cast<int32_t>(s.size()) + 1;
 	if (buf == nullptr || *inoutLen < need)
@@ -2117,6 +2127,11 @@ int32_t hge_getOwnedCamerasJson(char* buf, int32_t* inoutLen)
 int32_t hge_getOwnedLensesJson(char* buf, int32_t* inoutLen)
 {
 	return copyOut(dataManager::ownedLensesJson(), buf, inoutLen);
+}
+
+int32_t hge_ownedCameraAuthPassJson(const char* name, char* buf, int32_t* inoutLen)
+{
+	return copyOut(dataManager::ownedCameraAuthPass(name ? std::string(name) : std::string()), buf, inoutLen);
 }
 
 int32_t hge_addOwnedCamera(const char* name)

@@ -62,6 +62,16 @@ public:
 	// 所持から削除して保存する。return: 成功(削除した)。
 	static bool removeOwnedCamera(const std::string& name);
 	static bool removeOwnedLens(const std::string& name);
+	// 所持カメラを読み込むだけ(起動時に1回)。読み込むと、その資格情報が
+	//  ダイジェスト認証の候補として登録される(csjson::cameraFromJson)。カメラを探す前に
+	//  済ませておかないと、最初の 401 に対応できず発見に1回失敗する。
+	static void preloadOwned(void);
+
+	// 所持カメラのダイジェスト認証パスワードを**平文で**返す(編集画面の表示用)。
+	//  JSON(ownedCamerasJson / 撮影計画)には暗号文しか載せないため、UI で中身を見せるには
+	//  この経路が要る。見つからない/未設定なら空文字。
+	static std::string ownedCameraAuthPass(const std::string& name);
+
 	// 所持カメラの撮影計画への自動挿入フラグを設定して保存する。
 	static bool setOwnedCameraAutoInsert(const std::string& name, bool autoInsert);
 

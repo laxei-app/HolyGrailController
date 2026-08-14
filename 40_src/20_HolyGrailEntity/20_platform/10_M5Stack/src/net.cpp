@@ -1,8 +1,9 @@
-#include "commonM5.h"
+﻿#include "commonM5.h"
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <HTTPClient.h>
 #include <mutex>
+#include "httpAuth.h"		// ダイジェスト認証(401 を受けてから対応する)
 #include <esp_wifi.h>
 #include <esp_netif.h>
 #include <esp_idf_version.h>	// ESP_IDF_VERSION_MAJOR(2.x=IDF4 / 3.x=IDF5 の分岐に使用)
@@ -261,6 +262,7 @@ static void noteHttpError(int code, std::string& response)
         bool        busy = false;
     };
     static httpSlot   g_slots[kMaxKeepConns];
+    static const char* kAuthHeaders[] = { "WWW-Authenticate" };	// 401 のチャレンジを読むため
     static std::mutex g_slotMtx;
 
     // "http://host:port/..." から host:port までを取り出す(接続先が変わったかの判定用)。
@@ -325,6 +327,31 @@ static void noteHttpError(int code, std::string& response)
         return slot;
     }
 
+    // その要求に付ける Authorization(まだ 401 を受けていない相手なら空)。
+    //  ダイジェスト認証は事前判定が要らない。要求はサーバ(カメラ)から 401 で来る。
+    static void addAuthHeader(HTTPClient& cli, const std::string& url, const char* method)
+    {
+        const std::string host = endpointOf(url);
+        std::string path = url;
+        const size_t p = url.find("://");
+        if (p != std::string::npos)
+        {
+            const size_t s2 = url.find('/', p + 3);
+            path = (s2 == std::string::npos) ? std::string("/") : url.substr(s2);
+        }
+        const std::string a = httpAuth::authorization(host, method, path);
+        if (!a.empty()) { cli.addHeader("Authorization", a.c_str()); }
+        cli.collectHeaders(kAuthHeaders, 1);	// 401 のときチャレンジを読むため
+    }
+
+    // 401 を受けた。チャレンジを覚えられたら true(=同じ要求を投げ直す価値がある)。
+    static bool learnAuth(HTTPClient& cli, const std::string& url)
+    {
+        const std::string wa = cli.header("WWW-Authenticate").c_str();
+        if (wa.empty()) { return false; }
+        return httpAuth::learn(endpointOf(url), wa);
+    }
+
     void httpInit(void){}
     void httpDeInit(void)
     {
@@ -340,18 +367,31 @@ static void noteHttpError(int code, std::string& response)
                                const std::string* body, std::string& response)
     {
         int code = 0;
-        for (int attempt = 0; attempt < 2; ++attempt)
+        for (int authTry = 0; authTry < 2; ++authTry)		// 401 を受けたら1度だけ認証を付けて投げ直す
         {
-            const int slot = acquire(url);
-            if (slot < 0) { code = 0; break; }
-            HTTPClient& cli = g_slots[slot].cli;
-            if (body != nullptr) { cli.addHeader("Content-Type", "application/json"); }
-            code = (body != nullptr)
-                 ? cli.sendRequest(method, reinterpret_cast<uint8_t*>(const_cast<char*>(body->c_str())),
-                                   body->length())
-                 : cli.sendRequest(method);
-            if (code > 0) { response = cli.getString().c_str(); release(slot, false); break; }
-            release(slot, true);	// 使い回しが死んでいたかもしれない → 張り直して1度だけ再送
+            bool learned = false;
+            code = 0;
+            for (int attempt = 0; attempt < 2; ++attempt)
+            {
+                const int slot = acquire(url);
+                if (slot < 0) { code = 0; break; }
+                HTTPClient& cli = g_slots[slot].cli;
+                if (body != nullptr) { cli.addHeader("Content-Type", "application/json"); }
+                addAuthHeader(cli, url, method);
+                code = (body != nullptr)
+                     ? cli.sendRequest(method, reinterpret_cast<uint8_t*>(const_cast<char*>(body->c_str())),
+                                       body->length())
+                     : cli.sendRequest(method);
+                if (code > 0)
+                {
+                    response = cli.getString().c_str();		// 401 でも読み切る(使い回すソケットを壊さない)
+                    if (code == 401 && authTry == 0) { learned = learnAuth(cli, url); }
+                    release(slot, false);
+                    break;
+                }
+                release(slot, true);	// 使い回しが死んでいたかもしれない → 張り直して1度だけ再送
+            }
+            if (!learned) { break; }		// 401 でない、または資格情報が無い → そのまま返す
         }
         noteHttpStatus(code);
         noteHttpError(code, response);	// 失敗なら理由(接続不可か無返答か)を残す
@@ -364,13 +404,25 @@ static void noteHttpError(int code, std::string& response)
     {
         int code = 0;
         int slot = -1;			// 借りているスロット(本文を読み終えるまで手放さない)
-        for (int attempt = 0; attempt < 2; ++attempt)
+        for (int authTry = 0; authTry < 2; ++authTry)		// 401 を受けたら1度だけ認証を付けて投げ直す
         {
-            slot = acquire(url);
-            if (slot < 0) { code = 0; break; }
-            code = g_slots[slot].cli.GET();
-            if (code > 0) { break; }
-            release(slot, true); slot = -1;	// 張り直して1度だけ再送
+            code = 0; slot = -1;
+            for (int attempt = 0; attempt < 2; ++attempt)
+            {
+                slot = acquire(url);
+                if (slot < 0) { code = 0; break; }
+                addAuthHeader(g_slots[slot].cli, url, "GET");
+                code = g_slots[slot].cli.GET();
+                if (code > 0) { break; }
+                release(slot, true); slot = -1;	// 張り直して1度だけ再送
+            }
+            if (code != 401 || authTry > 0 || slot < 0) { break; }
+            // 401。本文を読み切ってからチャレンジを覚え、同じ要求を投げ直す。
+            HTTPClient& cli = g_slots[slot].cli;
+            const bool learned = learnAuth(cli, url);
+            (void)cli.getString();
+            release(slot, false); slot = -1;
+            if (!learned) { break; }		// 資格情報が無い → 401 のまま上へ返す
         }
         noteHttpStatus(code);
         bool success = false;

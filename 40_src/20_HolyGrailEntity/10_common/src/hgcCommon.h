@@ -72,6 +72,11 @@ namespace hgc
 		//  追随できない明るさのときだけサムネイルへ落ちる。マスタ既定は camera_body_list.json の
 		//  "meter_lv"、機体ごとの上書きは所持カメラの編集画面から。
 		bool meterLv = false;
+		// ダイジェスト認証(カメラ側の設定で有効にできる)。空なら認証なしの機体。
+		//  authPass は**平文で持つ**。保存するときだけ secret::encrypt() を通す
+		//  (ファイル上は "v1:..." の暗号文。詳細は secret.h)。
+		std::string authUser;			// ユーザーID
+		std::string authPass;			// パスワード(メモリ上は平文)
 	};
 
 	// 5.3 レンズ

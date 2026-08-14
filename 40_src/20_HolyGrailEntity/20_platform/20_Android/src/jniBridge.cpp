@@ -445,6 +445,23 @@ JNIEXPORT jstring JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeGetOwnedLenses(JNIEnv* env, jobject /*thiz*/)
 { return callBufGetter(env, hge_getOwnedLensesJson); }
 
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeOwnedCameraAuthPass(JNIEnv* env, jobject /*thiz*/, jstring name)
+{
+	if (name == nullptr) { return env->NewStringUTF(""); }
+	const char* n = env->GetStringUTFChars(name, nullptr);
+	int32_t len = 0;
+	hge_ownedCameraAuthPassJson(n ? n : "", nullptr, &len);
+	std::string out;
+	if (len > 0)
+	{
+		std::vector<char> b(static_cast<size_t>(len));
+		if (hge_ownedCameraAuthPassJson(n ? n : "", b.data(), &len) == 0) { out = b.data(); }
+	}
+	env->ReleaseStringUTFChars(name, n);
+	return env->NewStringUTF(out.c_str());
+}
+
 JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeAddOwnedCamera(JNIEnv* env, jobject /*thiz*/, jstring name)
 { return callNameCmd(env, name, hge_addOwnedCamera); }

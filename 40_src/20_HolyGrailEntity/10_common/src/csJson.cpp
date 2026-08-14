@@ -1,5 +1,7 @@
 ﻿// 撮影計画(cs)・撮影制御方法(ccm)の JSON 相互変換(データ構造仕様書43)。
 #include "csJson.h"
+#include "secret.h"		// パスワードはファイル・通信ともに暗号化して載せる
+#include "httpAuth.h"		// 読み込んだ資格情報はそのまま 401 の候補にする
 #include <json/nlohmann/json.hpp>
 #include <cctype>
 
@@ -72,7 +74,11 @@ namespace csjson
 			             {"serial", c.serial}, {"friendly", c.friendly},
 			             {"sensorSize", c.sensorSize}, {"sensorSizeV", c.sensorSizeV}, {"sensorPixel", c.sensorPixel},
 			             {"isoList", c.isoList}, {"ssList", c.ssList},
-			             {"meterLv", c.meterLv} };
+			             {"meterLv", c.meterLv},
+			             {"authUser", c.authUser},
+			             // パスワードは暗号文で載せる。ファイルにも ETP にも平文は出さない
+			             //  (エッジも同じ固定鍵を持っているので、そのまま復号できる)。
+			             {"authPass", secret::encrypt(c.authPass)} };
 		}
 		hgc::camera cameraFromJson(const json& j)
 		{
@@ -88,6 +94,11 @@ namespace csjson
 			if (j.contains("isoList")) { c.isoList = j["isoList"].get<std::vector<std::string>>(); }
 			if (j.contains("ssList"))  { c.ssList  = j["ssList"].get<std::vector<std::string>>(); }
 			c.meterLv     = j.value("meterLv", false);	// 無い=サムネイルだけ(既定)
+			c.authUser    = getStr(j, "authUser");
+			c.authPass    = secret::decrypt(getStr(j, "authPass"));	// 平文で手書きされていてもそのまま通る
+			// カメラ情報を読む道はここ1本(所持カメラ・撮影計画ファイル・ETP受信のすべて)。
+			//  発見の段階ではどの IP がどの機体か分からないので、候補として登録しておく。
+			httpAuth::addCandidate(c.authUser, c.authPass);
 			return c;
 		}
 
