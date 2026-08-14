@@ -147,6 +147,12 @@ object HgeNative {
     fun bleExchange(target: String, frame: ByteArray, timeoutMs: Int): ByteArray? =
         EdgeBleLink.exchange(target, frame, timeoutMs)
 
+    // ネイティブから呼び返される BLE のエッジ探索。見つかった端末名(HGC- を除く)を返す。
+    //  BLE には UDP ブロードキャストが無いので、検索はアドバタイズのスキャンで代える。
+    @JvmStatic
+    fun bleScanNames(timeoutMs: Int): Array<String> =
+        EdgeBleLink.scanEdgeNames(timeoutMs.toLong()).toTypedArray()
+
     external fun nativeEdgeSearch(timeoutMs: Int): String           // edgeInfo の JSON 配列
     external fun nativeEdgeStart(host: String, port: Int, datetime: String, offMin: Int, nameBmp: ByteArray, planId: String, planJson: String): Int
     external fun nativeEdgeStop(host: String, port: Int, planId: String): Int

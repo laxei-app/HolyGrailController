@@ -210,6 +210,48 @@ namespace
 		return result;
 	}
 
+	// BLE でエッジを探す(アドバタイズのスキャン)。見つかった端末名を返す。
+	//  BLE には UDP ブロードキャストが無いので、検索の代わりがこれになる。実装は Kotlin 側。
+	std::vector<std::string> bleScanNames(int timeoutMs)
+	{
+		std::vector<std::string> names;
+		JavaVM* vm = hgeJavaVm();
+		if (vm == nullptr) { return names; }
+		JNIEnv* env = nullptr;
+		bool attached = false;
+		if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK)
+		{
+			if (vm->AttachCurrentThread(&env, nullptr) != JNI_OK) { return names; }
+			attached = true;
+		}
+		jclass cls = env->FindClass("app/laxei/holygrail/HgeNative");
+		jmethodID mid = (cls != nullptr)
+		              ? env->GetStaticMethodID(cls, "bleScanNames", "(I)[Ljava/lang/String;")
+		              : nullptr;
+		if (mid != nullptr)
+		{
+			jobject jr = env->CallStaticObjectMethod(cls, mid, static_cast<jint>(timeoutMs));
+			if (env->ExceptionCheck()) { env->ExceptionClear(); jr = nullptr; }
+			if (jr != nullptr)
+			{
+				jobjectArray arr = static_cast<jobjectArray>(jr);
+				const jsize n = env->GetArrayLength(arr);
+				for (jsize i = 0; i < n; ++i)
+				{
+					jstring js = static_cast<jstring>(env->GetObjectArrayElement(arr, i));
+					if (js == nullptr) { continue; }
+					const char* cs = env->GetStringUTFChars(js, nullptr);
+					if (cs != nullptr) { names.push_back(cs); env->ReleaseStringUTFChars(js, cs); }
+					env->DeleteLocalRef(js);
+				}
+				env->DeleteLocalRef(jr);
+			}
+		}
+		if (cls != nullptr) { env->DeleteLocalRef(cls); }
+		if (attached) { vm->DetachCurrentThread(); }
+		return names;
+	}
+
 	// 永続接続で「操作の最初の1コマンド」を送る。使い回し接続が死んでいたら 1 度だけ張り直して再送。
 	// return: method(ACK/NAK) or 0(失敗)。要 g_connMtx。
 	int firstReq(const std::string& host, int port, uint16_t cmd, uint16_t method,
@@ -261,9 +303,32 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeSetBle(JNIEnv*, jobject, jboolean u
 }
 
 // エッジ端末を検索する。timeoutMs だけ応答を集め、edgeInfo の JSON 配列を返す。
+//
+// 【BLE のとき】UDP ブロードキャストは相手の Wi-Fi に居ないと届かない。BLE 運用の狙いは
+//  まさに「スマホがエッジの AP へ入らずに済ませる」ことなので、ここで UDP を投げても何も
+//  返らない。そこでアドバタイズをスキャンして名前を集め、各台へ C_SEARCH を 1 往復させる。
+//  返す JSON の形は Wi-Fi と同じ(呼び側は経路を知らない)。
 JNIEXPORT jstring JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeEdgeSearch(JNIEnv* env, jobject, jint timeoutMs)
 {
+	if (g_useBle.load())
+	{
+		std::string arr = "[";
+		std::set<std::string> seen;	// BLE では IP が全台 192.168.4.1 になり得るので名前で重複排除
+		for (const std::string& nm : bleScanNames(timeoutMs))
+		{
+			if (nm.empty() || seen.count(nm)) { continue; }
+			seen.insert(nm);
+			std::string info;
+			if (bleRequest(nm, etp::C_SEARCH, etp::M_GET, "", info) != etp::M_ACK) { continue; }
+			if (info.empty()) { continue; }
+			if (arr.size() > 1) { arr += ","; }
+			arr += info;
+		}
+		arr += "]";
+		return env->NewStringUTF(arr.c_str());
+	}
+
 	int fd = socket(AF_INET, SOCK_DGRAM, 0);
 	if (fd < 0) { return env->NewStringUTF("[]"); }
 	int yes = 1;
