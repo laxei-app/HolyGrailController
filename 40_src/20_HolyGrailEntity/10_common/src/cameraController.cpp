@@ -203,6 +203,11 @@ apiBase::meterTiming cameraController::meterTimingHint(const class device& devic
 	return device.apiBase->meterTimingHint();
 }
 
+void cameraController::setMeterLv(const class device& device, bool useLv)
+{
+	if (device.apiBase != nullptr) { device.apiBase->setMeterLv(useLv); }
+}
+
 void cameraController::meterReset(const class device& device)
 {
 	if (device.apiBase != nullptr) { device.apiBase->meterReset(); }

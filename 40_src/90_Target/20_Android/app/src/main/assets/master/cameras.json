@@ -81,7 +81,7 @@
   },
   {
     "manufacture": "Canon",
-    "name": "EOS R10",
+    "name": "EOS R10", "meter_lv": true,
     "pixel_h": 4000,
     "pixel_w": 6000,
     "sensor_h": 15.0,

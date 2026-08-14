@@ -71,7 +71,8 @@ namespace csjson
 			return json{ {"maker", c.maker}, {"model", c.model}, {"name", c.name},
 			             {"serial", c.serial}, {"friendly", c.friendly},
 			             {"sensorSize", c.sensorSize}, {"sensorSizeV", c.sensorSizeV}, {"sensorPixel", c.sensorPixel},
-			             {"isoList", c.isoList}, {"ssList", c.ssList} };
+			             {"isoList", c.isoList}, {"ssList", c.ssList},
+			             {"meterLv", c.meterLv} };
 		}
 		hgc::camera cameraFromJson(const json& j)
 		{
@@ -86,6 +87,7 @@ namespace csjson
 			c.sensorPixel = j.value("sensorPixel", 0u);
 			if (j.contains("isoList")) { c.isoList = j["isoList"].get<std::vector<std::string>>(); }
 			if (j.contains("ssList"))  { c.ssList  = j["ssList"].get<std::vector<std::string>>(); }
+			c.meterLv     = j.value("meterLv", false);	// 無い=サムネイルだけ(既定)
 			return c;
 		}
 
@@ -492,6 +494,7 @@ namespace csjson
 			c.sensorSize  = m.value("sensor_w", 0.0);	// 横[mm]
 			c.sensorSizeV = m.value("sensor_h", 0.0);	// 縦[mm]
 			c.sensorPixel = m.value("pixel_w", 0u);		// 横[pixel]
+			c.meterLv     = m.value("meter_lv", false);	// 測光方式(無い=サムネイルだけ)
 			if (m.contains("iso") && m["iso"].is_array())
 			{
 				for (const auto& v : m["iso"])

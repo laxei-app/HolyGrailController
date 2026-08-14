@@ -1213,6 +1213,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private var selLens: String? = null                 // 630 選択中の所持レンズ名
     private val camFields = HashMap<String, EditText>()  // カメラ詳細の入力欄
     private var camAutoInsert: CheckBox? = null
+    private var camMeterLv: CheckBox? = null       // ライブビューで測光する(機体ごと)
     private val camLensNames = ArrayList<String>()       // 組み合わせるレンズ(順序=先頭が初期値)
     private var camLensContainer: LinearLayout? = null   // 組み合わせレンズの並べ替えコンテナ
     private val lensRowViews = mutableListOf<View>()
@@ -1416,7 +1417,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun buildCameraDetail() {
         val box = findViewById<LinearLayout>(R.id.cameralist_detail)
-        box.removeAllViews(); camFields.clear(); camAutoInsert = null; camLensNames.clear()
+        box.removeAllViews(); camFields.clear(); camAutoInsert = null; camMeterLv = null; camLensNames.clear()
         buildingLens = false
         val sel = selCamera
         if (sel == null) {
@@ -1447,6 +1448,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.addView(editRow2("シャッター速度", "ssMin", ss.first, "ssMax", ss.second, "〜", "", false))
         val cb = CheckBox(this); cb.text = "撮影計画の初期値にする"; cb.isChecked = ocObj?.optBoolean("autoInsert", false) ?: false
         camAutoInsert = cb; box.addView(cb)
+        // 測光方式。既定はサムネイルだけ(最も正確)。撮影済みサムネイルの取得回数に上限がある
+        //  機種(EOS R10)だけこれを入れ、普段はライブビューで測って足りないときだけサムネイルへ落ちる。
+        val cbLv = CheckBox(this); cbLv.text = "ライブビューで測光する"; cbLv.isChecked = cam.optBoolean("meterLv", false)
+        camMeterLv = cbLv; box.addView(cbLv)
 
         // 組み合わせるレンズ(先頭=初期値)。並べ替えはハンドルをドラッグ(ss/iso/fnと同じ)。
         box.addView(thinDivider())
@@ -1464,7 +1469,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun camDetailSig(): String {
         val sb = StringBuilder()
         camFields.toSortedMap().forEach { (k, v) -> sb.append(k).append('=').append(v.text).append(';') }
-        sb.append("auto=").append(camAutoInsert?.isChecked == true).append(";lens=").append(camLensNames.joinToString(","))
+        sb.append("auto=").append(camAutoInsert?.isChecked == true)
+          .append(";lv=").append(camMeterLv?.isChecked == true)
+          .append(";lens=").append(camLensNames.joinToString(","))
         return sb.toString()
     }
 
@@ -1580,6 +1587,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         o.put("name", selCamera ?: orig)      // 名称はリストのインライン編集分(selCamera)
         o.put("autoInsert", camAutoInsert?.isChecked ?: false)
+        o.put("meterLv", camMeterLv?.isChecked ?: false)
         val ln = JSONArray(); camLensNames.forEach { ln.put(it) }; o.put("lensNames", ln)
         val js = o.toString()
         if (rebuild) {

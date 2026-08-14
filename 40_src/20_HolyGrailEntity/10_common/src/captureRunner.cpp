@@ -636,6 +636,9 @@ bool captureRunner::establishSession(void)
 	// 前セッションの時刻と比べると、復帰後の正常なフレームまで「古い」と誤判定してしまう。
 	// 測光の内部状態(学習値・鮮度基準・撮影画像の登録通知の待ち方)はカメラ依存層が持つ。
 	// セッションが作り直されるのでまとめて捨てさせる。
+	// 測光方式(サムネイルだけ / ライブビュー主体)を伝える。再接続で api オブジェクトごと
+	//  作り直されるため、meterReset と同じくセッション確立のたびに渡し直す。
+	cameraController::setMeterLv(*dev_, plan_.camera.meterLv);
 	cameraController::meterReset(*dev_);
 
 	// 変更分のみ適用のキャッシュをクリア(再接続直後はカメラ状態が不定なので次回フル適用させる)。

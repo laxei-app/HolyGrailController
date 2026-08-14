@@ -65,6 +65,13 @@ namespace hgc
 		uint32_t sensorPixel = 0;		// センサー横[pixel]
 		std::vector<std::string> isoList;	// 設定可能iso感度(カメラ設定値の文字列)
 		std::vector<std::string> ssList;	// 設定可能シャッター速度(カメラ設定値の文字列)
+		// 測光にライブビューを主体で使う機種か。既定(false)は「サムネイルだけ」。
+		//  撮影済みサムネイルの取得は最も正確だが、機種によっては取得回数に上限があり
+		//  (EOS R10 は電源投入あたり 200 回程度で応答しなくなる)一晩持たない。
+		//  そういう機種だけ true にして、普段はライブビューで測り、ライブビューでは
+		//  追随できない明るさのときだけサムネイルへ落ちる。マスタ既定は camera_body_list.json の
+		//  "meter_lv"、機体ごとの上書きは所持カメラの編集画面から。
+		bool meterLv = false;
 	};
 
 	// 5.3 レンズ

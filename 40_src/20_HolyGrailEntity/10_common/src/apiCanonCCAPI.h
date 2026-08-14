@@ -176,10 +176,15 @@ public:
 	// 測光をいつ呼んでほしいか: 露光が閉じ次第すぐ。ソースは直前の撮影画像なので待つ理由が無く、
 	// 早く測るほど「露出設定→撮影周期まで待つ」の余裕が増える(=周期を守りやすい)。
 	meterTiming meterTimingHint(void) const override { return meterTiming{ true, 0 }; }
+	void    setMeterLv(bool useLv) override { meterLv_ = useLv; }
 	void    meterReset(void) override;
 	void    meterArm(void) override;		// 1枚目の直前に溜まった通知を捨てる
 
 protected:
+	// 測光方式(所持カメラの設定。setMeterLv で受ける)。false=サムネイルだけ(既定・最も正確)、
+	//  true=ライブビュー主体(サムネイル取得に回数上限がある機種の逃げ道)。
+	bool             meterLv_ = false;
+
 	// --- 測光の内部状態(セッション単位。meterReset で捨てる) ---
 	expo::expoTables tables_;			// 設定可能値テーブル(getSettingsでabilityから自前構築。
 										//  中身も表記もカメラ依存なのでこの層が作る。共通層は渡さない)

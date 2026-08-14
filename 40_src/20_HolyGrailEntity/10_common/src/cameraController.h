@@ -49,6 +49,8 @@ public:
 	// 測光を「いつ呼ぶか」の申告を得る(カメラ未取得時は既定値=シャッター5秒前)。
 	static apiBase::meterTiming meterTimingHint(const class device& device);
 	// 「いま測光を始められるか」の軽い問い合わせ(busy計測)。1=可 / 0=まだ / -1=計測しない。
+	// 測光方式の指定(所持カメラの meterLv をそのまま渡す)。セッション確立のたびに呼ぶ。
+	static void    setMeterLv(const class device& device, bool useLv);
 	static void    meterReset(const class device& device);
 	static void    meterArm(const class device& device);	// 1枚目のシャッター直前の構え直し
 	// 直近 alzMetering が解析したライブビューフレームのカメラ側取得時刻[ms]。0=不明。

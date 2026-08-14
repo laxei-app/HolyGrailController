@@ -744,6 +744,7 @@ bool dataManager::setOwnedCameraDetailJson(const std::string& origName, const st
 	cam.sensorSize  = j.value("sensorSize", cam.sensorSize);
 	cam.sensorSizeV = j.value("sensorSizeV", cam.sensorSizeV);
 	cam.sensorPixel = j.value("sensorPixel", cam.sensorPixel);
+	cam.meterLv     = j.value("meterLv", cam.meterLv);	// ライブビューで測光する(機体ごとの上書き)
 
 	// ISO/SS: min/max が現状と変わったときだけ標準1/3段で再生成(マスタ/カメラ取得値は維持)。
 	std::string isoMin = j.value("isoMin", std::string());
