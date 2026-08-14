@@ -10,6 +10,7 @@
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -210,31 +211,88 @@ namespace net
 		//  失敗が「カメラが 503 等で断った」のか「そもそも届かなかった」のかをログで区別するため。
 		int g_lastHttpStatus = 0;
 
-		// --- TCP接続の使い回し(keep-alive。2026-08-05 エッジと同じ方式に揃える) ---
+		// --- TCP接続の使い回し(keep-alive。宛先ごとに1本ずつ持つ) ---
 		// リクエストごとに接続を張り直すと、初期収束のように短時間へ通信が集中する場面で
 		// connect() が詰まる(エッジで実測: 9秒に約40本 → 1.5秒経っても繋がらない回が頻発)。
-		// 接続を1本に保てば、失敗しうる箇所がその1本だけになる。
-		// HTTP関連は netThread の単一ワーカーからのみ呼ばれるので、静的1本で足りる。
-		int         g_keepFd  = -1;			// 使い回している接続(-1=無し)
-		std::string g_keepEp;				// その接続先 "host:port"
+		//
+		// 【1本しか持たない実装をやめた理由(2026-08-15)】
+		//  ① 宛先が変わるたびに閉じて張り直していた。カメラ2台を1台の端末で回すと**毎リクエスト**
+		//     再接続になり、上の「connect が詰まる」状態へ逆戻りする。接続が 80〜5000ms とばらつく
+		//     機種(EOS R50 V 実測)では成立しない。HTTPS を載せれば毎回ハンドシェイクになる。
+		//  ② **排他が無かった**。「単一ワーカーからのみ呼ばれる」という前提で書かれていたが、
+		//     netThread のワーカーは 2 本ある(kWorkerCount)。カメラAの通信中に別スレッドが
+		//     カメラB宛で借りに来ると、使用中のソケットを横から close していた。
+		//
+		// 宛先ごとにスロットを持ち、**借りている間は busy** にして他スレッドから触らせない。
+		constexpr int kMaxKeepConns = 3;	// ワーカー2本+別宛先1つぶんの余裕
+		struct keepSlot { std::string ep; int fd = -1; bool busy = false; };
+		std::mutex g_keepMtx;
+		keepSlot   g_keep[kMaxKeepConns];
 
-		void keepClose(void)
-		{
-			if (g_keepFd >= 0) { close(g_keepFd); g_keepFd = -1; }
-			g_keepEp.clear();
-		}
-
-		// 使える接続を返す(無ければ張る)。fresh=張りたてか(=失敗しても再試行の価値が無い)。
-		int keepConn(const std::string& host, int port, bool& fresh)
+		// 借りる。同じ宛先の空きがあれば使い回し、無ければ空きスロットで張る。
+		//  戻り値=スロット番号(-1=借りられなかった)。fresh=張りたて(失敗しても再送の価値が無い)。
+		int keepAcquire(const std::string& host, int port, int& fdOut, bool& fresh)
 		{
 			const std::string ep = host + ":" + std::to_string(port);
-			// 宛先が変わったら使い回せない(前の相手へ投げてしまう)。1スマホ2カメラで実際に起きる。
-			if (g_keepFd >= 0 && g_keepEp != ep) { keepClose(); }
-			if (g_keepFd >= 0) { fresh = false; return g_keepFd; }
-			fresh = true;
-			g_keepFd = tcpConnect(host, port);
-			if (g_keepFd >= 0) { g_keepEp = ep; }
-			return g_keepFd;
+			int slot = -1;
+			{
+				std::lock_guard<std::mutex> lk(g_keepMtx);
+				for (int i = 0; i < kMaxKeepConns; ++i)		// ① 同じ宛先の空き
+				{
+					if (!g_keep[i].busy && g_keep[i].fd >= 0 && g_keep[i].ep == ep) { slot = i; break; }
+				}
+				if (slot >= 0)
+				{
+					g_keep[slot].busy = true; fdOut = g_keep[slot].fd; fresh = false; return slot;
+				}
+				for (int i = 0; i < kMaxKeepConns; ++i)		// ② 未使用スロット
+				{
+					if (!g_keep[i].busy && g_keep[i].fd < 0) { slot = i; break; }
+				}
+				if (slot < 0)								// ③ 空いている他宛先を畳んで空ける
+				{
+					for (int i = 0; i < kMaxKeepConns; ++i)
+					{
+						if (g_keep[i].busy) { continue; }
+						if (g_keep[i].fd >= 0) { close(g_keep[i].fd); g_keep[i].fd = -1; }
+						g_keep[i].ep.clear(); slot = i; break;
+					}
+				}
+				if (slot < 0) { return -1; }				// 全部使用中(枠>ワーカー数なので通常起きない)
+				g_keep[slot].busy = true; g_keep[slot].ep = ep; g_keep[slot].fd = -1;
+			}
+			// 接続はロックの外で行う(最大6秒かかるので、その間ほかのカメラを止めない)。
+			const int fd = tcpConnect(host, port);
+			{
+				std::lock_guard<std::mutex> lk(g_keepMtx);
+				g_keep[slot].fd = fd;
+				if (fd < 0) { g_keep[slot].busy = false; g_keep[slot].ep.clear(); return -1; }
+			}
+			fdOut = fd; fresh = true; return slot;
+		}
+
+		// 返す。dead=この接続はもう使えない(閉じる)。
+		void keepRelease(int slot, bool dead)
+		{
+			if (slot < 0) { return; }
+			std::lock_guard<std::mutex> lk(g_keepMtx);
+			if (dead)
+			{
+				if (g_keep[slot].fd >= 0) { close(g_keep[slot].fd); g_keep[slot].fd = -1; }
+				g_keep[slot].ep.clear();
+			}
+			g_keep[slot].busy = false;
+		}
+
+		// 全部畳む(init/deInit 用)。使用中でも閉じる。
+		void keepCloseAll(void)
+		{
+			std::lock_guard<std::mutex> lk(g_keepMtx);
+			for (int i = 0; i < kMaxKeepConns; ++i)
+			{
+				if (g_keep[i].fd >= 0) { close(g_keep[i].fd); g_keep[i].fd = -1; }
+				g_keep[i].ep.clear(); g_keep[i].busy = false;
+			}
 		}
 
 		int httpRequest(const std::string& method, const std::string& url,
@@ -260,11 +318,13 @@ namespace net
 			// 使い回している接続を相手が黙って閉じていることがある。その場合は送信か受信が
 			// 空振りするので、張り直して1度だけ再送する(張りたてで失敗したなら諦める)。
 			std::string raw;
+			int slot = -1;			// 借りているスロット(応答を読み終えるまで手放さない)
 			for (int attempt = 0; attempt < 2; ++attempt)
 			{
 				bool fresh = false;
-				int fd = keepConn(host, port, fresh);
-				if (fd < 0)
+				int fd = -1;
+				slot = keepAcquire(host, port, fd, fresh);
+				if (slot < 0)
 				{
 					__android_log_print(ANDROID_LOG_WARN, HGE_LOG_TAG,
 					                    "net: connect failed host=%s port=%d errno=%d(%s)",
@@ -274,10 +334,11 @@ namespace net
 				raw.clear();
 				const bool sent = sendAll(fd, req.c_str(), req.size());
 				if (sent && recvResponse(fd, raw) && !raw.empty()) { break; }
-				keepClose();				// 死んでいた接続を捨てる
+				keepRelease(slot, true);	// 死んでいた接続を捨てる
+				slot = -1;
 				if (fresh) { return 0; }	// 張りたてで駄目ならこちらの問題ではない
 			}
-			if (raw.empty()) { return 0; }
+			if (raw.empty()) { keepRelease(slot, true); return 0; }
 
 			// ヘッダと本体を分離
 			size_t he = raw.find("\r\n\r\n");
@@ -303,7 +364,7 @@ namespace net
 			const bool wantClose = (lower.find("connection: close") != std::string::npos);
 			const bool noLength  = (lower.find("content-length:") == std::string::npos) &&
 			                       (lower.find("transfer-encoding: chunked") == std::string::npos);
-			if (wantClose || noLength) { keepClose(); }
+			keepRelease(slot, wantClose || noLength);	// 使い回せないときだけ閉じて返す
 
 			response = content;
 			g_lastHttpStatus = code;
@@ -316,13 +377,13 @@ namespace net
 	bool init()
 	{
 		g_break = false;
-		keepClose();	// 使い回している接続を残さない
+		keepCloseAll();	// 使い回している接続を残さない
 		return true;
 	}
 
 	bool deInit()
 	{
-		keepClose();
+		keepCloseAll();
 		return true;
 	}
 
@@ -466,7 +527,7 @@ namespace net
 		// 受信の途中で打ち切ると、その接続には読み残しが残る。使い回すと次の応答と
 		// 混ざるので、中断したら必ず捨てる。
 		g_break = true;
-		keepClose();
+		keepCloseAll();	// 読み残しの残る接続は全部捨てる(どれを中断したか分からないため)
 	}
 
 	bool httpGet(const std::string& url, std::string& response)

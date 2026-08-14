@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <HTTPClient.h>
+#include <mutex>
 #include <esp_wifi.h>
 #include <esp_netif.h>
 #include <esp_idf_version.h>	// ESP_IDF_VERSION_MAJOR(2.x=IDF4 / 3.x=IDF5 の分岐に使用)
@@ -242,9 +243,25 @@ static void noteHttpError(int code, std::string& response)
     #include <HTTPClient.h>
     #include <WiFi.h>
 
-    static HTTPClient  g_http;
-    static std::string g_endpoint;		// 直近に繋いだ "http://host:port"
-    static bool        g_open = false;
+    // --- 接続は宛先ごとに1本ずつ持つ ---
+    // 【1本しか持たない実装をやめた理由(2026-08-15)】
+    //  ① HTTPClient は接続先を見ず connected() だけで使い回すため、宛先が変わったら閉じるしか
+    //     なかった。カメラ2台を1台のエッジで回すと**毎リクエスト**再接続になり、以前 keep-alive で
+    //     直した「connect が詰まる」状態(9秒に約40本で不通)へ逆戻りする。接続が 80〜5000ms と
+    //     ばらつく機種(EOS R50 V 実測)では成立せず、HTTPS を載せれば毎回ハンドシェイクになる。
+    //  ② **排他が無かった**。netThread のワーカーは2本(kWorkerCount)あるので、カメラAの通信中に
+    //     別スレッドがカメラB宛で prepare() を呼ぶと、使用中の接続を横から end() していた。
+    // 借りている間は busy にして、他スレッドから触らせない。
+    constexpr int kMaxKeepConns = 3;	// ワーカー2本+別宛先1つぶんの余裕
+    struct httpSlot
+    {
+        HTTPClient  cli;
+        std::string ep;					// "http://host:port"
+        bool        open = false;
+        bool        busy = false;
+    };
+    static httpSlot   g_slots[kMaxKeepConns];
+    static std::mutex g_slotMtx;
 
     // "http://host:port/..." から host:port までを取り出す(接続先が変わったかの判定用)。
     static std::string endpointOf(const std::string& url)
@@ -255,29 +272,68 @@ static void noteHttpError(int code, std::string& response)
         return url.substr(0, (s == std::string::npos) ? url.size() : s);
     }
 
-    static void closeConn(void)
+    // 返す。dead=この接続はもう使えない(閉じる)。
+    static void release(int slot, bool dead)
     {
-        g_http.end();
-        g_endpoint.clear();
-        g_open = false;
+        if (slot < 0) { return; }
+        std::lock_guard<std::mutex> lk(g_slotMtx);
+        if (dead)
+        {
+            g_slots[slot].cli.end();
+            g_slots[slot].open = false;
+            g_slots[slot].ep.clear();
+        }
+        g_slots[slot].busy = false;
     }
 
-    static bool prepare(const std::string& url)
+    // 借りる。同じ宛先の空きがあれば使い回し、無ければ空きスロットで張る。-1=借りられない。
+    static int acquire(const std::string& url)
     {
-        // HTTPClient は接続先を見ず connected() だけで使い回すため、宛先が変わったのに
-        // 繋ぎっぱなしだと前の相手へ投げてしまう。1エッジ複数カメラで実際に起きるので必ず切る。
         const std::string ep = endpointOf(url);
-        if (g_open && ep != g_endpoint) { closeConn(); }
-        if (!g_http.begin(url.c_str())) { return false; }
-        g_http.setReuse(true);				// 応答後もソケットを閉じない
-        g_http.setConnectTimeout(kHttpConnectTimeoutMs);	// スマホと同じ値(net.h)
-        g_http.setTimeout(kHttpIoTimeoutMs);
-        g_endpoint = ep; g_open = true;
-        return true;
+        int slot = -1;
+        {
+            std::lock_guard<std::mutex> lk(g_slotMtx);
+            for (int i = 0; i < kMaxKeepConns; ++i)		// ① 同じ宛先の空き
+            {
+                if (!g_slots[i].busy && g_slots[i].open && g_slots[i].ep == ep) { slot = i; break; }
+            }
+            if (slot < 0)								// ② 未使用スロット
+            {
+                for (int i = 0; i < kMaxKeepConns; ++i)
+                {
+                    if (!g_slots[i].busy && !g_slots[i].open) { slot = i; break; }
+                }
+            }
+            if (slot < 0)								// ③ 空いている他宛先を畳んで空ける
+            {
+                for (int i = 0; i < kMaxKeepConns; ++i)
+                {
+                    if (g_slots[i].busy) { continue; }
+                    g_slots[i].cli.end(); g_slots[i].open = false; g_slots[i].ep.clear();
+                    slot = i; break;
+                }
+            }
+            if (slot < 0) { return -1; }				// 全部使用中(枠>ワーカー数なので通常起きない)
+            g_slots[slot].busy = true;
+        }
+        httpSlot& sl = g_slots[slot];
+        if (!sl.cli.begin(url.c_str())) { release(slot, true); return -1; }
+        sl.cli.setReuse(true);							// 応答後もソケットを閉じない
+        sl.cli.setConnectTimeout(kHttpConnectTimeoutMs);	// スマホと同じ値(net.h)
+        sl.cli.setTimeout(kHttpIoTimeoutMs);
+        sl.ep = ep; sl.open = true;
+        return slot;
     }
 
     void httpInit(void){}
-    void httpDeInit(void){ closeConn(); }
+    void httpDeInit(void)
+    {
+        std::lock_guard<std::mutex> lk(g_slotMtx);
+        for (int i = 0; i < kMaxKeepConns; ++i)
+        {
+            g_slots[i].cli.end(); g_slots[i].open = false; g_slots[i].ep.clear(); g_slots[i].busy = false;
+        }
+    }
 
     // ボディを伴う要求(POST/PUT/DELETE)。返り値=HTTPステータス(0=応答なし)。
     static int requestWithBody(const char* method, const std::string& url,
@@ -286,14 +342,16 @@ static void noteHttpError(int code, std::string& response)
         int code = 0;
         for (int attempt = 0; attempt < 2; ++attempt)
         {
-            if (!prepare(url)) { code = 0; break; }
-            if (body != nullptr) { g_http.addHeader("Content-Type", "application/json"); }
+            const int slot = acquire(url);
+            if (slot < 0) { code = 0; break; }
+            HTTPClient& cli = g_slots[slot].cli;
+            if (body != nullptr) { cli.addHeader("Content-Type", "application/json"); }
             code = (body != nullptr)
-                 ? g_http.sendRequest(method, reinterpret_cast<uint8_t*>(const_cast<char*>(body->c_str())),
-                                      body->length())
-                 : g_http.sendRequest(method);
-            if (code > 0) { response = g_http.getString().c_str(); break; }
-            closeConn();	// 使い回しが死んでいたかもしれない → 張り直して1度だけ再送
+                 ? cli.sendRequest(method, reinterpret_cast<uint8_t*>(const_cast<char*>(body->c_str())),
+                                   body->length())
+                 : cli.sendRequest(method);
+            if (code > 0) { response = cli.getString().c_str(); release(slot, false); break; }
+            release(slot, true);	// 使い回しが死んでいたかもしれない → 張り直して1度だけ再送
         }
         noteHttpStatus(code);
         noteHttpError(code, response);	// 失敗なら理由(接続不可か無返答か)を残す
@@ -305,37 +363,42 @@ static void noteHttpError(int code, std::string& response)
     bool httpGet(const std::string& url, std::string& answer)
     {
         int code = 0;
+        int slot = -1;			// 借りているスロット(本文を読み終えるまで手放さない)
         for (int attempt = 0; attempt < 2; ++attempt)
         {
-            if (!prepare(url)) { code = 0; break; }
-            code = g_http.GET();
+            slot = acquire(url);
+            if (slot < 0) { code = 0; break; }
+            code = g_slots[slot].cli.GET();
             if (code > 0) { break; }
-            closeConn();	// 張り直して1度だけ再送
+            release(slot, true); slot = -1;	// 張り直して1度だけ再送
         }
         noteHttpStatus(code);
         bool success = false;
-        if (code == 200)
+        if (code == 200 && slot >= 0)
         {
-            const int len = g_http.getSize();
+            HTTPClient& cli = g_slots[slot].cli;
+            const int len = cli.getSize();
             if (len >= 0)
             {
                 answer.resize(static_cast<size_t>(len));
-                WiFiClient* stream = g_http.getStreamPtr();
+                WiFiClient* stream = cli.getStreamPtr();
                 const int recvd = (stream != nullptr) ? stream->readBytes(answer.data(), len) : 0;
                 success = (recvd >= len);
-                if (!success) { closeConn(); }	// 読み残しは次の要求を壊すので切る
+                release(slot, !success);	// 読み残しは次の要求を壊すので切る
             }
             else
             {	// 長さ不明(chunked等)。使い回せないので読み切って閉じる。
-                answer = g_http.getString().c_str();
+                answer = cli.getString().c_str();
                 success = true;
-                closeConn();
+                release(slot, true);
             }
+            slot = -1;
         }
         else
         {
             DBGLN(col::RED,"%s:url?(%s).",__func__, url.c_str());
         }
+        release(slot, true);	// 上で返していなければここで捨てる(slot=-1 なら何もしない)
         return success;
     }
 
