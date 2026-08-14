@@ -127,8 +127,9 @@ public:
 	errCode actShutter(void);							// シャッターを切る動作
 	errCode startShooting(void);						// 撮影開始
 	errCode stopLiveView(void) override;				// ライブビュー停止(撮影ループ中は掴まない)
-	// 撮影ループ中にライブビューが要るか。サムネ測光では不要(初期収束のときだけ使う)。
-	bool    liveViewNeededWhileCapturing(void) const override { return false; }
+	// 撮影ループ中にライブビューが要るか。サムネ測光では不要(初期収束のときだけ使う)が、
+	//  ライブビュー主体方式では毎コマ測るので掴んだままにする。
+	bool    liveViewNeededWhileCapturing(void) const override { return meterLv_; }
 	bool    liveViewAlive(void);						// ライブビューが実際に流れているか(?kind=info。接続の生存確認)
 	errCode setupShootingModeManual(void) override;		// 撮影モードをM(ダイアル無視ON)へ。元値を保存
 	errCode restoreShootingMode(void) override;			// 保存した撮影モードへ戻す(ダイアル無視OFF)
@@ -184,6 +185,15 @@ protected:
 	// 測光方式(所持カメラの設定。setMeterLv で受ける)。false=サムネイルだけ(既定・最も正確)、
 	//  true=ライブビュー主体(サムネイル取得に回数上限がある機種の逃げ道)。
 	bool             meterLv_ = false;
+	// --- ライブビュー主体方式の状態(セッション単位。meterReset で捨てる) ---
+	//  ライブビューが効かない暗さのときだけサムネイルへ落ちる。そのサムネイルは
+	//  **1コマ前**のファイルから取る(生成直後のファイルに触ると R10 が固まるため。
+	//  2026-08-13 実測で 4/4 停止)。そのため直近2コマぶんのパスを覚えておく。
+	std::string      lvShotPrev_;			// 1コマ前の撮影ファイル(サムネイルの取得先)
+	std::string      lvShotLast_;			// 直近の通知で現れたファイル
+	int              lvFallbackSkip_ = 0;	// 間引き用の残りコマ数(0でサムネイルを取る)
+	double           lvHeldSceneRef_ = 0.0;	// 間引き中に返す、直近サムネイルの場面基準
+	int              lvFallbackShots_ = 0;	// このセッションでサムネイルを取った回数(診断用)
 
 	// --- 測光の内部状態(セッション単位。meterReset で捨てる) ---
 	expo::expoTables tables_;			// 設定可能値テーブル(getSettingsでabilityから自前構築。
@@ -206,8 +216,13 @@ protected:
 	// 直前に撮れた画像のサムネイルから測光する(本体)。
 	errCode meterSceneShot(const hgc::exposure& shotExp, meterResult& out,
 	                       const std::function<bool()>& keepGoing);
+	// ライブビュー主体方式の測光。詳しくは .cpp の説明を参照。
+	errCode meterSceneLvFirst(const hgc::exposure& shotExp, meterResult& out,
+	                          const std::function<bool()>& keepGoing);
 	// 中核: 新規画像を待ち→サムネイル取得→復号→輝度ヒスト統計まで(露出非依存の部分)。
-	errCode thumbMeterCore(meterResult& out, int budgetMs, const std::function<bool()>& keepGoing);
+	//  pathOverride を渡すと「待ち」を飛ばしてそのファイルを測る(1コマ前を取るときに使う)。
+	errCode thumbMeterCore(meterResult& out, int budgetMs, const std::function<bool()>& keepGoing,
+	                       const std::string& pathOverride = std::string());
 	// 新規画像待ちの診断(どの通信でつまずいたか)。meterResult へそのまま載せる。
 	struct waitDiag { int step = 0; int http = 0; std::string body; };
 	// 新規画像の検知は event/polling(カメラからの登録通知)。ディレクトリを一切読まないので、

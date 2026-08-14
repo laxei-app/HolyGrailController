@@ -1121,6 +1121,16 @@ namespace
 	constexpr double kPegBrightStep       = -4.0;
 	constexpr double kPegDarkStep         = +2.0;
 	constexpr int    kHereMaxShift        = 4;		// 1回の meterHere で張り付きを抜ける試行の上限
+	// --- ライブビュー主体方式 ---
+	// ライブビューが底に張り付いたまま抜けられないとき、サムネイルを何コマに1回取るか。
+	//  取得回数に上限がある機種のための方式なので、必要最小限にする。夜明けの明るさは
+	//  15秒周期で 0.03段/コマ程度しか動かないので、4コマ(1分)に1回でも 0.13段刻みで足りる。
+	constexpr int    kLvFallbackEveryN    = 4;
+	// サムネイルへ落ちたときの測光予算[ms]。1コマ前のファイルを直接取るので待ちは要らない。
+	constexpr int    kLvFallbackBudgetMs  = 6000;
+	// 撮影ファイルの登録通知をこれだけ待つ[ms]。ライブビュー主体では通知は
+	//  「どのファイルが1コマ前か」を知るためだけに使うので、取れなければ諦めてよい。
+	constexpr int    kLvNotifyBudgetMs    = 3000;
 	constexpr int    kHereSettleMs        = 700;	// 測光露出を変えてからLVが追従するまでの待ち[ms]
 	constexpr int    kHereApplyRetryMs    = 300;	// 測光露出の適用に失敗したときの間隔[ms]
 
@@ -1146,6 +1156,10 @@ void apiCanonCCAPI::meterReset(void)
 	hereExp_       = hgc::exposure{};	// 初期収束の測光露出は取り直す
 	lvFreshPrevMs_ = 0;					// 再接続でLVセッションが作り直されるため鮮度基準も捨てる
 	lvFreshPrevAt_ = nullptr;
+	// ライブビュー主体方式の状態。再接続でファイル名の並びの追跡が切れるので捨てる
+	// (古いパスを1コマ前だと思って測ると、まったく別の明るさを掴む)。
+	lvShotPrev_.clear(); lvShotLast_.clear();
+	lvFallbackSkip_ = 0; lvHeldSceneRef_ = 0.0;
 	// 【空読みはここでしない(2026-08-13)】ここで流しても、この後の準備(撮影モード変更・
 	//  設定取得・初期収束の露出適用)で新しいイベントが積まれてしまい、1コマ目の登録通知が
 	//  その中に埋もれて拾えなかった。空読みは1枚目の直前(meterArm)へ移した。
@@ -1370,6 +1384,7 @@ errCode apiCanonCCAPI::meterHere(meterResult& out, const std::function<bool()>& 
 errCode apiCanonCCAPI::meterScene(const hgc::exposure& shotExp, meterResult& out,
                                   const std::function<bool()>& keepGoing)
 {
+	if (meterLv_) { return this->meterSceneLvFirst(shotExp, out, keepGoing); }
 	return this->meterSceneShot(shotExp, out, keepGoing);
 }
 
@@ -1545,15 +1560,20 @@ std::string apiCanonCCAPI::waitAddedByEvent(int budgetMs, const std::function<bo
 // 測光の中核(露出非依存の部分): 新規画像の登録を待ち、サムネイルを取得・復号して
 // 輝度ヒストグラム統計(中央値/p99/pMax/チェックサム)まで作る。
 //  meterExp/sceneRef は呼び出し側(meterSceneShot)が撮影露出で確定する。
-errCode apiCanonCCAPI::thumbMeterCore(meterResult& out, int budgetMs, const std::function<bool()>& keepGoing)
+errCode apiCanonCCAPI::thumbMeterCore(meterResult& out, int budgetMs, const std::function<bool()>& keepGoing,
+                                      const std::string& pathOverride)
 {
 	out = meterResult{};
 	void* t0 = tool::startElapse();
 
 	// ① 新しい画像の登録通知を待つ(カメラが露光後の記録を終えるまで)。
+	//    pathOverride があるときは「どのファイルを測るか」が既に決まっているので待たない
+	//    (ライブビュー主体方式が1コマ前のファイルを指定してくる経路)。
 	int tries = 0;
 	waitDiag diag;
-	const std::string path = waitAddedByEvent(budgetMs, keepGoing, tries, diag);
+	const std::string path = pathOverride.empty()
+	                       ? waitAddedByEvent(budgetMs, keepGoing, tries, diag)
+	                       : pathOverride;
 	out.waitStep = diag.step;
 	out.waitHttp = diag.http;
 	out.waitBody = diag.body;
@@ -1635,6 +1655,99 @@ errCode apiCanonCCAPI::thumbMeterCore(meterResult& out, int budgetMs, const std:
 //  ・露出には一切触れない(測光ss切替なし=appliedExp空・settleなし)。
 //  ・呼び出しタイミングは meterTimingHint の申告どおり(露光終了直後)。captureRunner が従う。
 //  ・shotExp = このサムネイルを撮った露出(呼び出し側の直前コマ)。sceneRef の割り戻しに使う。
+// 【ライブビュー主体の測光】撮影済みサムネイルの取得回数に上限がある機種のための方式。
+//
+// 【なぜ要るか】サムネイル測光は本露光そのものを見るので最も正確だが、EOS R10 は撮影と対にした
+//  サムネイル取得が電源投入あたり 200 回程度で応答しなくなる(2026-08-12 実測。1コマ前を取る
+//  形でも 236〜243 回)。15秒周期なら1時間で 240 コマなので、毎コマ取ると一晩持たない。
+//  一方ライブビューは何回読んでも減らないが、積分の上限(ここでは測光ss 0.5秒)があるため
+//  暗くなると中央値が黒に張り付き、そこから先の明るさが見えなくなる。
+//
+// 【方針】ふだんはライブビューで測り、**ライブビューが底に張り付いて抜けられないときだけ**
+//  サムネイルへ落ちる。落ちている間も毎コマは取らず kLvFallbackEveryN コマに1回だけ取り、
+//  間のコマは直近の値を返す(明るさは 15 秒で 0.03 段程度しか動かないので足りる)。
+//  実測(2026-08-14、撮影画像との突き合わせ)では、夕方の薄明は夜間露出へクランプされるので
+//  サムネイルが要る区間はほぼ無く、夜明けだけが対象で 200 コマ程度。4コマに1回なら
+//  50 回前後に収まり、R10 の予算内で一晩通せる計算になる。
+//
+// 【1コマ前を取る理由】生成直後のファイルに触ると R10 は 4/4 で停止した(2026-08-13)。
+//  そこで登録通知は毎コマ拾ってファイル名だけ覚えておき、測るのは常に1つ前のファイルにする。
+errCode apiCanonCCAPI::meterSceneLvFirst(const hgc::exposure& shotExp, meterResult& out,
+                                         const std::function<bool()>& keepGoing)
+{
+	// ① 登録通知を拾ってファイル名の並びを進める(測光そのものはまだしない)。
+	//    サムネイルは取らないので、ここは回数の予算を消費しない。
+	{
+		int tries = 0;
+		waitDiag diag;
+		const std::string p = waitAddedByEvent(kLvNotifyBudgetMs, keepGoing, tries, diag);
+		if (!p.empty() && p != lvShotLast_)
+		{
+			lvShotPrev_ = lvShotLast_;	// 1つ前へ送る
+			lvShotLast_ = p;
+		}
+	}
+
+	// ② ライブビューで測る。ここが本線。
+	meterResult lv;
+	const errCode le = this->meterHere(lv, keepGoing);
+	// ライブビューが「見えていない」判定: 測れてはいるが中央値が底に張り付いていて、
+	//  しかも測光ss を伸ばしきっている(=これ以上積分できない)。この状態の値は
+	//  場面の明るさではなく「LVの下限」なので、そのまま使うと露出が追随しなくなる。
+	const double meterSs = expo::parseValue(lv.meterExp.ss, expo::expoKind::ss);
+	const bool   lvBlind = (le != ERR_HGC_OK) || !lv.usable
+	                    || (lv.x <= kPegDark && meterSs >= kInitMeterMaxSsSec * 0.99);
+	if (!lvBlind)
+	{
+		out = lv;
+		lvFallbackSkip_ = 0;	// 明るさが戻ったので、次に暗くなったら即サムネイルを取る
+		return ERR_HGC_OK;
+	}
+
+	// ③ ライブビューでは足りない。サムネイルへ落ちる(間引きあり)。
+	//    間引き中のコマは直近の場面基準をそのまま返す。上位はこれを目標に1コマぶんずつ
+	//    近づくので、値を据え置いても露出は滑らかに動く。
+	if (lvFallbackSkip_ > 0 && lvHeldSceneRef_ > 0.0)
+	{
+		--lvFallbackSkip_;
+		out           = lv;			// 診断値(ヒスト等)はライブビューのものを残す
+		out.ok        = true;
+		out.usable    = true;
+		out.failStage = 0;
+		out.sceneRef  = lvHeldSceneRef_;
+		out.meterExp  = shotExp;
+		return ERR_HGC_OK;
+	}
+
+	// 1コマ前が分かっていなければ取りようがない(セッションの最初の1コマ)。
+	//  ライブビューの値をそのまま使う(暗い側へ張り付いた値だが、次のコマで取り直せる)。
+	if (lvShotPrev_.empty())
+	{
+		out = lv;
+		if (!lv.usable) { return (le == ERR_HGC_OK) ? ERR_HGC_RDY_METARING : le; }
+		return ERR_HGC_OK;
+	}
+
+	meterResult th;
+	const errCode te = thumbMeterCore(th, kLvFallbackBudgetMs, keepGoing, lvShotPrev_);
+	if (te != ERR_HGC_OK || !th.ok)
+	{	// 取れなかった。ライブビューの値で凌ぐ(次のコマでまた取りに行く)。
+		out = lv;
+		return (lv.usable) ? ERR_HGC_OK : ((le == ERR_HGC_OK) ? ERR_HGC_RDY_METARING : le);
+	}
+	// 1コマ前の画像なので、割り戻す露出も「そのコマの露出」でなければならない。
+	//  撮影周期の間に露出を動かしているとズレるが、暗所ではクランプが効いていて
+	//  ほとんど動かないため、直前コマの露出(shotExp)で足りる。ズレるようなら
+	//  コマごとの露出を覚えて渡す形に直す(実験で見る)。
+	th.meterExp     = shotExp;
+	th.sceneRef     = th.linear / std::pow(2.0, expo::brightnessStops(shotExp, tables_));
+	lvHeldSceneRef_ = th.sceneRef;
+	lvFallbackSkip_ = kLvFallbackEveryN - 1;
+	++lvFallbackShots_;
+	out = th;
+	return ERR_HGC_OK;
+}
+
 errCode apiCanonCCAPI::meterSceneShot(const hgc::exposure& shotExp, meterResult& out,
                                       const std::function<bool()>& keepGoing)
 {
