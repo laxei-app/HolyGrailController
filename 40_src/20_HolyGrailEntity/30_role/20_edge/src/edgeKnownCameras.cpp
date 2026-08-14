@@ -224,6 +224,14 @@ void presenceStart(std::function<void()> onChange)
 void presenceStop() { presenceMon::stop(); }
 std::string presenceJson() { return presenceMon::json(); }
 
+bool ownedCamerasAuthoritative()
+{
+	// エッジも接続したカメラを所持台帳へ記録する(recordConnectedCamera)。ただしそれは
+	// 「どの個体に繋いだか」の控えで、測光方式などの**設定の出所ではない**。設定はスマホが
+	// 撮影計画へ載せて送ってくるので、エッジはそれを信用する(自分の控えで上書きしない)。
+	return false;
+}
+
 // 計画カメラの在否。エッジ自身の在否モニタ(共通)から判定する。1=オンライン/0=オフライン/-1=不明。
 int cameraPresence(const hgc::camera& cam) { return presenceMon::presence(cam); }
 void cameraPresenceVerify(const hgc::camera& cam) { presenceMon::verifyNow(cam); }

@@ -847,10 +847,17 @@ namespace
 	// 編集中計画のccm一式を、その計画のカメラ/レンズの上下限へクランプする(item3)。
 	// 測光方式は「その機体の性質」であって計画ごとに変える設定ではない。計画は自分のカメラの
 	//  コピーを持つので、所持カメラ側でチェックを変えても既存の計画には届かない。使う直前に
-	//  所持カメラの値へ揃える。**スマホ直結の撮影と、エッジへ送る計画JSONの両方で通ること**。
-	//  (所持カメラを持たないエッジ役では見つからず、受け取った計画の値のまま=無害)
+	//  所持カメラの値へ揃える。スマホ直結の撮影と、エッジへ送る計画JSONの両方で通す。
+	//
+	// 【エッジでは絶対にやらない(2026-08-14 の回帰)】当初「エッジは所持カメラを持たないので
+	//  無害」と書いたが**誤り**。エッジも接続したカメラを所持台帳へ記録する
+	//  (recordConnectedCamera)。その控えの meterLv は既定 false なので、ここを無条件に走らせると
+	//  **スマホが計画へ載せて送った true を false へ塗り潰す**。実際 R10 がライブビュー主体に
+	//  ならず毎コマサムネイルを取りに行き、178コマで Device busy に陥った(R10 の取得回数上限)。
+	//  設定の出所はスマホだけ。受け取った側は計画を信用する。
 	void applyOwnedMeterLv(hgc::camera& cam)
 	{
+		if (!hge::role::ownedCamerasAuthoritative()) { return; }
 		hgc::camera oc;
 		const std::string key = cam.name.empty() ? cam.model : cam.name;
 		if (!key.empty() && dataManager::findOwnedCamera(key, oc)) { cam.meterLv = oc.meterLv; }
