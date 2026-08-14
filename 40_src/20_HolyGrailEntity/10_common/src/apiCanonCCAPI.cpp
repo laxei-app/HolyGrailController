@@ -70,6 +70,26 @@ apiCanonCCAPI::apiCanonCCAPI(void) {}
 apiCanonCCAPI::~apiCanonCCAPI(void) {}
 
 
+// /ccapi の応答が「API一覧ではない」か。AVF対応機(動画寄りの機種)は一覧を出さず
+//  {"value":"No list of APIs"} を返す(CCAPI Reference 4.2.1)。
+//  判定は公式サンプルと同じく **"value" キーがあるかどうか**で行う(文字列一致には頼らない)。
+static bool isNoApiList(const std::string& body)
+{
+	json j = json::parse(body, nullptr, false);
+	if (j.is_discarded() || !j.is_object()) { return true; }	// 壊れている=一覧として使えない
+	return j.contains("value");
+}
+
+// 開発者向けのAPI一覧 URL を作る。CCAPI Reference 4.2.2「List of supported APIs (For developers)」。
+//  urlAccess("http://host:port/ccapi")の "ccapi" までを土台に /ver100/topurlfordev を足す。
+//  **バージョンは常に ver100**(公式サンプル WebAPI.getUrlForDev() と同じ。機種の対応版に依らない)。
+static std::string topUrlForDev(const std::string& urlAccess)
+{
+	const size_t ix = urlAccess.rfind("ccapi");
+	if (ix == std::string::npos) { return std::string(); }
+	return urlAccess.substr(0, ix + 5) + "/ver100/topurlfordev";
+}
+
 // device についての情報を取得する
 // device : カメラの情報。この呼び出し時には location が入っていること。
 //          location を読み取りdevice discovery の内容、コマンド一覧を取得する。
@@ -87,12 +107,28 @@ errCode apiCanonCCAPI::init(class device& device)
     if(!success)                { return ERR_HGC_API_LIST; }	
 	if (catlog.length() == 0)   { return ERR_HGC_API_LIST; }	
 
+    // AVF対応機(EOS R50 V など動画寄りの機種)は /ccapi で一覧を出さず {"value":"No list of APIs"}
+    //  を返す。その場合は**開発者向けの一覧**から取り直す(CCAPI Reference 4.2.2。公式サンプルも
+    //  isNoListOfApis() → getUrlForDev() と同じ流れ)。応答の形は同じで、要素のキーが
+    //  "path"(相対)ではなく "url"(絶対)になる機種がある。analizeUseFunction は両方受ける。
+    if (isNoApiList(catlog))
+    {
+        const std::string devUrl = topUrlForDev(device.urlAccess);
+        std::string devCat;
+        if (!devUrl.empty() && netThread::httpGet(devUrl, devCat) && !devCat.empty() && !isNoApiList(devCat))
+        {
+            DBGLN(col::YEL, "CCAPI: no API list -> use topurlfordev");
+            catlog.swap(devCat);
+        }
+    }
+
     // 使用する api の path を保存する。
     err = analizeUseFunction(device, catlog);
     // 一覧を出さない機種(EOS R50 V は {"value":"No list of APIs"})では何も登録できない。
     //  個別のエンドポイントは応答するので、既知のパスを直接叩いて組み立て直す。
     if (err != ERR_HGC_OK || funcList.find(funcNum::SHOT) == funcList.end())
     {
+        // ここまで来るのは /ccapi も topurlfordev も一覧を返さなかったとき。最後の砦。
         DBGLN(col::YEL, "CCAPI: API list unusable -> probe known paths");
         useFunctionClear();
         funcList.clear();
@@ -114,6 +150,21 @@ errCode apiCanonCCAPI::initManual(class device& device)
     auto success = netThread::httpGet(device.urlAccess, catlog);
     if (!success)               { return ERR_HGC_API_LIST; }
     if (catlog.length() == 0)   { return ERR_HGC_API_LIST; }
+
+    // AVF対応機(EOS R50 V など動画寄りの機種)は /ccapi で一覧を出さず {"value":"No list of APIs"}
+    //  を返す。その場合は**開発者向けの一覧**から取り直す(CCAPI Reference 4.2.2。公式サンプルも
+    //  isNoListOfApis() → getUrlForDev() と同じ流れ)。応答の形は同じで、要素のキーが
+    //  "path"(相対)ではなく "url"(絶対)になる機種がある。analizeUseFunction は両方受ける。
+    if (isNoApiList(catlog))
+    {
+        const std::string devUrl = topUrlForDev(device.urlAccess);
+        std::string devCat;
+        if (!devUrl.empty() && netThread::httpGet(devUrl, devCat) && !devCat.empty() && !isNoApiList(devCat))
+        {
+            DBGLN(col::YEL, "CCAPI: no API list -> use topurlfordev");
+            catlog.swap(devCat);
+        }
+    }
 
     errCode err = analizeUseFunction(device, catlog);
     if (err != ERR_HGC_OK || funcList.find(funcNum::SHOT) == funcList.end())
@@ -175,8 +226,10 @@ errCode apiCanonCCAPI::analizeUseFunction(class device& device, std::string& cat
         {
             for (const auto& entry : endpoints) 
             {
-                // path 取得
+                // path 取得。開発者向け一覧(topurlfordev)は "path" ではなく絶対URLの "url" で返す
+                //  機種がある(CCAPI Reference 4.2.2 / 公式サンプル APIDataSet も両対応)。
                 std::string path = entry.value("path", "");
+                if (path.length() == 0) { path = entry.value("url", ""); }
                 if (path.length() == 0) { continue; }
                 class func func;
                 for (auto& fncRef : useFunction)
