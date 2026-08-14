@@ -89,6 +89,15 @@ errCode apiCanonCCAPI::init(class device& device)
 
     // 使用する api の path を保存する。
     err = analizeUseFunction(device, catlog);
+    // 一覧を出さない機種(EOS R50 V は {"value":"No list of APIs"})では何も登録できない。
+    //  個別のエンドポイントは応答するので、既知のパスを直接叩いて組み立て直す。
+    if (err != ERR_HGC_OK || funcList.find(funcNum::SHOT) == funcList.end())
+    {
+        DBGLN(col::YEL, "CCAPI: API list unusable -> probe known paths");
+        useFunctionClear();
+        funcList.clear();
+        err = probeUseFunction(device);
+    }
     this->device = device;
     liveViewInfo.resize(1024*8);
     return err;
@@ -107,6 +116,12 @@ errCode apiCanonCCAPI::initManual(class device& device)
     if (catlog.length() == 0)   { return ERR_HGC_API_LIST; }
 
     errCode err = analizeUseFunction(device, catlog);
+    if (err != ERR_HGC_OK || funcList.find(funcNum::SHOT) == funcList.end())
+    {   // 一覧を出さない機種。init() と同じく既知のパスを直接叩いて組み立てる。
+        useFunctionClear();
+        funcList.clear();
+        err = probeUseFunction(device);
+    }
 
     // CCAPI の deviceinformation からモデル名/シリアルNo.等を補完する(UPnP記述子の代替)。
     // 失敗しても手動接続自体は続行する(機能取得が済んでいれば撮影は可能)。
@@ -210,6 +225,85 @@ errCode apiCanonCCAPI::analizeUseFunction(class device& device, std::string& cat
         return ERR_HGC_API_LIST;
     }
     return ERR_HGC_OK;
+}
+
+// カタログ(/ccapi)が使えないカメラのために、必要な機能のパスを直接叩いて funcList を作る。
+//
+// 【なぜ要るか(2026-08-14 EOS R50 V)】この機種は /ccapi が {"value":"No list of APIs"} を返し、
+//  APIの一覧を出さない。アプリは一覧から全機能のURLを組み立てる作りなので、**一覧が出ない
+//  というだけで**カメラとして成立せず、検出一覧にも出ず、未登録カメラの登録プロンプトも
+//  出なかった(シリアルはCCAPI経由で取るため)。
+//  一方で個別のエンドポイントは普通に応答する。ならばこちらから当てて確かめればよい。
+//
+// 【バージョンを跨いで探す理由】同じ機種でも機能ごとに ver が違う。R50 V の実測:
+//   av/tv/iso・shutterbutton・liveview・autopoweroff・ignoreshootingmodedialmode → ver100
+//   storage/currentstorage/currentdirectory・event/polling・shootingmode      → ver110
+//  ver100 決め打ちにすると半分しか見つからない(contents はどのverにも無かった)。
+//
+// 【404 だけを「無い」と見なす理由】POST専用のパス(shutterbutton)は GET すると 405、
+//  ライブビュー系は状況により 503 を返す。どちらも「そこにある」ので採用してよい。
+//  応答そのものが無い(status 0)ときは相手に届いていないので、最初から通信できていない
+//  場合は空振りを続けないよう即座に諦める。
+errCode apiCanonCCAPI::probeUseFunction(class device& device)
+{
+	// urlAccess は "http://host:port/ccapi"。末尾の "ccapi" までを土台にする。
+	const size_t ix = device.urlAccess.rfind("ccapi");
+	if (ix == std::string::npos) { return ERR_HGC_API_LIST; }
+	const std::string base = device.urlAccess.substr(0, ix + 5);
+
+	struct probeDef { funcNum fn; const char* path; uint8_t verbs; };
+	static const probeDef defs[] =
+	{
+		{ funcNum::SHOT,           "shooting/control/shutterbutton",             verb::POS },
+		{ funcNum::F_NUMBER,       "shooting/settings/av",                       verb::GET | verb::PUT },
+		{ funcNum::SS,             "shooting/settings/tv",                       verb::GET | verb::PUT },
+		{ funcNum::ISO,            "shooting/settings/iso",                      verb::GET | verb::PUT },
+		{ funcNum::LIVE_DETAIL,    "shooting/liveview/flipdetail",               verb::GET },
+		{ funcNum::LIVE_SET,       "shooting/liveview",                          verb::POS | verb::PUT },
+		{ funcNum::STRAGE_STA,     "devicestatus/storage",                       verb::GET },
+		{ funcNum::STRAGE_ACT,     "devicestatus/currentstorage",                verb::GET },
+		{ funcNum::DIR_ACT,        "devicestatus/currentdirectory",              verb::GET },
+		{ funcNum::L_FILE,         "contents",                                   verb::GET },
+		{ funcNum::IGNORE_DIAL,    "shooting/control/ignoreshootingmodedialmode", verb::GET | verb::PUT },
+		{ funcNum::SHOOTMODE_DIAL, "shooting/settings/shootingmodedial",         verb::GET | verb::PUT },
+		{ funcNum::SHOOTMODE,      "shooting/settings/shootingmode",             verb::GET | verb::PUT },
+		{ funcNum::AUTOPOWEROFF,   "functions/autopoweroff",                     verb::GET | verb::PUT },
+		{ funcNum::EVENT_POLL,     "event/polling",                              verb::GET },
+	};
+	static const char* vers[] = { "ver100", "ver110", "ver120", "ver130" };
+
+	int found = 0, tried = 0;
+	for (const auto& d : defs)
+	{
+		for (const char* v : vers)
+		{
+			std::string body;
+			const std::string url = base + "/" + v + "/" + d.path;
+			const bool ok = netThread::httpGet(url, body);
+			int st = 0; std::string dummy;
+			if (!ok) { netThread::lastHttpFailure(st, dummy); }
+			++tried;
+			if (!ok && st == 0)
+			{	// 応答そのものが無い。1つも見つかっていないなら相手に届いていない。
+				if (found == 0 && tried >= 2) { return ERR_HGC_API_LIST; }
+				continue;
+			}
+			if (!ok && st == 404) { continue; }		// そのバージョンには無い
+
+			class func f;
+			f.funcNum = d.fn;
+			f.url     = url;
+			if (d.verbs & verb::GET) { f.verb |= verb::GET; }
+			if (d.verbs & verb::PUT) { f.verb |= verb::PUT; }
+			if (d.verbs & verb::POS) { f.verb |= verb::POS; }
+			if (d.verbs & verb::DEL) { f.verb |= verb::DEL; }
+			funcList[d.fn] = f;
+			++found;
+			break;
+		}
+	}
+	DBGLN(col::YEL, "CCAPI: probed %d/%d functions (no API list)", found, (int)(sizeof(defs)/sizeof(defs[0])));
+	return (found > 0) ? ERR_HGC_OK : ERR_HGC_API_LIST;
 }
 
 // 登録された機能を削除する

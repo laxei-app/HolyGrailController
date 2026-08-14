@@ -316,6 +316,10 @@ protected:
 	// useFunction に登録された機能を削除する
 	void useFunctionClear(void);
 
+	// カタログ(/ccapi)が使えないカメラのために、必要な機能のパスを直接叩いて funcList を作る。
+	//  詳しくは .cpp の説明を参照(EOS R50 V 対応)。
+	errCode probeUseFunction(class device& device);
+
 	// 使う機能の一覧
 	std::vector<class useFunction> useFunction =
 	{
