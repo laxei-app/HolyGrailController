@@ -270,7 +270,10 @@ errCode apiCanonCCAPI::probeUseFunction(class device& device)
 		{ funcNum::AUTOPOWEROFF,   "functions/autopoweroff",                     verb::GET | verb::PUT },
 		{ funcNum::EVENT_POLL,     "event/polling",                              verb::GET },
 	};
-	static const char* vers[] = { "ver100", "ver110", "ver120", "ver130" };
+	// 【ver140 まで見る(2026-08-14)】R50 V は contents が ver140 にあった。ver130 までで
+	//  打ち切っていたため「contents はどのバージョンにも無い」と誤判定していた。
+	//  上から順に当てて最初に見つかったものを採るので、増やしても既存機種の結果は変わらない。
+	static const char* vers[] = { "ver100", "ver110", "ver120", "ver130", "ver140", "ver150" };
 
 	int found = 0, tried = 0;
 	for (const auto& d : defs)
