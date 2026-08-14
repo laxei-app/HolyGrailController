@@ -2,5 +2,5 @@
 // 版数は 40_src/version.properties で管理し、ビルドのたびにパッチが +1 される。
 #ifndef _EDGE_VERSION_H_
 #define _EDGE_VERSION_H_
-#define HGC_EDGE_VERSION "0.1.71"
+#define HGC_EDGE_VERSION "0.1.72"
 #endif
