@@ -230,7 +230,7 @@ void edgeRemoveReceivedPlan(const std::string& id)
 // 選択の邪魔になるため。撮影終了(state=IDLE)かつ撮影終了時刻が過去(capturable=false)の計画が対象。
 // スマホ側には計画が残るので、エッジから消えても再送すれば使える。実行中/待機中の計画は消さない。
 // 実装は planList() のキャッシュを見るだけなので軽い。loop から定期的に呼ぶ。
-static void pruneFinishedPlans(void);
+static void pruneFinishedPlans(bool all);
 
 static constexpr int HEAD_H   = 28;
 static constexpr int CLOCK_H  = 22;	// 最下段の時計予約帯の高さ(px)。計画表示・スクロール対象外(#8)
@@ -345,13 +345,15 @@ static const json& planList(void)
 	return cache;
 }
 
-// 項目2: 終わった撮影計画をエッジから自動削除する(宣言は上部)。
-// 条件: 撮影終了時刻が過去(capturable=false) かつ 非実行(state=IDLE)。実行中/待機中/未検出は残す。
-// 保留操作(g_pendingIcon)中の計画も触らない(押した直後の取り違えを防ぐ)。
-static void pruneFinishedPlans(void)
+// 時計が信用できるか。未設定(1970)や同期前のでたらめな時刻で計画を消してしまわないための門番。
+static bool clockUsable(void)
 {
-	const json& arr = planList();
-	std::vector<std::string> gone;
+	return static_cast<long long>(time(nullptr)) >= 1577836800LL;	// 2020-01-01 より前=未設定
+}
+
+// 期限切れの計画を拾う。条件は「終了が過去(capturable=false)かつ非実行(IDLE)かつ操作保留でない」。
+static void collectExpiredPlans(const json& arr, std::vector<std::string>& gone)
+{
 	for (const auto& p : arr)
 	{
 		const std::string id = p.value("id", std::string());
@@ -360,6 +362,52 @@ static void pruneFinishedPlans(void)
 		if (p.value("state", 0) != HGE_ST_IDLE) { continue; }	// 実行中/待機中など → 残す
 		if (g_pendingIcon.count(id) > 0) { continue; }			// 操作の確定待ち → 残す
 		gone.push_back(id);
+	}
+}
+
+// 計画ファイルを全部読んで一覧を作る(受信リストで絞らない)。取り残されたファイルを拾うため。
+static json planListAllFromFiles(void)
+{
+	json out = json::array();
+	int32_t len = 0;
+	hge_listPlansJson(nullptr, &len);
+	if (len <= 0) { return out; }
+	std::vector<char> buf(static_cast<size_t>(len));
+	if (hge_listPlansJson(buf.data(), &len) != ERR_HGC_OK) { return out; }
+	json j = json::parse(buf.data(), nullptr, false);
+	if (!j.is_discarded() && j.is_array()) { out = j; }
+	return out;
+}
+
+// 項目2: 終わった撮影計画をエッジから自動削除する(宣言は上部)。
+// 条件: 撮影終了時刻が過去(capturable=false) かつ 非実行(state=IDLE)。実行中/待機中/未検出は残す。
+// 保留操作(g_pendingIcon)中の計画も触らない(押した直後の取り違えを防ぐ)。
+//
+// 【2026-08-14 修正】8/11 の計画がエッジに残り続けていた。原因は2つ。
+//  ① capturable(=終了が未来か)は一覧を作った時点の判定で、planList() はキャッシュされる。
+//     一覧を作り直す機会が無いまま日付をまたぐと、期限切れになっても capturable=true のままで
+//     いつまでも消えない。→ 掃除の前に必ず取り直す。
+//  ② 電源が切れている間に期限が切れた計画は、その場では消せない。起動直後に見直す機会が無く、
+//     しかも起動時は時計がまだ来ていないことがある(RTC無し/同期前。実際 1970 年のidの計画が
+//     残っていた)。→ **時計が使えるようになった最初の1回**で全件を見直す。
+//     このときは受信リスト(g_recvPlans)で絞らず、計画ファイルを直接見る(受信リストとファイルが
+//     ずれて取り残されたものも拾うため)。
+//
+// all=true: 計画ファイル全件が対象(起動後の1回)。false: 受信済みの計画だけ(定期)。
+static void pruneFinishedPlans(bool all)
+{
+	// 時計が来ていないと「終了が過去か」を判断できない。信用できる時刻になるまで何もしない。
+	if (!clockUsable()) { return; }
+
+	std::vector<std::string> gone;
+	if (all)
+	{
+		collectExpiredPlans(planListAllFromFiles(), gone);
+	}
+	else
+	{
+		g_listDirty = true;			// capturable を取り直してから見る(①)
+		collectExpiredPlans(planList(), gone);
 	}
 	for (const auto& id : gone)
 	{
@@ -977,11 +1025,16 @@ void loop(void)
 		if (nowMs - lastPump >= 1000) { lastPump = nowMs; hge_pump(); }
 	}
 
-	// 項目2: 終わった撮影計画をエッジから自動削除する(撮影終了後・過去になった計画)。30秒毎で十分。
+	// 項目2: 終わった撮影計画をエッジから自動削除する。
+	//  ・起動後、時計が使えるようになった最初の1回だけ全件(受信リストに無いファイルも含む)を見直す。
+	//    電源が切れている間に期限切れになった計画は、その場では消せないのでここで拾う。
+	//  ・以後は30秒毎。capturable は一覧を作った時点の判定なので、毎回取り直してから見る。
 	{
-		static uint32_t lastPrune = 0;
+		static uint32_t lastPrune  = 0;
+		static bool     bootPruned = false;
 		uint32_t nowMs = millis();
-		if (nowMs - lastPrune >= 30000) { lastPrune = nowMs; pruneFinishedPlans(); }
+		if (!bootPruned && clockUsable()) { bootPruned = true; lastPrune = nowMs; pruneFinishedPlans(true); }
+		else if (nowMs - lastPrune >= 30000) { lastPrune = nowMs; pruneFinishedPlans(false); }
 	}
 
 	// BLE 設定プロビジョニングの保留要求処理(仕様8.2.2)
