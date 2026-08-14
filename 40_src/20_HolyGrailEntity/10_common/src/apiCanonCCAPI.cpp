@@ -1159,7 +1159,7 @@ void apiCanonCCAPI::meterReset(void)
 	// ライブビュー主体方式の状態。再接続でファイル名の並びの追跡が切れるので捨てる
 	// (古いパスを1コマ前だと思って測ると、まったく別の明るさを掴む)。
 	lvShotPrev_.clear(); lvShotLast_.clear();
-	lvFallbackSkip_ = 0; lvHeldSceneRef_ = 0.0;
+	lvFallbackSkip_ = 0; lvHeldSceneRef_ = 0.0; lvStretchedOut_ = false;
 	// 【空読みはここでしない(2026-08-13)】ここで流しても、この後の準備(撮影モード変更・
 	//  設定取得・初期収束の露出適用)で新しいイベントが積まれてしまい、1コマ目の登録通知が
 	//  その中に埋もれて拾えなかった。空読みは1枚目の直前(meterArm)へ移した。
@@ -1188,6 +1188,35 @@ void apiCanonCCAPI::shiftMeterSs(hgc::exposure& me, double delta, double capSec)
 		if (d < best) { best = d; pick = e.value; }
 	}
 	if (!pick.empty()) { me.ss = pick; }
+}
+
+// 測光露出を delta 段ずらす。ss は capSec を超えられないので、**足りないぶんを ISO で補う**。
+//
+// 【なぜ ISO で補うのか(2026-08-14)】ライブビューの限界は「ss をどれだけ長くできるか」で
+//  あって「場面がどれだけ暗いか」ではない。ss を capSec まで詰めた分を ISO で戻せば、
+//  同じ明るさの場面を短い ss で見られる = ライブビューで測れる範囲がそのぶん伸びる。
+//  ここを ss だけで動かしていたため、撮影ss が上限を超えた瞬間に測光露出が撮影露出より
+//  暗くなり、測る前から真っ暗と決まっていた(その状態を「ライブビューでは見えない」と
+//  判定してサムネイルへ落ちていたので、落ちる時期が実際より早すぎた)。
+//
+//  ISO を上げるとノイズは増えるが、見るのは中央値なので実用上ほとんど効かない。
+//  ISO も上限まで来て届かなければ、そこが本当にライブビューの限界。
+void apiCanonCCAPI::shiftMeterExp(hgc::exposure& me, double delta, double capSec) const
+{
+	if (tables_.ss.empty()) { return; }
+	const double want = expo::brightnessStops(me, tables_) + delta;
+	this->shiftMeterSs(me, delta, capSec);			// まず ss で寄せる(capSec 以内)
+	const double rest = want - expo::brightnessStops(me, tables_);	// ss で届かなかったぶん
+	if (std::fabs(rest) < 0.15 || tables_.iso.empty()) { return; }	// 誤差なら触らない
+	hgc::exposure t = me;
+	std::string pick; double best = 1e9;
+	for (const auto& e : tables_.iso)
+	{
+		t.iso = e.value;
+		const double d = std::fabs(expo::brightnessStops(t, tables_) - want);
+		if (d < best) { best = d; pick = e.value; }
+	}
+	if (!pick.empty()) { me.iso = pick; }
 }
 
 // ライブビューのヒストグラムを1枚ぶん読む(取れるまで kMeterMaxMs まで粘る)。
@@ -1298,12 +1327,16 @@ errCode apiCanonCCAPI::meterLvAt(const hgc::exposure& seed, meterResult& out,
 	// 撮影ループ中はライブビューを掴んでいない(離してある)ので、要るときだけ張る。
 	if (!this->liveViewAlive()) { this->startShooting(); }
 
+	lvStretchedOut_ = false;
+
 	// 測光露出の出発点。撮影露出(seed)が使えるならそれ、無ければ自分の学習値。
 	hgc::exposure me = validExp(seed) ? seed : (validExp(hereExp_) ? hereExp_ : camExp_);
 	if (!validExp(me)) { out.failStage = 20; return ERR_HGC_RDY_METARING; }
+	// ライブビューが再現できない長さの ss は詰める。**明るさは変えない**(詰めたぶんは ISO で戻す)。
+	//  撮影ss が上限以下ならここで何も変わらず、カメラへ1バイトも送らずに測ることになる。
 	if (expo::parseValue(me.ss, expo::expoKind::ss) > kInitMeterMaxSsSec)
 	{
-		this->shiftMeterSs(me, 0.0, kInitMeterMaxSsSec);
+		this->shiftMeterExp(me, 0.0, kInitMeterMaxSsSec);
 	}
 
 	for (int shift = 0; shift < kHereMaxShift; ++shift)
@@ -1356,34 +1389,26 @@ errCode apiCanonCCAPI::meterLvAt(const hgc::exposure& seed, meterResult& out,
 
 		// 白飛び: 大股で降りる。ss が最短側に達して降りきれないときは ISO を下げて抜ける。
 		if (h.x >= kPegBright)
-		{
-			const double before = expo::brightnessStops(me, tables_);
-			this->shiftMeterSs(me, kPegBrightStep, kInitMeterMaxSsSec);
-			if (before - expo::brightnessStops(me, tables_) < 1.0)
-			{
-				hgc::exposure t = me;
-				const double wantB = before + kPegBrightStep;
-				std::string pick; double best = 1e9;
-				for (const auto& e : tables_.iso)
-				{
-					t.iso = e.value;
-					const double d = std::fabs(expo::brightnessStops(t, tables_) - wantB);
-					if (d < best) { best = d; pick = e.value; }
-				}
-				if (!pick.empty()) { me.iso = pick; }
-			}
+		{	// ss で降りきれないぶんは ISO を下げて抜ける(shiftMeterExp が両方まとめて見る)。
+			this->shiftMeterExp(me, kPegBrightStep, kInitMeterMaxSsSec);
 			out.failStage = 23;
 			continue;
 		}
 		// 黒潰れ: まだ伸ばせるなら忠実上限まで伸ばして測り直す。
 		// 伸ばしきっても黒い(=本当に真っ暗な夜)ならその値で進める。投影は明側限界へ
 		// クランプされ、夜間露出へ落ち着く。
-		if (h.x <= kPegDark
-		 && expo::parseValue(me.ss, expo::expoKind::ss) < kInitMeterMaxSsSec * 0.99)
+		if (h.x <= kPegDark)
 		{
-			this->shiftMeterSs(me, kPegDarkStep, kInitMeterMaxSsSec);
-			out.failStage = 23;
-			continue;
+			const double before = expo::brightnessStops(me, tables_);
+			this->shiftMeterExp(me, kPegDarkStep, kInitMeterMaxSsSec);
+			if (expo::brightnessStops(me, tables_) - before >= 0.5)
+			{
+				out.failStage = 23;
+				continue;			// まだ伸ばせた → 伸ばして測り直す
+			}
+			// ss は上限、ISO も上限。**ここが本当のライブビューの限界**。
+			//  値は下限に張り付いていて場面の明るさではないので、上位へそう申告する。
+			lvStretchedOut_ = true;
 		}
 
 		// 採用。次回の出発点として覚える(呼ぶたびに最初から探し直さない)。
@@ -1712,24 +1737,29 @@ errCode apiCanonCCAPI::meterSceneLvFirst(const hgc::exposure& shotExp, meterResu
 		}
 	}
 
-	// ② ライブビューで測る。ここが本線。
-	//    **撮影露出のまま測る**のが基本。ライブビューは積分の上限(kInitMeterMaxSsSec)を
-	//    超える ss を再現できないので、それより長い撮影露出のときだけ測光専用の露出へ
-	//    乗せ替える(乗せ替えると1コマごとに ss が動いて見えるうえ、追従待ちも要る)。
-	hgc::exposure seed;
-	if (validExp(shotExp) &&
-	    expo::parseValue(shotExp.ss, expo::expoKind::ss) <= kInitMeterMaxSsSec)
+	// ② 間引き中(=直前に「ライブビューでは見えない」と分かっている)は、測光そのものを省く。
+	//    ライブビューを読み直しても答えは同じで、乗せ替えと追従待ちを毎コマ払うだけになる。
+	//    夜明けで明るさが戻れば、間引きが明けたコマで拾える(15秒周期なら最大45秒遅れ)。
+	if (lvFallbackSkip_ > 0 && lvHeldSceneRef_ > 0.0)
 	{
-		seed = shotExp;
+		--lvFallbackSkip_;
+		out           = meterResult{};
+		out.ok        = true;
+		out.usable    = true;
+		out.sceneRef  = lvHeldSceneRef_;
+		out.meterExp  = shotExp;
+		return ERR_HGC_OK;
 	}
+
+	// ③ ライブビューで測る。ここが本線。
+	//    **撮影露出をそのまま渡す**。ライブビューが再現できない長さの ss は meterLvAt が
+	//    詰めて、詰めたぶんを ISO で戻す(明るさは変えない)。撮影ss が上限以下なら
+	//    カメラへは1バイトも送らずに測ることになる。
 	meterResult lv;
-	const errCode le = this->meterLvAt(seed, lv, keepGoing);
-	// ライブビューが「見えていない」判定: 測れてはいるが中央値が底に張り付いていて、
-	//  しかも測光ss を伸ばしきっている(=これ以上積分できない)。この状態の値は
-	//  場面の明るさではなく「LVの下限」なので、そのまま使うと露出が追随しなくなる。
-	const double meterSs = expo::parseValue(lv.meterExp.ss, expo::expoKind::ss);
-	const bool   lvBlind = (le != ERR_HGC_OK) || !lv.usable
-	                    || (lv.x <= kPegDark && meterSs >= kInitMeterMaxSsSec * 0.99);
+	const errCode le = this->meterLvAt(shotExp, lv, keepGoing);
+	// ライブビューが「見えていない」判定は、**ss と ISO を伸ばしきってなお底に張り付く**こと。
+	//  それ以外(まだ伸ばす余地がある/普通に測れた)の値は場面の明るさとして信用してよい。
+	const bool lvBlind = (le != ERR_HGC_OK) || !lv.usable || lvStretchedOut_;
 	if (!lvBlind)
 	{
 		out = lv;
@@ -1737,20 +1767,7 @@ errCode apiCanonCCAPI::meterSceneLvFirst(const hgc::exposure& shotExp, meterResu
 		return ERR_HGC_OK;
 	}
 
-	// ③ ライブビューでは足りない。サムネイルへ落ちる(間引きあり)。
-	//    間引き中のコマは直近の場面基準をそのまま返す。上位はこれを目標に1コマぶんずつ
-	//    近づくので、値を据え置いても露出は滑らかに動く。
-	if (lvFallbackSkip_ > 0 && lvHeldSceneRef_ > 0.0)
-	{
-		--lvFallbackSkip_;
-		out           = lv;			// 診断値(ヒスト等)はライブビューのものを残す
-		out.ok        = true;
-		out.usable    = true;
-		out.failStage = 0;
-		out.sceneRef  = lvHeldSceneRef_;
-		out.meterExp  = shotExp;
-		return ERR_HGC_OK;
-	}
+	// ④ ライブビューでは足りない。サムネイルへ落ちる。
 
 	// 1コマ前が分かっていなければ取りようがない(セッションの最初の1コマ)。
 	//  ライブビューの値をそのまま使う(暗い側へ張り付いた値だが、次のコマで取り直せる)。

@@ -194,6 +194,9 @@ protected:
 	int              lvFallbackSkip_ = 0;	// 間引き用の残りコマ数(0でサムネイルを取る)
 	double           lvHeldSceneRef_ = 0.0;	// 間引き中に返す、直近サムネイルの場面基準
 	int              lvFallbackShots_ = 0;	// このセッションでサムネイルを取った回数(診断用)
+	// 直近のライブビュー測光が「底に張り付いたまま、ss も ISO も伸ばしきった」で終わったか。
+	//  = ライブビューではこの暗さが見えない。サムネイルへ落ちる唯一の判断材料。
+	bool             lvStretchedOut_ = false;
 
 	// --- 測光の内部状態(セッション単位。meterReset で捨てる) ---
 	expo::expoTables tables_;			// 設定可能値テーブル(getSettingsでabilityから自前構築。
@@ -210,6 +213,9 @@ protected:
 	void        meterSleep(int ms, const std::function<bool()>& keepGoing) const;
 	// 測光露出をテーブル上で delta 段ずらす(結果の ss は capSec を超えない)。
 	void        shiftMeterSs(hgc::exposure& me, double delta, double capSec) const;
+	// 同上。ss だけで届かないぶんを ISO で補う(ライブビューの限界は ss の長さなので、
+	//  ss を詰めて ISO で戻すと同じ明るさを短い ss で見られる)。詳しくは .cpp の説明。
+	void        shiftMeterExp(hgc::exposure& me, double delta, double capSec) const;
 	// ライブビュー測光の本体。seed が有効ならその露出のまま測る(何も送らない)。
 	//  張り付いたときだけ測光専用の露出へ乗せ替える。詳しくは .cpp の説明を参照。
 	errCode     meterLvAt(const hgc::exposure& seed, meterResult& out,
