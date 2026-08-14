@@ -845,6 +845,17 @@ namespace
 	}
 
 	// 編集中計画のccm一式を、その計画のカメラ/レンズの上下限へクランプする(item3)。
+	// 測光方式は「その機体の性質」であって計画ごとに変える設定ではない。計画は自分のカメラの
+	//  コピーを持つので、所持カメラ側でチェックを変えても既存の計画には届かない。使う直前に
+	//  所持カメラの値へ揃える。**スマホ直結の撮影と、エッジへ送る計画JSONの両方で通ること**。
+	//  (所持カメラを持たないエッジ役では見つからず、受け取った計画の値のまま=無害)
+	void applyOwnedMeterLv(hgc::camera& cam)
+	{
+		hgc::camera oc;
+		const std::string key = cam.name.empty() ? cam.model : cam.name;
+		if (!key.empty() && dataManager::findOwnedCamera(key, oc)) { cam.meterLv = oc.meterLv; }
+	}
+
 	void clampPlanCcmToGear(void) { clampOwnedToGear(g_plan.ccm, g_plan.camera, g_plan.lens); }
 
 	// --- item5: 名称の重複回避(リスト+分割バー画面共通の方針) ---
@@ -1154,7 +1165,11 @@ namespace
 					// 引いた回数(1コマ6〜8回が普通)なので、これを使うと全コマが「リトライ」に
 					// なってしまい意味を失う(2026-08-13 実測で判明)。
 					if (c.meterFetchTries > 1) { ++R.meterRetryFrames; }
-					if (c.meterFetchTries > 0) { ++R.thumbFrames; }	// 実際にサムネイルを取ったコマ
+					// 何で測ったかの内訳。カメラ依存層の申告(apiBase::via_*)をそのまま数えるだけで、
+					//  この値で動作は変えない(測光方式は下の層に隠したままにする)。
+					if      (c.meterVia == 2) { ++R.thumbFrames; }
+					else if (c.meterVia == 1) { ++R.lvFrames; }
+					else if (c.meterVia == 3) { ++R.heldFrames; }
 					if (c.applyTry > 1)  { ++R.applyRetryFrames; }
 					if (c.staleSkip > 0) { ++R.staleFrames; R.staleTotal += c.staleSkip; }
 					if (c.lateMs >= 0)
@@ -1282,6 +1297,7 @@ namespace
 			S->state = HGE_ST_NOCAMERA; notifyStateP(S->planId, HGE_ST_NOCAMERA); refreshAggregateState();
 		}
 		hgc::exposureSmoothing smooth = dataManager::currentSmoothing();
+		applyOwnedMeterLv(S->plan.camera);	// スマホ直結でも所持カメラの測光方式で撮る
 		errCode e = S->runner->ready(S->plan, &S->dev, smooth, g_offMin);
 		if (e != ERR_HGC_OK) { notifyError(e, "ready"); S->state = HGE_ST_ERROR; notifyStateP(S->planId, HGE_ST_ERROR); refreshAggregateState(); return e; }
 		// 撮影ループを本スレッド上で実行する(セッションあたり1スレッド)。runner 用の2本目の
@@ -1599,14 +1615,7 @@ int32_t hge_getPlanJson(char* buf, int32_t* inoutLen)
 		errCode e = loadFixedPlanImpl();
 		if (e != ERR_HGC_OK) { return e; }
 	}
-	// 測光方式は「その機体の性質」であって計画ごとに変える設定ではない。計画は自分のカメラの
-	//  コピーを持つので、所持カメラ側でチェックを変えても既存の計画には届かない。ここで所持カメラの
-	//  値へ揃えてから出す(所持カメラを持たないエッジ役では見つからず、計画の値のまま=無害)。
-	{
-		hgc::camera oc;
-		const std::string key = g_plan.camera.name.empty() ? g_plan.camera.model : g_plan.camera.name;
-		if (!key.empty() && dataManager::findOwnedCamera(key, oc)) { g_plan.camera.meterLv = oc.meterLv; }
-	}
+	applyOwnedMeterLv(g_plan.camera);
 	std::string s = csjson::toJson(g_plan);
 	int32_t need = static_cast<int32_t>(s.size()) + 1;
 	if (buf == nullptr || *inoutLen < need)

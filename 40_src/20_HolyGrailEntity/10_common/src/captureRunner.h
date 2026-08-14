@@ -83,7 +83,9 @@ public:
 	                      // (1=一発で乗った / >1=待って乗った / 0=不明)。放置後の初回にだけ
 	                      // 起きる適用失敗を、後から「起きたが吸収した」と確認するための記録。
 	                      int firstApplyTries = 0;
-	                      convergeInfo converge{}; };	// 撮影開始前の初期収束の結果(セッション単位)
+	                      convergeInfo converge{};	// 撮影開始前の初期収束の結果(セッション単位)
+	                      // 何で測ったか(レポートの件数用)。apiBase::via_* の値。
+	                      int meterVia = 0; };
 
 	using stateCb    = std::function<void(int)>;					// hgeState 値
 	using progressCb = std::function<void(const progressInfo&)>;
@@ -324,6 +326,7 @@ private:
 	double      lvP75Log_ = -1.0, lvP90Log_ = -1.0;
 	double      lvSatLog_ = -1.0;
 	int         meterWaitMs_ = -1, meterFetchMs_ = -1, meterDecodeMs_ = -1, meterFetchTries_ = 0;	// 測光所要の内訳(ログ用)
+	int         meterVia_ = 0;		// 何で測ったか(apiBase::via_*。レポートの件数用)
 	// カメラ実装からの申告: 直前のコマの撮影結果が現れなかった(撮れていない疑い)。
 	// 測光しないコマでは判定できないので false のまま(=据え置き扱い)。
 	bool        shotMissing_ = false;

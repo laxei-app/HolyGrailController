@@ -1412,6 +1412,7 @@ errCode apiCanonCCAPI::meterLvAt(const hgc::exposure& seed, meterResult& out,
 		}
 
 		// 採用。次回の出発点として覚える(呼ぶたびに最初から探し直さない)。
+		out.via        = meterResult::via_liveView;
 		hereExp_       = me;
 		out.meterExp   = me;
 		out.sceneRef   = h.linear / std::pow(2.0, expo::brightnessStops(me, tables_));
@@ -1674,6 +1675,7 @@ errCode apiCanonCCAPI::thumbMeterCore(meterResult& out, int budgetMs, const std:
 		if (static_cast<int>(tool::getElapse(t0)) >= budgetMs) { break; }	// 総予算切れ
 		meterSleep(kThumbFetchRetryMs, keepGoing);
 	}
+	out.via      = meterResult::via_shotThumb;	// ここまで来たら取得先はサムネイル(成否に関わらず)
 	out.fetchMs  = static_cast<int>(tool::getElapse(tf)) - decodeMs;	// 取得だけの時間
 	out.decodeMs = decodeMs;
 	out.rdyMs    = static_cast<int>(tool::getElapse(t0));
@@ -1746,6 +1748,7 @@ errCode apiCanonCCAPI::meterSceneLvFirst(const hgc::exposure& shotExp, meterResu
 		out           = meterResult{};
 		out.ok        = true;
 		out.usable    = true;
+		out.via       = meterResult::via_held;	// 測っていない(直近のサムネイル値を据え置き)
 		out.sceneRef  = lvHeldSceneRef_;
 		out.meterExp  = shotExp;
 		return ERR_HGC_OK;

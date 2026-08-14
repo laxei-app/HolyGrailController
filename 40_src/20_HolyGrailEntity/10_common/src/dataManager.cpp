@@ -1368,6 +1368,8 @@ std::string dataManager::writeCaptureReport(const captureReport& r, const hgc::c
 	                  { "setFail", r.setFail },     { "setFailPct", pct(r.setFail, r.frames) },
 	                  { "meterRetryFrames", r.meterRetryFrames },
 	                  { "thumbFrames", r.thumbFrames },
+	                  { "lvFrames", r.lvFrames },
+	                  { "heldFrames", r.heldFrames },
 	                  { "applyRetryFrames", r.applyRetryFrames } };
 
 	j["interval"] = { { "setSec", plan.interval }, { "actualSec", actual } };

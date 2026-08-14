@@ -110,6 +110,15 @@ public:
 		int           waitStep  = 0;
 		int           waitHttp  = 0;	// その通信のHTTPステータス(0=応答なし/接続失敗)
 		std::string   waitBody;			// 応答本文の先頭(CCAPIは理由をここに返す)
+		// 【この値で動作を変えないこと】どの手で測ったかの申告。撮影レポートに件数を出すためだけに
+		//  使う。測光の方式はカメラ依存層に隠蔽したままにしたいので、上位はこれを数えて表示する
+		//  以外のことをしない。区別を持たない実装は via_unknown のままでよい。
+		//  0=不明/測っていない 1=ライブビュー 2=撮影画像のサムネイル 3=据え置き(測らず直近値)
+		static constexpr int via_unknown = 0;
+		static constexpr int via_liveView = 1;
+		static constexpr int via_shotThumb = 2;
+		static constexpr int via_held = 3;
+		int           via = via_unknown;
 	};
 	// 【撮影中の測光】直前に撮った1コマ(その露出が shotExp)を手がかりに場面の明るさを測る。
 	//  実装がどう測るかは自由(撮影画像のサムネイル/ライブビュー/外部センサー…)。呼び出し側は

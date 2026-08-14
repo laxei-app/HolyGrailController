@@ -157,6 +157,7 @@ bool captureRunner::meterFrame(const hgc::exposure& shotExp, apiBase::meterResul
 	meterFetchMs_  = mr.fetchMs;
 	meterDecodeMs_ = mr.decodeMs;
 	meterFetchTries_ = mr.fetchTries;
+	meterVia_        = mr.via;
 	asIsLinear_    = mr.asIsLinear;
 	// カメラ露出状態の整合(契約: 測光のために露出を触ったら必ず申告される)。
 	if (!mr.appliedExp.fn.empty())  { lastFnApplied_  = mr.appliedExp.fn; }
@@ -962,7 +963,7 @@ errCode captureRunner::loop(void)
 		meterTry_ = 0;	// 測光試行回数をリセット(測光しないコマは 0)
 		// 測光の内訳もリセットする。前コマの値が残ると、測光しないコマ(夜間の固定露出)で
 		// 前の busy/取得時間をそのまま報告してしまう。
-		meterWaitMs_ = -1; meterFetchMs_ = -1; meterDecodeMs_ = -1; meterFetchTries_ = 0;
+		meterWaitMs_ = -1; meterFetchMs_ = -1; meterDecodeMs_ = -1; meterFetchTries_ = 0; meterVia_ = 0;
 		shotMissing_ = false;	// 測光しないコマは「撮れていない」の判定ができない=据え置き
 
 		// ② このコマの ev0 中心bmを太陽高度から決める(薄明ほど暗く保つ)。測光を使う制御方法(preNight/postNight/auto)で効く。
@@ -1431,7 +1432,7 @@ errCode captureRunner::loop(void)
 			                          lvMeanLinLog_, lvP75Log_, lvP90Log_, lvSatLog_,
 			                          meterSsUsed_, meterSettleMs_, lvPinnedLog_, meterUsableLog_,
 			                          meterWaitMs_, meterFetchMs_, meterDecodeMs_, meterFetchTries_, busyMs, leadUsed,
-			                          asIsLinear_, firstApplyTries_, converge_ });
+			                          asIsLinear_, firstApplyTries_, converge_, meterVia_ });
 		}
 
 		// 測光の連続失敗は「接続断」ではない(2026-07-28 根治)。

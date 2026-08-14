@@ -3957,6 +3957,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
                "測光したコマ中。露出は据え置き")
         repRow(box, "露出設定できず", "%d (%.1f%%)".format(exp.optInt("setFail"), exp.optDouble("setFailPct")),
                "0%でないとアプリとカメラの露出がズレる")
+        // 何で測ったかの内訳。ライブビュー主体のカメラ(R10)では、サムネイルの回数が
+        //  そのまま機種の取得回数予算の消費になるので、ここを見て間引きを調整する。
+        val nLv = exp.optInt("lvFrames"); val nTh = exp.optInt("thumbFrames"); val nHd = exp.optInt("heldFrames")
+        if (nLv + nTh + nHd > 0) {
+            repRow(box, "ライブビューで測光", "$nLv コマ")
+            repRow(box, "サムネイルで測光", "$nTh コマ",
+                   if (nLv > 0) "ライブビューで足りず落ちたコマ" else "サムネイルだけの方式では全コマ")
+            if (nHd > 0) repRow(box, "測らず据え置き", "$nHd コマ", "間引き。直近の測光値を使った")
+        }
         repRow(box, "測光リトライ", "${exp.optInt("meterRetryFrames")} コマ")
         repRow(box, "露出設定リトライ", "${exp.optInt("applyRetryFrames")} コマ")
 
