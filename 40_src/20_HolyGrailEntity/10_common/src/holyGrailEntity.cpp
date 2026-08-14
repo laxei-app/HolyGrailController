@@ -1154,6 +1154,7 @@ namespace
 					// 引いた回数(1コマ6〜8回が普通)なので、これを使うと全コマが「リトライ」に
 					// なってしまい意味を失う(2026-08-13 実測で判明)。
 					if (c.meterFetchTries > 1) { ++R.meterRetryFrames; }
+					if (c.meterFetchTries > 0) { ++R.thumbFrames; }	// 実際にサムネイルを取ったコマ
 					if (c.applyTry > 1)  { ++R.applyRetryFrames; }
 					if (c.staleSkip > 0) { ++R.staleFrames; R.staleTotal += c.staleSkip; }
 					if (c.lateMs >= 0)
@@ -1597,6 +1598,14 @@ int32_t hge_getPlanJson(char* buf, int32_t* inoutLen)
 	{
 		errCode e = loadFixedPlanImpl();
 		if (e != ERR_HGC_OK) { return e; }
+	}
+	// 測光方式は「その機体の性質」であって計画ごとに変える設定ではない。計画は自分のカメラの
+	//  コピーを持つので、所持カメラ側でチェックを変えても既存の計画には届かない。ここで所持カメラの
+	//  値へ揃えてから出す(所持カメラを持たないエッジ役では見つからず、計画の値のまま=無害)。
+	{
+		hgc::camera oc;
+		const std::string key = g_plan.camera.name.empty() ? g_plan.camera.model : g_plan.camera.name;
+		if (!key.empty() && dataManager::findOwnedCamera(key, oc)) { g_plan.camera.meterLv = oc.meterLv; }
 	}
 	std::string s = csjson::toJson(g_plan);
 	int32_t need = static_cast<int32_t>(s.size()) + 1;

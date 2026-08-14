@@ -224,6 +224,10 @@ public:
 		int      staleFrames = 0;	// 古いライブビューを捨てたコマ数
 		long     staleTotal  = 0;	// 捨てた延べ回数
 		int      meterRetryFrames = 0;	// 測光をリトライしたコマ数
+		// 撮影済みサムネイルを実際に取りに行ったコマ数。ライブビュー主体方式(meterLv)では
+		//  「ライブビューでは足りず落ちた回数」= 取得回数の予算をどれだけ使ったかになる。
+		//  サムネイルだけの方式では全コマがこれになる。
+		int      thumbFrames      = 0;
 		int      applyRetryFrames = 0;	// 露出設定をリトライしたコマ数
 		int      lateOk    = 0;		// 撮影周期を守れたコマ(遅れ <= captureRunner::kLateOkMs)
 		int      lateCnt   = 0;		// 遅れを計測できたコマ(1枚目を除く)
