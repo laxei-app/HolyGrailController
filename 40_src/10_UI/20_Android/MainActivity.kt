@@ -808,14 +808,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 for (i in 0 until edgesJson.length()) {
                     val o = edgesJson.optJSONObject(i) ?: continue
                     val ip = o.optString("ip"); val port = o.optInt("port", 50506)
-                    if (ip.isEmpty()) continue
-                    val ename = o.optString("name").ifEmpty { "edge_$ip" }
+                    val nm = o.optString("name")
+                    // ネイティブへ渡す相手の指定は Wi-Fi なら IP、BLE なら端末名(Edge.addr() と同じ規則)。
+                    //  ここが IP 固定だったため、BLE ではログ取得だけが相手を見つけられなかった。
+                    val target = if (edgeUseBle()) nm else ip
+                    if (target.isEmpty()) continue
+                    val ename = nm.ifEmpty { "edge_$ip" }
                     setMsg("エッジ「$ename」のログ一覧を取得中...")
-                    val listJson = try { JSONArray(HgeNative.nativeEdgeLogList(ip, port)) } catch (e: Exception) { JSONArray() }
+                    val listJson = try { JSONArray(HgeNative.nativeEdgeLogList(target, port)) } catch (e: Exception) { JSONArray() }
                     for (k in 0 until listJson.length()) {
                         val logName = listJson.optString(k); if (logName.isEmpty()) continue
                         setMsg("エッジ「$ename」: $logName")
-                        val bytes = fetchEdgeLog(ip, port, logName)
+                        val bytes = fetchEdgeLog(target, port, logName)
                         if (bytes.isNotEmpty()) {
                             try { saveToDownloads("hgclog-" + sanitizeFolder(ename), logName, bytes); copied++ }
                             catch (e: Exception) { errors.append("$ename/$logName ") }
@@ -833,11 +837,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // エッジのログ name を分割取得して全バイトを返す(4KBチャンクで offset を進める)。
-    private fun fetchEdgeLog(ip: String, port: Int, name: String): ByteArray {
+    private fun fetchEdgeLog(target: String, port: Int, name: String): ByteArray {
         val out = java.io.ByteArrayOutputStream()
         var offset = 0; var guard = 0
         while (guard++ < 20000) {
-            val chunk = try { HgeNative.nativeEdgeLogRead(ip, port, name, offset) } catch (e: Exception) { ByteArray(0) }
+            val chunk = try { HgeNative.nativeEdgeLogRead(target, port, name, offset) } catch (e: Exception) { ByteArray(0) }
             if (chunk.isEmpty()) break
             out.write(chunk); offset += chunk.size
             if (chunk.size < 4096) break   // <CHUNK = EOF

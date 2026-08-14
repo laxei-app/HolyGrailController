@@ -23,10 +23,25 @@ namespace
 	std::vector<uint8_t>  g_rx;			// 受信バッファ(フレーミング用)
 	constexpr size_t      RX_MAX = 16384;	// 想定外の流入でメモリを食い潰さないための上限
 
-	// 1回の notify で送れる量。MTU-3(ATTヘッダ)。接続時に更新する。
+	// 1回に送れる量。MTU-3(ATTヘッダ)。接続時に更新する。
 	size_t                g_chunk = 20;
-	// 分割 notify の間隔。詰めて出すと相手が取りこぼす(sendReply のコメント参照)。
+	// notify で送るときの分割間隔。indicate が使えないときの保険(sendReply のコメント参照)。
 	constexpr uint32_t    CHUNK_GAP_MS = 8;
+
+	// 送信(indicate)の確認応答を待つためのフラグ。BLE タスクが立て、送信側が見る。
+	volatile bool         g_txAcked = false;
+	// 1チャンクの確認応答をどれだけ待つか[ms]。接続間隔(15〜45ms程度)の数倍あれば足りる。
+	//  ここで長く粘るとメインループが止まるので、諦めて次へ進む。
+	constexpr uint32_t    ACK_WAIT_MS = 400;
+
+	// 送信側の状態通知。indicate は確認応答が返ったときに BLE_HS_EDONE で呼ばれる。
+	class TxCb : public NimBLECharacteristicCallbacks
+	{
+		void onStatus(NimBLECharacteristic* /*c*/, int code) override
+		{
+			if (code == 0 || code == BLE_HS_EDONE) { g_txAcked = true; }
+		}
+	};
 
 	class RxCb : public NimBLECharacteristicCallbacks
 	{
@@ -51,33 +66,55 @@ namespace
 	// 応答フレームを notify で送る。MTU を超える分は分割する。
 	//  ETP は自分でフレーム長を持っているので、受け側は届いた順に積んで decode すればよい。
 	//  分割用の独自ヘッダは付けない。
+	// 【なぜ indicate なのか(2026-08-14 実測)】notify は投げっぱなしで、送り手からは
+	//  成否が分からない。実際 notify() が全チャンク true を返し retry=0 drop=0 でも、
+	//  受け手には 1354B/6分割が **1バイトも届かない** ことがあった。チャンク間に 8ms 空けると
+	//  6分割は通るようになったが、ログ取得の 4KB(17分割)では今度は途中までしか届かない
+	//  (スマホ側 got=2354B/3528B/3276B とばらつく)。時間を空けて祈る方式では詰められない。
+	//
+	//  indicate は 1つ送るごとに相手からの確認応答(ATT Confirmation)を待つ、プロトコルで
+	//  決まった順送りになる。速度は接続間隔に律速されるが、「送れたことが分かってから次を送る」
+	//  ので取りこぼしが原理的に起きない。ログのような大きい応答はこれでないと運べない。
+	//
+	//  相手が通知(notify)でしか購読していない場合は indicate が失敗するので、その時だけ
+	//  従来の notify + 間隔で送る(テスト用の中央役など)。
 	void sendReply(const std::vector<uint8_t>& out)
 	{
 		if (g_tx == nullptr || !g_connected) { return; }
 		size_t off = 0;
-		int    chunks = 0, retries = 0, dropped = 0;
+		int    chunks = 0, viaNotify = 0, dropped = 0;
 		const uint32_t t0 = millis();
 		while (off < out.size())
 		{
 			const size_t n = ((out.size() - off) < g_chunk) ? (out.size() - off) : g_chunk;
-			g_tx->setValue(out.data() + off, n);
-			// notify はキューが詰まると失敗する。少し待って詰め直す(落とすと応答が壊れるため)。
-			int i = 0;
-			for (; i < 20 && !g_tx->notify(); ++i) { delay(5); }
-			retries += i;
-			if (i >= 20) { ++dropped; }		// 20回粘っても入らなかった = このぶんは落ちた
+			g_txAcked = false;
+			bool ok = g_tx->indicate(out.data() + off, n);
+			if (ok)
+			{
+				// 【自分で待つ】NimBLE の indicate() は確認応答を待たずに戻る。ATT は
+				//  「確認応答が返るまで次の指示を出せない」決まりなので、待たずに次を投げると
+				//  そこから先が全部 false になる(2026-08-14: 17分割のうち5つしか通らなかった)。
+				//  ここで待つぶん、確実に順送りになる。
+				const uint32_t tw = millis();
+				while (!g_txAcked && (millis() - tw) < ACK_WAIT_MS) { delay(2); }
+				ok = g_txAcked;
+			}
+			if (!ok)
+			{	// indicate 未購読(またはタイムアウト)。notify で送り直す。
+				g_tx->setValue(out.data() + off, n);
+				int i = 0;
+				for (; i < 20 && !g_tx->notify(); ++i) { delay(5); }
+				ok = (i < 20);
+				++viaNotify;
+				if (off + n < out.size()) { delay(CHUNK_GAP_MS); }
+			}
+			if (!ok) { ++dropped; }
 			++chunks;
 			off += n;
-			// 【間を空ける理由(2026-08-14 実測)】notify() は true を返しても、詰めて出すと
-			//  相手に1バイトも届かないことがある(1354B/6分割の応答がスマホ側 got=0B、
-			//  エッジ側は retry=0 drop=0 で「送れた」と見えていた)。ホストのキューには
-			//  入っても接続イベントに載りきらず捨てられているとみられる。
-			//  8ms 空けるだけで全量届くようになった。1KB あたり 40ms 程度の追加で済む。
-			if (off < out.size()) { delay(CHUNK_GAP_MS); }
 		}
-		// 大きい応答(レポート本文など)が届かない件の切り分け用。落ちた数がゼロでないなら送信側の負け。
-		DBGLN(col::CYN, "etpBle: tx %u B in %d chunks (%ums retry=%d drop=%d)",
-		      (unsigned)out.size(), chunks, (unsigned)(millis() - t0), retries, dropped);
+		// 大きい応答が届かない件の切り分け用。dropped>0 なら送信側の負け。
+		DBGLN(col::CYN, "etpBle: tx %u B in %d chunks (%ums notify=%d drop=%d)",
+		      (unsigned)out.size(), chunks, (unsigned)(millis() - t0), viaNotify, dropped);
 	}
 }
 
@@ -93,7 +130,10 @@ namespace etpBle
 		NimBLECharacteristic* rx = svc->createCharacteristic(
 			UUID_RX, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
 		rx->setCallbacks(new RxCb());
-		g_tx = svc->createCharacteristic(UUID_TX, NIMBLE_PROPERTY::NOTIFY);
+		// INDICATE(確認応答つき)を主に使う。NOTIFY も残すのは、通知でしか購読しない
+		//  相手(テスト用の中央役など)とも話せるようにするため。
+		g_tx = svc->createCharacteristic(UUID_TX, NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::INDICATE);
+		g_tx->setCallbacks(new TxCb());		// 確認応答を受け取るため
 		svc->start();
 		NimBLEDevice::getAdvertising()->addServiceUUID(UUID_SVC);
 		DBGLN(col::GRN, "etpBle: service up (%s)", UUID_SVC);

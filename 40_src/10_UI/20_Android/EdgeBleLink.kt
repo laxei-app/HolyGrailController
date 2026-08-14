@@ -231,19 +231,29 @@ object EdgeBleLink {
         lk.tx = svc.getCharacteristic(TXC)
         if (lk.rx == null || lk.tx == null) { log("no ETP characteristics"); lk.close(); return null }
 
-        // 通知を有効にする(CCCD への書き込みまで済ませないと notify は来ない)
+        // 【通知ではなく指示(INDICATE)で購読する】通知は投げっぱなしで、送り手には成否が
+        //  分からない。エッジ側が「全部送れた」と言っていても、こちらには途中までしか届かない
+        //  ことが実測で出た(4KB=17分割のログ応答で got=2354B/3528B/3276B とばらつく)。
+        //  指示は 1 つごとに確認応答を返す決まりなので、エッジは前の分が届いてから次を送る。
+        //  確認応答は Android のスタックが自動で返すため、アプリ側の受け口は通知と同じ。
         lk.gatt?.setCharacteristicNotification(lk.tx, true)
         val d = lk.tx?.getDescriptor(CCCD)
         if (d != null) {
+            val want = if ((lk.tx?.properties ?: 0) and BluetoothGattCharacteristic.PROPERTY_INDICATE != 0)
+                           BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
+                       else BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
             lk.latchDesc = CountDownLatch(1)
             if (Build.VERSION.SDK_INT >= 33) {
-                lk.gatt?.writeDescriptor(d, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                lk.gatt?.writeDescriptor(d, want)
             } else {
                 @Suppress("DEPRECATION")
-                run { d.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE; lk.gatt?.writeDescriptor(d) }
+                run { d.value = want; lk.gatt?.writeDescriptor(d) }
             }
             lk.latchDesc?.await(5, TimeUnit.SECONDS)
         }
+        // 接続間隔を詰める。指示は1つごとに往復するので、間隔がそのまま転送速度になる
+        //  (既定の 40ms 前後だとログ 1MB に十数分かかる)。
+        try { lk.gatt?.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH) } catch (_: Exception) {}
         lk.usedAt = System.currentTimeMillis()
         links[target] = lk
         trimLinks(target)
