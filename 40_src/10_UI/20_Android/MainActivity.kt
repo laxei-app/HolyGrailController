@@ -1218,6 +1218,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private val camFields = HashMap<String, EditText>()  // カメラ詳細の入力欄
     private var camAutoInsert: CheckBox? = null
     private var camMeterLv: CheckBox? = null       // ライブビューで測光する(機体ごと)
+    private var camAuthBaseline = ""              // 詳細を開いた時点の認証欄(変更検知用)
     private val camLensNames = ArrayList<String>()       // 組み合わせるレンズ(順序=先頭が初期値)
     private var camLensContainer: LinearLayout? = null   // 組み合わせレンズの並べ替えコンテナ
     private val lensRowViews = mutableListOf<View>()
@@ -1518,6 +1519,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.addView(editRow("ユーザーID", "authUser", cam.optString("authUser")))
         // パスワードは JSON では暗号文なので、平文はネイティブから別途もらう。
         box.addView(editRowPass("パスワード", "authPass", HgeNative.nativeOwnedCameraAuthPass(sel)))
+        camAuthBaseline = camAuthSig()      // ここからの変化だけを「変更」とみなす
 
         // 組み合わせるレンズ(先頭=初期値)。並べ替えはハンドルをドラッグ(ss/iso/fnと同じ)。
         box.addView(thinDivider())
@@ -1656,6 +1658,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         o.put("meterLv", camMeterLv?.isChecked ?: false)
         val ln = JSONArray(); camLensNames.forEach { ln.put(it) }; o.put("lensNames", ln)
         val js = o.toString()
+        // 認証情報を変えた場合だけ、エッジ端末が持っている計画は古いままだと知らせる。
+        //  保存はレンズ変更や画面離脱でも走るので、変わっていないときは黙っている。
+        val authSig = camAuthSig()
+        val authChanged = (authSig != camAuthBaseline)
+        camAuthBaseline = authSig
         if (rebuild) {
             Thread {
                 HgeNative.nativeSetOwnedCameraDetail(orig, js)
@@ -1663,6 +1670,44 @@ class MainActivity : AppCompatActivity(), HgeListener {
             }.start()
         } else {
             Thread { HgeNative.nativeSetOwnedCameraDetail(orig, js) }.start()
+        }
+        if (authChanged) { noticeAuthChangedIfHeld(selCamera ?: orig) }
+    }
+
+    // 所持カメラ詳細の認証欄の内容(変更検知用)。
+    private fun camAuthSig(): String =
+        (camFields["authUser"]?.text?.toString() ?: "") + "\t" + (camFields["authPass"]?.text?.toString() ?: "")
+
+    // そのカメラを使う撮影計画を保有しているエッジ端末の名前。
+    //  エッジは開始のたびに計画を丸ごと受け取り直すので、送信済みのものを追いかけて更新する必要はない。
+    //  ただし今エッジのディスクにあるのは古い値なので、単独復帰(停電など、スマホ抜きの再開)では
+    //  古い資格情報が使われる。禁止も自動更新もせず、その事実だけ伝える。
+    private fun edgesHoldingCamera(camName: String): List<String> {
+        if (camName.isEmpty()) return emptyList()
+        val ids = HashSet<String>()
+        try {
+            val pa = JSONArray(HgeNative.nativeListPlans())
+            for (k in 0 until pa.length()) {
+                val po = pa.optJSONObject(k) ?: continue
+                if (po.optString("camName") == camName) ids.add(po.optString("id"))
+            }
+        } catch (_: Exception) { return emptyList() }
+        if (ids.isEmpty()) return emptyList()
+        return edgeHeldByEdge.entries
+            .filter { e -> e.value.any { ids.contains(it) } }
+            .map { it.key }.distinct()
+    }
+
+    private fun noticeAuthChangedIfHeld(camName: String) {
+        val edges = edgesHoldingCamera(camName)
+        if (edges.isEmpty()) return
+        runOnUiThread {
+            AlertDialog.Builder(this)
+                .setTitle("認証情報を変更しました")
+                .setMessage("このカメラを使う撮影計画がエッジ端末「" + edges.joinToString("」「") + "」に置かれています。\n\n" +
+                            "エッジ端末が持っている計画は変更前のままです。次回の撮影開始で送り直され、そのときに反映されます。")
+                .setPositiveButton("OK", null)
+                .show()
         }
     }
 
