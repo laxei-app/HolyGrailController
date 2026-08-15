@@ -321,6 +321,11 @@ namespace net
 			if (!parseUrl(url, host, port, path)) { return 0; }
 
 			const std::string hostKey = host + ":" + std::to_string(port);
+			// 認証が要る相手へは1本ずつ投げる。nc(ノンスカウンタ)は到着順に増えていないと
+			//  リプレイと見なされ、以後どれだけ正しく作っても 401 になる(EOS R50 V 実測)。
+			//  ワーカー2本が同じカメラへ並行に投げると必ず起きる。錠は host ごとなので
+			//  2台同時撮影の並行性は落ちない。資格情報を1つも登録していなければ何もしない。
+			httpAuth::hostGuard authLock(hostKey);
 
 			// 401 を受けたら認証情報を覚えて1度だけ投げ直す(ダイジェスト認証。RFC 2617)。
 			//  「このカメラは認証が要る」と事前に知っておく必要は無い。要求はサーバから来る。
@@ -393,7 +398,14 @@ namespace net
 				                       (lower.find("transfer-encoding: chunked") == std::string::npos);
 				keepRelease(slot, wantClose || noLength);	// 使い回せないときだけ閉じて返す
 
-				if (code != 401 || authTry > 0) { break; }
+				if (code != 401)
+				{
+					// 認証付きで通った。次に同じ nonce で 401 が来ても「パスワードが違う」と
+					//  誤判定しないように実績を残す。
+					if (!auth.empty()) { httpAuth::noteSuccess(hostKey); }
+					break;
+				}
+				if (authTry > 0) { break; }
 				// 401。チャレンジを覚えて、同じ要求を認証つきで投げ直す。
 				const std::string wa = headerValue(header, "WWW-Authenticate");
 				if (wa.empty() || !httpAuth::learn(hostKey, wa)) { break; }	// 資格情報が無い/尽きた

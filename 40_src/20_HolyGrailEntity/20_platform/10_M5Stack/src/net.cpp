@@ -366,6 +366,10 @@ static void noteHttpError(int code, std::string& response)
     static int requestWithBody(const char* method, const std::string& url,
                                const std::string* body, std::string& response)
     {
+        // 認証が要る相手へは1本ずつ投げる。nc(ノンスカウンタ)は到着順に増えていないと
+        //  リプレイと見なされ、以後どれだけ正しく作っても 401 になる(EOS R50 V 実測)。
+        //  錠は host ごとなので2台同時撮影の並行性は落ちない。
+        httpAuth::hostGuard authLock(endpointOf(url));
         int code = 0;
         for (int authTry = 0; authTry < 2; ++authTry)		// 401 を受けたら1度だけ認証を付けて投げ直す
         {
@@ -386,6 +390,8 @@ static void noteHttpError(int code, std::string& response)
                 {
                     response = cli.getString().c_str();		// 401 でも読み切る(使い回すソケットを壊さない)
                     if (code == 401 && authTry == 0) { learned = learnAuth(cli, url); }
+                    // 認証付きで通ったら実績を残す(次の同一 nonce の 401 を誤判定しないため)
+                    else if (code != 401) { httpAuth::noteSuccess(endpointOf(url)); }
                     release(slot, false);
                     break;
                 }
@@ -402,6 +408,7 @@ static void noteHttpError(int code, std::string& response)
     // 使い回すソケットでは「Content-Length ぶん読み切る」ことが必須(読み残すと次の要求が壊れる)。
     bool httpGet(const std::string& url, std::string& answer)
     {
+        httpAuth::hostGuard authLock(endpointOf(url));	// 認証時は1本ずつ(nc の順序を守る)
         int code = 0;
         int slot = -1;			// 借りているスロット(本文を読み終えるまで手放さない)
         for (int authTry = 0; authTry < 2; ++authTry)		// 401 を受けたら1度だけ認証を付けて投げ直す
@@ -416,6 +423,7 @@ static void noteHttpError(int code, std::string& response)
                 if (code > 0) { break; }
                 release(slot, true); slot = -1;	// 張り直して1度だけ再送
             }
+            if (code != 401 && slot >= 0) { httpAuth::noteSuccess(endpointOf(url)); }
             if (code != 401 || authTry > 0 || slot < 0) { break; }
             // 401。本文を読み切ってからチャレンジを覚え、同じ要求を投げ直す。
             HTTPClient& cli = g_slots[slot].cli;
