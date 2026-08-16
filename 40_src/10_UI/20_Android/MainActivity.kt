@@ -4137,17 +4137,21 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 撮影開始前の露出合わせ(初期収束)がうまくいったか。ここが済んでいないと1枚目から露出が外れる。
         repBand(box, "撮影前の露出合わせ")
         val cvw = o.optJSONObject("converge") ?: JSONObject()
-        val cvOutcome = cvw.optInt("outcome", 2)
+        // 3=収束不要(固定露出で始まった/直前の撮影露出を引き継いだ)。古いレポートには outcome が
+        //  無いか 2 が入っているので、既定は 3 にしつつ 2 の表示は残す。
+        val cvOutcome = cvw.optInt("outcome", 3)
         repRow(box, "結果", when (cvOutcome) {
             0 -> "合わせられた"
             1 -> "合わせきれず開始"
-            else -> "測光できず開始"
+            2 -> "測光できず開始"
+            else -> "収束不要"
         }, when (cvOutcome) {
             0 -> "目標の範囲に入った(または露出限界に到達した)"
             1 -> "時間内に目標へ届かず、その時点の最良推定で撮り始めた"
-            else -> "一度も測光できず、撮影制御方法の基準値のまま撮り始めた"
+            2 -> "一度も測光できず、撮影制御方法の基準値のまま撮り始めた"
+            else -> "固定露出(星景/夜間)から始まったか、直前の撮影露出を引き継いだので、合わせる必要がなかった"
         })
-        repRow(box, "測れた回数", "${cvw.optInt("steps")} 回")
+        if (cvOutcome != 3) { repRow(box, "測れた回数", "${cvw.optInt("steps")} 回") }
         if (cvw.optInt("applyNg") > 0 || cvw.optInt("meterNg") > 0) {
             repRow(box, "やり直した回数", "露出設定 ${cvw.optInt("applyNg")} / 測光 ${cvw.optInt("meterNg")}",
                    "失敗した回の値は使わずやり直している")

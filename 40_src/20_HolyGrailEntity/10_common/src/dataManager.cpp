@@ -1418,6 +1418,7 @@ std::string dataManager::writeCaptureReport(const captureReport& r, const hgc::c
 	if (r.staleFrames > 0 && pct(r.staleFrames, r.frames) > 10.0) { notes.push_back(static_cast<int>(NOTE_STALE_MANY)); }
 	if (r.lateCnt > 0 && pct(r.lateOk, r.lateCnt) < 90.0)         { notes.push_back(static_cast<int>(NOTE_LATE_MANY)); }
 	if (r.meterFail > 0 && pct(r.meterFail, r.meterTried) > 5.0)  { notes.push_back(static_cast<int>(NOTE_METER_FAIL)); }
+	// cvOutcome==3 は「収束不要」(固定露出で始まった/直前の撮影露出を引き継いだ)。所見にしない。
 	if (r.cvOutcome == 2)                                         { notes.push_back(static_cast<int>(NOTE_CONVERGE_NONE)); }
 	else if (r.cvOutcome == 1)                                    { notes.push_back(static_cast<int>(NOTE_CONVERGE_PART)); }
 	if (r.busyCnt == 0)                                           { notes.push_back(static_cast<int>(NOTE_BUSY_NO_DATA)); }

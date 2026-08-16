@@ -41,7 +41,11 @@ public:
 		int meterNg = 0;	// 測光できず、やり直した回数
 		// 0=収束した(目標±1/3段以内 か 露出限界に到達) / 1=収束しきらず最良推定で開始
 		// 2=一度も測れず基準値のまま開始(最悪。露出が最初から大きく外れる)
-		int outcome = 2;
+		// 3=収束不要(既定値)。固定露出(星景/夜間)から始まった、または直前の撮影露出を
+		//   引き継いだので initialConverge を呼んでいない。既定を 2 にすると「呼ばなかった」と
+		//   「呼んだが一度も測れなかった」が区別できず、固定露出で始まる計画が毎回
+		//   「一度も測光できず」と誤報になる(2026-08-17 R50V の通しで発覚)。
+		int outcome = 3;
 	};
 
 	struct capturedInfo { int frame; hgc::exposure exp; double luminance; std::string ccm; double metered = -1.0;
