@@ -1,4 +1,4 @@
-#include "presenceMonitor.h"
+﻿#include "presenceMonitor.h"
 #include "cameraController.h"
 #include "netThread.h"
 #include "osSystemCall.h"
@@ -17,7 +17,8 @@
 namespace {
 
 	struct pcam { std::string serial; std::string model; std::string friendly; std::string ip; bool online = false; long long lastSeen = 0;
-	              bool verify = false; };	// #1: 次tickで即疎通確認し、失敗ならTTLを待たずオフラインへ
+	              bool verify = false;		// #1: 次tickで即疎通確認し、失敗ならTTLを待たずオフラインへ
+	              std::string location; };	// SSDP のデバイス記述URL(認証不要)。生死確認はこれを引く
 	std::vector<pcam>       g_map;
 	std::mutex              g_mapMutex;
 	std::function<void()>   g_onChange;
@@ -54,15 +55,30 @@ namespace {
 	void mergeFullLocked(long long now)
 	{
 		std::vector<class device> found;
-		cameraController::detectTarget(found);	// ※apiBaseリーク許容(頻度を抑えて使用)
+		// 【CCAPI を叩かない】在否に必要なのは機種名/シリアル/愛称/IP だけで、いずれも SSDP の
+		//  デバイス記述(認証不要)から取れる。以前は detectTarget で apiBase まで作っていたため、
+		//  撮影主体でない側が認証付きで CCAPI を叩き、ダイジェスト認証の nc がぶつかって
+		//  カメラを 403 で締め出していた(EOS R50 V 実測 2026-08-16)。
+		//  カメラに触るのは「そのカメラで撮る主体」だけ、という規則に合わせる。
+		cameraController::identifyTargets(found);
 		for (auto& d : found)
 		{
-			if (!d.apiBase) { continue; }
 			std::string ip = hostOf(d.urlAccess);
+			if (ip.empty()) { ip = hostOf(d.location); }	// urlAccess が無い機種は記述URLのホストで代用
 			if (d.serialno.empty() || ip.empty()) { continue; }
 			bool merged = false;
-			for (auto& c : g_map) { if (c.serial == d.serialno) { c.model = d.model; c.friendly = d.friendName; c.ip = ip; c.online = true; c.lastSeen = now; merged = true; break; } }
-			if (!merged) { g_map.push_back(pcam{ d.serialno, d.model, d.friendName, ip, true, now }); }
+			for (auto& c : g_map)
+			{
+				if (c.serial != d.serialno) { continue; }
+				c.model = d.model; c.friendly = d.friendName; c.ip = ip; c.location = d.location;
+				c.online = true; c.lastSeen = now; merged = true; break;
+			}
+			if (!merged)
+			{
+				pcam n{ d.serialno, d.model, d.friendName, ip, true, now };
+				n.location = d.location;
+				g_map.push_back(n);
+			}
 		}
 	}
 
@@ -71,8 +87,12 @@ namespace {
 		for (auto& c : g_map)
 		{
 			if (!c.online) { c.verify = false; continue; }
+			// 【ここも CCAPI を叩かない】生死を知るだけなら SSDP のデバイス記述(認証不要)で足りる。
+			//  記述URLは機種で異なる(ポートもパスも)ので、探索時に受け取ったものをそのまま引く。
+			//  未取得のうちは在否を落とさない(TTL に委ねる)。
+			if (c.location.empty()) { c.verify = false; continue; }	// 記述URL未取得=判定しない(TTLに委ねる)
 			std::string resp;
-			const bool alive = netThread::httpGet("http://" + c.ip + ":8080/ccapi", resp) && !resp.empty();
+			const bool alive = netThread::httpGet(c.location, resp) && !resp.empty();
 			if (alive) { c.lastSeen = now; c.verify = false; }
 			else if (c.verify)  { c.online = false; c.verify = false; }	// #1: 即確認の要求 → TTLを待たずオフライン
 			else if (now - c.lastSeen > kTtlSec) { c.online = false; }

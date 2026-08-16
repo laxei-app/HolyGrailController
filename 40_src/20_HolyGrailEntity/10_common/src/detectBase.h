@@ -19,6 +19,12 @@ public:
 	// 能動検出。見つかったこの種別のデバイス(apiBase 設定済み)を out に追加する。戻り=追加数。
 	virtual size_t detect(std::vector<class device>& out) = 0;
 
+	// 身元だけを確かめる検出。見つかったデバイスの機種名/シリアル/愛称/IP を out に入れる。
+	//  **apiBase は作らない=CCAPI を叩かない**。在否監視のように「そこに居るか」だけ知りたい
+	//  用途で使う(認証が要るカメラを撮影主体でない側が叩くと締め出しを招くため)。
+	//  既定は detect(=従来どおり)。認証不要の身元確認ができる派生だけが上書きする。
+	virtual size_t identify(std::vector<class device>& out) { return detect(out); }
+
 	// IP 直指定でこの種別のデバイスを1台構築する(SSDP不使用)。
 	//  成功時 out に apiBase 設定済みデバイスを入れて true。非対応/失敗は false。
 	virtual bool makeManualDevice(const std::string& host, class device& out) = 0;

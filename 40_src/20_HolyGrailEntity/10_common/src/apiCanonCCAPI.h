@@ -118,6 +118,8 @@ public:
 	apiCanonCCAPI(void);
 	virtual ~apiCanonCCAPI(void);
 	errCode init(class device & device);	// 初期化(SSDP/UPnP記述子経由)
+	// 身元だけ(デバイス記述のみ。CCAPI は叩かない)。理由は apiBase::identify を参照。
+	errCode identify(class device & device) override { return getDeviceDescriptor(device); }
 	errCode initManual(class device & device);	// 手動初期化(device.urlAccessを直接使用。記述子取得をスキップ)
 
 	// カメラとの直接の指示

@@ -17,6 +17,10 @@ public:
 public:
 	// カメラの検出(全バックエンドを走査して device へ追加)
 	static size_t detectTarget(std::vector<class device>& device);
+	// 身元だけを確かめる検出(機種名/シリアル/愛称/IP)。**CCAPI を叩かない**ので apiBase は入らない。
+	//  在否監視のように「そこに居るか」だけ知りたい側が使う。認証が要るカメラを、撮影主体でない側が
+	//  叩くと認証がぶつかってカメラを締め出すため(EOS R50 V 実測 2026-08-16)。
+	static size_t identifyTargets(std::vector<class device>& device);
 
 	// IP直指定でカメラに接続する(SSDPを使わない。エミュレータ等での手動接続用)。
 	//  host : カメラのIPアドレス(例 "192.168.1.4")。対応バックエンドが接続を試みる。

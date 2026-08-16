@@ -16,6 +16,13 @@ public:
 	apiBase(void) {};
 	virtual ~apiBase(void) {};
 	virtual errCode init(class device& device) = 0;
+
+	// 身元だけを確かめる(機種名/シリアル/愛称/IP)。**CCAPI は叩かない**。
+	//  在否監視のように「そこに居るか」を知りたいだけの用途で使う。CCAPI の API一覧取得は
+	//  カメラ側の設定によっては認証が要り、撮影主体でない側が叩くと認証がぶつかって
+	//  カメラを締め出す(EOS R50 V 実測 2026-08-16)。SSDP のデバイス記述だけなら認証不要。
+	//  既定は init(=従来どおり)。認証不要の身元確認を持つ派生だけが上書きする。
+	virtual errCode identify(class device& device) { return init(device); }
 	virtual errCode startShooting(void) { return ERR_HGC_NOT_SUPPORTED; };
 	virtual errCode rdyShutter(const cmdt::shotSet& shotSet) { return ERR_HGC_NOT_SUPPORTED; }
 	virtual errCode actShutter(void)						{ return ERR_HGC_NOT_SUPPORTED; }

@@ -16,6 +16,8 @@ public:
 	~detectSsdpBase() override;
 	// M-SEARCH で探索し、統合・apiBase 初期化まで済ませたデバイスを out に追加する。
 	size_t detect(std::vector<class device>& out) override;
+	// 同じ探索だが、身元確認(デバイス記述)までで止める。CCAPI は叩かない。
+	size_t identify(std::vector<class device>& out) override;
 	// SSDP受動待ち受けの開始/停止。既に稼働中なら watchStart は何もしない(共有単一リスナ)。
 	void watchStart(std::function<void()> onAppear) override;
 	void watchStop() override;
@@ -25,6 +27,8 @@ protected:
 	virtual const std::vector<deviceDiscovery::definitionIntereface>& interfaces() const = 0;
 
 private:
+	// 探索の共通部。identifyOnly=true なら apiBase を作らず、身元(記述子)だけで out へ入れる。
+	size_t discover(std::vector<class device>& out, bool identifyOnly);
 	errCode watchLoop();
 	std::atomic<bool>     watchRunning_{ false };
 	void*                 watchThread_ = nullptr;	// ossc スレッドハンドル

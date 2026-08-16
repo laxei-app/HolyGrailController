@@ -9,6 +9,18 @@
 // (旧 cameraController::detectTarget の探索/統合/初期化処理をバックエンド側へ移設したもの。)
 size_t detectSsdpBase::detect(std::vector<class device>& out)
 {
+	return discover(out, false);
+}
+
+// 身元だけ(デバイス記述まで)。CCAPI を叩かないので認証の影響を受けない。
+// 在否監視のように「そこに居るか」だけ知りたい側が使う。
+size_t detectSsdpBase::identify(std::vector<class device>& out)
+{
+	return discover(out, true);
+}
+
+size_t detectSsdpBase::discover(std::vector<class device>& out, bool identifyOnly)
+{
 	std::vector<class device> devices;						// このバックエンド分の検出結果
 	auto num = deviceDiscovery::search(devices, interfaces());	// SSDP で探す(このバックエンドの service 定義で分類)
 	if (num == 0) { return 0; }								// 見つからない
@@ -66,6 +78,17 @@ size_t detectSsdpBase::detect(std::vector<class device>& out)
 	{	// api の初期化をおこなう。このバックエンドが対応する種別のみ生成できる。
 		std::shared_ptr<class apiBase> api(makeApi());	// makeApi は raw new を返す→shared_ptr が所有
 		if (!api) { continue; }							// 生成失敗(このバックエンド非対応)
+
+		if (identifyOnly)
+		{	// 身元だけ。デバイス記述(認証不要)で機種名/シリアル/愛称を埋め、apiBase は作らない。
+			//  api はここで役目を終える(スコープ離脱で解放)。
+			if (api->identify(device) != ERR_HGC_OK) { continue; }
+			if (device.serialno.empty()) { continue; }	// 身元が割れないものは在否に使えない
+			device.apiBase = nullptr;
+			out.push_back(device);
+			added++;
+			continue;
+		}
 
 		// api の初期化をおこなう
 		errCode ie = api->init(device);

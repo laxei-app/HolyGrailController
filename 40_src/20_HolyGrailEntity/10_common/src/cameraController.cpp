@@ -31,6 +31,16 @@ std::vector<std::unique_ptr<detectBase>>& cameraController::backends()
 // ネットワークに接続されているカメラを検出する
 // devices : 検出したカメラの情報(呼び出し側でクリア済み。各バックエンドが追加する)
 // return  : 検出したカメラの数
+// 身元だけを確かめる検出。CCAPI を叩かないので、認証の有無に関係なく安全に呼べる。
+//  detectTarget と違い、発見キャッシュも apiBase も作らない(撮影の経路には一切影響しない)。
+size_t cameraController::identifyTargets(std::vector<class device>& devices)
+{
+	static std::mutex identifyMutex;
+	std::lock_guard<std::mutex> lock(identifyMutex);	// M-SEARCH の 1900 bind 競合を避ける
+	for (auto& be : backends()) { be->identify(devices); }
+	return devices.size();
+}
+
 size_t cameraController::detectTarget(std::vector<class device> & devices)
 {
 	// Phase4(netThread並行化との両立): 複数セッションが同時に発見(SSDP M-SEARCH)を走らせると
