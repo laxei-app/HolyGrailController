@@ -59,34 +59,60 @@ def decode(buf):
     return (cmd, method, buf[10:10 + length].rstrip(b' ')), total
 
 
-def call(ip, cmd, method, data=b'', timeout=15):
-    s = socket.create_connection((ip, PORT), timeout)
-    s.settimeout(timeout)
-    try:
-        s.sendall(encode(cmd, method, data))
-        buf = b''
+class session:
+    """1本の接続で何度もやり取りする。
+
+    エッジは単一クライアント方式(etpEdge.cpp の g_client)なので、要求のたびに接続を張り直すと、
+    前の接続がまだ生きているとみなされて新しい接続が弾かれる(RST)。ログは1回 4096 バイトずつ
+    なので数百KBだと張り直しが数十回になり、必ず踏む。開いたまま順に投げれば起きない
+    (スマホの edgeClient も1接続で C_TIME→計画→開始と続けている)。
+    """
+    def __init__(self, ip, timeout=15):
+        self.s = socket.create_connection((ip, PORT), timeout)
+        self.s.settimeout(timeout)
+        self.buf = b""
+
+    def call(self, cmd, method, data=b""):
+        self.s.sendall(encode(cmd, method, data))
         while True:
+            p, n = decode(self.buf)
+            if n < 0:
+                return None
+            if p:
+                self.buf = self.buf[n:]
+                return p
             try:
-                c = s.recv(8192)
+                c = self.s.recv(8192)
             except socket.timeout:
                 return None
             if not c:
                 return None
-            buf += c
-            p, n = decode(buf)
-            if n < 0:
-                return None
-            if p:
-                return p
-    finally:
-        s.close()
+            self.buf += c
+
+    def close(self):
+        try:
+            self.s.close()
+        except OSError:
+            pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self.close()
+
+
+def call(ip, cmd, method, data=b"", timeout=15):
+    with session(ip, timeout) as se:
+        return se.call(cmd, method, data)
 
 
 def read_file(ip, cmd, name):
     """分割転送を結合する。各チャンクの末尾には番兵 0x01 が付く(末尾空白を守るため)。"""
     out, off = b'', 0
+    se = session(ip, 20)	# 1本の接続で読み切る(張り直すと弾かれる)
     while True:
-        p = call(ip, cmd, M_GET, ("%s\t%d" % (name, off)).encode())
+        p = se.call(cmd, M_GET, ("%s\t%d" % (name, off)).encode())
         if p is None or p[1] == M_NAK:
             break
         body = p[2]
@@ -101,6 +127,7 @@ def read_file(ip, cmd, name):
         if off > 8 * 1024 * 1024:
             sys.stderr.write("8MB を超えたので打ち切りました\n")
             break
+    se.close()
     return out
 
 
