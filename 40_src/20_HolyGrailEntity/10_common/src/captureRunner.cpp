@@ -1519,9 +1519,17 @@ errCode captureRunner::loop(void)
 			}
 			if (!recovered && lostLink)
 			{	// 本当に届いていない → 中止まで再接続を続ける(従来どおり)。
+				// 直前(上の established)で張り直したばかりなら、その1回を使い切ってから次を試す。
+				//  ここで重ねて取りに行くと、1秒差で2本のセッションを張ることになる。認証を使うカメラでは
+				//  2本がそれぞれ独立に 401 から nc(ノンスカウンタ)を数え直すため、カメラから見ると nc が
+				//  行き来してリプレイと判定され、403 "Not access" で締め出される(EOS R50 V 実測 2026-08-16)。
+				//  起きるのは noRecord と lostLink が同時に立ち、かつ noRecordRounds>1 で establish の成功を
+				//  信用しない場合。復帰の判定が最大 kReconnectWaitMs 遅れるだけで、意図は変わらない。
+				bool justEstablished = established;
 				while (running_)
 				{
-					if (onReconnect_ && onReconnect_() && establishSession()) { recovered = true; break; }
+					if (justEstablished) { justEstablished = false; }
+					else if (onReconnect_ && onReconnect_() && establishSession()) { recovered = true; break; }
 					interruptibleSleep(kReconnectWaitMs);
 				}
 				if (!recovered) { break; }	// 中止された → 終了処理へ
