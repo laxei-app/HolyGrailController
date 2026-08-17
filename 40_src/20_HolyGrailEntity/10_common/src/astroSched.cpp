@@ -273,6 +273,28 @@ namespace astro
 		// 種別の連続区間を窓へ統合する。
 		hgc::ccmType runType = hgc::ccmType::invalid;
 		astro_time_t runStart = tStart;
+		// 種別が変わる境目の時刻を、実際の高度しきい値へ寄せる(2026-08-17)。
+		//  サンプルは1分刻みなので、そのまま使うと最大1分ぶん行き過ぎる。太陽高度にして約0.2°で、
+		//  夜間の始まりが -12.2°、終わりが -11.8° と表示されていた(既定 -12° のはずが揃わない)。
+		//  隣り合う2サンプルの間に入りうるしきい値は高々1つなので(しきい値どうしは3°以上離れており、
+		//  1分で太陽が動くのは約0.2°)、その1つを線形補間で求める。
+		auto refineUt = [&](size_t i) -> double
+		{
+			if (i == 0) { return samples[i].ut; }
+			const double h0 = samples[i - 1].h, h1 = samples[i].h;
+			const double d  = h1 - h0;
+			if (std::fabs(d) < 1e-9) { return samples[i].ut; }
+			const double lo = (h0 < h1) ? h0 : h1;
+			const double hi = (h0 < h1) ? h1 : h0;
+			const double cand[3] = { nightAlt, samples[i].rising ? twiAltRise : twiAltSet, sunDirectMaxAlt };
+			for (double th : cand)
+			{
+				if (th <= lo || th >= hi) { continue; }
+				const double r = (th - h0) / d;	// 0..1
+				return samples[i - 1].ut + (samples[i].ut - samples[i - 1].ut) * r;
+			}
+			return samples[i].ut;	// しきい値以外の理由で変わった(画角侵入等)ならサンプル位置のまま
+		};
 		auto flushRun = [&](astro_time_t runEnd)
 		{
 			if (runType == hgc::ccmType::invalid) { return; }
@@ -287,9 +309,10 @@ namespace astro
 		{
 			if (types[i] != runType)
 			{
-				flushRun(Astronomy_TimeFromDays(samples[i].ut));
+				const astro_time_t bt = Astronomy_TimeFromDays(refineUt(i));
+				flushRun(bt);
 				runType = types[i];
-				runStart = Astronomy_TimeFromDays(samples[i].ut);
+				runStart = bt;
 			}
 		}
 		flushRun(tEnd);

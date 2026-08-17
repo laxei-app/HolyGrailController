@@ -12,7 +12,8 @@
 #include "csJson.h"
 #include "astroSched.h"
 #include <cstdio>
-#include <cstdlib>	// std::llabs
+#include <cstdlib>
+#include <cmath>	// std::fabs	// std::llabs
 #include <string>
 
 namespace
@@ -195,26 +196,18 @@ int main(void)
 		check(countType(p, hgc::ccmType::sunset)  == 0, "既定では夕日の窓ができない");
 		check(countType(p, hgc::ccmType::night)   >  0, "夜間の窓はできる");
 
-		// 夜間の窓の始まりが「太陽高度 -12°(下降)」の時刻と一致することを確かめる。
-		//  -18° のままなら夜間の始まりはもっと遅い時刻になるので、ここでずれを検出できる。
+		// 夜間の窓の**両端の太陽高度が -12.0° ちょうど**であることを確かめる。
+		//  以前は1分刻みのサンプル位置をそのまま境目にしていたため、行き過ぎて
+		//  始まり -12.2° / 終わり -11.8° になっていた(2026-08-17 に線形補間で修正)。
 		const hgc::ccmWindow* nw = nullptr;
 		for (const auto& w : p.ccmList) { if (w.ccm && w.ccm->type == hgc::ccmType::night) { nw = &w; break; } }
 		check(nw != nullptr, "夜間の窓を取り出せる");
 		if (nw != nullptr)
 		{
-			astro::altTime a12 = astro::sunAltitudeTime(p.place, p.start, -12.0, false, 540);
-			astro::altTime a18 = astro::sunAltitudeTime(p.place, p.start, -18.0, false, 540);
-			check(a12.valid && a18.valid, "-12°/-18°(下降)の時刻が求まる");
-			if (a12.valid && a18.valid)
-			{
-				// 分類は1分刻みのサンプリング、sunAltitudeTime は解析的な探索なので数分ずれる
-				// (大気差の扱いも違う)。**どちらに近いか**で既定値の変更を判定する。
-				const long long ns  = hgc::toUnixUtc(nw->start, 540);
-				const long long d12 = std::llabs(ns - hgc::toUnixUtc(a12.when, 540));
-				const long long d18 = std::llabs(ns - hgc::toUnixUtc(a18.when, 540));
-				check(d12 < d18,   "夜間の始まりが -18° より -12° に近い(既定が -12°)");
-				check(d12 < 600,   "-12° の時刻との差が10分以内");
-			}
+			const double hs = astro::sunHoriz(nw->start, 540, p.place).altitude;
+			const double he = astro::sunHoriz(nw->end,   540, p.place).altitude;
+			check(std::fabs(hs - (-12.0)) < 0.02, "夜間の始まりの太陽高度が -12.0°");
+			check(std::fabs(he - (-12.0)) < 0.02, "夜間の終わりの太陽高度が -12.0°");
 		}
 	}
 
