@@ -1272,6 +1272,30 @@ namespace
 	constexpr double kPegDarkStep         = +2.0;
 	constexpr int    kHereMaxShift        = 4;		// 1回の meterHere で張り付きを抜ける試行の上限
 	// --- ライブビュー主体方式 ---
+	// ライブビュー測光を使ってよい上限[段]。撮影露出の明るさ(APEX)がこれ以上なら、
+	//  ライブビューは読まずにサムネイルで測る。
+	//
+	// 【なぜ ISO/ss/fn の組み合わせではなく APEX で切るのか】
+	//  測光露出は shiftMeterExp が「ss を kInitMeterMaxSsSec で頭打ちにし、足りない分を ISO で
+	//  戻す(fn は触らない)」という作り方をする。つまり **APEX が同じなら ISO と ss をどう
+	//  振り分けてもライブビューへ届く依頼は同一**になる:
+	//    撮影 ISO1600/8秒/f1.4  (+6.00) → 測光 ISO25600/0.5秒/f1.4
+	//    撮影 ISO4000/3.2秒/f1.4(+6.00) → 測光 ISO25600/0.5秒/f1.4  (同じ)
+	//  APEX は「外界の暗さの代理変数」ではなく**測光条件そのもの**なので、優先度の設定
+	//  (ISO から動かす/fn を最後に動かす等)を変えても判定は揺らがない。
+	//
+	// 【値の根拠(2026-08-17 実測)】R10 の preNight+postNight 790コマを、同じコマの実写サムネイルを
+	//  机上で測光し直した値と突き合わせた。折れ点は 8/14夕(暗くなる向き)と 8/17朝(明るくなる向き)で
+	//  一致した:
+	//    APEX +0.33 (ISO100/2.5秒/f1.4) 以下 … 誤差 中央0.13段 / 最大0.20段
+	//    APEX +0.67 (ISO100/3.2秒/f1.4)      … 誤差 中央0.15段 / 最大0.51段
+	//    APEX +1.00 (ISO100/4秒  /f1.4) 以上 … 誤差 中央0.84段 / 最大5.77段
+	//  +0.50 で切ると「1段以上外した測光」464コマを**取りこぼし0**で捕まえ、ライブビューを
+	//  採用したコマの最大誤差は 0.20段 に収まる。
+	//
+	// 【機種ごとの設定値は持たない】サムネイルで測れるのが普通で、この経路が要るのは R10(と
+	//  恐らく R7)だけという判断による(ユーザー指示 2026-08-17)。固定値で持つ。
+	constexpr double kLvMaxApexStops      = 0.5;
 	// ライブビューが底に張り付いたまま抜けられないとき、サムネイルを何コマに1回取るか。
 	//  取得回数に上限がある機種のための方式なので、必要最小限にする。夜明けの明るさは
 	//  15秒周期で 0.03段/コマ程度しか動かないので、4コマ(1分)に1回でも 0.13段刻みで足りる。
@@ -1861,15 +1885,25 @@ errCode apiCanonCCAPI::thumbMeterCore(meterResult& out, int budgetMs, const std:
 // 【なぜ要るか】サムネイル測光は本露光そのものを見るので最も正確だが、EOS R10 は撮影と対にした
 //  サムネイル取得が電源投入あたり 200 回程度で応答しなくなる(2026-08-12 実測。1コマ前を取る
 //  形でも 236〜243 回)。15秒周期なら1時間で 240 コマなので、毎コマ取ると一晩持たない。
-//  一方ライブビューは何回読んでも減らないが、積分の上限(ここでは測光ss 0.5秒)があるため
-//  暗くなると中央値が黒に張り付き、そこから先の明るさが見えなくなる。
+//  一方ライブビューは何回読んでも減らないが、暗くなると値が合わなくなる。
 //
-// 【方針】ふだんはライブビューで測り、**ライブビューが底に張り付いて抜けられないときだけ**
-//  サムネイルへ落ちる。落ちている間も毎コマは取らず kLvFallbackEveryN コマに1回だけ取り、
+// 【方針(2026-08-17 改定)】撮影露出の明るさ(APEX)が kLvMaxApexStops 以上なら**ライブビューは
+//  読まずに**サムネイルで測る。落ちている間も毎コマは取らず kLvFallbackEveryN コマに1回だけ取り、
 //  間のコマは直近の値を返す(明るさは 15 秒で 0.03 段程度しか動かないので足りる)。
-//  実測(2026-08-14、撮影画像との突き合わせ)では、夕方の薄明は夜間露出へクランプされるので
-//  サムネイルが要る区間はほぼ無く、夜明けだけが対象で 200 コマ程度。4コマに1回なら
-//  50 回前後に収まり、R10 の予算内で一晩通せる計算になる。
+//
+// 【なぜ「底に張り付いたら」ではなくなったか】旧版の条件は「ヒスト中央値 <= kPegDark(0.01) かつ
+//  ss/ISO を伸ばしきり」だった。ところが測光露出は ss を頭打ちにした分を ISO で埋め戻すので、
+//  暗くてもヒストは中間調に見えて**この条件に到達しない**。実際 8/14夕・8/15朝・8/17朝の
+//  R10 は全コマがライブビューのままで、切替は一度も起きなかった。2026-08-17 は同じ夜明けを
+//  R50V(サムネイル測光)と同時に撮っており、R10 だけが夜間露出から 13分31秒 離れられず、
+//  実画像の飽和が 23% まで進んだ。中央値の位置で切る案も検討したが、取りこぼしを 0 にすると
+//  APEX で切るより枚数が増えるため採らなかった。
+//
+// 【枚数の見積もり(2026-08-17 実測)】この条件に当たるのは preNight/postNight でそれぞれ
+//  250〜280コマ。4コマに1回へ間引くと 1晩(夜間前+夜間後)で 140枚前後に収まり、R10 の
+//  取得予算(236〜243回)の内側に入る。間引きの粗さは問題にならない: この区間で空が明るく
+//  なる速さは実測 0.094段/コマ が最大なので、4コマ=最大0.38段。ヒステリシス帯 0.8段の
+//  内側であり、1歩踏むかどうかの判断は変わらない。
 //
 // 【1コマ前を取る理由】生成直後のファイルに触ると R10 は 4/4 で停止した(2026-08-13)。
 //  そこで登録通知は毎コマ拾ってファイル名だけ覚えておき、測るのは常に1つ前のファイルにする。
@@ -1889,9 +1923,36 @@ errCode apiCanonCCAPI::meterSceneLvFirst(const hgc::exposure& shotExp, meterResu
 		}
 	}
 
-	// ② 間引き中(=直前に「ライブビューでは見えない」と分かっている)は、測光そのものを省く。
-	//    ライブビューを読み直しても答えは同じで、乗せ替えと追従待ちを毎コマ払うだけになる。
-	//    夜明けで明るさが戻れば、間引きが明けたコマで拾える(15秒周期なら最大45秒遅れ)。
+	// ② ライブビューが使えるかは、撮影露出の明るさ(APEX)だけで決まる(kLvMaxApexStops の説明を参照)。
+	//    ここより暗い側ではライブビューを**読みもしない**。読んでも答えが数段ずれるうえ、
+	//    測光露出の乗せ替えと追従待ち(kHereSettleMs)を毎コマ払うだけ損になる。
+	const double shotApex   = expo::brightnessStops(shotExp, tables_);
+	const bool   lvOutOfRange = (shotApex >= kLvMaxApexStops);
+
+	// ③ 範囲内ならライブビューで測る。ここが本線。
+	//    **撮影露出をそのまま渡す**。ライブビューが再現できない長さの ss は meterLvAt が
+	//    詰めて、詰めたぶんを ISO で戻す(明るさは変えない)。撮影ss が上限以下なら
+	//    カメラへは1バイトも送らずに測ることになる。
+	meterResult lv;
+	errCode     le = ERR_HGC_RDY_METARING;
+	if (!lvOutOfRange)
+	{
+		le = this->meterLvAt(shotExp, lv, keepGoing);
+		// 範囲内でも、取得に失敗した/ss と ISO を伸ばしきってなお底に張り付いたときは信用しない。
+		if (le == ERR_HGC_OK && lv.usable && !lvStretchedOut_)
+		{
+			out = lv;
+			lvFallbackSkip_ = 0;	// 明るさが戻ったので、次に暗くなったら即サムネイルを取る
+			return ERR_HGC_OK;
+		}
+	}
+
+	// ④ ライブビューでは測れない(範囲外、または範囲内だが取得に失敗/底に張り付き)。サムネイルへ落ちる。
+
+	// 間引き中は取りに行かず、直近のサムネイル値を据え置く。明るさは 15秒で 0.03段程度しか
+	//  動かないので足りる。linear も据え置き値から復元して入れること。ここを空にすると上位は
+	//  「測光失敗」とみなし、移動平均を捨てて metering lost を毎回ログに出す(この経路は一度も
+	//  呼ばれていなかったので露見していなかった。2026-08-17)。
 	if (lvFallbackSkip_ > 0 && lvHeldSceneRef_ > 0.0)
 	{
 		--lvFallbackSkip_;
@@ -1900,50 +1961,49 @@ errCode apiCanonCCAPI::meterSceneLvFirst(const hgc::exposure& shotExp, meterResu
 		out.usable    = true;
 		out.via       = meterResult::via_held;	// 測っていない(直近のサムネイル値を据え置き)
 		out.sceneRef  = lvHeldSceneRef_;
+		out.linear    = lvHeldSceneRef_ * std::pow(2.0, shotApex);	// 撮影露出へ投影し直す
 		out.meterExp  = shotExp;
 		return ERR_HGC_OK;
 	}
 
-	// ③ ライブビューで測る。ここが本線。
-	//    **撮影露出をそのまま渡す**。ライブビューが再現できない長さの ss は meterLvAt が
-	//    詰めて、詰めたぶんを ISO で戻す(明るさは変えない)。撮影ss が上限以下なら
-	//    カメラへは1バイトも送らずに測ることになる。
-	meterResult lv;
-	const errCode le = this->meterLvAt(shotExp, lv, keepGoing);
-	// ライブビューが「見えていない」判定は、**ss と ISO を伸ばしきってなお底に張り付く**こと。
-	//  それ以外(まだ伸ばす余地がある/普通に測れた)の値は場面の明るさとして信用してよい。
-	const bool lvBlind = (le != ERR_HGC_OK) || !lv.usable || lvStretchedOut_;
-	if (!lvBlind)
-	{
-		out = lv;
-		lvFallbackSkip_ = 0;	// 明るさが戻ったので、次に暗くなったら即サムネイルを取る
-		return ERR_HGC_OK;
-	}
-
-	// ④ ライブビューでは足りない。サムネイルへ落ちる。
-
 	// 1コマ前が分かっていなければ取りようがない(セッションの最初の1コマ)。
-	//  ライブビューの値をそのまま使う(暗い側へ張り付いた値だが、次のコマで取り直せる)。
 	if (lvShotPrev_.empty())
 	{
-		out = lv;
-		if (!lv.usable) { return (le == ERR_HGC_OK) ? ERR_HGC_RDY_METARING : le; }
-		return ERR_HGC_OK;
+		if (lv.usable && le == ERR_HGC_OK) { out = lv; return ERR_HGC_OK; }	// 読んでいれば張り付いた値で凌ぐ
+		out = meterResult{};
+		out.meterExp = shotExp;
+		return ERR_HGC_RDY_METARING;
 	}
 
 	meterResult th;
 	const errCode te = thumbMeterCore(th, kLvFallbackBudgetMs, keepGoing, lvShotPrev_);
 	if (te != ERR_HGC_OK || !th.ok)
-	{	// 取れなかった。ライブビューの値で凌ぐ(次のコマでまた取りに行く)。
-		out = lv;
-		return (lv.usable) ? ERR_HGC_OK : ((le == ERR_HGC_OK) ? ERR_HGC_RDY_METARING : le);
+	{	// 取れなかった。次のコマでまた取りに行く(間引きは進めない)。
+		if (lv.usable && le == ERR_HGC_OK) { out = lv; return ERR_HGC_OK; }	// 読んでいればそれで凌ぐ
+		if (lvHeldSceneRef_ > 0.0)
+		{	// 読んでいない。直近のサムネイル値を据え置く(据え置きは測光失敗ではない)。
+			//  間引きは進めないので、次のコマでまた取りに行く。
+			const bool missing = th.shotMissing;	// 撮影結果が現れない疑いは握りつぶさない
+			out             = meterResult{};
+			out.ok          = true;
+			out.usable      = true;
+			out.via         = meterResult::via_held;
+			out.sceneRef    = lvHeldSceneRef_;
+			out.linear      = lvHeldSceneRef_ * std::pow(2.0, shotApex);
+			out.meterExp    = shotExp;
+			out.shotMissing = missing;
+			return ERR_HGC_OK;
+		}
+		out = th;
+		out.meterExp = shotExp;
+		return (te != ERR_HGC_OK) ? te : ERR_HGC_API_ANALIZE;
 	}
 	// 1コマ前の画像なので、割り戻す露出も「そのコマの露出」でなければならない。
 	//  撮影周期の間に露出を動かしているとズレるが、暗所ではクランプが効いていて
 	//  ほとんど動かないため、直前コマの露出(shotExp)で足りる。ズレるようなら
 	//  コマごとの露出を覚えて渡す形に直す(実験で見る)。
 	th.meterExp     = shotExp;
-	th.sceneRef     = th.linear / std::pow(2.0, expo::brightnessStops(shotExp, tables_));
+	th.sceneRef     = th.linear / std::pow(2.0, shotApex);
 	lvHeldSceneRef_ = th.sceneRef;
 	lvFallbackSkip_ = kLvFallbackEveryN - 1;
 	++lvFallbackShots_;
