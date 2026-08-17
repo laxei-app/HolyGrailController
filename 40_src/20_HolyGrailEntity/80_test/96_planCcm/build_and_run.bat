@@ -20,6 +20,7 @@ cl /nologo /EHsc /std:c++17 /W3 /utf-8 /fp:precise ^
    /I "%SRC%" /I "%LIBDIR%" ^
    /Fo"%OUT%\\" /Fe"%OUT%\planCcmTest.exe" ^
    "%HERE%planCcmTest.cpp" "%SRC%\csJson.cpp" "%SRC%\astroSched.cpp" "%SRC%\exposureMath.cpp" ^
+   "%SRC%\secret.cpp" "%SRC%\httpAuth.cpp" "%SRC%\md5.cpp" ^
    "%LIBDIR%\astronomy\astronomy.c"
 if errorlevel 1 ( echo BUILD FAILED & exit /b 1 )
 

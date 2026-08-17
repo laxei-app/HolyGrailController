@@ -12,6 +12,7 @@
 #include "csJson.h"
 #include "astroSched.h"
 #include <cstdio>
+#include <cstdlib>	// std::llabs
 #include <string>
 
 namespace
@@ -128,6 +129,7 @@ int main(void)
 	std::printf("\n[3] 使う/使わない(実体は保持する)\n");
 	{
 		hgc::cs p = makePlan("C");
+		p.ccm.useSunrise = true;	// 朝日/夕日は既定で「使わない」(2026-08-17)。このテストは明示的に使う
 		p.ccm.sunrise->name = "朝日(ユーザー編集)";
 		p.ccm.sunrise->limitDark = hgc::exposure{ "200", "1/2000", "11" };
 		check(astro::buildSchedule(p, 540) == ERR_HGC_OK, "使う状態でスケジュール");
@@ -154,7 +156,8 @@ int main(void)
 		hgc::cs p = makePlan("D");
 		p.ccm.day->name = "日中D";
 		p.ccm.night->limitBright = hgc::exposure{ "3200", "6", "2.0" };
-		p.ccm.useSunset = false;
+		p.ccm.useSunset  = false;
+		p.ccm.useSunrise = true;	// 既定は「使わない」。true/false 両方が往復することを見る
 		check(astro::buildSchedule(p, 540) == ERR_HGC_OK, "スケジュール");
 		const std::string js = csjson::toJson(p);
 
@@ -176,6 +179,43 @@ int main(void)
 		// 復元した計画の ccm を編集しても、元の計画には影響しない。
 		if (q.ccm.day) { q.ccm.day->name = "変更後"; }
 		checkStr(p.ccm.day->name, "日中D", "復元先を編集しても元の計画は変わらない");
+	}
+
+	// ---------------------------------------------------------------- ④-2
+	// 既定値(2026-08-17 ユーザー指示):
+	//  ・夜間↔移行の境界は -12°(航海薄明)。以前は -18°(天文薄明)だった
+	//  ・朝日/夕日(太陽を直接撮る)は既定で使わない
+	std::printf("\n[4-2] 既定値(夜間境界 -12° / 朝日・夕日は使わない)\n");
+	{
+		hgc::cs p = makePlan("F");
+		check(p.ccm.useSunrise == false, "朝日は既定で使わない");
+		check(p.ccm.useSunset  == false, "夕日は既定で使わない");
+		check(astro::buildSchedule(p, 540) == ERR_HGC_OK, "既定のスケジュール");
+		check(countType(p, hgc::ccmType::sunrise) == 0, "既定では朝日の窓ができない");
+		check(countType(p, hgc::ccmType::sunset)  == 0, "既定では夕日の窓ができない");
+		check(countType(p, hgc::ccmType::night)   >  0, "夜間の窓はできる");
+
+		// 夜間の窓の始まりが「太陽高度 -12°(下降)」の時刻と一致することを確かめる。
+		//  -18° のままなら夜間の始まりはもっと遅い時刻になるので、ここでずれを検出できる。
+		const hgc::ccmWindow* nw = nullptr;
+		for (const auto& w : p.ccmList) { if (w.ccm && w.ccm->type == hgc::ccmType::night) { nw = &w; break; } }
+		check(nw != nullptr, "夜間の窓を取り出せる");
+		if (nw != nullptr)
+		{
+			astro::altTime a12 = astro::sunAltitudeTime(p.place, p.start, -12.0, false, 540);
+			astro::altTime a18 = astro::sunAltitudeTime(p.place, p.start, -18.0, false, 540);
+			check(a12.valid && a18.valid, "-12°/-18°(下降)の時刻が求まる");
+			if (a12.valid && a18.valid)
+			{
+				// 分類は1分刻みのサンプリング、sunAltitudeTime は解析的な探索なので数分ずれる
+				// (大気差の扱いも違う)。**どちらに近いか**で既定値の変更を判定する。
+				const long long ns  = hgc::toUnixUtc(nw->start, 540);
+				const long long d12 = std::llabs(ns - hgc::toUnixUtc(a12.when, 540));
+				const long long d18 = std::llabs(ns - hgc::toUnixUtc(a18.when, 540));
+				check(d12 < d18,   "夜間の始まりが -18° より -12° に近い(既定が -12°)");
+				check(d12 < 600,   "-12° の時刻との差が10分以内");
+			}
+		}
 	}
 
 	// ---------------------------------------------------------------- ⑤

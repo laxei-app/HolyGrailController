@@ -1954,15 +1954,26 @@ int32_t hge_setBoundaryByAlt(int32_t beforeType, int32_t afterType, int32_t occ,
 		}
 	}
 	// 撮影制御方法移動範囲(仕様 7.3.2 追加)。境界に接する種別ペアで可動高度をクランプする。
-	//  night=1 sunrise=2 sunset=3 day=4 preNight=6 postNight=7
+	// 【2026-08-17 修正】種別番号を直書きしていて **preNight/postNight がずれていた**。
+	//  実際の ccmType は night=1 sunrise=2 sunset=3 day=4 **preNight=5 postNight=6** だが、
+	//  ここは preNight=6 postNight=7 のつもりで書かれていた。そのため
+	//   ・夕日↔夜間前移行、夜間前移行↔夜間 … どの分岐にも当たらず既定(-24〜+6)=事実上チェック無し
+	//   ・朝日↔夜間後移行、夜間後移行↔夜間 … postNight が偶然 6 に当たって効いていた
+	//  という非対称になっていた(夕方だけ効かない)。enum から取って二度とずれないようにする。
 	{
+		const int tNight = static_cast<int>(hgc::ccmType::night);
+		const int tSunUp = static_cast<int>(hgc::ccmType::sunrise);
+		const int tSunDn = static_cast<int>(hgc::ccmType::sunset);
+		const int tDay   = static_cast<int>(hgc::ccmType::day);
+		const int tPre   = static_cast<int>(hgc::ccmType::preNight);
+		const int tPost  = static_cast<int>(hgc::ccmType::postNight);
 		auto has = [&](int t) { return beforeType == t || afterType == t; };
 		double lo = -24.0, hi = 6.0;
-		bool sun = has(2) || has(3), trans = has(6) || has(7);
-		if (has(4) && sun)            { lo = 3.0;   hi = 6.0;   }  // 日中↔夕日/朝日(上境界 +6〜+3)
-		else if (sun && trans)        { lo = -1.0;  hi = 2.0;   }  // 夕日/朝日↔移行(下境界 +2〜-1)
-		else if (has(4) && trans)     { lo = -3.0;  hi = 4.0;   }  // 日中↔移行(日中境界 +4〜-3)
-		else if (has(1) && trans)     { lo = -19.0; hi = -12.0; }  // 夜間↔移行(夜間境界 -12〜-19)
+		bool sun = has(tSunUp) || has(tSunDn), trans = has(tPre) || has(tPost);
+		if (has(tDay) && sun)          { lo = 3.0;   hi = 6.0;   }  // 日中↔夕日/朝日(上境界 +6〜+3)
+		else if (sun && trans)         { lo = -1.0;  hi = 2.0;   }  // 夕日/朝日↔移行(下境界 +2〜-1)
+		else if (has(tDay) && trans)   { lo = -3.0;  hi = 4.0;   }  // 日中↔移行(日中境界 +4〜-3)
+		else if (has(tNight) && trans) { lo = -19.0; hi = -12.0; }  // 夜間↔移行(夜間境界 -12〜-19)
 		if (altDeg < lo) altDeg = lo;
 		if (altDeg > hi) altDeg = hi;
 	}

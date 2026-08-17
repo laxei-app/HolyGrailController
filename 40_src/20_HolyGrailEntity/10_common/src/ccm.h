@@ -107,8 +107,11 @@ namespace hgc
 		std::shared_ptr<ccmSunset>  sunset;
 		std::shared_ptr<ccmDay>     day;
 		bool useNight   = true;
-		bool useSunrise = true;
-		bool useSunset  = true;
+		// 朝日/夕日(太陽を直接撮る)は既定で**使わない**(2026-08-17 ユーザー指示)。
+		//  太陽が画角に入る構図でないと意味がなく、既定で入れておくと薄明の連続性を
+		//  分断してしまう(日中が朝日で割られる既知の課題も同根)。使う人が明示的に入れる。
+		bool useSunrise = false;
+		bool useSunset  = false;
 		bool useDay     = true;
 
 		// 4種そろっているか(欠けていたら初期値の取り込みが必要)。

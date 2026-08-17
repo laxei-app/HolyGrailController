@@ -188,14 +188,22 @@ class ScheduleView(context: Context) : View(context) {
         }
         return res
     }
+    // 撮影制御方法移動範囲(仕様 7.3.2)。ネイティブ側 hge_setBoundaryByAlt と同じ表にすること。
+    // 【2026-08-17 修正】種別番号がずれていた。ccmType は
+    //  invalid=0 night=1 sunrise=2 sunset=3 day=4 **preNight=5 postNight=6**。
+    //  ここは preNight=6 postNight=7 のつもりで書かれていたため、夕日↔夜間前移行と
+    //  夜間前移行↔夜間が既定(-24〜+6)に落ちて事実上チェックされていなかった(夕方だけ効かない)。
+    private object CcmT { const val NIGHT = 1; const val SUNRISE = 2; const val SUNSET = 3
+                          const val DAY = 4; const val PRE_NIGHT = 5; const val POST_NIGHT = 6 }
     private fun clampRange(before: Int, after: Int): Pair<Double, Double> {
         fun has(t: Int) = before == t || after == t
-        val sun = has(2) || has(3); val trans = has(6) || has(7)
+        val sun   = has(CcmT.SUNRISE) || has(CcmT.SUNSET)
+        val trans = has(CcmT.PRE_NIGHT) || has(CcmT.POST_NIGHT)
         return when {
-            has(4) && sun -> 3.0 to 6.0
+            has(CcmT.DAY) && sun -> 3.0 to 6.0
             sun && trans -> -1.0 to 2.0
-            has(4) && trans -> -3.0 to 4.0
-            has(1) && trans -> -19.0 to -12.0
+            has(CcmT.DAY) && trans -> -3.0 to 4.0
+            has(CcmT.NIGHT) && trans -> -19.0 to -12.0
             else -> -24.0 to 6.0
         }
     }
