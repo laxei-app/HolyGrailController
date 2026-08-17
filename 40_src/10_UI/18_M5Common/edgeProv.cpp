@@ -60,15 +60,25 @@ namespace
 	// 両方がこのサーバを使うので、ここで受けて etpBle へ中継する。
 	class SrvCb : public NimBLEServerCallbacks
 	{
-		void onConnect(NimBLEServer*, NimBLEConnInfo&) override
+		void onConnect(NimBLEServer* srv, NimBLEConnInfo&) override
 		{
-			Serial.println("[PROV] BLE client connected");
+			Serial.printf("[PROV] BLE client connected (conn=%d)\n", (int)(srv ? srv->getConnectedCount() : 0));
 			etpBle::onConnected();
+			// 【つながっていても広告を続ける(2026-08-17)】NimBLE は接続すると広告を止める。
+			//  ETP を BLE で運ぶ設定にしているとスマホがつなぎっぱなしにするので、エッジが
+			//  広告しなくなり **設定変更のQRを出す経路が使えなくなる**(スマホのプロビジョニング
+			//  画面は "HGC-<端末名>" の広告を名前一致で探すため「見つかりません」になる)。
+			//  屋外のAPモード運用中に SSID/パスワードを変えられなくなるのは詰みなので、
+			//  接続中も広告を出し続ける。同時接続は CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3 まで。
+			NimBLEDevice::startAdvertising();
 		}
-		void onDisconnect(NimBLEServer*, NimBLEConnInfo&, int) override
+		void onDisconnect(NimBLEServer* srv, NimBLEConnInfo&, int) override
 		{
-			Serial.println("[PROV] BLE client disconnected");
-			etpBle::onDisconnected();
+			const int left = srv ? (int)srv->getConnectedCount() : 0;
+			Serial.printf("[PROV] BLE client disconnected (conn=%d)\n", left);
+			// ETP の受信状態を捨てるのは**最後の1本が切れたとき**だけ。プロビジョニング用の
+			//  2本目が切れただけで捨てると、生きている ETP の途中フレームを壊す。
+			if (left <= 0) { etpBle::onDisconnected(); }
 			NimBLEDevice::startAdvertising();
 		}
 		void onMTUChange(uint16_t mtu, NimBLEConnInfo&) override { etpBle::onMtu(mtu); }
