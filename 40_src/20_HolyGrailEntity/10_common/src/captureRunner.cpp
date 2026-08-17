@@ -542,6 +542,12 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 	int     meterNg    = 0;			// 測光できず値を採用できなかった回数
 	int     calibShots = 0;			// 露出を合わせるために余分に撮ったコマ数(実写確認)
 	bool    needShot   = false;		// 測光値が概算にすぎないと実装が申告した(実写で確かめる)
+	// 「張り付きを抜ける途中で1回ぶんを使い切った」回数。**異常ではない**ので測光失敗と分けて数える。
+	//  1回の meterHere が動かせるのは kHereMaxShift x kPegBrightStep = 16段まで。開始時のカメラの
+	//  露出が大きく外れていれば当たり前に起きる(実測: 夜間露出のまま日中に開始すると16段ずれ、
+	//  1回目は必ずここへ来る)。これを測光失敗に数えていたため、正常な収束でも ERR が出ていた。
+	int     pegRetry      = 0;
+	int     lastFailStage = 0;		// 最後に測れなかったときの段階(apiBase実装の申告。23=張り付き)
 	bool    converged  = false;		// 目標へ収まった(または露出限界に到達した)か
 	errCode lastErr    = ERR_HGC_OK;	// 最後に失敗したときのコード
 	char    meterMs[112] = {0};
@@ -579,7 +585,12 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 			interruptibleSleep(kApplyRetryMs);
 			continue;	// step は増やさない(収束の1歩として数えない)
 		}
-		if (!okThis) { ++meterNg; lastErr = me; continue; }	// 測光失敗 → 予算内で再試行
+		if (!okThis)
+		{	// 測光できず → 予算内で再試行。23=張り付きを抜けきれなかった(=まだ途中)は異常ではない。
+			lastErr = me; lastFailStage = mr.failStage;
+			if (mr.failStage == 23) { ++pegRetry; } else { ++meterNg; }
+			continue;
+		}
 
 		++step;
 		needShot = mr.needShotCheck;	// この明るさでは測り方が信用できない、という実装からの申告
@@ -686,21 +697,24 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 	converge_.outcome = (step == 0) ? 2 : (converged ? 0 : 1);
 	converge_.shots   = calibShots;
 
-	if (onError_)
+	// 結果を1行残す。**収束できたなら異常ではないので INFO** にする。onError_ は ERR ログに加えて
+	//  UI へも通知(HGE_EV_ERROR)が飛ぶので、正常な収束で呼んではいけない。
+	//  また、HTTP の状態は「取得そのものが失敗した」(stage=22)ときしか意味を持たない。従来は
+	//  無条件に withHttpDetail を通していたため、通信は正常なのに "http=応答なし" と書かれていた。
 	{
-		char eb[280];
+		std::string msg = "初期収束 有効" + std::to_string(step) + "回";
+		if (calibShots > 0) { msg += " 実写" + std::to_string(calibShots) + "枚"; }
+		if (pegRetry   > 0) { msg += " 張付継続" + std::to_string(pegRetry) + "回"; }
+		msg += " 測光ms=" + std::string(meterMs);
 		if (applyNg > 0 || meterNg > 0)
 		{
-			// 失敗した回は値を採用せずやり直している。step=実際に収束へ使えた回数。
-			// step=0 は「一度も測れなかった」= 露出は基準値のまま撮り始めることを意味する。
-			std::snprintf(eb, sizeof(eb), "%s (収束: 有効%d回 適用失敗%d 測光失敗%d 測光ms=%s)",
-			              this->withHttpDetail("初期収束").c_str(), step, applyNg, meterNg, meterMs);
+			msg += " (適用失敗" + std::to_string(applyNg) + " 測光失敗" + std::to_string(meterNg) +
+			       " 最終stage=" + std::to_string(lastFailStage) + ")";
+			if (lastFailStage == 22) { msg += " " + this->withHttpDetail("直近の通信"); }
 		}
-		else
-		{
-			std::snprintf(eb, sizeof(eb), "初期収束 有効%d回 測光ms=%s", step, meterMs);
-		}
-		onError_(lastErr, eb);
+		const bool bad = (!converged) || (applyNg > 0) || (meterNg > 0);
+		if (bad && onError_) { onError_(lastErr, msg.c_str()); }
+		else                 { dataManager::logEvent("CONV", msg.c_str()); }
 	}
 	// 収束中にカメラ実装が動かした露出は差分適用キャッシュの外である。ここで無効化して
 	// 次の適用に全軸を必ず送らせる(キャッシュと実機がズレたまま1枚目を撮る事故の防止)。
