@@ -267,6 +267,18 @@ namespace
 		return nullptr;
 	}
 
+	// sec を含む撮影制御方法の窓の時間範囲。見つからなければ false。
+	//  スケジュール表示の高度は**この境目の時刻**から求める(サンプルの最小/最大ではなく)。
+	bool ccmWindowRangeAtUnix(long long sec, long long& outStart, long long& outEnd)
+	{
+		for (const auto& w : g_plan.ccmList)
+		{
+			long long s = hgc::toUnixUtc(w.start, g_offMin), e = hgc::toUnixUtc(w.end, g_offMin);
+			if (sec >= s && sec < e) { outStart = s; outEnd = e; return true; }
+		}
+		return false;
+	}
+
 	// 仕様 7.3.2 のスケジュール=太陽高度軸(+6°〜-24°)で夕方/朝方を分けたブロック群を JSON 配列で返す。
 	// 各ブロック: {title,date,axis(down=夕/up=朝),segments[{type,name,altTop,altBottom,used}],marks[{label,time,alt}]}
 	std::string buildBlocksJson(void)
@@ -341,10 +353,25 @@ namespace
 				while (k <= b)
 				{
 					const hgc::ccmBase* c = activeCcmAtUnix(sm[k].t);
+					const size_t k0 = k;
 					double mnA = sm[k].alt, mxA = sm[k].alt;
 					while (k <= b && activeCcmAtUnix(sm[k].t) == c) { if (sm[k].alt < mnA) mnA = sm[k].alt; if (sm[k].alt > mxA) mxA = sm[k].alt; ++k; }
 					if (c)
 					{
+						// 表示する高度は**窓の境目の時刻**から求める(2026-08-17)。
+						//  サンプル(60秒刻み)の最小/最大を使うと、境目を1サンプルぶん行き過ぎた
+						//  高度になる。太陽は1分で約0.2°動くので、夜間の境目が -12.0° のはずが
+						//  夕方 -12.2° / 朝 -11.8° と表示されていた(符号が逆なのは行き過ぎる向きの違い)。
+						//  ブロック(=この図の1枚)の範囲は超えないように切る。
+						long long ws = 0, we = 0;
+						if (ccmWindowRangeAtUnix(sm[k0].t, ws, we))
+						{
+							if (ws < sm[a].t) { ws = sm[a].t; }
+							if (we > sm[b].t) { we = sm[b].t; }
+							const double h1 = sunAltAtUnix(ws), h2 = sunAltAtUnix(we);
+							mxA = (h1 > h2) ? h1 : h2;
+							mnA = (h1 < h2) ? h1 : h2;
+						}
 						int ty = static_cast<int>(c->type);
 						if (ty == 2 || ty == 3) { ty = sunType; hasSunDirect = true; }	// ブロック方向に種別を統一(item4)
 						segs.push_back({ ty, c->name, clampAlt(mxA), clampAlt(mnA) });
@@ -400,7 +427,16 @@ namespace
 			for (size_t m = a + 1; m <= b; ++m)
 			{
 				const hgc::ccmBase* c = activeCcmAtUnix(sm[m].t);
-				if (c != prevC) { addMark("", sm[m].t, clampAlt(sm[m].alt)); prevC = c; }	// 内部の可動境目のみ
+				if (c != prevC)
+				{
+					// 境目の時刻/高度は**窓が持つ正確な時刻**から出す(2026-08-17)。サンプル位置
+					//  (60秒刻み)をそのまま使うと1サンプルぶん行き過ぎ、太陽は1分で約0.2°動くので
+					//  夜間の境目が -12.0° のはずが -12.2°/-11.8° と表示されていた。
+					long long ws = 0, we = 0, bt = sm[m].t;
+					if (ccmWindowRangeAtUnix(sm[m].t, ws, we) && ws > sm[a].t && ws <= sm[m].t) { bt = ws; }
+					addMark("", bt, clampAlt(sunAltAtUnix(bt)));
+					prevC = c;
+				}
 			}
 			if (bi == 0) { addMark("Start", s0, sunAltAtUnix(s0)); }
 			if (bi == kept.size() - 1) { addMark("End", s1, sunAltAtUnix(s1)); }
