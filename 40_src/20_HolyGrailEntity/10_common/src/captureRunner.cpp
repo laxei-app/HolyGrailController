@@ -638,7 +638,10 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 		void* tc = tool::startElapse();
 		while (calibShots < kCalibMaxShots && running_)
 		{
-			if (static_cast<int>(tool::getElapse(tc)) >= kCalibBudgetMs) { break; }
+			// 次の1枚が予算内に終わらないなら撮らない(測る前に打ち切られる無駄コマを作らない)。
+			const double calSs = expo::parseValue(ctl.current().ss, expo::expoKind::ss);
+			const int    calCost = static_cast<int>((calSs > 0.0 ? calSs : 0.0) * 1000.0) + kCalibShotOverheadMs;
+			if (static_cast<int>(tool::getElapse(tc)) + calCost > kCalibBudgetMs) { break; }
 			// 撮る露出をカメラへ乗せてから切る(乗っていないと割り戻す分母が嘘になる)。
 			int applyTries = 0;
 			if (this->applyWithRetry(ctl.current(), applyTries, kApplyMaxMs) != ERR_HGC_OK) { ++applyNg; break; }
@@ -647,10 +650,7 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 			if (this->fireShutter(ctl.current(), itv, failStreak, false) != ERR_HGC_OK) { break; }
 			++calibShots;
 			// 露光が終わるまで待つ。測光は記録の通知を待つので、ここで待たないと待ち予算を空振りする。
-			{
-				const double ssSec = expo::parseValue(ctl.current().ss, expo::expoKind::ss);
-				this->interruptibleSleep(static_cast<long>((ssSec > 0.0 ? ssSec : 0.0) * 1000.0) + kAfterShutterMarginMs);
-			}
+			this->interruptibleSleep(static_cast<long>((calSs > 0.0 ? calSs : 0.0) * 1000.0) + kAfterShutterMarginMs);
 			// 撮影ループ用の間引き(kLvFallbackEveryN)を持ち込まない。持ち込むと、前の1枚で
 			//  取得した直後にカウンタが立ち、この1枚が据え置き値を返して丸ごと無駄になる。
 			cameraController::resetMeterCadence(*dev_);
@@ -680,9 +680,8 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 			ctl.applyStops(-cErr);
 			const double cNewB = expo::brightnessStops(ctl.current(), tables_);
 			if (std::fabs(cNewB - cCurB) < 1e-6) { converged = true; break; }	// 露出限界で動けない
-			// 中央値が帯の中にあった = 実写の真値でズレを丸ごと補正できた。**確認の1枚は撮らない**。
-			//  張り付いていたときだけ、ズレが「これ以上」しか分からないのでもう1枚撮って測り直す。
-			if (cr.x > kCalibPegLow && cr.x < kCalibPegHigh) { converged = true; break; }
+			// ここで打ち切らない。補正後の露出でもう一度測り、ev0 を引き直して確かめる
+			//  (1回の補正では 1.0〜1.3段 残る。kCalibMaxShots の説明を参照)。
 		}
 	}
 
