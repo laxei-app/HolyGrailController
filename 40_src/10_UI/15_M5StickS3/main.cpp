@@ -835,12 +835,25 @@ static void renderProv(void)
 	                + "\",\"m\":\"" + g_netMode
 	                + "\",\"s\":\"" + g_apSsid
 	                + "\",\"p\":\"" + g_apPass + "\"}";
-	int sz = g_scrH - 24;	// 縦に収める
-	g_cv.qrcode(qr.c_str(), (g_scrW - sz) / 2, 2, sz, 6);	// version 6: 内容が増えたため
+	// QRを左へ寄せて縦いっぱいに使い、文字は右へ逃がす(2026-08-17。スマホで読めなかった)。
+	//  【なぜ小さかったか】qrcode() の1モジュールの太さは **w ÷ モジュール数の整数除算**。
+	//   従来は下に文字を置くため w=111px に切り詰めており、version 6(41x41)だと
+	//   111/41 = **2px/モジュール**しか出ていなかった(実際に描かれるQRは82pxで、
+	//   残り29pxは白余白として捨てられていた)。
+	//  【直し方】(a) 文字を右へ移して w を 135px(画面の高さいっぱい)に広げる
+	//            (b) version は**下限指定**で、内容が入らなければライブラリが自動で上げる。
+	//                6 を直に渡すと内容が短くても 41x41 のままなので、4 を渡して
+	//                最小の版を選ばせる。33x33 で収まれば 135/33 = **4px/モジュール**になる。
+	//  QRの右は白背景がそのまま静穏帯(quiet zone)になる。
+	const int sz = g_scrH;
+	g_cv.qrcode(qr.c_str(), 0, 0, sz, 4);
+	const int tx = sz + 8;	// QRの右に白を空けてから文字
 	g_cv.setFont(&fonts::Font2);
 	g_cv.setTextColor(TFT_BLACK);
-	g_cv.setTextDatum(textdatum_t::bottom_center);
-	g_cv.drawString("Scan with phone", g_scrW / 2, g_scrH - 2);
+	g_cv.setTextDatum(textdatum_t::middle_left);
+	g_cv.drawString("Scan",  tx, g_scrH / 2 - 20);
+	g_cv.drawString("with",  tx, g_scrH / 2);
+	g_cv.drawString("phone", tx, g_scrH / 2 + 20);
 	g_cv.setTextDatum(textdatum_t::top_left);
 }
 // AP参加情報。QRは廃止した(理由はCoreS3側 renderApInfo のコメント参照)。カメラへ手入力
