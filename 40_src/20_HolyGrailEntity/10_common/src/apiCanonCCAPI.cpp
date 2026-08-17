@@ -1600,6 +1600,10 @@ errCode apiCanonCCAPI::meterLvAt(const hgc::exposure& seed, meterResult& out,
 		}
 
 		// 採用。次回の出発点として覚える(呼ぶたびに最初から探し直さない)。
+		// 測光露出の明るさが kLvMaxApexStops 以上なら、この値は数段低く出ている疑いがある
+		//  (中央値は中間調に見えるので、張り付き判定では捕まらない)。上位へ「概算にすぎない」と
+		//  申告し、初期収束には実写で測り直してもらう。撮影ループはそもそもここへ来ない。
+		out.needShotCheck = (expo::brightnessStops(me, tables_) >= kLvMaxApexStops);
 		out.via        = meterResult::via_liveView;
 		hereExp_       = me;
 		out.meterExp   = me;

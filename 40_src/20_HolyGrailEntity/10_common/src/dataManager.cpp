@@ -1407,7 +1407,8 @@ std::string dataManager::writeCaptureReport(const captureReport& r, const hgc::c
 	j["apply"] = { { "cnt", r.applyCnt }, { "avgMs", avg(r.applySumMs, r.applyCnt) }, { "maxMs", r.applyMaxMs } };
 	// 撮影開始前の初期収束が、うまくいったのか失敗したのか。ここが済んでいないと1枚目から露出が外れる。
 	j["converge"] = { { "outcome", r.cvOutcome }, { "steps", r.cvSteps },
-	                  { "applyNg", r.cvApplyNg }, { "meterNg", r.cvMeterNg } };
+	                  { "applyNg", r.cvApplyNg }, { "meterNg", r.cvMeterNg },
+	                  { "shots", r.cvShots } };
 	j["liveview"] = { { "staleFrames", r.staleFrames }, { "staleTotal", r.staleTotal } };
 	j["limit"] = { { "maxSsSec", r.maxSsSec }, { "minIntervalSec", minInterval },
 	               { "marginSec", (minInterval >= 0.0) ? (plan.interval - minInterval) : 0.0 } };

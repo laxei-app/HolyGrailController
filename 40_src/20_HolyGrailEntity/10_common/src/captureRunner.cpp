@@ -540,6 +540,8 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 	// 例 "測光ms=1180,860!,910" ('!'=その回は値を採用できなかった)。
 	int     applyNg    = 0;			// 測光のためのカメラ操作が失敗した回数(実装からの申告)
 	int     meterNg    = 0;			// 測光できず値を採用できなかった回数
+	int     calibShots = 0;			// 露出を合わせるために余分に撮ったコマ数(実写確認)
+	bool    needShot   = false;		// 測光値が概算にすぎないと実装が申告した(実写で確かめる)
 	bool    converged  = false;		// 目標へ収まった(または露出限界に到達した)か
 	errCode lastErr    = ERR_HGC_OK;	// 最後に失敗したときのコード
 	char    meterMs[112] = {0};
@@ -580,6 +582,7 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 		if (!okThis) { ++meterNg; lastErr = me; continue; }	// 測光失敗 → 予算内で再試行
 
 		++step;
+		needShot = mr.needShotCheck;	// この明るさでは測り方が信用できない、という実装からの申告
 		// ev0 のリニア輝度は環境光依存(§4.3.3/4.3.4)。測光値と測光時の露出から都度求める。
 		const hgc::exposure& mex = validExposure(mr.meterExp) ? mr.meterExp : ctl.current();
 		const double lin0      = expo::ev0LinearForMeasure(mr.linear, mex, ev0cfg_);
@@ -615,11 +618,62 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 		// 次の反復で新しい測光により誤差を再確認する(確認が取れたら上で break)。
 	}
 
+	// --- 実写での確認(2026-08-17) ---
+	// ライブビュー測光が「概算にすぎない」と申告したら、実際に撮ってそのサムネイルで測り直す。
+	// 何枚要るかはカメラ実装が決める(kCalibMaxShots の説明を参照)。1枚目を測れない機種は
+	// 「測れなかった」を返すので、そのまま次の1枚へ進む。
+	if (needShot && running_)
+	{
+		void* tc = tool::startElapse();
+		while (calibShots < kCalibMaxShots && running_)
+		{
+			if (static_cast<int>(tool::getElapse(tc)) >= kCalibBudgetMs) { break; }
+			// 撮る露出をカメラへ乗せてから切る(乗っていないと割り戻す分母が嘘になる)。
+			int applyTries = 0;
+			if (this->applyWithRetry(ctl.current(), applyTries, kApplyMaxMs) != ERR_HGC_OK) { ++applyNg; break; }
+			int failStreak = 0;
+			const double itv = (plan_.interval > 0.0) ? plan_.interval : 15.0;
+			if (this->fireShutter(ctl.current(), itv, failStreak, false) != ERR_HGC_OK) { break; }
+			++calibShots;
+			// 露光が終わるまで待つ。測光は記録の通知を待つので、ここで待たないと待ち予算を空振りする。
+			{
+				const double ssSec = expo::parseValue(ctl.current().ss, expo::expoKind::ss);
+				this->interruptibleSleep(static_cast<long>((ssSec > 0.0 ? ssSec : 0.0) * 1000.0) + kAfterShutterMarginMs);
+			}
+			apiBase::meterResult cr;
+			const errCode ce = cameraController::meterScene(*dev_, ctl.current(), cr,
+			                                                [this]() { return running_.load(); });
+			if (ce != ERR_HGC_OK || !cr.ok || !cr.usable || !(cr.sceneRef > 0.0))
+			{	// 1枚目は測れない機種がある(R10=1コマ前しか測れない)。次の1枚へ。
+				continue;
+			}
+			const hgc::exposure& cex = validExposure(cr.meterExp) ? cr.meterExp : ctl.current();
+			const double cLin0 = expo::ev0LinearForMeasure(cr.linear, cex, ev0cfg_);
+			const double cLinT = expo::linearFromEvBase(evT, cLin0);
+			const double cCurB = expo::brightnessStops(ctl.current(), tables_);
+			const double cPred = cr.sceneRef * std::pow(2.0, cCurB);
+			if (cPred <= 0.0 || cLinT <= 0.0) { break; }
+			const double cErr  = std::log2(cPred / cLinT);
+			{
+				char cb[160];
+				std::snprintf(cb, sizeof(cb), "shot=%d x=%.4f ref=%.6f cur=%.2f err=%+.2f rdy=%dms",
+				              calibShots, cr.x, cr.sceneRef, cCurB, cErr, cr.rdyMs);
+				dataManager::logEvent("CONV", cb);
+			}
+			++step;					// 実写で1歩詰めたので収束の1歩として数える
+			converged = false;
+			if (std::fabs(cErr) <= kInitConvergeTolStops) { converged = true; break; }
+			ctl.applyStops(-cErr);
+			const double cNewB = expo::brightnessStops(ctl.current(), tables_);
+			if (std::fabs(cNewB - cCurB) < 1e-6) { converged = true; break; }	// 露出限界で動けない
+		}
+	}
+
 	// 【診断 2026-08-14】収束が最終的にどの露出を1枚目に渡したか。上の CONV 各行と突き合わせる。
 	{
 		char cb[128];
-		std::snprintf(cb, sizeof(cb), "done step=%d ng(apply=%d meter=%d) conv=%d -> iso=%s ss=%s fn=%s (%.2f段)",
-		              step, applyNg, meterNg, converged ? 1 : 0,
+		std::snprintf(cb, sizeof(cb), "done step=%d shots=%d ng(apply=%d meter=%d) conv=%d -> iso=%s ss=%s fn=%s (%.2f段)",
+		              step, calibShots, applyNg, meterNg, converged ? 1 : 0,
 		              ctl.current().iso.c_str(), ctl.current().ss.c_str(), ctl.current().fn.c_str(),
 		              expo::brightnessStops(ctl.current(), tables_));
 		dataManager::logEvent("CONV", cb);
@@ -630,6 +684,7 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 	converge_.applyNg = applyNg;
 	converge_.meterNg = meterNg;
 	converge_.outcome = (step == 0) ? 2 : (converged ? 0 : 1);
+	converge_.shots   = calibShots;
 
 	if (onError_)
 	{

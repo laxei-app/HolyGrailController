@@ -4152,6 +4152,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
             else -> "固定露出(星景/夜間)から始まったか、直前の撮影露出を引き継いだので、合わせる必要がなかった"
         })
         if (cvOutcome != 3) { repRow(box, "測れた回数", "${cvw.optInt("steps")} 回") }
+        // ライブビューでは測れない暗さだったときだけ、実写を撮って合わせ直す。
+        //  そのコマは frames に入らないので、カードの枚数との差をここで説明する。
+        val cvShots = cvw.optInt("shots")
+        if (cvShots > 0) {
+            repRow(box, "調整用の撮影", "$cvShots 枚",
+                   "暗くてライブビューでは測れないため、実際に撮って露出を合わせた。" +
+                   "この枚数はコマ数に含まれないが、カードには残っている")
+        }
         if (cvw.optInt("applyNg") > 0 || cvw.optInt("meterNg") > 0) {
             repRow(box, "やり直した回数", "露出設定 ${cvw.optInt("applyNg")} / 測光 ${cvw.optInt("meterNg")}",
                    "失敗した回の値は使わずやり直している")

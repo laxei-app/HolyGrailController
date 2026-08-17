@@ -1232,6 +1232,7 @@ namespace
 					// 初期収束の結果はセッション単位。毎コマ同じ値が来るのでそのまま写す。
 					R.cvSteps = c.converge.steps; R.cvApplyNg = c.converge.applyNg;
 					R.cvMeterNg = c.converge.meterNg; R.cvOutcome = c.converge.outcome;
+					R.cvShots   = c.converge.shots;
 				}
 			},
 			[S](errCode e, const std::string& m) {
