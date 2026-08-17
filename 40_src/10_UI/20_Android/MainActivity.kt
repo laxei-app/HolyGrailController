@@ -774,6 +774,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun isCaptureBusy(): Boolean =
         capturingPlans.isNotEmpty() || waitingPlans.isNotEmpty() || disconnectedPlans.isNotEmpty()
 
+    // 指定した**その1台**のエッジ端末が今カメラを使っているか(撮影中/開始要求中)。
+    //  ネットワーク設定の変更を止めるのは、その端末とカメラの回線が切れて撮影が壊れるから。
+    //  別の端末が撮影していても、この端末を触る妨げにはならない(2026-08-17 指示。Edge00が
+    //  撮影中というだけで、何もしていない Edge01 の設定まで変更できなくなっていた)。
+    //  エッジ名が空の計画=スマホ直結なので、どのエッジとも無関係として数えない。
+    private fun isEdgeCaptureBusy(edgeName: String): Boolean {
+        if (edgeName.isEmpty()) return false
+        return (capturingPlans + waitingPlans + disconnectedPlans).any { planEdgeName(it) == edgeName }
+    }
+
     // ログ取得: スマホ自身のログ + オンラインの各エッジのログを、ユーザーが見える場所へコピーする。
     // 保存先: スマホ = Download/hgclog/、エッジ = Download/hgclog-<端末名>/(何のフォルダか分かるように)。
     // 同名ファイルは上書き(内容は同じはずなので日時フォルダで増やさない)。
@@ -5173,8 +5183,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 // 撮影中は AP/STA を切り替えさせない。切り替えるとエッジとカメラの回線が切れて
                 // 撮影が壊れる(2026-08-14 指示)。エッジ側でも同じ判定で断るが、ここで止めれば
                 // 理由をユーザーに見せられる。
-                if (isCaptureBusy()) {
-                    Toast.makeText(ctx, "撮影中はエッジ端末のネットワーク設定を変更できません。撮影を止めてから行ってください",
+                // 見るのは**送信先のその1台**だけ(2026-08-17 指示)。以前は全計画をまとめて見て
+                // いたため、別のエッジが撮影しているだけで手を出せなくなっていた。
+                // 送信先は編集中の登録名。新規(未選択)なら入力欄の名前=まだ撮影していない。
+                val target = selectedEdgeName.ifEmpty { (edgeNameEt?.text?.toString() ?: "").trim() }
+                if (isEdgeCaptureBusy(target)) {
+                    Toast.makeText(ctx, "「" + target + "」は撮影中です。ネットワーク設定を変えるとカメラとの回線が切れます。撮影を止めてから行ってください",
                                    Toast.LENGTH_LONG).show()
                 } else {
                     sendEdgeProvision()
