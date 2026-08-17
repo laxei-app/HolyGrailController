@@ -203,7 +203,7 @@ class ScheduleView(context: Context) : View(context) {
             has(CcmT.DAY) && sun -> 3.0 to 6.0
             sun && trans -> -1.0 to 2.0
             has(CcmT.DAY) && trans -> -3.0 to 4.0
-            has(CcmT.NIGHT) && trans -> -19.0 to -12.0
+            has(CcmT.NIGHT) && trans -> -19.0 to -6.0   // 夜間境界(2026-08-17 に -12 から -6 まで拡張)
             else -> -24.0 to 6.0
         }
     }

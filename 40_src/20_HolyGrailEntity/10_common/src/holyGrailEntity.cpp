@@ -1973,7 +1973,7 @@ int32_t hge_setBoundaryByAlt(int32_t beforeType, int32_t afterType, int32_t occ,
 		if (has(tDay) && sun)          { lo = 3.0;   hi = 6.0;   }  // 日中↔夕日/朝日(上境界 +6〜+3)
 		else if (sun && trans)         { lo = -1.0;  hi = 2.0;   }  // 夕日/朝日↔移行(下境界 +2〜-1)
 		else if (has(tDay) && trans)   { lo = -3.0;  hi = 4.0;   }  // 日中↔移行(日中境界 +4〜-3)
-		else if (has(tNight) && trans) { lo = -19.0; hi = -12.0; }  // 夜間↔移行(夜間境界 -12〜-19)
+		else if (has(tNight) && trans) { lo = -19.0; hi = -6.0;  }  // 夜間↔移行(夜間境界 -6〜-19。2026-08-17 に -12 から拡張)
 		if (altDeg < lo) altDeg = lo;
 		if (altDeg > hi) altDeg = hi;
 	}
