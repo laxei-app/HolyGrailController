@@ -31,6 +31,12 @@
 #include "dataManager.h"
 #include "batteryLevel.h"	// バッテリ残量レベル(実測放電カーブから決めたしきい値)
 #include "batteryIcon.h"	// 残量アイコンの描画
+#include "edgeBacklight.h"	// バックライト自動消灯(無操作1分。消灯中は電源LEDも消す)
+
+// バックライトの状態(無操作1分で消灯)。実際に消す処理は blApply()。
+static edgeBL::state g_bl;
+// ワーカースレッド(notifyCb)からの点灯要求。実際の点灯は loop() で行う(I2C/表示を別スレッドから触らない)。
+static volatile bool g_blWake = false;
 #include "batteryGuard.h"	// 限界での自動シャットダウン
 #include "osFile.h"
 #include "osClock.h"
@@ -164,6 +170,7 @@ static void loadRecvPlans(void)
 void edgeAddReceivedPlan(const std::string& id)
 {
 	if (!id.empty()) { g_recvPlans.insert(id); saveRecvPlans(); g_listDirty = true; g_dirty = true; }
+	g_bl.poke(millis());	// スマホから計画が来た=人が操作している。画面を点ける
 }
 
 // 計画名ビットマップ(スマホから ETP C_NAME_BMP で計画idごとに受信。1bpp MSB先頭, 1=白)。
@@ -234,6 +241,19 @@ static void pruneFinishedPlans(bool all);
 
 static constexpr int HEAD_H   = 28;
 static constexpr int CLOCK_H  = 22;	// 最下段の時計予約帯の高さ(px)。計画表示・スクロール対象外(#8)
+
+// ── バックライト自動消灯(2026-08-17。edgeBacklight.h の説明を参照) ──
+// CoreS3 の電源LEDは AXP2101 の reg 0x69 で制御する(M5Unified の setLed は
+//  ESP32-S3 では M5PaperS3 しか処理しないため自前で叩く)。Core2 と同じ扱いで
+//  0x35=点灯 / 0x05=消灯。消灯中は画面も電源LEDも光らせない。
+static void blApply(bool on)
+{
+	M5.Display.setBrightness(on ? 255 : 0);
+	if (M5.Power.getType() == m5::Power_Class::pmic_t::pmic_axp2101)
+	{
+		M5.Power.Axp2101.writeRegister8(0x69, on ? 0x35 : 0x05);
+	}
+}
 
 static M5Canvas g_cv(&M5.Display);	// ダブルバッファ(ちらつき防止)
 
@@ -838,6 +858,7 @@ static void handleTouch(void)
 	static int  startX = 0, startY = 0, startScroll = 0;
 	static bool moved = false;
 	static bool ignoreGesture = false;	// #8 時計帯から始まったジェスチャは丸ごと無視
+	static bool clockBand = false;	// このジェスチャが時計帯から始まったか(離したときの手動消灯用)
 
 	auto t = M5.Touch.getDetail();
 	bool pressed = t.isPressed();
@@ -845,11 +866,32 @@ static void handleTouch(void)
 
 	if (pressed && !prevPressed)
 	{
-		// #8 最下段の時計予約帯はスクロール・タップ対象外。そこから始まった操作はジェスチャ全体を無視。
+		// 消灯中のタッチは**点けるだけ**。そのジェスチャは丸ごと捨てる。
+		//  暗い画面を手探りで触って撮影を開始/停止させてしまうのを防ぐ(ユーザー指示 2026-08-17)。
+		if (g_bl.poke(millis()))
+		{
+			g_dirty = true;	// 点けた直後の画面を描き直す
+			ignoreGesture = true; clockBand = false;
+			startX = tx; startY = ty; startScroll = g_scroll; moved = false;
+			prevPressed = pressed;
+			return;
+		}
+		// #8 の帯はスクロール/タップ対象外のまま。ただしタップ(動かさず離す)だけは**手動消灯**に使う。
 		ignoreGesture = (ty >= 240 - CLOCK_H);
+		clockBand     = ignoreGesture;
 		startX = tx; startY = ty; startScroll = g_scroll; moved = false;
 	}
-	if (ignoreGesture) { if (!pressed) { ignoreGesture = false; } prevPressed = pressed; return; }
+	if (ignoreGesture)
+	{
+		if (pressed && (std::abs(tx - startX) > 8 || std::abs(ty - startY) > 8)) { moved = true; }
+		if (!pressed)
+		{
+			if (clockBand && !moved) { g_bl.off(millis()); }	// 時計帯のタップ=手動消灯
+			ignoreGesture = false; clockBand = false;
+		}
+		prevPressed = pressed;
+		return;
+	}
 	else if (pressed && prevPressed)
 	{
 		if (std::abs(tx - startX) > 8 || std::abs(ty - startY) > 8) { moved = true; }
@@ -880,6 +922,8 @@ static void notifyCb(int32_t ev, const char* json_, int32_t len, void* user)
 		int s = HGE_ST_IDLE;
 		const char* p = std::strstr(json_, "\"state\":");	// {"planId":..,"state":d} 形式に対応
 		if (p) { std::sscanf(p, "\"state\":%d", &s); }
+		// 時刻になって撮影が始まったら画面を点ける(ユーザー指示 2026-08-17)。
+		if (s == HGE_ST_CAPTURING && g_state != HGE_ST_CAPTURING) { g_blWake = true; }
 		g_state = s;
 		g_dirty = true;	// 状態変化で再描画(APモードのQR自動解除・状態帯更新を確実にする)
 		Serial.printf("[EV] STATE: %s\n", stName(s));
@@ -910,6 +954,7 @@ void setup(void)
 	auto cfg = M5.config();
 	M5.begin(cfg);
 	dbg::init();
+	g_bl.begin(blApply, millis());	// バックライト自動消灯を開始(点灯状態から)
 
 	// ①内部DRAM節約: malloc の PSRAM 振り分け閾値を実行時に下げる。512B超の確保(ライブビュー生文字列
 	// ~14KB・計画JSON・CCAPIパースの中〜大確保等)を PSRAM へ載せ、内部DRAMを空ける。tiny確保(<=512B)は
@@ -1247,7 +1292,11 @@ void loop(void)
 		// (廃止 2026-07-05) 'H'=直近カメラIPシードは既知IP直結の廃止に伴い削除。
 	}
 
-	if (g_dirty)
+	// バックライト: 通知スレッドからの点灯要求を反映し、無操作が続いたら消す。
+	if (g_blWake) { g_blWake = false; if (g_bl.poke(millis())) { g_dirty = true; } }
+	g_bl.update(millis());
+
+	if (g_dirty && g_bl.isOn())	// 消灯中は描かない(点けたときに描き直す)
 	{
 		g_dirty = false;
 		redraw();

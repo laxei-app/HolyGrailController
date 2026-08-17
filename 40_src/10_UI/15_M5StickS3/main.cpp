@@ -36,6 +36,12 @@
 #include "dataManager.h"
 #include "batteryLevel.h"	// バッテリ残量レベル(実測放電カーブから決めたしきい値)
 #include "batteryIcon.h"	// 残量アイコンの描画
+#include "edgeBacklight.h"	// バックライト自動消灯(無操作1分。消灯中は電源LEDも消す)
+
+// バックライトの状態(無操作1分で消灯)。実際に消す処理は blApply()。
+static edgeBL::state g_bl;
+// ワーカースレッド(notifyCb)からの点灯要求。実際の点灯は loop() で行う(I2C/表示を別スレッドから触らない)。
+static volatile bool g_blWake = false;
 #include "batteryGuard.h"	// 限界での自動シャットダウン
 #include "osFile.h"
 #include "osClock.h"
@@ -159,6 +165,20 @@ struct Button
 };
 static Button g_key1, g_key2;
 
+// ── バックライト/電源LEDの実体(2026-08-17。edgeBacklight.h の説明を参照) ──
+// バックライトenable は G38。電源LEDは M5PM1(0x6E) の PWR_CFG(0x06) bit4=LED CONTROL で、
+//  データシートどおり **1=点灯 / 0=消灯**(2026-08-17 実機確認)。
+//  起動直後は bit4=0 なのに点灯して見えるが、これは PMIC 側の LED 自己制御ロジック
+//  (リセット時に1回光る等)によるもので、bit4 の意味とは別物。ここから推測してはいけない。
+//  bitOn/bitOff は read-modify-write なので、同じレジスタにある 5V昇圧/3.3V LDO/
+//  3.3V DCDC/充電許可のビットには触れない。
+static void blApply(bool on)
+{
+	gpio_set_level(GPIO_NUM_38, on ? 1 : 0);
+	if (on) { M5.In_I2C.bitOn (0x6E, 0x06, 1 << 4, 100000); }	// LED点灯
+	else    { M5.In_I2C.bitOff(0x6E, 0x06, 1 << 4, 100000); }	// LED消灯
+}
+
 // ── NVS 接続情報(CoreS3版と同一。§8.2.1) ──
 static const char* WIFI_SSID = "Buffalo-G-D850";
 static const char* WIFI_PASS = "rnhcftfbk75tf";
@@ -266,6 +286,7 @@ static void loadRecvPlans(void)
 void edgeAddReceivedPlan(const std::string& id)
 {
 	if (!id.empty()) { g_recvPlans.insert(id); saveRecvPlans(); g_listDirty = true; g_dirty = true; }
+	g_bl.poke(millis());	// スマホから計画が来た=人が操作している。画面を点ける
 }
 
 // ── 計画名ビットマップ(スマホから受信。CoreS3版と同一の永続化) ──
@@ -881,6 +902,36 @@ static void handleButtons(uint32_t now)
 	int e1 = g_key1.update(now);
 	int e2 = g_key2.update(now);
 
+	// 「この押下はもう使い終わった」フラグ。**離すまで**点灯にも操作にも使わない。
+	//  ・復帰に使った押下: 離した瞬間の短押しで撮影が始まってしまうのを防ぐ
+	//  ・長押し消灯に使った押下: 消した直後もキーは押されたままなので、**この判定を
+	//    先に置かないと次のループで即座に点け直してしまう**(2026-08-17 実機で発生)
+	static bool swallow = false;
+	if (swallow)
+	{
+		if (!g_key1.pressedNow() && !g_key2.pressedNow()) { swallow = false; }
+		return;
+	}
+
+	// 消灯中のキー操作は**点けるだけ**(ユーザー指示 2026-08-17)。長押しの800ms待ちを挟まず
+	//  即座に点けたいので、update() の結果ではなく「押されている」ことそのものを見る。
+	if (!g_bl.isOn())
+	{
+		if (g_key1.pressedNow() || g_key2.pressedNow())
+		{
+			g_bl.poke(now);
+			g_dirty = true;	// 点けた直後の画面を描き直す
+			swallow = true;
+		}
+		return;
+	}
+
+	// KEY1/KEY2 どちらの長押しでも手動消灯(ユーザー指示 2026-08-17)。
+	if ((e1 & 2) || (e2 & 2)) { g_bl.off(now); swallow = true; return; }
+
+	// 何か押されていれば無操作タイマを進めない。
+	if (g_key1.pressedNow() || g_key2.pressedNow()) { g_bl.poke(now); }
+
 	// 参加情報/プロビジョニング表示中はどちらのキーでも計画画面へ戻る。
 	if (g_apInfoMode || g_provMode)
 	{
@@ -935,6 +986,8 @@ static void notifyCb(int32_t ev, const char* json_, int32_t len, void* user)
 		int s = HGE_ST_IDLE;
 		const char* p = std::strstr(json_, "\"state\":");
 		if (p) { std::sscanf(p, "\"state\":%d", &s); }
+		// 時刻になって撮影が始まったら画面を点ける(ユーザー指示 2026-08-17)。
+		if (s == HGE_ST_CAPTURING && g_state != HGE_ST_CAPTURING) { g_blWake = true; }
 		g_state = s;
 		if (g_apInfoMode && s != HGE_ST_IDLE) { g_dirty = true; }	// 参加情報表示中に撮影開始→閉じて計画画面へ(全画面再描画)
 		Serial.printf("[EV] STATE: %s\n", stName(s));
@@ -976,6 +1029,7 @@ void setup(void)
 	gpio_reset_pin(GPIO_NUM_38);
 	gpio_set_direction(GPIO_NUM_38, GPIO_MODE_OUTPUT);
 	gpio_set_level(GPIO_NUM_38, 1);	// バックライトenable(実体の電源はM5PM1で安定化済み)
+	g_bl.begin(blApply, millis());	// バックライト自動消灯を開始(点灯状態から)
 	g_scrW = g_lcd.width(); g_scrH = g_lcd.height();
 	// 全画面スプライト(240x135x2=64KB)を PSRAM に確保しダブルバッファ描画する。
 	// Arduino 3.x で Octal PSRAM が有効なので PSRAM に載る。失敗時は内蔵RAM(setPsram(false))へフォールバック。
@@ -1185,7 +1239,13 @@ void loop(void)
 	}
 
 	// 計画/一覧の変化(g_dirty)は全画面更新を優先。状態/進捗/点滅(g_bandDirty)は下部の状態帯だけ部分転送。
-	if (g_dirty) { redraw(false); g_dirty = false; g_bandDirty = false; }
+	// バックライト: 通知スレッドからの点灯要求を反映し、無操作が続いたら消す。
+	if (g_blWake) { g_blWake = false; if (g_bl.poke(millis())) { g_dirty = true; } }
+	g_bl.update(millis());
+
+	// 消灯中は描かない(点けたときに描き直す)。
+	if (!g_bl.isOn()) { /* 何も描かない */ }
+	else if (g_dirty) { redraw(false); g_dirty = false; g_bandDirty = false; }
 	else if (g_bandDirty) { redraw(true); g_bandDirty = false; }
 
 	// 保留中の開始/停止を実行(KEY1時のアイコン切替は上の redraw で反映済み)。
