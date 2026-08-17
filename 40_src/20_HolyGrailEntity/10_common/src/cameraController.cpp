@@ -200,6 +200,11 @@ errCode cameraController::meterScene(const class device& device, const hgc::expo
 	return device.apiBase->meterScene(shotExp, out, keepGoing);
 }
 
+void cameraController::resetMeterCadence(const class device& device)
+{
+	if (device.apiBase != nullptr) { device.apiBase->resetMeterCadence(); }
+}
+
 errCode cameraController::meterHere(const class device& device, apiBase::meterResult& out,
                                     const std::function<bool()>& keepGoing)
 {

@@ -176,6 +176,7 @@ public:
 	errCode meterScene(const hgc::exposure& shotExp, meterResult& out,
 	                   const std::function<bool()>& keepGoing) override;
 	errCode meterHere(meterResult& out, const std::function<bool()>& keepGoing) override;
+	void    resetMeterCadence(void) override { lvFallbackSkip_ = 0; }	// 間引きを捨てる(初期収束用)
 	// 測光をいつ呼んでほしいか: 露光が閉じ次第すぐ。ソースは直前の撮影画像なので待つ理由が無く、
 	// 早く測るほど「露出設定→撮影周期まで待つ」の余裕が増える(=周期を守りやすい)。
 	meterTiming meterTimingHint(void) const override { return meterTiming{ true, 0 }; }

@@ -651,6 +651,9 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 				const double ssSec = expo::parseValue(ctl.current().ss, expo::expoKind::ss);
 				this->interruptibleSleep(static_cast<long>((ssSec > 0.0 ? ssSec : 0.0) * 1000.0) + kAfterShutterMarginMs);
 			}
+			// 撮影ループ用の間引き(kLvFallbackEveryN)を持ち込まない。持ち込むと、前の1枚で
+			//  取得した直後にカウンタが立ち、この1枚が据え置き値を返して丸ごと無駄になる。
+			cameraController::resetMeterCadence(*dev_);
 			apiBase::meterResult cr;
 			const errCode ce = cameraController::meterScene(*dev_, ctl.current(), cr,
 			                                                [this]() { return running_.load(); });
@@ -677,6 +680,9 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 			ctl.applyStops(-cErr);
 			const double cNewB = expo::brightnessStops(ctl.current(), tables_);
 			if (std::fabs(cNewB - cCurB) < 1e-6) { converged = true; break; }	// 露出限界で動けない
+			// 中央値が帯の中にあった = 実写の真値でズレを丸ごと補正できた。**確認の1枚は撮らない**。
+			//  張り付いていたときだけ、ズレが「これ以上」しか分からないのでもう1枚撮って測り直す。
+			if (cr.x > kCalibPegLow && cr.x < kCalibPegHigh) { converged = true; break; }
 		}
 	}
 

@@ -50,6 +50,8 @@ public:
 	                          apiBase::meterResult& out, const std::function<bool()>& keepGoing);
 	static errCode meterHere(const class device& device, apiBase::meterResult& out,
 	                         const std::function<bool()>& keepGoing);
+	// 測光の間引きの状態を捨てる(初期収束は1枚1枚が高価なので、撮ったら必ず測る)。
+	static void    resetMeterCadence(const class device& device);
 	// 測光を「いつ呼ぶか」の申告を得る(カメラ未取得時は既定値=シャッター5秒前)。
 	static apiBase::meterTiming meterTimingHint(const class device& device);
 	// 「いま測光を始められるか」の軽い問い合わせ(busy計測)。1=可 / 0=まだ / -1=計測しない。
