@@ -102,7 +102,17 @@ static void saveNetMode(const char* mode)
 // SSID=HGC-Edge-<MAC下2桁>、パス=8桁の乱数(英数)。焼き込み共有秘密を避け端末ごとに異なる。
 static void ensureApCreds(void)
 {
-	if (!g_apSsid.empty() && !g_apPass.empty()) { return; }
+	// 【そのまま使えるか(2026-08-17)】SoftAP は SSID 1〜32文字・パスワード 8〜63文字でないと
+	//  WiFi.softAP() が false を返し、**APが一切立たない**。画面も出ずカメラも繋がらず、
+	//  BLE以外で到達できなくなる(実機で発生: 8文字未満のパスワードを設定した)。
+	//  空・長すぎ・短すぎのいずれでも既定値へ作り直して、必ずAPが立つようにする。
+	const size_t apSl = g_apSsid.size(), apPl = g_apPass.size();
+	if (apSl >= 1 && apSl <= 32 && apPl >= 8 && apPl <= 63) { return; }
+	if (apSl != 0 || apPl != 0)
+	{
+		Serial.printf("[AP] stored creds unusable (ssid=%u chars, pass=%u chars; need 1-32 / 8-63) -> regenerate\n",
+		              (unsigned)apSl, (unsigned)apPl);
+	}
 	uint8_t mac[6] = {0};
 	WiFi.macAddress(mac);
 	char ss[24]; std::snprintf(ss, sizeof(ss), "HGC-Edge-%02X%02X", mac[4], mac[5]);
@@ -653,8 +663,18 @@ void edgeProvApply(const char* name, const char* ssid, const char* pass, const c
 		//  捨てていたため、APのSSID/パスワードをユーザーが決められなかった。
 		//  空で送られたときは今の値を保つ。まだ何も無ければ ensureApCreds が
 		//  端末固有の既定値(HGC-Edge-<MAC下2桁> / 8桁乱数)を作る。
-		if (ssid && ssid[0]) { g_apSsid = ssid; }
-		if (pass && pass[0]) { g_apPass = pass; }
+		// 【使えない値は受け取らない(2026-08-17)】SoftAP は SSID 1〜32文字・パスワード
+		//  8〜63文字でないと立たない。短いパスワードをそのまま保存すると再起動後に
+		//  APが消え、画面も出ずカメラも繋がらず、BLE以外で到達できなくなる(実機で発生)。
+		//  弾いたときは今の値を保つので、端末は必ず繋がる状態のまま残る。
+		{
+			const size_t sl = (ssid && ssid[0]) ? std::strlen(ssid) : 0;
+			const size_t pl = (pass && pass[0]) ? std::strlen(pass) : 0;
+			if (sl >= 1 && sl <= 32) { g_apSsid = ssid; }
+			else if (sl != 0) { Serial.printf("[PROV] AP ssid rejected (%u chars, need 1-32) -> keep current\n", (unsigned)sl); }
+			if (pl >= 8 && pl <= 63) { g_apPass = pass; }
+			else if (pl != 0) { Serial.printf("[PROV] AP pass rejected (%u chars, need 8-63) -> keep current\n", (unsigned)pl); }
+		}
 		ensureApCreds();	// 片方でも空なら既定値を用意(既にあれば何もしない)
 		Preferences p;
 		if (p.begin("hgc", false))
@@ -742,7 +762,24 @@ static void startApAndEtp(void)
 	ensureApCreds();
 	// 同時接続上限=ESP32 SoftAPの最大(10)。スマホ+カメラ複数台+2台目エッジ(Edje01)+再接続churn分の余裕を確保。
 	// 4だと「スマホ+R10+R100+Edje01=4」でちょうど埋まり、再接続時に弾かれてEdje01がAPに入れなくなる不具合が出た。
-	if (wifiConnect::startAp(g_apSsid.c_str(), g_apPass.c_str(), 10))
+	// 【立たなかったら諦めない(2026-08-17)】ここで失敗すると AP が無く、参加情報の画面も出ず
+	//  カメラも繋がらない。屋外ではBLE以外の到達手段が消えるので、数回やり直し、それでも
+	//  駄目なら資格を端末固有の既定値へ作り直して最後にもう一度試す(必ずAPを立てる)。
+	bool apUp = false;
+	for (int i = 0; i < 3 && !apUp; ++i)
+	{
+		if (i) { delay(300); }
+		apUp = wifiConnect::startAp(g_apSsid.c_str(), g_apPass.c_str(), 10);
+		if (!apUp) { Serial.printf("[AP] softAP start failed (try %d/3) ssid=%s (%u chars) pass=%u chars\n",
+		                           i + 1, g_apSsid.c_str(), (unsigned)g_apSsid.size(), (unsigned)g_apPass.size()); }
+	}
+	if (!apUp)
+	{
+		g_apSsid.clear(); g_apPass.clear(); ensureApCreds();	// 既定値へ作り直す(NVSも更新)
+		apUp = wifiConnect::startAp(g_apSsid.c_str(), g_apPass.c_str(), 10);
+		Serial.printf("[AP] retry with default creds ssid=%s -> %s\n", g_apSsid.c_str(), apUp ? "up" : "still FAILED");
+	}
+	if (apUp)
 	{
 		Serial.printf("[AP] SoftAP up ssid=%s pass=%s ip=%s\n",
 		              g_apSsid.c_str(), g_apPass.c_str(), wifiConnect::apIp().c_str());
@@ -753,7 +790,8 @@ static void startApAndEtp(void)
 		hge_presenceStart();		// 項目1: エッジ自身の在否モニタ(スマホと共通)を開始(APサブネットのカメラを探す)
 		g_state = hge_getState();
 	}
-	else { Serial.println("[AP] softAP start FAILED"); }
+	else { Serial.printf("[AP] softAP start FAILED ssid=%s (%u chars) pass=%u chars\n",
+	                     g_apSsid.c_str(), (unsigned)g_apSsid.size(), (unsigned)g_apPass.size()); }
 }
 
 // ── 起動画面(項目8) ──────────────────────────────────────────────
@@ -1000,7 +1038,7 @@ void setup(void)
 //  ・up= は起動からの経過秒。途中で再起動すると 0 に戻るので、電池切れ以外の再起動を見分けられる。
 //  ・osfile::append は都度追記なので、電源が落ちても直前の行までは残る。
 // 60秒間隔なら 10時間で 600行 = 数十KB程度でログ領域を圧迫しない。
-static constexpr uint32_t kBattLogIntervalMs = 60000;
+static constexpr uint32_t kBattLogIntervalMs = 300000;	// 5分ごと(2026-08-17。60秒だと13時間で51KB。放電カーブは5分刻みで足りる)
 static void logBatteryPeriodic(void)
 {
 	static uint32_t last = 0;

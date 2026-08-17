@@ -5273,6 +5273,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (mode == "sta" && ssid.isEmpty() && selectedEdgeName.isEmpty()) {
             Toast.makeText(ctx, "SSIDを入力してください(新規登録は接続先が必要です)", Toast.LENGTH_LONG).show(); return
         }
+        // 【APは長さを守らせる(2026-08-17)】Wi-FiのAPはパスワード8〜63文字・SSID1〜32文字でないと
+        //  そもそも立ち上がらない。短いまま送るとエッジは再起動後にAPを出せず、画面も出ず
+        //  カメラも繋がらない(BLE以外で到達できなくなる)。送る前にここで止めて理由を伝える。
+        if (mode == "ap") {
+            if (ssid.length > 32) {
+                Toast.makeText(ctx, "APのSSIDは32文字以内にしてください", Toast.LENGTH_LONG).show(); return
+            }
+            if (pass.isNotEmpty() && pass.length < 8) {
+                Toast.makeText(ctx, "APのパスワードは8文字以上にしてください(Wi-Fiの決まりです。空にするとエッジが自動で作ります)", Toast.LENGTH_LONG).show(); return
+            }
+            if (pass.length > 63) {
+                Toast.makeText(ctx, "APのパスワードは63文字以内にしてください", Toast.LENGTH_LONG).show(); return
+            }
+        }
         val json = JSONObject().put("name", name).put("ssid", ssid).put("pass", pass).put("mode", mode).toString()
         ensureBlePermissions {
             edgePopView?.text = "BLE送信中..."
