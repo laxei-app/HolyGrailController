@@ -24,6 +24,11 @@ public:
 	//  既定は init(=従来どおり)。認証不要の身元確認を持つ派生だけが上書きする。
 	virtual errCode identify(class device& device) { return init(device); }
 	virtual errCode startShooting(void) { return ERR_HGC_NOT_SUPPORTED; };
+	// 直近に撮れた画像の EXIF からセンサー実寸[mm]と横画素数を読む(2026-08-19)。
+	//  機材マスターに無い機種はこれらが空のままで、NPFも撮影シミュレーションも出せない。
+	//  カメラのAPIは寸法も画素数も返さないが、撮影画像には入っている。撮ってから埋める。
+	virtual errCode readSensorSpec(double& sensorWmm, double& sensorHmm, uint32_t& pixelW)
+	{ (void)sensorWmm; (void)sensorHmm; (void)pixelW; return ERR_HGC_NOT_SUPPORTED; }
 	virtual errCode rdyShutter(const cmdt::shotSet& shotSet) { return ERR_HGC_NOT_SUPPORTED; }
 	virtual errCode actShutter(void)						{ return ERR_HGC_NOT_SUPPORTED; }
 	// 露出を1項目ずつ設定する(周期正確化のタイマ方式で、変更のあった項目だけを適用するため)。

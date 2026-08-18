@@ -69,6 +69,11 @@ namespace net
     // HTTP関連
     void httpBreak(void);
     bool httpGet(const std::string& url, std::string& answer);
+    // 範囲指定GET(HTTP Range)。大きなファイルの先頭だけ要るときに使う。
+    //  用途: 撮影画像のEXIFからセンサー寸法/画素数を読む(先頭64KBで足りる。本体は
+    //  数MB〜数十MBあるので全部落とすわけにいかない)。
+    //  戻り: 206(部分)か200(相手がRange非対応で全部返した)なら true。
+    bool httpGetRange(const std::string& url, long from, long to, std::string& answer);
     bool httpPost(const std::string& url, const std::string& body, std::string& response);
     bool httpPut(const std::string& url, const std::string& body, std::string& response);
     bool httpDelete(const std::string& url, std::string& response);

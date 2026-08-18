@@ -173,6 +173,18 @@ errCode cameraController::getSettings(const class device& device, cmdt::shotRang
 	return device.apiBase->getSettings(settings);
 }
 
+// 撮影画像のEXIFからセンサー諸元を読む
+// device     :対象デバイス
+// sensorWmm  :センサー横[mm]
+// sensorHmm  :センサー縦[mm]
+// pixelW     :センサー横[pixel]
+// return     :ERR_HGC_OK:成功
+errCode cameraController::readSensorSpec(const class device& device, double& sensorWmm, double& sensorHmm, uint32_t& pixelW)
+{
+	if (device.apiBase == nullptr) { return ERR_HGC_READY; }
+	return device.apiBase->readSensorSpec(sensorWmm, sensorHmm, pixelW);
+}
+
 // 測光の準備をする
 // device :対象デバイス
 // return : ERR_HGC_OK: 成功

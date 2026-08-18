@@ -468,9 +468,16 @@ namespace
 		return static_cast<int>(std::ceil(maxSs)) + 2;
 	}
 
+	// 計画のカメラの控えで空の項目を所持カメラから引き直す(実体は下)。
+	void applyOwnedCameraSettings(hgc::camera& cam);
+
 	// --- スケジュールの JSON 生成 ---
 	void buildScheduleJson(void)
 	{
+		// 表示を作る前に、計画のカメラの控えで空になっている項目を所持カメラから引き直す。
+		//  センサー寸法は撮影中に画像から埋まることがある(機材マスターに無い機種)。
+		//  ここで引き直さないと NPF と画角が "---" のまま戻らない(2026-08-19)。
+		applyOwnedCameraSettings(g_plan.camera);
 		char num[64];
 		std::string j = "{\"name\":\"" + jesc(g_plan.name) + "\"";
 		// 撮影周期は小数第1位まで扱う(長秒ss時に ss+2.0/+2.5/+3.0 のような細かい設定を可能にするため)。
@@ -918,6 +925,12 @@ namespace
 			//  既に入っている値は上書きしない(ユーザーが選んだ個体を勝手に変えない)。
 			if (cam.serial.empty()       && !oc.serial.empty())       { cam.serial       = oc.serial; }
 			if (cam.assignedName.empty() && !oc.assignedName.empty()) { cam.assignedName = oc.assignedName; }
+			// センサー寸法/画素数も同じ扱い。撮影画像から後で埋まることがあるので
+			//  (機材マスターに無い機種)、控えが空なら所持カメラの今の値を採る。
+			//  こうしないと NPF と撮影シミュレーションが "---" のまま戻らない。
+			if (cam.sensorSize  <= 0.0 && oc.sensorSize  > 0.0) { cam.sensorSize  = oc.sensorSize;  }
+			if (cam.sensorSizeV <= 0.0 && oc.sensorSizeV > 0.0) { cam.sensorSizeV = oc.sensorSizeV; }
+			if (cam.sensorPixel == 0   && oc.sensorPixel > 0)   { cam.sensorPixel = oc.sensorPixel; }
 		}
 	}
 

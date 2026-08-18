@@ -406,7 +406,9 @@ static void noteHttpError(int code, std::string& response)
 
     // null を含むデータ(ライブビュー等)を扱うため、GET は本文をストリームから長さ分だけ読む。
     // 使い回すソケットでは「Content-Length ぶん読み切る」ことが必須(読み残すと次の要求が壊れる)。
-    bool httpGet(const std::string& url, std::string& answer)
+    // GET の実体。rangeHdr が非nullなら Range ヘッダを付ける(部分取得)。
+    //  撮影画像のEXIFを読むのに先頭だけ取りたい。本体は数MB〜数十MBあるので全部は落とせない。
+    static bool httpGetInner(const std::string& url, std::string& answer, const char* rangeHdr)
     {
         httpAuth::hostGuard authLock(endpointOf(url));	// 認証時は1本ずつ(nc の順序を守る)
         int code = 0;
@@ -419,6 +421,7 @@ static void noteHttpError(int code, std::string& response)
                 slot = acquire(url);
                 if (slot < 0) { code = 0; break; }
                 addAuthHeader(g_slots[slot].cli, url, "GET");
+                if (rangeHdr != nullptr) { g_slots[slot].cli.addHeader("Range", rangeHdr); }
                 code = g_slots[slot].cli.GET();
                 if (code > 0) { break; }
                 release(slot, true); slot = -1;	// 張り直して1度だけ再送
@@ -434,7 +437,8 @@ static void noteHttpError(int code, std::string& response)
         }
         noteHttpStatus(code);
         bool success = false;
-        if (code == 200 && slot >= 0)
+        // 206 = 部分応答(Range を受け入れた)。200 と同じ手順で本文を読む。
+        if ((code == 200 || code == 206) && slot >= 0)
         {
             HTTPClient& cli = g_slots[slot].cli;
             const int len = cli.getSize();
@@ -460,6 +464,18 @@ static void noteHttpError(int code, std::string& response)
         }
         release(slot, true);	// 上で返していなければここで捨てる(slot=-1 なら何もしない)
         return success;
+    }
+
+    bool httpGet(const std::string& url, std::string& answer)
+    {
+        return httpGetInner(url, answer, nullptr);
+    }
+
+    bool httpGetRange(const std::string& url, long from, long to, std::string& answer)
+    {
+        char hdr[48];
+        std::snprintf(hdr, sizeof(hdr), "bytes=%ld-%ld", from, to);
+        return httpGetInner(url, answer, hdr);
     }
 
     bool httpPost(const std::string& url, const std::string& body, std::string& response)

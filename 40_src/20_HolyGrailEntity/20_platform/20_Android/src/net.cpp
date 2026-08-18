@@ -10,6 +10,7 @@
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
+#include <cstdio>
 #include <mutex>
 #include "httpAuth.h"		// ダイジェスト認証(401 を受けてから対応する)
 #include <string>
@@ -312,7 +313,8 @@ namespace net
 		}
 
 		int httpRequest(const std::string& method, const std::string& url,
-		                const std::string& body, bool hasBody, std::string& response)
+		                const std::string& body, bool hasBody, std::string& response,
+		                const char* extraHeader = nullptr)
 		{
 			g_lastHttpStatus = 0;	// 応答を得られなければ 0 のまま
 			response.clear();
@@ -339,6 +341,7 @@ namespace net
 				// 一度 401 を受けた相手には最初から付ける(毎回2往復にしない)。
 				const std::string auth = httpAuth::authorization(hostKey, method, path);
 				if (!auth.empty()) { req += "Authorization: " + auth + "\r\n"; }
+				if (extraHeader != nullptr) { req += extraHeader; }	// 例: Range: bytes=0-65535
 				if (hasBody)
 				{
 					req += "Content-Type: application/json\r\n";
@@ -583,6 +586,17 @@ namespace net
 		// 辛うじて止まっていただけ)。httpPost/httpPut と同じくステータスで判定する。
 		int code = httpRequest("GET", url, std::string(), false, response);
 		return (code >= 200 && code <= 204);
+	}
+
+	// 範囲指定GET。先頭だけ欲しいときに使う(撮影画像のEXIFからセンサー諸元を読む)。
+	//  相手がRangeに対応しなければ 200 で全部返る。それも成功として扱う
+	//  (呼び出し側は先頭さえあれば用が足りる)。
+	bool httpGetRange(const std::string& url, long from, long to, std::string& response)
+	{
+		char hdr[64];
+		std::snprintf(hdr, sizeof(hdr), "Range: bytes=%ld-%ld\r\n", from, to);
+		int code = httpRequest("GET", url, std::string(), false, response, hdr);
+		return (code == 206 || code == 200);
 	}
 
 	bool httpPost(const std::string& url, const std::string& body, std::string& response)

@@ -3,6 +3,7 @@
 #include "netThread.h"
 #include "exposureMath.h"
 #include "jpegLuma.h"	// 撮影画像サムネイルの輝度ヒストグラム化(測光)
+#include "exifSensor.h"	// 撮影画像のEXIFからセンサー諸元を読む
 #include <json/nlohmann/json.hpp>
 #include <cmath>
 #include <cstring>	// pickThumbPath の拡張子比較
@@ -544,6 +545,38 @@ std::string apiCanonCCAPI::sendFor(const std::vector<sendMap>& map, double real)
         if (d < bestDiff) { bestDiff = d; best = &e; }
     }
     return best->send;
+}
+
+// 撮影画像のEXIFからセンサー実寸[mm]と横画素数を読む。
+//
+// 【なぜ撮影画像から読むか(2026-08-19)】センサーの寸法と画素数は機材マスターにある機種しか
+//  埋まらない。CCAPI は deviceinformation にも他のどこにも返さない(実測で確認)。一方、
+//  撮影した画像の EXIF には FocalPlaneXResolution と PixelXDimension が入っていて、
+//  センサー横[mm] = 画素数 / 解像度 × 25.4 で出せる。撮ったあとなら分かる。
+//
+// 【先頭だけ取る】本体は CR3 で 25MB ある。全部落とすのは論外なので HTTP Range で先頭
+//  64KB だけ取る(実測: EOS R50 V の CR3 は先頭 64KB に目的のタグが入っていた)。
+//  サムネイルには EXIF が無く、display 画像は解像度が縮小に合わせて書き換えられていて
+//  画素数が縮小後の値になるため、どちらも使えない(実測)。元画像の先頭が要る。
+errCode apiCanonCCAPI::readSensorSpec(double& sensorWmm, double& sensorHmm, uint32_t& pixelW)
+{
+	if (lastImagePath_.empty()) { return ERR_HGC_NO_ELEMENT; }	// まだ1枚も測光していない
+	const std::string base = apiHostBase();
+	if (base.empty()) { return ERR_HGC_NET_URL_FAIL; }
+
+	constexpr long kHeadBytes = 64 * 1024;
+	std::string head;
+	if (!netThread::httpGetRange(base + lastImagePath_ + "?kind=main", 0, kHeadBytes - 1, head) || head.empty())
+	{ return ERR_HGC_NET_NO_RECEIPT; }
+
+	exifSensor::spec s;
+	if (!exifSensor::parse(reinterpret_cast<const uint8_t*>(head.data()), head.size(), s))
+	{ return ERR_HGC_NO_ELEMENT; }
+
+	sensorWmm = s.sensorWmm;
+	sensorHmm = s.sensorHmm;
+	pixelW    = s.pixelW;
+	return ERR_HGC_OK;
 }
 
 // 設定値を取得する。撮影開始時に呼ばれ、表示用(settings=正規化)と
@@ -1828,6 +1861,7 @@ errCode apiCanonCCAPI::thumbMeterCore(meterResult& out, int budgetMs, const std:
 	const std::string path = pathOverride.empty()
 	                       ? waitAddedByEvent(budgetMs, keepGoing, tries, diag)
 	                       : pathOverride;
+	if (!path.empty()) { lastImagePath_ = path; }	// センサー諸元の読み取り用に控える
 	out.waitStep = diag.step;
 	out.waitHttp = diag.http;
 	out.waitBody = diag.body;

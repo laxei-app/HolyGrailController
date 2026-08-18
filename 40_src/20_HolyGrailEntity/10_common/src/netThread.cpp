@@ -18,6 +18,7 @@ namespace netThread
         SSDP_READ,
         SSDP_CLOSE,
         HTTP_GET,
+        HTTP_GET_RANGE,
         HTTP_POST,
         HTTP_PUT,
         HTTP_DELETE,
@@ -141,6 +142,9 @@ namespace netThread
 		// 受け取った HTTP ステータス(0=応答なし)。net::httpXxx はワーカースレッド上で実行されるので、
 		// 呼び出し元スレッドから net::lastHttpStatus() を読んでも取り違える。要求ごとに持ち帰る。
 		int                 status;
+		// 範囲指定GET(HTTP_GET_RANGE)で使う取得範囲[byte]。それ以外の型では見ない。
+		long                rangeFrom;
+		long                rangeTo;
 
 		// コンストラクタ
         http_t(const std::string& url, const std::string& body, std::string& response) : url(url), body(body), response(response)
@@ -148,11 +152,15 @@ namespace netThread
             type = queType::HTTP_GET; // デフォルトは GET とする
             result = false;
             status = 0;
+            rangeFrom = 0;
+            rangeTo   = 0;
 		}
         http_t(http_t& other) : requestQue_t(other), url(other.url), body(other.body), response(other.response)
         {
             result = false;
             status = 0;
+            rangeFrom = other.rangeFrom;
+            rangeTo   = other.rangeTo;
         }
 		~http_t() {}
     };
@@ -272,6 +280,21 @@ namespace netThread
         return req.result;                          // 成功
     }
 
+	// 範囲指定 HTTP GET(先頭だけ取る)。撮影画像のEXIFを読むのに使う。
+	// return : 成功した場合は true、失敗した場合は false を返す。
+    bool httpGetRange(const std::string& url, long from, long to, std::string& answer)
+    {
+		std::string dummyBody; // GET なので body は空
+        http_t req(url, dummyBody, answer);
+        req.type      = queType::HTTP_GET_RANGE;
+        req.rangeFrom = from;
+        req.rangeTo   = to;
+        auto result = execRequest(&req);
+        if (result != ERR_HGC_OK) { noteHttpFailure(0, ""); return false; }
+        if (!req.result) { noteHttpFailure(req.status, answer); }
+        return req.result;
+    }
+
 	// HTTP POST
 	// return : 成功した場合は true、失敗した場合は false を返す。
     bool httpPost(const std::string& url, const std::string& body, std::string& response )
@@ -384,6 +407,12 @@ namespace netThread
             case queType::HTTP_GET:
                 httpReq = static_cast<http_t*>(req);
                 httpReq->result = net::httpGet(httpReq->url, httpReq->response);
+                httpReq->status = net::lastHttpStatus();
+                break;
+
+            case queType::HTTP_GET_RANGE:
+                httpReq = static_cast<http_t*>(req);
+                httpReq->result = net::httpGetRange(httpReq->url, httpReq->rangeFrom, httpReq->rangeTo, httpReq->response);
                 httpReq->status = net::lastHttpStatus();
                 break;
 

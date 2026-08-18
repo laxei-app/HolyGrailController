@@ -145,6 +145,9 @@ public:
 	static bool serialForAssignedName(const std::string& assignedName, std::string& outSerial);
 	// 所持カメラに登録済みのシリアル一覧(空は除く)。「それ以外のカメラ」判定に使う。
 	static void ownedCameraSerials(std::vector<std::string>& out);
+	// 撮影画像から読めたセンサー実寸/画素数を所持カメラへ入れる(空のときだけ)。true=書いた。
+	//  機材マスターに無い機種の穴埋め。ユーザーが手で入れた値は上書きしない。
+	static bool fillOwnedCameraSensor(const std::string& serial, double sensorWmm, double sensorHmm, uint32_t pixelW);
 	// 同じ機種として登録されている所持カメラの台数(個体が確定しているものだけ)。
 	static int ownedCountForModel(const hgc::camera& cam);
 	// device のモデルが計画/所持カメラ cam と同機種か(メーカー名差を吸収)。

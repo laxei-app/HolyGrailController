@@ -25,6 +25,8 @@ namespace netThread
     // HTTP関連
     void httpBreak(void);
     bool httpGet(const std::string& url, std::string& answer);
+    // 範囲指定GET(HTTP Range)。撮影画像のEXIFを読むのに先頭だけ取る。
+    bool httpGetRange(const std::string& url, long from, long to, std::string& answer);
     bool httpPost(const std::string& url, const std::string& body, std::string& response);
     bool httpPut(const std::string& url, const std::string& body, std::string& response);
     bool httpDelete(const std::string& url, std::string& response);

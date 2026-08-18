@@ -139,6 +139,8 @@ public:
 
 	// 情報を知る
 	errCode getSettings(cmdt::shotRange& settings);		// 設定値を取得する
+	// 撮影画像のEXIFからセンサー実寸[mm]と横画素数を読む(機材マスターに無い機種の穴埋め)。
+	errCode readSensorSpec(double& sensorWmm, double& sensorHmm, uint32_t& pixelW) override;
 	errCode rdyMetering(void);							// 測光準備
 	errCode alzMetering(cmdt::HISTOGRAM& histoOut);		    // 測光解析
 
@@ -266,6 +268,9 @@ protected:
 	void        flushEventPolling(void);
 	// funcList のURLから "http://host:port" 部分を得る(コンテンツパスの絶対URL化に使う)。
 	std::string apiHostBase(void) const;
+	// 直近に測光で掴んだ撮影画像のパス(CCAPIのcontentsパス)。センサー諸元の読み取りに使う。
+	//  測光が1度も通っていないと空。
+	std::string lastImagePath_;
 
 	// カメラの情報を取得する
 	errCode getDeviceDescriptor(class device& device);

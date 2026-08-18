@@ -60,6 +60,36 @@ void captureRunner::setCallbacks(stateCb s, progressCb p, capturedCb c, errorCb 
 	onError_    = std::move(e);
 }
 
+// 機材マスターに無い機種のセンサー諸元(実寸[mm]/横画素数)を、撮れた画像の EXIF から補う。
+//
+// 【なぜここか(2026-08-19)】センサーの寸法と画素数はカメラのAPIからは取れず、機材マスターに
+//  無い機種は空のままになる。空だと NPF も撮影シミュレーションも出せない。撮影画像には
+//  入っているので、撮り始めたら1回だけ読んで所持カメラへ入れる。
+//  ・**撮るか撮らないかはユーザーが決めること**なので、登録の時点では撮らない。撮り始めてから読む。
+//  ・測光が1コマ目の画像を掴んだあと(=2コマ目以降)でないと読む対象が無いので frame>=2 で試す。
+//  ・成功・失敗どちらでも1セッション1回でやめる(毎コマ余計な通信をしない)。
+void captureRunner::fillSensorFromShot(int frame)
+{
+	if (sensorFillDone_ || frame < 2) { return; }
+	if (plan_.camera.sensorSize > 0.0 && plan_.camera.sensorPixel > 0) { sensorFillDone_ = true; return; }
+	if (dev_ == nullptr) { return; }
+
+	sensorFillDone_ = true;	// 試すのは1回だけ(失敗しても繰り返さない)
+	double wmm = 0.0, hmm = 0.0;
+	uint32_t px = 0;
+	const errCode e = cameraController::readSensorSpec(*dev_, wmm, hmm, px);
+	if (e != ERR_HGC_OK || wmm <= 0.0 || px == 0)
+	{
+		dataManager::logEvent("GEAR", "センサー諸元を撮影画像から読めなかった(マスターに登録してください)", true);
+		return;
+	}
+	// この撮影で使う控えにも入れる(画角を使う表示がこのセッション中も正しくなる)。
+	if (plan_.camera.sensorSize  <= 0.0) { plan_.camera.sensorSize  = wmm; }
+	if (plan_.camera.sensorSizeV <= 0.0) { plan_.camera.sensorSizeV = hmm; }
+	if (plan_.camera.sensorPixel == 0)   { plan_.camera.sensorPixel = px;  }
+	dataManager::fillOwnedCameraSensor(dev_->serialno, wmm, hmm, px);
+}
+
 errCode captureRunner::ready(const hgc::cs& plan, device* dev,
                              const hgc::exposureSmoothing& smooth, int utcOffsetMin)
 {
@@ -994,6 +1024,7 @@ errCode captureRunner::loop(void)
 			shutterMs = tool::epochMs();	// シャッター投下直前の壁時計(ms精度)
 			err = this->fireShutter(shotExp, interval, shootFailStreak, cameraOffline);
 			++frame;
+			this->fillSensorFromShot(frame);	// マスターに無い機種のセンサー諸元を撮影画像から補う
 			if (onProgress_) { onProgress_(progressInfo{ frame, total, static_cast<int>(endSec - now), static_cast<int>(now - startSec) }); }
 			// 準備を始める時刻まで待つ。
 			//  周期 <= リード や 周期-リード < SS のような厳しい設定でも、遅れて実行されるだけで破綻はしない

@@ -43,6 +43,8 @@ public:
 	static errCode setIso(const class device& device, const std::string& iso);
 	static errCode actShutter(const class device& device);
 	static errCode getSettings(const class device& device, cmdt::shotRange& settings);
+	// 直近に撮れた画像からセンサー実寸[mm]と横画素数を読む(マスターに無い機種の穴埋め)。
+	static errCode readSensorSpec(const class device& device, double& sensorWmm, double& sensorHmm, uint32_t& pixelW);
 	static errCode rdyMetering(const class device& device);
 	static errCode alzMetering(const class device& device, cmdt::HISTOGRAM& hist);
 	// 測光(場面のリニア輝度の取得)。測り方の実装詳細はカメラ依存(apiBase実装側)。

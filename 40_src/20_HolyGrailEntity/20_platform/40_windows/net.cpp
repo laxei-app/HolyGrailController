@@ -188,6 +188,17 @@ void httpDeInit()
     curl_global_cleanup();
 }
 
+// 範囲指定GET(HTTP Range)。撮影画像のEXIFを読むのに先頭だけ要る場面で使う。
+//  Windowsは検証用で保守対象外なので、範囲を渡さず全部取って先頭を切り出す簡易実装。
+//  呼び出し側は先頭さえあれば用が足りるので、これで振る舞いは変わらない。
+bool httpGetRange(const std::string& url, long from, long to, std::string& response)
+{
+    (void)from;
+    if (!httpGet(url, response)) { return false; }
+    if (to > 0 && response.size() > static_cast<size_t>(to) + 1) { response.resize(static_cast<size_t>(to) + 1); }
+    return true;
+}
+
 // 5. HTTP GET (Device Description取得用)
 bool httpGet(const std::string& url, std::string& response) 
 {
@@ -322,6 +333,18 @@ static int breakCheck(void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl_
 
 void httpInit(){}
 void httpDeInit() {}
+
+// 範囲指定GET(HTTP Range)。撮影画像のEXIFを読むのに先頭だけ要る場面で使う。
+//  Windowsは検証用で保守対象外なので、範囲を渡さず全部取って先頭を切り出す簡易実装。
+//  呼び出し側は先頭さえあれば用が足りるので、これで振る舞いは変わらない。
+bool httpGetRange(const std::string& url, long from, long to, std::string& response)
+{
+    (void)from;
+    if (!httpGet(url, response)) { return false; }
+    if (to > 0 && response.size() > static_cast<size_t>(to) + 1) { response.resize(static_cast<size_t>(to) + 1); }
+    return true;
+}
+
 
 // 5. HTTP GET (Device Description取得用)
 bool httpGet(const std::string& url, std::string& response)  

@@ -325,6 +325,10 @@ private:
 	hgc::exposure initialConverge(expo::exposureCtl& ctl, const hgc::exposure& initial, double evT);
 	void interruptibleSleep(long ms);
 
+	// マスターに無い機種のセンサー諸元を撮影画像から補う(1セッション1回だけ試す)。
+	void fillSensorFromShot(int frame);
+	bool sensorFillDone_ = false;
+
 	hgc::cs plan_{};
 	device* dev_ = nullptr;
 	hgc::exposureSmoothing smooth_{};
