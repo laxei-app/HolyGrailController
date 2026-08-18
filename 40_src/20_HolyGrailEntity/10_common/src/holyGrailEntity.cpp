@@ -487,6 +487,8 @@ namespace
 		// 項目C: 計画のカメラ表示はアプリ登録の「名称」(name)に統一する(選択肢と同じ)。
 		//  従来は maker+model("Canon EOS R10")=愛称相当を出していた。name が空なら model へフォールバック。
 		j += ",\"camera\":\"" + jesc(g_plan.camera.name.empty() ? g_plan.camera.model : g_plan.camera.name) + "\"";
+		// 同じ機種を複数台持つと名称だけでは分からないので、カメラ本体で付けた名前も添える。
+		j += ",\"cameraAssignedName\":\"" + jesc(g_plan.camera.assignedName) + "\"";
 		j += ",\"lens\":\""   + jesc(g_plan.lens.name) + "\"";
 		std::snprintf(num, sizeof(num), "%.1f", g_plan.azimuth);
 		j += ",\"azimuth\":" + std::string(num);
@@ -908,6 +910,14 @@ namespace
 			cam.meterLv  = oc.meterLv;
 			cam.authUser = oc.authUser;
 			cam.authPass = oc.authPass;
+			// 【個体の取り違え対策(2026-08-19)】計画はカメラを「控え」で持つ。所持カメラへ
+			//  あとからシリアルが入っても、その前に作った計画の控えは空のままになる。
+			//  空のまま撮影を始めると個体を指定できず、同機種の空き1台で代替されるため、
+			//  2台目の計画のつもりが1台目を掴む(実機で発生: EOS R50 V 2台がどちらも同じ個体)。
+			//  名称は所持カメラを指す鍵なので、そこから今のシリアル/設定名を引き直す。
+			//  既に入っている値は上書きしない(ユーザーが選んだ個体を勝手に変えない)。
+			if (cam.serial.empty()       && !oc.serial.empty())       { cam.serial       = oc.serial; }
+			if (cam.assignedName.empty() && !oc.assignedName.empty()) { cam.assignedName = oc.assignedName; }
 		}
 	}
 
@@ -1000,6 +1010,7 @@ namespace
 		//    実際の露光開始までは runner が開始時刻まで待機する)。
 		//  ・複数同時撮影でも、これから撮るカメラは動作中のものとは必ず別の1台。各セッションは自分専用の
 		//    device(S->dev: アドレス安定)を持つので、探索しても実行中の他セッションを壊さない。
+		applyOwnedCameraSettings(S->plan.camera);	// 探索の前に個体(シリアル)を引き直す
 		const hgc::camera& pc = S->plan.camera;
 		// 他の動作中セッションが使用中のカメラ(serial)は割り当て不可(同じカメラで二重撮影しない)。
 		auto serialBusy = [&](const std::string& serial) -> bool {
@@ -1069,8 +1080,20 @@ namespace
 			std::vector<std::string> knownSerials; dataManager::ownedCameraSerials(knownSerials);
 			auto isKnown = [&](const std::string& s) -> bool { for (auto& k : knownSerials) { if (k == s) { return true; } } return false; };
 			for (auto& d : found) { if (d.apiBase && dataManager::cameraModelMatches(d, pc) && !isKnown(d.serialno) && !serialBusy(d.serialno)) { hit = &d; break; } }
-			if (hit == nullptr)	// 該当が無ければ同機種の空き1台で代替。
-			{ for (auto& d : found) { if (d.apiBase && dataManager::cameraModelMatches(d, pc) && !serialBusy(d.serialno)) { hit = &d; break; } } }
+			// 該当が無ければ同機種の空き1台で代替。ただし**同機種を2台以上登録している**ときはしない。
+			//  どちらのつもりか決められないのに1台目を掴んでしまい、2台目の計画のはずが
+			//  1台目を操作する(2026-08-19 実機で発生)。個体が決められないなら未検出として扱い、
+			//  探索を続ける方が正しい(誤ったカメラを動かさない)。
+			if (hit == nullptr)
+			{
+				if (dataManager::ownedCountForModel(pc) >= 2)
+				{
+					dataManager::logEvent("NET", (pc.model + " は同機種を複数登録しているため、"
+					                              "個体(シリアル)が決まらない計画では代替しない").c_str(), true);
+				}
+				else
+				{ for (auto& d : found) { if (d.apiBase && dataManager::cameraModelMatches(d, pc) && !serialBusy(d.serialno)) { hit = &d; break; } } }
+			}
 		}
 		else
 		{	// 計画にカメラ未指定: 他セッションが使っていない最初の1台。見つからなくても武装(3a)。

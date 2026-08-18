@@ -1986,10 +1986,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun choosePlanCamera() {
         val arr = camArray(HgeNative.nativeGetOwnedCameras())
         if (arr.length() == 0) { openCameraList(); return }
-        val names = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optJSONObject("camera")?.optString("name") }
+        val cams = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optJSONObject("camera") }
+        val names = cams.map { it.optString("name") }
+        // 選択肢は「名称(カメラ本体で付けた名前)」。同機種を2台持つと名称だけでは
+        //  どちらか分からないため(2026-08-19 依頼)。選ぶキーは従来どおり名称。
+        val labels = cams.map { c ->
+            val an = c.optString("assignedName")
+            if (an.isNotEmpty()) c.optString("name") + "  (" + an + ")" else c.optString("name")
+        }
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle("カメラを選択")
-            .setItems(names.toTypedArray()) { _, which ->
+            .setItems(labels.toTypedArray()) { _, which ->
                 val name = names[which]
                 planExec.execute {
                     HgeNative.nativeSetPlanCamera(name)
@@ -3521,7 +3528,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
             } catch (_: Exception) {}
             placeText.text = o.optString("place")
             latlngText.text = o.optString("latlng") + "  標高 " + o.optInt("altitude") + "m"
-            cameraText.text = "カメラ: " + o.optString("camera")
+            // 同機種を複数台持つと名称だけでは区別できないので、カメラ本体で付けた名前を添える。
+            val camAn = o.optString("cameraAssignedName")
+            cameraText.text = "カメラ: " + o.optString("camera") + (if (camAn.isNotEmpty()) "  ($camAn)" else "")
             lensText.text = "レンズ: " + o.optString("lens")
             // センサー/焦点距離/画角は撮影シミュレーション画面へ移した(2026-08-08 UI依頼)。
             // センサー寸法はマスターにある機種しか分からない。未登録のときに 0.0×0.0 と出すと

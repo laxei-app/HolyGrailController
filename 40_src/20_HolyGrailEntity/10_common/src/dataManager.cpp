@@ -1329,6 +1329,20 @@ void dataManager::ownedCameraSerials(std::vector<std::string>& out)
 	for (const auto& oc : g_ownedCameras) { if (!oc.cam.serial.empty()) { out.push_back(oc.cam.serial); } }
 }
 
+// §4b: 同じ機種として登録されている所持カメラの台数(個体が確定しているものだけ数える)。
+//  2台以上あると「同機種の空き1台」で代替できない(どちらのつもりか決められない)。
+int dataManager::ownedCountForModel(const hgc::camera& cam)
+{
+	ensureOwned();
+	int n = 0;
+	for (const auto& oc : g_ownedCameras)
+	{
+		if (oc.cam.serial.empty()) { continue; }		// 未確定は個体として数えない
+		if (!cam.model.empty() && oc.cam.model == cam.model) { ++n; }
+	}
+	return n;
+}
+
 // §4b: device のモデルが計画カメラ(cam)と同機種か。
 bool dataManager::cameraModelMatches(const device& dev, const hgc::camera& cam)
 {

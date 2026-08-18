@@ -3,6 +3,8 @@
 #include "net.h"
 #include "osSystemCall.h"
 #include "tool.h"
+#include "netThread.h"
+#include "dataManager.h"	// 発見できたのに使えない機体を記録する
 #include <algorithm>
 
 // SSDP(M-SEARCH)で検出し、同一カメラの統合と apiBase 初期化まで済ませて out に追加する。
@@ -94,6 +96,19 @@ size_t detectSsdpBase::discover(std::vector<class device>& out, bool identifyOnl
 		errCode ie = api->init(device);
 		if ( ie != ERR_HGC_OK )
 		{	// 初期化失敗(api はスコープ離脱で自動解放)
+			// 【落とした理由を残す(2026-08-19)】ここで黙って捨てると、SSDPには応えているのに
+			//  「カメラが見つからない」としか見えない。実機で起きたのは、CCAPIに認証を設定した
+			//  機体で資格情報が未登録のため /ccapi が401になり、この機体だけ発見されなかった例。
+			//  身元(記述XML)は認証不要で取れているので、どの機体かは書ける。
+			int st = 0; std::string dummy;
+			netThread::lastHttpFailure(st, dummy);
+			std::string why = (st == 401 || st == 403)
+			                  ? "カメラのユーザーID/パスワードを所持カメラに登録してください"
+			                  : "";
+			std::string d = "発見したが使えない " + (device.model.empty() ? std::string("?") : device.model)
+			              + "/" + (device.serialno.empty() ? std::string("?") : device.serialno)
+			              + " HTTP=" + std::to_string(st) + (why.empty() ? "" : (" " + why));
+			dataManager::logEvent("NET", d.c_str(), true);
 			device.apiBase = nullptr;
 			continue;
 		}
