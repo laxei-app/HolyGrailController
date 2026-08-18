@@ -210,6 +210,9 @@ class SimPage(
     // 時刻スライダー。他画面と同じ Material Slider(大きなつまみ=●)を使う。
     private val seek = com.google.android.material.slider.Slider(context)
     private val render = SkyRenderView(context)
+    // センサー寸法が分からないと画角が決まらず、星を投影する場所が決められない。
+    //  そのときは絵の代わりにこの文言を出す(2026-08-19)。
+    private val noSensorView = TextView(context)
     // 項目G: 日時は画像内でなく欄外の下に出す(年なし)。
     private val dateLabel = TextView(context)
 
@@ -261,6 +264,16 @@ class SimPage(
 
         // ① 撮影イメージ(高さは幅と横向きセンサー比から決まる=横向き/縦向きで枠は不変)
         addView(render, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        // ①' センサー寸法が未登録のときの代替表示(絵と入れ替える)。
+        noSensorView.text = "センサーサイズが登録されていないので表示できません"
+        noSensorView.textSize = 13f
+        noSensorView.gravity = Gravity.CENTER
+        noSensorView.setTextColor(0xFF888888.toInt())
+        noSensorView.setPadding(dp(12f), dp(48f), dp(12f), dp(48f))
+        noSensorView.visibility = View.GONE
+        addView(noSensorView, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         // ②-0 センサー/焦点距離/画角(2026-08-08 UI依頼で計画1ページ目から移設)。
@@ -359,8 +372,10 @@ class SimPage(
             az = o.optDouble("azimuth", 90.0); el = o.optDouble("elevation", 10.0)
             landscape = o.optBoolean("landscape", true)
             o.optJSONObject("camera")?.let {
-                sensorW = it.optDouble("sensorSize", 36.0); sensorH = it.optDouble("sensorSizeV", 24.0)
-                if (sensorH <= 0.0) sensorH = sensorW * 2.0 / 3.0
+                // 未登録(0)はそのまま 0 で持つ。既定値(フルサイズ36×24)や横幅からの推定で
+                // 埋めると、別のカメラの画角を本物のように見せてしまう(2026-08-19)。
+                sensorW = it.optDouble("sensorSize", 0.0); sensorH = it.optDouble("sensorSizeV", 0.0)
+                if (sensorW > 0.0 && sensorH <= 0.0) sensorH = sensorW * 2.0 / 3.0
             }
             o.optJSONObject("lens")?.let {
                 focal = it.optDouble("focalLength", 50.0)
@@ -440,8 +455,17 @@ class SimPage(
     private var latestParams = ""        // 最新の要求パラメータ
 
     private fun renderSky() {
-        latestParams = buildParams()
         dateLabel.text = labelFmt.format(currentMillis())   // 欄外の日時は即時更新(軽い)
+        // センサー寸法が未登録なら画角が決まらない=星をどこへ置くか決められない。
+        //  適当な既定値で描くと別のカメラの絵になるので、理由を出して計算もしない(2026-08-19)。
+        if (sensorW <= 0.0 || sensorH <= 0.0) {
+            render.visibility = View.GONE
+            noSensorView.visibility = View.VISIBLE
+            return
+        }
+        render.visibility = View.VISIBLE
+        noSensorView.visibility = View.GONE
+        latestParams = buildParams()
         if (simBusy) { simDirty = true; return }            // 実行中なら最新を保持するだけ
         kickSim()
     }

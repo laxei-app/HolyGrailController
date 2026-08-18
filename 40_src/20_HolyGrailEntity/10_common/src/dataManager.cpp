@@ -6,6 +6,7 @@
 #include "csJson.h"
 #include "device.h"
 #include "exposureMath.h"
+#include "cameraData.h"	// 登録時にカメラからISO/SSを取る
 #include <json/nlohmann/json.hpp>
 #include <vector>
 #include <algorithm>
@@ -473,7 +474,29 @@ namespace
 		return nullptr;
 	}
 
-	// 所持/計画カメラ cam の型番が device dev と同じ機種か(メーカー名差を吸収)。
+		// カメラが申告する設定可能値(ISO/SS)を所持カメラへ入れる。true=1つでも取れた。
+	//
+	// 【なぜカメラから取るか(2026-08-19)】マスタに無い機種は、これまで似た機種のマスタから
+	//  ISO/SSを借りていた。借り物は当たっている保証が無いのに、正しい値のように見える。
+	//  ISOとSSはカメラ自身が申告するので、借りずに本人へ聞けばよい。
+	//  (センサー寸法と画素数はカメラから取れない。そちらは空のままにして「無い」と分かるようにする)
+	bool fillListsFromCamera(const device& dev, hgc::camera& cam)
+	{
+		if (dev.apiBase == nullptr) { return false; }
+		cmdt::shotRange r;
+		if (dev.apiBase->getSettings(r) != ERR_HGC_OK) { return false; }
+		// "auto" は露出計算に使えないので落とす(Bulb は末尾の特別値として残す)。
+		auto pick = [](const std::vector<std::string>& src, std::vector<std::string>& dst)
+		{
+			dst.clear();
+			for (const auto& v : src) { if (!v.empty() && v != "auto" && v != "Auto") { dst.push_back(v); } }
+		};
+		if (!r.iso.empty()) { pick(r.iso, cam.isoList); }
+		if (!r.ss.empty())  { pick(r.ss,  cam.ssList);  }
+		return !cam.isoList.empty() || !cam.ssList.empty();
+	}
+
+// 所持/計画カメラ cam の型番が device dev と同じ機種か(メーカー名差を吸収)。
 	bool camModelMatchesDev(const hgc::camera& cam, const device& dev)
 	{
 		std::string key = stripMaker(dev.model, dev.manufacturer);
@@ -1219,6 +1242,15 @@ int dataManager::recordConnectedCameraStatus(const device& dev, bool allowAdd)
 					if (autoName) { oc.cam.name = uniqueOwnedName(key); }
 					changed = true;
 				}
+				// 【ISO/SSが空なら、いま繋がっているカメラから埋める(2026-08-19)】
+				//  登録の瞬間には取れないことがある。認証が要る機体は、ユーザーが
+				//  ユーザーID/パスワードを入れるまでCCAPIを読めないため(実測 EOS R50 V の1台)。
+				//  撮影で繋いだときは認証を通っているので、そこで埋まる。
+				if ((oc.cam.isoList.empty() || oc.cam.ssList.empty()) && fillListsFromCamera(dev, oc.cam))
+				{
+					logEvent("GEAR", (oc.cam.model + " のISO/SSをカメラから取得した(S/N " + dev.serialno + ")").c_str());
+					changed = true;
+				}
 				if (changed) { saveOwnedCameras(); }
 				return static_cast<int>(camApply::updated);
 			}
@@ -1233,6 +1265,7 @@ int dataManager::recordConnectedCameraStatus(const device& dev, bool allowAdd)
 		{
 			oc.cam.serial = dev.serialno;
 			if (!dev.assignedName.empty()) { oc.cam.assignedName = dev.assignedName; }
+			if (oc.cam.isoList.empty() || oc.cam.ssList.empty()) { fillListsFromCamera(dev, oc.cam); }
 			saveOwnedCameras();
 			return static_cast<int>(camApply::filled);
 		}
@@ -1244,25 +1277,28 @@ int dataManager::recordConnectedCameraStatus(const device& dev, bool allowAdd)
 
 	//    §4a: 既存が識別済みなら2台目の登録は可。device は実機なのでシリアルを持ち、未識別の重複は作らない。
 	hgc::ownedCamera oc;
-	// 【型番はカメラが名乗ったものを使う(2026-08-19)】マスタ照合は完全一致が無いと
-	//  「最長部分一致」に落ちる。この一致は**別機種を掴むことがある**。
-	//  実測: "EOS R50 V" はマスタに無く、部分一致で "EOS R50" を掴んで
-	//  EOS R50 として登録された。型番が違うので撮影開始時の機種照合に通らず、
-	//  カメラを見つけられずに撮影が始まらなかった。
-	//  マスタから借りてよいのは仕様(センサー寸法・ISO/SSの一覧)だけで、素性ではない。
-	const hgc::camera* m     = matchMasterCamera(dev);
-	const bool         exact = (m && m->name == key);
+	// 【マスタに無い機種は借り物をしない(2026-08-19)】以前はマスタ照合が完全一致に外れると
+	//  「最長部分一致」に落ち、別機種のマスタを丸ごと使っていた。実測: "EOS R50 V" は
+	//  マスタに無く "EOS R50" を掴み、型番も仕様も EOS R50 になった。型番が違うので
+	//  撮影開始時の機種照合に通らず、撮影が始まらなかった。
+	//  借り物は当たっている保証が無いのに正しい値のように見えるので、やめる。
+	//   ・型番/ISO/SS → カメラ本人から取る
+	//   ・センサー寸法/画素数 → カメラからは取れないので**空のまま**にする。
+	//     間違った値を出すより「無い」と分かるほうがよい(NPFと撮影シミュレーションは
+	//     その旨を表示して止まる)。
+	const hgc::camera* m = findMasterCamera(key);	// 完全一致のみ
 	if (m) { oc.cam = *m; }
-	else   { oc.cam.maker = dev.manufacturer; }
-	if (!exact)
-	{	// 部分一致(または不一致)。素性はカメラの申告で上書きする。
-		oc.cam.model = key.empty() ? dev.model : key;
-		oc.cam.name  = oc.cam.model;
-		if (!oc.cam.maker.empty() || !dev.manufacturer.empty()) { oc.cam.maker = dev.manufacturer; }
-		if (m)
-		{	// 仕様だけ似た機種から借りている。当たっている保証は無いので残しておく。
-			logEvent("GEAR", (key + " はマスタに無い。仕様を " + m->name + " から借りた(要確認)").c_str());
-		}
+	else
+	{
+		oc.cam.model       = key.empty() ? dev.model : key;
+		oc.cam.name        = oc.cam.model;
+		oc.cam.maker       = dev.manufacturer;
+		oc.cam.sensorSize  = 0.0;	// 未登録(マスタに無い)
+		oc.cam.sensorSizeV = 0.0;
+		oc.cam.sensorPixel = 0;
+		const bool got = fillListsFromCamera(dev, oc.cam);
+		logEvent("GEAR", (key + " はマスタに無い。センサー寸法は未登録。ISO/SSは" +
+		                  (got ? "カメラから取得" : "取得できず空")).c_str());
 	}
 	if (oc.cam.model.empty()) { oc.cam.model = key.empty() ? dev.model : key; }	// 機種照合の基準(名称は一意化で変わるため model を確実に持たせる)
 	if (oc.cam.name.empty()) { oc.cam.name = dev.assignedName.empty() ? (key.empty() ? dev.model : key) : dev.assignedName; }

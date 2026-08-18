@@ -509,8 +509,13 @@ namespace
 		std::snprintf(num, sizeof(num), "%.1f", fovDeg.v);
 		j += ",\"fovV\":" + std::string(num);
 		// NPF シャッター速度[秒](参考表示)と最小撮影周期[秒](最長ss+2)、帯モード。
-		double npf = expo::npfShutterSec(g_plan.camera.sensorSize, static_cast<double>(g_plan.camera.sensorPixel),
-		                                 g_plan.lens.focalLength, g_plan.lens.fn);
+		// 【センサー未登録なら算出不可(2026-08-19)】NPFはセンサー横寸法と画素数が要る。
+		//  マスタに無い機種はどちらも空なので、0で計算した数字を出すと嘘になる。
+		//  -1 を「出せない」の合図にして、画面は "---" と出す。
+		double npf = (g_plan.camera.sensorSize > 0.0 && g_plan.camera.sensorPixel > 0)
+		             ? expo::npfShutterSec(g_plan.camera.sensorSize, static_cast<double>(g_plan.camera.sensorPixel),
+		                                   g_plan.lens.focalLength, g_plan.lens.fn)
+		             : -1.0;
 		std::snprintf(num, sizeof(num), "%.2f", npf);
 		j += ",\"npf\":" + std::string(num);
 		j += ",\"minInterval\":" + std::to_string(minIntervalSec(g_plan));
@@ -2440,6 +2445,24 @@ int32_t hge_recordCameraIdentity(const char* model, const char* serial, const ch
 	if (d.model.empty() && d.serialno.empty()) { return ERR_HGC_INVALID_ARG; }
 	size_t sp = d.model.find(' ');
 	d.manufacturer = (sp != std::string::npos) ? d.model.substr(0, sp) : std::string();
+
+	// 【新規登録は実機に繋いでから(2026-08-19)】ここへ来る model/serial は在否監視(SSDP)由来で、
+	//  カメラを叩かずに得た情報しか無い。マスタに無い機種は ISO/SS をカメラ本人から取りたいので、
+	//  「新規として追加する」ときだけ実機を探し直し、APIを持った device で登録する。
+	//  既存の更新(型番/愛称の反映)は通信不要なので、そのまま済ませて余計な探索をしない。
+	//  撮影中(セッションあり)は探索しない。撮影主体以外がカメラへ触れないための既存の約束。
+	if (allowAdd != 0 && g_sessions.empty())
+	{
+		const int32_t pre = dataManager::recordConnectedCameraStatus(d, false);
+		if (pre != static_cast<int32_t>(dataManager::camApply::isNew)) { return pre; }
+		std::vector<device> found;
+		cameraController::detectTarget(found);
+		for (auto& fd : found)
+		{
+			if (fd.apiBase && !fd.serialno.empty() && fd.serialno == d.serialno)
+			{ return dataManager::recordConnectedCameraStatus(fd, true); }
+		}
+	}
 	return dataManager::recordConnectedCameraStatus(d, allowAdd != 0);
 }
 

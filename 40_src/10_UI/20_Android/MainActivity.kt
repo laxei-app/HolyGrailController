@@ -1508,9 +1508,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  自動で入る。手入力はしない(勝手に入れない)。未取得のうちは「未定義」と表示する。
         box.addView(displayRow("愛称", cam.optString("assignedName").ifEmpty { "未定義" }))
         box.addView(displayRow("シリアルNo.", cam.optString("serial").ifEmpty { "未定義" }))
-        box.addView(editRow2("センサーサイズ", "sensorSize", cam.optDouble("sensorSize", 0.0).toString(),
-            "sensorSizeV", cam.optDouble("sensorSizeV", 0.0).toString(), "×", "mm", true))
-        box.addView(editRow("センサーpixel(横)", "sensorPixel", cam.optInt("sensorPixel", 0).toString(), true))
+        // 未登録(0)は空欄で出す。0.0 と書くと「0という値が入っている」ように見えるため(2026-08-19)。
+        // センサー寸法と画素数は機材マスターにある機種しか埋まらない。無い機種はここに手で入れる。
+        fun blankIfZero(v: Double) = if (v > 0.0) v.toString() else ""
+        fun blankIfZeroI(v: Int)   = if (v > 0) v.toString() else ""
+        box.addView(editRow2("センサーサイズ", "sensorSize", blankIfZero(cam.optDouble("sensorSize", 0.0)),
+            "sensorSizeV", blankIfZero(cam.optDouble("sensorSizeV", 0.0)), "×", "mm", true))
+        box.addView(editRow("センサーpixel(横)", "sensorPixel", blankIfZeroI(cam.optInt("sensorPixel", 0)), true))
         val iso = arrMinMax(cam.optJSONArray("isoList"))
         box.addView(editRow2("ISO感度", "isoMin", iso.first, "isoMax", iso.second, "〜", "", false))
         val ss = arrMinMax(cam.optJSONArray("ssList"))
@@ -3520,15 +3524,23 @@ class MainActivity : AppCompatActivity(), HgeListener {
             cameraText.text = "カメラ: " + o.optString("camera")
             lensText.text = "レンズ: " + o.optString("lens")
             // センサー/焦点距離/画角は撮影シミュレーション画面へ移した(2026-08-08 UI依頼)。
-            simGearText = "センサー %.1f×%.1fmm  焦点距離 %d mm  画角 %.0f×%.0f°".format(
-                o.optDouble("sensorW"), o.optDouble("sensorH"), o.optInt("focalLength"),
-                o.optDouble("fovH"), o.optDouble("fovV"))
+            // センサー寸法はマスターにある機種しか分からない。未登録のときに 0.0×0.0 と出すと
+            // 値が入っているように見えるので、寸法も画角も出さない(2026-08-19)。
+            val sw = o.optDouble("sensorW"); val sh = o.optDouble("sensorH")
+            simGearText = if (sw > 0.0 && sh > 0.0)
+                "センサー %.1f×%.1fmm  焦点距離 %d mm  画角 %.0f×%.0f°".format(
+                    sw, sh, o.optInt("focalLength"), o.optDouble("fovH"), o.optDouble("fovV"))
+            else
+                "センサー 未登録  焦点距離 %d mm  画角 ---".format(o.optInt("focalLength"))
             simPage?.setGearText(simGearText)
             intervalText.text = fmtInterval(o.optDouble("interval", 15.0)) + "秒"
             suppressLandscape = true
             landscapeCheck.isChecked = o.optBoolean("landscape")
             suppressLandscape = false
-            npfText.text = "NPF %.1f秒   最小周期 %d秒".format(o.optDouble("npf"), o.optInt("minInterval"))
+            // npf が負 = センサー寸法/画素数が未登録で算出できない(Entityが -1 を返す)。
+            val npf = o.optDouble("npf", -1.0)
+            npfText.text = if (npf >= 0.0) "NPF %.1f秒   最小周期 %d秒".format(npf, o.optInt("minInterval"))
+                           else "NPF ---   最小周期 %d秒".format(o.optInt("minInterval"))
             // 項目11: 計画1ページ目の方向/仰角ウィジェットは廃止。撮影中画面の表示だけ残す。
             val az = o.optDouble("azimuth", 90.0)
             val el = o.optDouble("elevation", 10.0)
