@@ -1203,7 +1203,23 @@ int dataManager::recordConnectedCameraStatus(const device& dev, bool allowAdd)
 		{
 			if (!oc.cam.serial.empty() && oc.cam.serial == dev.serialno)
 			{
-				if (!dev.assignedName.empty() && oc.cam.assignedName != dev.assignedName) { oc.cam.assignedName = dev.assignedName; saveOwnedCameras(); }
+				bool changed = false;
+				if (!dev.assignedName.empty() && oc.cam.assignedName != dev.assignedName)
+				{ oc.cam.assignedName = dev.assignedName; changed = true; }
+				// 【型番のずれを直す(2026-08-19)】シリアルが同じなら同一個体なので、
+				//  型番はカメラの申告が正しい。過去に部分一致で別機種として登録された個体
+				//  ("EOS R50 V" が "EOS R50" になった)を、次に見つけたときに正す。
+				//  名前はリストのキーでユーザーが変えられるため、自動で付いたまま
+				//  (=旧型番と同じ)のときだけ合わせる。
+				if (!key.empty() && oc.cam.model != key)
+				{
+					const bool autoName = (oc.cam.name == oc.cam.model);
+					logEvent("GEAR", (oc.cam.model + " を " + key + " に直した(S/N " + dev.serialno + ")").c_str());
+					oc.cam.model = key;
+					if (autoName) { oc.cam.name = uniqueOwnedName(key); }
+					changed = true;
+				}
+				if (changed) { saveOwnedCameras(); }
 				return static_cast<int>(camApply::updated);
 			}
 		}
@@ -1228,13 +1244,25 @@ int dataManager::recordConnectedCameraStatus(const device& dev, bool allowAdd)
 
 	//    §4a: 既存が識別済みなら2台目の登録は可。device は実機なのでシリアルを持ち、未識別の重複は作らない。
 	hgc::ownedCamera oc;
-	const hgc::camera* m = matchMasterCamera(dev);
+	// 【型番はカメラが名乗ったものを使う(2026-08-19)】マスタ照合は完全一致が無いと
+	//  「最長部分一致」に落ちる。この一致は**別機種を掴むことがある**。
+	//  実測: "EOS R50 V" はマスタに無く、部分一致で "EOS R50" を掴んで
+	//  EOS R50 として登録された。型番が違うので撮影開始時の機種照合に通らず、
+	//  カメラを見つけられずに撮影が始まらなかった。
+	//  マスタから借りてよいのは仕様(センサー寸法・ISO/SSの一覧)だけで、素性ではない。
+	const hgc::camera* m     = matchMasterCamera(dev);
+	const bool         exact = (m && m->name == key);
 	if (m) { oc.cam = *m; }
-	else
-	{
+	else   { oc.cam.maker = dev.manufacturer; }
+	if (!exact)
+	{	// 部分一致(または不一致)。素性はカメラの申告で上書きする。
 		oc.cam.model = key.empty() ? dev.model : key;
 		oc.cam.name  = oc.cam.model;
-		oc.cam.maker = dev.manufacturer;
+		if (!oc.cam.maker.empty() || !dev.manufacturer.empty()) { oc.cam.maker = dev.manufacturer; }
+		if (m)
+		{	// 仕様だけ似た機種から借りている。当たっている保証は無いので残しておく。
+			logEvent("GEAR", (key + " はマスタに無い。仕様を " + m->name + " から借りた(要確認)").c_str());
+		}
 	}
 	if (oc.cam.model.empty()) { oc.cam.model = key.empty() ? dev.model : key; }	// 機種照合の基準(名称は一意化で変わるため model を確実に持たせる)
 	if (oc.cam.name.empty()) { oc.cam.name = dev.assignedName.empty() ? (key.empty() ? dev.model : key) : dev.assignedName; }
