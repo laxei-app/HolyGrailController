@@ -573,7 +573,7 @@ namespace
 			if (i) { dj += ","; }
 			const auto& d = g_devices[i];
 			dj += "{\"uuid\":\"" + jesc(d.uuid) + "\",\"model\":\"" + jesc(d.model) +
-			      "\",\"friendly\":\"" + jesc(d.friendName) +
+			      "\",\"assignedName\":\"" + jesc(d.assignedName) +
 			      "\",\"manufacturer\":\"" + jesc(d.manufacturer) +
 			      "\",\"serialno\":\"" + jesc(d.serialno) + "\"}";
 		}
@@ -757,7 +757,7 @@ namespace
 		}
 		notify(HGE_EV_DEVICE, devicesJson());
 		logCameraNet();
-		// 接続時にシリアル/フレンドリ名を所持カメラへ自動保存(無ければ自動作成。§5.2拡張)。
+		// 接続時にシリアル/設定名を所持カメラへ自動保存(無ければ自動作成。§5.2拡張)。
 		dataManager::recordConnectedCamera(g_devices[0]);
 		setState(HGE_ST_READY);
 		return ERR_HGC_OK;
@@ -1009,14 +1009,14 @@ namespace
 			return false;
 		};
 
-		// §4b: 計画のカメラを特定する。同機種(例 EOS R10)が複数あっても、シリアルNo か フレンドリ名 で1台を選ぶ。
+		// §4b: 計画のカメラを特定する。同機種(例 EOS R10)が複数あっても、シリアルNo か ユーザーが付けた名前(assignedName) で1台を選ぶ。
 		//  ・serial 指定           → そのシリアルの個体。
-		//  ・friendly 指定         → 所持リストからシリアルを解決して個体特定(未接続でserial不明なら下のモデル照合へ)。
+		//  ・assignedName 指定         → 所持リストからシリアルを解決して個体特定(未接続でserial不明なら下のモデル照合へ)。
 		//  ・どちらも無い("それ以外のEOS-R10") → 同機種で、既に識別済み(所持リストにシリアル登録済み)の個体"以外"の1台。
 		std::string wantSerial = pc.serial;
-		if (wantSerial.empty() && !pc.friendly.empty())
+		if (wantSerial.empty() && !pc.assignedName.empty())
 		{
-			std::string s; if (dataManager::serialForFriendly(pc.friendly, s)) { wantSerial = s; }
+			std::string s; if (dataManager::serialForAssignedName(pc.assignedName, s)) { wantSerial = s; }
 		}
 		const bool hasModel = !pc.model.empty() || !pc.name.empty();
 
@@ -1041,7 +1041,7 @@ namespace
 			cameraController::detectTarget(found);
 			{	// 診断: SSDP検索で何台見つかったか(0台=SSDP不発の可能性)。機種/シリアルも残す。
 				std::string d = "SSDP検索結果 " + std::to_string(found.size()) + "台";
-				for (auto& fd : found) { if (fd.apiBase) { d += " [" + (fd.model.empty() ? fd.friendName : fd.model) + "/" + (fd.serialno.empty() ? "?" : fd.serialno) + "]"; } }
+				for (auto& fd : found) { if (fd.apiBase) { d += " [" + (fd.model.empty() ? fd.assignedName : fd.model) + "/" + (fd.serialno.empty() ? "?" : fd.serialno) + "]"; } }
 				dataManager::logEvent("NET", d.c_str());
 			}
 		}
@@ -1281,11 +1281,11 @@ namespace
 		//  ・撮影要求時にカメラ未検出でも中断しないため、runner の取得フェーズがこれを繰り返し呼ぶ。
 		//  ・撮影中の連続失敗時も同じ経路で再接続する。成功で *dev_(=S->dev)を最新IP/apiへ更新。
 		S->runner->setReconnect([S]() -> bool {
-			// 計画のカメラ(serial 明示 or friendly から解決)を毎回求める。初回未取得時は S->dev.serialno が
+			// 計画のカメラ(serial 明示 or assignedName から解決)を毎回求める。初回未取得時は S->dev.serialno が
 			// 空のため、それに依存しない(旧実装の空serial依存バグを解消)。既知IP直結にもこの serial を使う。
 			std::string wantSerial = S->plan.camera.serial;
-			if (wantSerial.empty() && !S->plan.camera.friendly.empty())
-			{ std::string s; if (dataManager::serialForFriendly(S->plan.camera.friendly, s)) { wantSerial = s; } }
+			if (wantSerial.empty() && !S->plan.camera.assignedName.empty())
+			{ std::string s; if (dataManager::serialForAssignedName(S->plan.camera.assignedName, s)) { wantSerial = s; } }
 			if (wantSerial.empty() && !S->dev.serialno.empty()) { wantSerial = S->dev.serialno; }
 
 			class device* hit = nullptr;
@@ -1506,7 +1506,7 @@ int32_t hge_connectManual(const char* host)
 	}
 	notify(HGE_EV_DEVICE, devicesJson());
 	logCameraNet();
-	// 接続時にシリアル/フレンドリ名を所持カメラへ自動保存(無ければ自動作成。§5.2拡張)。
+	// 接続時にシリアル/設定名を所持カメラへ自動保存(無ければ自動作成。§5.2拡張)。
 	dataManager::recordConnectedCamera(g_devices[0]);
 	setState(HGE_ST_READY);
 	return ERR_HGC_OK;
@@ -1720,14 +1720,14 @@ int32_t hge_listPlansJson(char* buf, int32_t* inoutLen)
 		captureSession* sess = sessionFor(id);
 		int st = sess ? sess->state.load() : static_cast<int>(HGE_ST_IDLE);
 		// カメラ予約表(項目17)と重複開始の抑止に使うため、計画のカメラも載せる。
-		//  model/serial=同一機体の判定に使う / friendly・name=表示用。
+		//  model/serial=同一機体の判定に使う / assignedName・name=表示用。
 		const hgc::camera& pc = cs.camera;
 		std::string o = "{\"id\":\"" + jesc(id) + "\",\"name\":\"" + jesc(cs.name) + "\"" +
 		     ",\"start\":\"" + dtToStr(cs.start) + "\",\"end\":\"" + dtToStr(cs.end) + "\"" +
 		     ",\"capturable\":" + std::string(capturable ? "true" : "false") +
 		     ",\"camModel\":\"" + jesc(pc.model) + "\"" +
 		     ",\"camName\":\"" + jesc(pc.name) + "\"" +
-		     ",\"camFriendly\":\"" + jesc(pc.friendly) + "\"" +
+		     ",\"camAssignedName\":\"" + jesc(pc.assignedName) + "\"" +
 		     ",\"camSerial\":\"" + jesc(pc.serial) + "\"" +
 		     ",\"state\":" + std::to_string(st) + "}";
 		rows.push_back(std::make_pair(startU, o));
@@ -2396,7 +2396,7 @@ int32_t hge_setPreferredCcm(const char* type, const char* name)
 }
 
 // 接続カメラ検索(同期)。検出した全カメラを g_devices に格納し、一覧 JSON を返す。
-//  [{"model":..,"friendly":..,"serial":..}, ...]。コンテキストメニューの「接続カメラ検索」用。
+//  [{"model":..,"assignedName":..,"serial":..}, ...]。コンテキストメニューの「接続カメラ検索」用。
 int32_t hge_searchDevicesListJson(char* buf, int32_t* inoutLen)
 {
 	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
@@ -2412,7 +2412,7 @@ int32_t hge_searchDevicesListJson(char* buf, int32_t* inoutLen)
 	{
 		if (i) { s += ","; }
 		const auto& d = g_devices[i];
-		s += "{\"model\":\"" + jesc(d.model) + "\",\"friendly\":\"" + jesc(d.friendName) +
+		s += "{\"model\":\"" + jesc(d.model) + "\",\"assignedName\":\"" + jesc(d.assignedName) +
 		     "\",\"serial\":\"" + jesc(d.serialno) + "\",\"ip\":\"" + jesc(hostFromDevice(d)) + "\"}";
 	}
 	s += "]";
@@ -2426,17 +2426,17 @@ int32_t hge_addOwnedDetected(int32_t index)
 	return dataManager::recordConnectedCamera(g_devices[index]) ? ERR_HGC_OK : ERR_HGC_INVALID_STATE;
 }
 
-// 発見/接続したカメラ識別情報(model/serial/friendly)を所持カメラへ反映する。
-//  用途: ①エッジ→スマホ書き戻し(edgeの進捗JSONの serial/friendly を受けて allowAdd=1)。
+// 発見/接続したカメラ識別情報(model/serial/assignedName)を所持カメラへ反映する。
+//  用途: ①エッジ→スマホ書き戻し(edgeの進捗JSONの serial/assignedName を受けて allowAdd=1)。
 //        ②裏の発見(プレゼンス)で allowAdd=0 → 返り値 ISNEW のとき UI が「登録しますか？」を出す。
 //  返り値: >=0 は dataManager::camApply(0=updated/1=filled/2=isNew)、<0 はエラー。
 //  maker は model 先頭トークン(空白まで)から導出する(stripMaker 用。Canon運用では "Canon EOS R100"→"Canon")。
-int32_t hge_recordCameraIdentity(const char* model, const char* serial, const char* friendly, int32_t allowAdd)
+int32_t hge_recordCameraIdentity(const char* model, const char* serial, const char* assignedName, int32_t allowAdd)
 {
 	device d;
 	d.model      = (model    != nullptr) ? model    : "";
 	d.serialno   = (serial   != nullptr) ? serial   : "";
-	d.friendName = (friendly != nullptr) ? friendly : "";
+	d.assignedName = (assignedName != nullptr) ? assignedName : "";
 	if (d.model.empty() && d.serialno.empty()) { return ERR_HGC_INVALID_ARG; }
 	size_t sp = d.model.find(' ');
 	d.manufacturer = (sp != std::string::npos) ? d.model.substr(0, sp) : std::string();
@@ -2474,22 +2474,22 @@ int32_t hge_getProgressJsonFor(const char* planId, char* buf, int32_t* inoutLen)
 
 	int st = HGE_ST_IDLE; std::string nm, ccm; hgc::exposure exp{};
 	int fr = 0, tot = 0, rem = 0, el = 0;
-	std::string cSerial, cFriendly, cModel;	// 接続確定カメラの識別情報(エッジ→スマホ書き戻し用)
+	std::string cSerial, cAssignedName, cModel;	// 接続確定カメラの識別情報(エッジ→スマホ書き戻し用)
 	if (captureSession* S = sessionFor(planId))
 	{
 		st = S->state.load(); nm = S->plan.name;
 		fr = S->pgFrame; tot = S->pgTotal; rem = S->pgRemain; el = S->pgElapsed;
 		ccm = S->pgCcm; exp = S->pgExp;
-		cSerial = S->dev.serialno; cFriendly = S->dev.friendName; cModel = S->dev.model;	// 未接続なら空
+		cSerial = S->dev.serialno; cAssignedName = S->dev.assignedName; cModel = S->dev.model;	// 未接続なら空
 	}
 	char tmp[512];
 	std::snprintf(tmp, sizeof(tmp),
 		"{\"state\":%d,\"name\":\"%s\",\"frame\":%d,\"total\":%d,\"remainSec\":%d,\"elapsedSec\":%d,"
 		"\"ccm\":\"%s\",\"iso\":\"%s\",\"ss\":\"%s\",\"fn\":\"%s\","
-		"\"serial\":\"%s\",\"friendly\":\"%s\",\"model\":\"%s\"}",
+		"\"serial\":\"%s\",\"assignedName\":\"%s\",\"model\":\"%s\"}",
 		st, jesc(nm).c_str(), fr, tot, rem, el,
 		jesc(ccm).c_str(), exp.iso.c_str(), exp.ss.c_str(), exp.fn.c_str(),
-		jesc(cSerial).c_str(), jesc(cFriendly).c_str(), jesc(cModel).c_str());
+		jesc(cSerial).c_str(), jesc(cAssignedName).c_str(), jesc(cModel).c_str());
 	int32_t need = static_cast<int32_t>(std::strlen(tmp)) + 1;
 	if (buf == nullptr || *inoutLen < need) { *inoutLen = need; return ERR_HGC_BUF_SHORT; }
 	std::memcpy(buf, tmp, need);

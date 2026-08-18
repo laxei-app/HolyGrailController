@@ -206,7 +206,19 @@ errCode apiCanonCCAPI::getDeviceDescriptor(class device& device)
 
     // device descriptor の内容を取り出す
     device.model = tool::getXmlTagValue(deviceDescriptor, "modelName");
-    device.friendName = tool::getXmlTagValue(deviceDescriptor, "friendlyName");
+    // 【ユーザーが付けた名前は X_deviceNickname(2026-08-19)】同じ機種を複数台つなぐと
+    //  どれがどれか分からないので、ユーザーはカメラ本体でニックネームを設定する。
+    //  キヤノンはそれを UPnP 記述の ns:X_deviceNickname に載せる。
+    //  friendlyName ではない。あちらは機種の愛称で、**同じ機種なら全台同じ値**になる
+    //  (実測: EOS R50 V 2台とも "Canon EOS R50 V"。X_deviceNickname は
+    //   "EOSR50V_501CFC" / "EOSR50V_52EF46" で別)。当初 friendlyName を
+    //  ユーザー設定名だと思って実装していたため、2台目を区別できなかった。
+    //  なおCCAPIの functions/registeredname/nickname は R50 V に無い(実測404)。
+    //  名前空間の接頭辞はカメラ任せなので、prefix 付き/無しの両方を見る。
+    //  ※ソニーはユーザー設定名を friendlyName に入れる。実装時はそちらを assignedName へ。
+    device.assignedName = tool::getXmlTagValue(deviceDescriptor, "ns:X_deviceNickname");
+    if (device.assignedName.empty())
+    { device.assignedName = tool::getXmlTagValue(deviceDescriptor, "X_deviceNickname"); }
     device.manufacturer = tool::getXmlTagValue(deviceDescriptor, "manufacturer");
     device.urlAccess = tool::getXmlTagValue(deviceDescriptor, "ns:X_accessURL");
     device.urlbase = tool::getXmlTagValue(deviceDescriptor, "URLBase");

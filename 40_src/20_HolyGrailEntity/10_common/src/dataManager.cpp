@@ -544,21 +544,21 @@ bool dataManager::addOwnedCameraFromMaster(const std::string& name)
 	ensureOwned();
 	const hgc::camera* m = findMasterCamera(name);
 	if (!m) { return false; }
-	// §4a: 同じ機種で「未識別(シリアルもフレンドリ名も空)」の所持カメラが既にあれば、もう一台の未識別は
-	//      区別できないため追加しない。識別済み(シリアル or フレンドリ名あり)なら2台目の登録を許可する。
+	// §4a: 同じ機種で「未識別(シリアルも設定名も空)」の所持カメラが既にあれば、もう一台の未識別は
+	//      区別できないため追加しない。識別済み(シリアル or 設定名あり)なら2台目の登録を許可する。
 	for (const auto& oc : g_ownedCameras)
 	{
 		bool sameModel = (!oc.cam.model.empty() && !m->model.empty() && oc.cam.model == m->model)
 		              || (!oc.cam.name.empty()  && (oc.cam.name == m->name || oc.cam.name == name));
-		if (sameModel && oc.cam.serial.empty() && oc.cam.friendly.empty()) { return false; }
+		if (sameModel && oc.cam.serial.empty() && oc.cam.assignedName.empty()) { return false; }
 	}
 	hgc::ownedCamera oc;
 	oc.cam = *m;
 	if (oc.cam.model.empty()) { oc.cam.model = m->name; }	// 機種照合の基準
 	oc.cam.name = uniqueOwnedName(oc.cam.name);	// 2台目以降は名称を一意化(リストのキー)
-	// 項目D: 愛称(FriendlyName)とシリアルは勝手に入れない。カメラがオンラインになりSSDPで取得できてから
+	// 項目D: 愛称(assignedName=カメラ本体で付けたニックネーム)とシリアルは勝手に入れない。カメラがオンラインになりSSDPで取得できてから
 	//  設定する(それまでは空=UIでは「未定義」と表示)。マスタに値があっても登録時は空にする。
-	oc.cam.friendly.clear();
+	oc.cam.assignedName.clear();
 	oc.cam.serial.clear();
 	g_ownedCameras.push_back(std::move(oc));
 	return saveOwnedCameras();
@@ -753,7 +753,7 @@ bool dataManager::setOwnedCameraDetailJson(const std::string& origName, const st
 	cam.maker       = j.value("maker", cam.maker);
 	cam.model       = j.value("model", cam.model);
 	cam.name        = j.value("name", cam.name);
-	cam.friendly    = j.value("friendly", cam.friendly);
+	cam.assignedName    = j.value("assignedName", cam.assignedName);
 	cam.serial      = j.value("serial", cam.serial);
 	cam.sensorSize  = j.value("sensorSize", cam.sensorSize);
 	cam.sensorSizeV = j.value("sensorSizeV", cam.sensorSizeV);
@@ -1196,14 +1196,14 @@ int dataManager::recordConnectedCameraStatus(const device& dev, bool allowAdd)
 	// device.model 例 "Canon EOS R10"。所持/マスタは型番のみ("EOS R10")なのでメーカー名を除いて照合。
 	std::string key = stripMaker(dev.model, dev.manufacturer);
 
-	// 1) シリアル一致の所持カメラ → 同一個体。フレンドリ名のみ更新する(serialは識別子なので変えない)。
+	// 1) シリアル一致の所持カメラ → 同一個体。設定名(assignedName)のみ更新する(serialは識別子なので変えない)。
 	if (!dev.serialno.empty())
 	{
 		for (auto& oc : g_ownedCameras)
 		{
 			if (!oc.cam.serial.empty() && oc.cam.serial == dev.serialno)
 			{
-				if (!dev.friendName.empty() && oc.cam.friendly != dev.friendName) { oc.cam.friendly = dev.friendName; saveOwnedCameras(); }
+				if (!dev.assignedName.empty() && oc.cam.assignedName != dev.assignedName) { oc.cam.assignedName = dev.assignedName; saveOwnedCameras(); }
 				return static_cast<int>(camApply::updated);
 			}
 		}
@@ -1216,7 +1216,7 @@ int dataManager::recordConnectedCameraStatus(const device& dev, bool allowAdd)
 		if (camModelMatchesDev(oc.cam, dev) && oc.cam.serial.empty())
 		{
 			oc.cam.serial = dev.serialno;
-			if (!dev.friendName.empty()) { oc.cam.friendly = dev.friendName; }
+			if (!dev.assignedName.empty()) { oc.cam.assignedName = dev.assignedName; }
 			saveOwnedCameras();
 			return static_cast<int>(camApply::filled);
 		}
@@ -1237,23 +1237,23 @@ int dataManager::recordConnectedCameraStatus(const device& dev, bool allowAdd)
 		oc.cam.maker = dev.manufacturer;
 	}
 	if (oc.cam.model.empty()) { oc.cam.model = key.empty() ? dev.model : key; }	// 機種照合の基準(名称は一意化で変わるため model を確実に持たせる)
-	if (oc.cam.name.empty()) { oc.cam.name = dev.friendName.empty() ? (key.empty() ? dev.model : key) : dev.friendName; }
+	if (oc.cam.name.empty()) { oc.cam.name = dev.assignedName.empty() ? (key.empty() ? dev.model : key) : dev.assignedName; }
 	oc.cam.name     = uniqueOwnedName(oc.cam.name);	// 同機種2台目以降は名称を一意化(リストのキー)
 	oc.cam.serial   = dev.serialno;
-	oc.cam.friendly = dev.friendName;
+	oc.cam.assignedName = dev.assignedName;
 	g_ownedCameras.push_back(std::move(oc));
 	saveOwnedCameras();
 	return static_cast<int>(camApply::isNew);
 }
 
-// §4b: 計画カメラの friendly から所持リストを引き、実シリアルを解決する(接続済みなら serial が入っている)。
-bool dataManager::serialForFriendly(const std::string& friendly, std::string& outSerial)
+// §4b: 計画カメラの assignedName から所持リストを引き、実シリアルを解決する(接続済みなら serial が入っている)。
+bool dataManager::serialForAssignedName(const std::string& assignedName, std::string& outSerial)
 {
-	if (friendly.empty()) { return false; }
+	if (assignedName.empty()) { return false; }
 	ensureOwned();
 	for (const auto& oc : g_ownedCameras)
 	{
-		if (oc.cam.friendly == friendly && !oc.cam.serial.empty()) { outSerial = oc.cam.serial; return true; }
+		if (oc.cam.assignedName == assignedName && !oc.cam.serial.empty()) { outSerial = oc.cam.serial; return true; }
 	}
 	return false;
 }

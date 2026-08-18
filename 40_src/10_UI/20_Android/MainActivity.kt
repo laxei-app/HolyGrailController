@@ -1404,7 +1404,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val cam = arr.optJSONObject(i)?.optJSONObject("camera") ?: continue
             val name = cam.optString("name")
             // 項目D: 愛称/シリアルは未取得なら「未定義」と出す(SSDPでオンライン取得後に実値が入る)。
-            val fr = cam.optString("friendly").ifEmpty { "未定義" }
+            val fr = cam.optString("assignedName").ifEmpty { "未定義" }
             val sn = cam.optString("serial").ifEmpty { "未定義" }
             val sub = "愛称:$fr  S/N:$sn"
             box.addView(listRow(name, sub, name == selCamera,
@@ -1504,9 +1504,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.addView(editRow("メーカー", "maker", cam.optString("maker")))
         box.addView(editRow("モデル", "model", cam.optString("model")))
         // 名称はリストの行でインライン編集する(分割バー画面共通の動作)。詳細からは除外。
-        // 項目D: 愛称(FriendlyName)とシリアルNo.は、カメラがオンラインになりSSDPで取得できてから
+        // 項目D: 愛称(assignedName=カメラ本体で付けたニックネーム)とシリアルNo.は、カメラがオンラインになりSSDPで取得できてから
         //  自動で入る。手入力はしない(勝手に入れない)。未取得のうちは「未定義」と表示する。
-        box.addView(displayRow("愛称", cam.optString("friendly").ifEmpty { "未定義" }))
+        box.addView(displayRow("愛称", cam.optString("assignedName").ifEmpty { "未定義" }))
         box.addView(displayRow("シリアルNo.", cam.optString("serial").ifEmpty { "未定義" }))
         box.addView(editRow2("センサーサイズ", "sensorSize", cam.optDouble("sensorSize", 0.0).toString(),
             "sensorSizeV", cam.optDouble("sensorSizeV", 0.0).toString(), "×", "mm", true))
@@ -3073,7 +3073,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         try {
             if (id == currentPlanId) {
                 val cam = JSONObject(HgeNative.nativeGetPlanJson()).optJSONObject("camera")
-                val label = listOf(cam?.optString("friendly") ?: "", cam?.optString("name") ?: "", cam?.optString("model") ?: "")
+                val label = listOf(cam?.optString("assignedName") ?: "", cam?.optString("name") ?: "", cam?.optString("model") ?: "")
                     .firstOrNull { it.isNotEmpty() }
                 if (!label.isNullOrEmpty()) return label
             }
@@ -3361,20 +3361,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  ・実測でもエッジのSSDP発見は1秒台で、ヒント無しで開始が遅くなることはない。
     // ETPの C_CAMERA_INFO とエッジ側の受信処理は残す(古いスマホと組み合わせても壊れないように)。
 
-    // ② 未登録カメラの発見 → 所持カメラへ反映。既存(serial一致)は friendly 更新、未定義の同機種枠は serial+friendly を確定
+    // ② 未登録カメラの発見 → 所持カメラへ反映。既存(serial一致)は assignedName 更新、未定義の同機種枠は serial+assignedName を確定
     //  (どちらも自動)。いずれにも該当しない新規個体は「登録しますか？」を出す(拒否済みserialは自動プロンプトしない)。
     private fun reconcileDiscoveredCameras(presenceJson: String) {
         val arr = try { JSONArray(presenceJson) } catch (_: Exception) { return }
         Thread {
-            val toPrompt = ArrayList<Triple<String, String, String>>()   // model, serial, friendly
+            val toPrompt = ArrayList<Triple<String, String, String>>()   // model, serial, assignedName
             for (i in 0 until arr.length()) {
                 val c = arr.optJSONObject(i) ?: continue
                 if (!c.optBoolean("online")) continue
                 val serial = c.optString("serial"); if (serial.isEmpty()) continue
                 if (declinedCamSerials.contains(serial)) continue        // 「いいえ」済みは自動では聞かない(手動登録は可)
-                val model = c.optString("model"); val friendly = c.optString("friendly")
-                val r = try { HgeNative.nativeRecordCameraIdentity(model, serial, friendly, false) } catch (_: Exception) { -1 }
-                if (r == 2) { toPrompt.add(Triple(model, serial, friendly)) }   // 2=新規個体(未追加) → 登録可否を問う
+                val model = c.optString("model"); val assignedName = c.optString("assignedName")
+                val r = try { HgeNative.nativeRecordCameraIdentity(model, serial, assignedName, false) } catch (_: Exception) { -1 }
+                if (r == 2) { toPrompt.add(Triple(model, serial, assignedName)) }   // 2=新規個体(未追加) → 登録可否を問う
             }
             if (toPrompt.isNotEmpty()) runOnUiThread { promptRegisterCameras(toPrompt) }
         }.start()
@@ -3382,9 +3382,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // 新規個体ごとに「登録しますか？」ダイアログを出す(どの画面でも表示)。登録=所持へ追加、いいえ=以後自動プロンプト抑止。
     private fun promptRegisterCameras(list: List<Triple<String, String, String>>) {
-        for ((model, serial, friendly) in list) {
+        for ((model, serial, assignedName) in list) {
             if (!promptingCamSerials.add(serial)) continue               // 既に表示中のserialは二重に出さない
-            val label = if (friendly.isNotEmpty()) friendly else if (model.isNotEmpty()) model else serial
+            val label = if (assignedName.isNotEmpty()) assignedName else if (model.isNotEmpty()) model else serial
             androidx.appcompat.app.AlertDialog.Builder(this)
                 .setTitle("カメラの登録")
                 .setMessage("未登録のカメラ「$label」が見つかりました。所持カメラに登録しますか？")
@@ -3392,7 +3392,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 .setPositiveButton("登録") { _, _ ->
                     promptingCamSerials.remove(serial)
                     Thread {
-                        try { HgeNative.nativeRecordCameraIdentity(model, serial, friendly, true) } catch (_: Exception) {}
+                        try { HgeNative.nativeRecordCameraIdentity(model, serial, assignedName, true) } catch (_: Exception) {}
                         runOnUiThread { if (flipper.displayedChild == 6) buildCameraList() }   // 6=所持カメラ一覧(openCameraList)
                     }.start()
                 }
@@ -3746,13 +3746,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 if (e <= now) continue                      // 終了が過去 → 予約表に入れない
                 val model = o.optString("camModel").ifEmpty { o.optString("camName") }
                 val serial = o.optString("camSerial")
-                val friendly = o.optString("camFriendly")
+                val assignedName = o.optString("camAssignedName")
                 if (model.isEmpty() && serial.isEmpty()) continue   // カメラ未指定の計画は対象外
                 // 同一機体の判定: シリアルがあればそれが最優先(機種違いの同シリアル衝突は model と併用)。
                 val key = if (serial.isNotEmpty()) "$model#$serial" else model
                 val label = buildString {
                     append(model.ifEmpty { "(カメラ未設定)" })
-                    if (friendly.isNotEmpty()) append("  $friendly")
+                    if (assignedName.isNotEmpty()) append("  $assignedName")
                     if (serial.isNotEmpty()) append("  Sn:$serial")
                 }
                 list.add(Reservation(id, o.optString("name"), key, label, model, serial, planEdgeName(id), s, e))
@@ -5486,12 +5486,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (pj.isEmpty()) return
         try {
             val o = JSONObject(pj)
-            // ① エッジ書き戻し: エッジが接続確定したカメラの serial/friendly を所持カメラへ反映する
+            // ① エッジ書き戻し: エッジが接続確定したカメラの serial/assignedName を所持カメラへ反映する
             //  (エッジ撮影ではスマホがカメラに接続しないため、この経路が唯一の識別情報伝播)。serial単位で1回だけ適用。
             val cSerial = o.optString("serial")
             if (cSerial.isNotEmpty() && edgeAppliedSerials.add(cSerial)) {
-                val cModel = o.optString("model"); val cFriendly = o.optString("friendly")
-                Thread { try { HgeNative.nativeRecordCameraIdentity(cModel, cSerial, cFriendly, true) } catch (_: Exception) {} }.start()
+                val cModel = o.optString("model"); val cAssignedName = o.optString("assignedName")
+                Thread { try { HgeNative.nativeRecordCameraIdentity(cModel, cSerial, cAssignedName, true) } catch (_: Exception) {} }.start()
             }
             val st = o.optInt("state")
             histOnState(pid, st)   // 項目9: エッジ側で起きたこと(開始/終了/カメラ断/復帰)を履歴に残す

@@ -23,7 +23,7 @@ public:
 
 	// 以下デバイスディスクリプタの内容
 	std::string	model;			// カメラモデル名 "Canon EOS R10"
-	std::string	friendName;		// 愛称
+	std::string	assignedName;		// ユーザーがカメラ本体で付けた名前(愛称)。同機種の見分けに使う
 	std::string	manufacturer;	// 提供元。"canon","sony"
 	std::string	serialno;		// シリアルno.
 	std::string urlbase;		// url base

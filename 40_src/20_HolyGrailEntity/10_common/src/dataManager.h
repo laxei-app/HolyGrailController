@@ -11,7 +11,7 @@
 #include "astroSched.h"		// astro::ccmSet
 #include <vector>
 
-class device;	// 接続時のシリアル/フレンドリ自動保存に使う
+class device;	// 接続時のシリアル/設定名の自動保存に使う
 
 class dataManager
 {
@@ -93,7 +93,7 @@ public:
 
 	// 所持カメラの詳細(全項目)を JSON で更新/新規作成して保存する。origName 一致を置換、
 	// 無ければ新規追加(マスタに無い手動カメラ)。json キー:
-	//  maker/model/name/friendly/serial/sensorSize/sensorSizeV/sensorPixel/
+	//  maker/model/name/assignedName/serial/sensorSize/sensorSizeV/sensorPixel/
 	//  isoMin/isoMax/ssMin/ssMax(設定可能範囲。変更時は標準1/3段で再生成)/autoInsert/lensNames[]
 	static bool setOwnedCameraDetailJson(const std::string& origName, const std::string& json);
 
@@ -127,22 +127,22 @@ public:
 	static bool findOwnedCamera(const std::string& name, hgc::camera& out);
 	static bool findOwnedLens(const std::string& name, hgc::lens& out);
 
-	// --- 接続時のシリアル/フレンドリ自動保存(§5.2拡張) ---
-	// モデル一致の所持カメラへ serial/friendly を保存。一致が無ければ
+	// --- 接続時のシリアル/設定名の自動保存(§5.2拡張) ---
+	// モデル一致の所持カメラへ serial/assignedName を保存。一致が無ければ
 	// master(model)＋device から所持カメラを自動作成して保存(1台運用で無設定OK)。
 	static bool recordConnectedCamera(const device& dev);
 
 	// 発見/接続したカメラ識別情報を所持リストへ反映する共通コア。返り値=処理区分。
-	//  UPDATED(0): serial一致の所持へ friendly を反映(§1)。
-	//  FILLED (1): serial未定義の同機種プレースホルダへ serial+friendly を確定(§2)。
+	//  UPDATED(0): serial一致の所持へ assignedName を反映(§1)。
+	//  FILLED (1): serial未定義の同機種プレースホルダへ serial+assignedName を確定(§2)。
 	//  ISNEW  (2): 一致する所持が無い(新規個体)。allowAdd なら新規追加済み、非 allowAdd なら未追加(呼び手が登録可否を問う)。
 	// allowAdd=false は「裏の発見」用(登録するか UI で聞く)。true は撮影接続/明示登録用(自動追加)。
 	enum class camApply { updated = 0, filled = 1, isNew = 2 };
 	static int recordConnectedCameraStatus(const device& dev, bool allowAdd);
 
-	// --- §4b 撮影開始時の特定カメラ照合(同機種が複数あっても serial/friendly で1台を選ぶ) ---
-	// 計画カメラの friendly から所持リストを引き実シリアルを解決(接続済みなら serial が入る)。true=解決。
-	static bool serialForFriendly(const std::string& friendly, std::string& outSerial);
+	// --- §4b 撮影開始時の特定カメラ照合(同機種が複数あっても serial/assignedName で1台を選ぶ) ---
+	// 計画カメラの assignedName から所持リストを引き実シリアルを解決(接続済みなら serial が入る)。true=解決。
+	static bool serialForAssignedName(const std::string& assignedName, std::string& outSerial);
 	// 所持カメラに登録済みのシリアル一覧(空は除く)。「それ以外のカメラ」判定に使う。
 	static void ownedCameraSerials(std::vector<std::string>& out);
 	// device のモデルが計画/所持カメラ cam と同機種か(メーカー名差を吸収)。

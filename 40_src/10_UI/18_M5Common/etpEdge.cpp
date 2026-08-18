@@ -238,7 +238,7 @@ namespace
 		{
 			// data=planId なら計画別の状態/進捗を返す(1エッジ複数カメラで誤NOCAMERAポップを防ぐ)。
 			// data 空は従来の集約スナップショット(復元/生存確認用)。
-			char b[512];	// serial/friendly/model(書き戻し用)を含むため 256→512
+			char b[512];	// serial/assignedName/model(書き戻し用)を含むため 256→512
 			int32_t len = sizeof(b);
 			const char* pid = pk.data.empty() ? nullptr : pk.data.c_str();
 			if (hge_getProgressJsonFor(pid, b, &len) == ERR_HGC_OK) { rd = b; }

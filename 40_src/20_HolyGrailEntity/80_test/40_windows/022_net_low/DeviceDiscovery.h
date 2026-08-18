@@ -14,7 +14,7 @@ public:
 
 		// 以下デバイスディスクリプタの内容
 		std::string	model;			// カメラモデル名 "Canon EOS R10"
-		std::string	friendName;		// 愛称
+		std::string	assignedName;		// 愛称
 		std::string	manufacturer;	// 提供元。"canon","sony"
 		std::string	serialno;		// シリアルno.
 	};

@@ -11,7 +11,7 @@ void device::clear(void)
 
 	// 以下デバイスディスクリプタの内容
 	model.clear();			// カメラモデル名 "Canon EOS R10"
-	friendName.clear();		// 愛称
+	assignedName.clear();		// ユーザーがカメラ本体で付けた名前(愛称)
 	manufacturer.clear();	// 提供元。"canon","sony"
 	serialno.clear();		// シリアルno.
 	urlbase.clear();		// url base

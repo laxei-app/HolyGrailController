@@ -16,7 +16,7 @@
 //      最後の参照が消えて解放されるため、常駐フル探索でもリークしない。
 namespace {
 
-	struct pcam { std::string serial; std::string model; std::string friendly; std::string ip; bool online = false; long long lastSeen = 0;
+	struct pcam { std::string serial; std::string model; std::string assignedName; std::string ip; bool online = false; long long lastSeen = 0;
 	              bool verify = false;		// #1: 次tickで即疎通確認し、失敗ならTTLを待たずオフラインへ
 	              std::string location; };	// SSDP のデバイス記述URL(認証不要)。生死確認はこれを引く
 	std::vector<pcam>       g_map;
@@ -70,12 +70,12 @@ namespace {
 			for (auto& c : g_map)
 			{
 				if (c.serial != d.serialno) { continue; }
-				c.model = d.model; c.friendly = d.friendName; c.ip = ip; c.location = d.location;
+				c.model = d.model; c.assignedName = d.assignedName; c.ip = ip; c.location = d.location;
 				c.online = true; c.lastSeen = now; merged = true; break;
 			}
 			if (!merged)
 			{
-				pcam n{ d.serialno, d.model, d.friendName, ip, true, now };
+				pcam n{ d.serialno, d.model, d.assignedName, ip, true, now };
 				n.location = d.location;
 				g_map.push_back(n);
 			}
@@ -177,7 +177,7 @@ std::string json(void)
 	for (const auto& c : g_map)
 	{
 		if (c.serial.empty() || c.ip.empty()) { continue; }
-		arr.push_back({ {"serial", c.serial}, {"model", c.model}, {"friendly", c.friendly}, {"ip", c.ip}, {"online", c.online} });
+		arr.push_back({ {"serial", c.serial}, {"model", c.model}, {"assignedName", c.assignedName}, {"ip", c.ip}, {"online", c.online} });
 	}
 	return arr.dump();
 }

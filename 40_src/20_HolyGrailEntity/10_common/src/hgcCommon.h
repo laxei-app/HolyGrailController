@@ -59,7 +59,10 @@ namespace hgc
 		std::string model;				// モデル名
 		std::string name;				// 表示名称
 		std::string serial;				// シリアルNo.(接続時に自動取得・保存。識別用)
-		std::string friendly;			// フレンドリ名(愛称。接続時に自動取得)
+		std::string assignedName;			// ユーザーがカメラ本体で付けた名前(愛称。接続時に自動取得)
+											//  同機種を複数台つないだときに人が見分けるための名前。
+											//  キヤノン=UPnPのX_deviceNickname / ソニー=friendlyName(実装時)。
+											//  キヤノンのfriendlyNameは機種の愛称で同機種は全台同じ→使わない。
 		double   sensorSize  = 0.0;		// センサー横[mm]
 		double   sensorSizeV = 0.0;		// センサー縦[mm]
 		uint32_t sensorPixel = 0;		// センサー横[pixel]

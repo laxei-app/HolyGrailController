@@ -71,7 +71,7 @@ namespace csjson
 		json cameraToJson(const hgc::camera& c)
 		{
 			return json{ {"maker", c.maker}, {"model", c.model}, {"name", c.name},
-			             {"serial", c.serial}, {"friendly", c.friendly},
+			             {"serial", c.serial}, {"assignedName", c.assignedName},
 			             {"sensorSize", c.sensorSize}, {"sensorSizeV", c.sensorSizeV}, {"sensorPixel", c.sensorPixel},
 			             {"isoList", c.isoList}, {"ssList", c.ssList},
 			             {"meterLv", c.meterLv},
@@ -87,7 +87,7 @@ namespace csjson
 			c.model       = j.value("model", std::string());
 			c.name        = j.value("name", std::string());
 			c.serial      = getStr(j, "serial");
-			c.friendly    = getStr(j, "friendly");
+			c.assignedName    = getStr(j, "assignedName");
 			c.sensorSize  = j.value("sensorSize", 0.0);
 			c.sensorSizeV = j.value("sensorSizeV", 0.0);
 			c.sensorPixel = j.value("sensorPixel", 0u);

@@ -22,7 +22,7 @@ namespace presenceMon
 	//   在否は定期M-SEARCHで拾えば#1には十分)。
 	void start(std::function<void()> onChange, std::function<bool()> canScan, bool useNotify = true);
 	void stop(void);
-	// 現在のマップを JSON 配列 [{serial,model,friendly,ip,online}] で返す。
+	// 現在のマップを JSON 配列 [{serial,model,assignedName,ip,online}] で返す。
 	std::string json(void);
 	// 計画カメラの在否。1=オンライン / 0=オフライン / -1=不明(まだ一度も探索していない)。
 	int presence(const hgc::camera& cam);

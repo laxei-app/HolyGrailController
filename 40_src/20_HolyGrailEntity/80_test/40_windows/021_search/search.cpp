@@ -29,7 +29,7 @@ int main()
 		cout << "ser:" <<  device.serLocation.c_str() << std::endl;
 		cout << "uui:" <<  device.uuid.c_str() << std::endl;
 		cout << "mod:" <<  device.model.c_str() << std::endl;
-		cout << "fri:" <<  device.friendName.c_str() << std::endl;
+		cout << "fri:" <<  device.assignedName.c_str() << std::endl;
 		cout << "man:" <<  device.manufacturer.c_str() << std::endl;
 		cout << "ser:" <<  device.serialno.c_str() << std::endl;
 		cout << "bas:" <<  device.urlbase.c_str() << std::endl;

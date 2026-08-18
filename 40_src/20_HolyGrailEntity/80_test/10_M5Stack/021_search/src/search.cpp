@@ -76,7 +76,7 @@ int deviceDiscoveryTest(void)
 		M5.Display.printf("ser:%s\n", device.serLocation.c_str());
 		M5.Display.printf("uui:%s\n", device.uuid.c_str());
 		M5.Display.printf("mod:%s\n", device.model.c_str());
-		M5.Display.printf("fri:%s\n", device.friendName.c_str());
+		M5.Display.printf("fri:%s\n", device.assignedName.c_str());
 		M5.Display.printf("man:%s\n", device.manufacturer.c_str());
 		M5.Display.printf("ser:%s\n", device.serialno.c_str());
 		M5.Display.printf("bas:%s\n", device.urlbase.c_str());
