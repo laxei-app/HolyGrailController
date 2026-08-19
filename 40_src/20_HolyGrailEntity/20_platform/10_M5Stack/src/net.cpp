@@ -30,6 +30,15 @@ std::vector<std::string> getLocalIpList()
     if (WiFi.status() == WL_CONNECTED) {
         ips.push_back(WiFi.localIP().toString().c_str());
     }
+    // 【APモードの自局も返す(2026-08-19)】この一覧は SSDP の M-SEARCH を投げる回数(NIC の数)に
+    //  使われる。APモードでは STA として繋がっていないので従来は**空**になり、M-SEARCH が
+    //  1回も飛ばなかった。撮影開始の探索は接続局IPを列挙する別経路を持つので気づかれなかったが、
+    //  在否監視(identifyTargets)は SSDP だけなので、APモードでは常に0台=カメラはずっとオフライン
+    //  扱いになっていた(待機中に×が出たまま戻らない。実機 Edge00/Edge01 で発生)。
+    if ((WiFi.getMode() & WIFI_MODE_AP) != 0) {
+        String ap = WiFi.softAPIP().toString();
+        if (ap.length() > 0 && ap != "0.0.0.0") { ips.push_back(ap.c_str()); }
+    }
     return ips;
 }
 

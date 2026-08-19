@@ -99,6 +99,25 @@ namespace {
 		}
 	}
 
+	// 一度オフラインにした個体を、記憶している記述URLへ当てて復帰させる。
+	//
+	// 【なぜ要るか(2026-08-19)】オフラインになった個体は refreshLiveness が見ない(online だけを見る)ので、
+	//  復帰の判定はフル探索(M-SEARCH)だけが握っている。M-SEARCH が届かない環境では**一度落ちたら
+	//  二度と戻らない**。実機で発生: エッジのAPモードでは M-SEARCH が飛んでおらず、カメラの電源を
+	//  入れ直したあと待機中の×が戻らなかった。
+	//  記述URL(認証不要)へ GET するだけなので、カメラに触る側の規則(CCAPIを叩かない)は保つ。
+	//  IPが変わっていると当たらないが、その場合はフル探索が拾う。ここは「戻れる道をもう1本」用。
+	void recoverOfflineLocked(long long now)
+	{
+		for (auto& c : g_map)
+		{
+			if (c.online || c.location.empty()) { continue; }
+			std::string resp;
+			if (netThread::httpGet(c.location, resp) && !resp.empty())
+			{ c.online = true; c.lastSeen = now; }
+		}
+	}
+
 	// #1: verify 要求のある個体だけを先に疎通確認する(フル探索の周期を待たない)。
 	bool anyVerifyPendingLocked()
 	{
@@ -128,7 +147,11 @@ namespace {
 				const bool verifyFirst = anyVerifyPendingLocked();
 				const bool doFull = !verifyFirst &&
 				                    (woke || (now - lastFull >= kFullEverySec) || lastFull == 0);
-				if (doFull) { mergeFullLocked(now); lastFull = now; g_scanned.store(true); }
+				if (doFull)
+				{
+					mergeFullLocked(now); lastFull = now; g_scanned.store(true);
+					recoverOfflineLocked(now);	// M-SEARCHで拾えなかった復帰を記述URLで拾う
+				}
 				else        { refreshLivenessLocked(now); }
 				std::string sig = signatureLocked();
 				if (sig != g_lastSig) { g_lastSig = sig; changed = true; }
