@@ -963,6 +963,71 @@ errCode apiCanonCCAPI::getStrageAct(std::string& path)
     return ERR_HGC_OK;
 }
 
+// カメラ自身の状態(記録メディア/電池/温度)を読む。
+//
+// 【なぜ要るか(2026-08-19)】カードが一杯になって撮影が止まったが、こちらは「記録できない」と
+//  断られて初めて気づいた。カメラは残量も電池も温度も聞けば教えてくれるので、止まる前に見る。
+//  ここでは**判断せず事実だけ**を返す。何を知らせるかは上位(captureRunner)が決め、
+//  文言は UI が持つ。
+//
+// 【版数の合わせ方】電池と温度のURLは、既に解決済みのストレージのURLから同じ版数のものを
+//  組み立てる。機種ごとに使える版数が違う(R50 V は storage が ver110)ので、決め打ちにしない。
+errCode apiCanonCCAPI::readDeviceStatus(deviceStatus& out)
+{
+	out = deviceStatus{};
+
+	// ① 記録メディア
+	std::vector<strageInfo> st;
+	if (this->getStrageSta(st) == ERR_HGC_OK)
+	{
+		out.cardValid = true;	// 問い合わせに答えた(中身が空=メディア未挿入も答えのうち)
+		for (const auto& s : st)
+		{
+			if (s.maxS == 0) { continue; }
+			out.cardPresent  = true;
+			out.cardWritable = (s.acce != "readonly");
+			out.cardFree     = static_cast<long long>(s.spaS);
+			out.cardTotal    = static_cast<long long>(s.maxS);
+			out.cardContents = static_cast<int>(s.conN);
+			break;	// 撮影に使うのは先頭の1枚
+		}
+	}
+
+	// ②③ 電池と温度。ストレージのURLの末尾を差し替えて同じ版数のものを作る。
+	const std::string base = funcList[funcNum::STRAGE_STA].url;
+	const std::string tail = "devicestatus/storage";
+	const size_t      pos  = base.rfind(tail);
+	if (pos == std::string::npos) { return out.cardValid ? ERR_HGC_OK : ERR_HGC_NOT_SUPPORTED; }
+	const std::string head = base.substr(0, pos) + "devicestatus/";
+
+	std::string body;
+	if (netThread::httpGet(head + "battery", body) && !body.empty())
+	{
+		auto j = json::parse(body, nullptr, false);
+		if (!j.is_discarded() && j.contains("level"))
+		{
+			out.battValid = true;
+			const std::string lv = j.value("level", std::string());
+			// "low" = まもなく空。それ以外(quarter/half/high/full/charge…)は当面もつ。
+			out.battLow = (lv == "low");
+		}
+	}
+	body.clear();
+	if (netThread::httpGet(head + "temperature", body) && !body.empty())
+	{
+		auto j = json::parse(body, nullptr, false);
+		if (!j.is_discarded() && j.contains("status"))
+		{
+			out.tempValid = true;
+			const std::string ts = j.value("status", std::string());
+			// disablerelease = 高温で撮影そのものができない。warning 系はまだ撮れる。
+			out.tempStopped = (ts.find("disablerelease") != std::string::npos);
+			out.tempWarning = !out.tempStopped && (ts != "normal" && !ts.empty());
+		}
+	}
+	return ERR_HGC_OK;
+}
+
 // ストレージ情報を取得する
 errCode apiCanonCCAPI::getStrageSta(std::vector<strageInfo>& strageInfo)
 {

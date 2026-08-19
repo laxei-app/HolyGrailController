@@ -174,6 +174,16 @@ errCode cameraController::getSettings(const class device& device, cmdt::shotRang
 	return device.apiBase->getSettings(settings);
 }
 
+// カメラ自身の状態(記録メディア/電池/温度)を読む
+// device :対象デバイス
+// out    :読めた状態
+// return :ERR_HGC_OK:成功
+errCode cameraController::readDeviceStatus(const class device& device, apiBase::deviceStatus& out)
+{
+	if (device.apiBase == nullptr) { return ERR_HGC_READY; }
+	return device.apiBase->readDeviceStatus(out);
+}
+
 // 撮影画像のEXIFからセンサー諸元を読む
 // device     :対象デバイス
 // sensorWmm  :センサー横[mm]

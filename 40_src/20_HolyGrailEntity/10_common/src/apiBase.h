@@ -24,6 +24,27 @@ public:
 	//  既定は init(=従来どおり)。認証不要の身元確認を持つ派生だけが上書きする。
 	virtual errCode identify(class device& device) { return init(device); }
 	virtual errCode startShooting(void) { return ERR_HGC_NOT_SUPPORTED; };
+	// カメラ自身が持っている状態(記録メディア/電池/温度)。撮影を止める原因になるものだけ。
+	//  値は「分からない」を混ぜないよう、取れたかどうかを *Valid で示す。
+	struct deviceStatus
+	{
+		bool      cardValid    = false;	// 記録メディアの情報が取れた
+		bool      cardPresent  = false;	// メディアが入っている
+		bool      cardWritable = false;	// 書き込める(読み取り専用でない)
+		long long cardFree     = 0;		// 空き[byte]
+		long long cardTotal    = 0;		// 全体[byte]
+		int       cardContents = 0;		// 記録済みの件数(1枚あたりの大きさの推定に使う)
+
+		bool battValid = false;			// 電池の情報が取れた
+		bool battLow   = false;			// 残量わずか
+
+		bool tempValid   = false;		// 温度の情報が取れた
+		bool tempWarning = false;		// 高温警告(まだ撮れる)
+		bool tempStopped = false;		// 高温で撮影できない
+	};
+	// カメラの状態を読む。撮影の合間に呼ばれる(周期に影響しない軽い問い合わせであること)。
+	virtual errCode readDeviceStatus(deviceStatus& out) { (void)out; return ERR_HGC_NOT_SUPPORTED; }
+
 	// 直近に撮れた画像の EXIF からセンサー実寸[mm]と横画素数を読む(2026-08-19)。
 	//  機材マスターに無い機種はこれらが空のままで、NPFも撮影シミュレーションも出せない。
 	//  カメラのAPIは寸法も画素数も返さないが、撮影画像には入っている。撮ってから埋める。

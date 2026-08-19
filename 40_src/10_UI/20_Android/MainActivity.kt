@@ -3507,12 +3507,30 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 HgeNative.EV_PRESENCE -> { reconcileDiscoveredCameras(json) }   // ②未登録カメラの反映/登録プロンプト(エッジへのIP pushは廃止)
                 HgeNative.EV_ERROR -> {
                     val o = JSONObject(json)
-                    val msg = o.optString("msg")
+                    // お知らせ(notice)は番号だけが届く。文言はこちら(UI)が持つ。
+                    //  Entity と通信路に日本語を置かないため(2026-08-19 方針)。
+                    val nt = o.optInt("notice", 0)
+                    val msg = if (nt != 0) noticeText(nt, o.optLong("n1", 0)) else o.optString("msg")
                     capState.text = "ERROR $msg"
                     // カメラ未検出・カメラ使用中など、撮影開始の失敗をユーザーへ通知する。
                     if (msg.isNotEmpty()) Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
                 }
             }
+    }
+
+    // お知らせ番号(Entity の hgc::notice)を人が読む文にする。**文言はここだけが持つ**。
+    //  Entity と通信路には番号しか流れないので、言い換えも多言語化もここの差し替えで済む。
+    //  知らない番号が届いたら番号のまま出す(古いアプリに新しい通知が来ても壊れない)。
+    private fun noticeText(code: Int, n1: Long): String = when (code) {
+        10 -> "カメラがカードに記録できません。カードの残量と書き込み保護を確認してください"
+        11 -> "カメラにカードが入っていません"
+        12 -> "カメラのカードが書き込み禁止になっています"
+        13 -> "カメラのカード残量が少なくなっています(あと約${n1}枚)"
+        20 -> "カメラの電池が残りわずかです"
+        21 -> "カメラが高温になっています"
+        22 -> "カメラが高温のため撮影できません。冷めるまで待ってください"
+        30 -> "カメラの状態が元に戻りました"
+        else -> "カメラからのお知らせ($code)"
     }
 
     // スケジュールJSON(静的フィールド+events+windows)から両画面の表示を更新する。

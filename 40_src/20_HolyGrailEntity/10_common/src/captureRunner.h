@@ -107,6 +107,9 @@ public:
 	~captureRunner();
 
 	void setCallbacks(stateCb s, progressCb p, capturedCb c, errorCb e);
+	// お知らせ(コード)の通知先。文言は UI が持つので、ここは番号と付随する数値だけを渡す。
+	using noticeCb = std::function<void(int code, long long n1)>;
+	void setNoticeCallback(noticeCb n) { onNotice_ = std::move(n); }
 	void setReconnect(reconnectCb r) { onReconnect_ = std::move(r); }
 
 	// Phase4(1エッジ複数カメラ同時): このセッションの tm0/tm1 境界を撮影周期内で frac 分だけ後ろへずらす。
@@ -324,6 +327,13 @@ private:
 	// 最初の補正(仕様 4.4)を反復収束で行い、撮影開始直後の初期露出を決める。
 	hgc::exposure initialConverge(expo::exposureCtl& ctl, const hgc::exposure& initial, double evT);
 	void interruptibleSleep(long ms);
+
+	noticeCb    onNotice_;
+	// カメラの状態(記録メディア/電池/温度)を見て、必要ならお知らせを出す。
+	//  撮影の合間に呼ぶ。同じお知らせを繰り返さないよう、直近に出したものを覚えておく。
+	void checkDeviceStatus(bool force);
+	long long   lastStatusCheckSec_ = 0;	// 前回見た時刻(epoch秒)
+	int         lastNotice_         = 0;	// 直近に出したお知らせ(同じものは繰り返さない)
 
 	// カメラが「カードに書けない」と答えているか(2026-08-19)。
 	//  シャッターは届いているのに記録されないので、通信の問題(未検出/接続断)と取り違えない。

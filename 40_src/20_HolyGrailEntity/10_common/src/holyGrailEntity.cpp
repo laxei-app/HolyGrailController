@@ -175,6 +175,21 @@ namespace
 
 	std::string jesc(const std::string& s);	// 前方宣言(定義は後方)
 
+	// ユーザーへの「お知らせ」を流す。**文言は載せない**(2026-08-19 ユーザー指示)。
+	//  通信路には番号だけを流し、何と表示するかは受け取ったUIが決める。
+	//  n1 の意味は notice ごとに決まる(notice.h 参照。例: cardLow なら残り枚数)。
+	//  ログには番号を残す。後から追うのに要るが、これは表示用の文ではない。
+	void notifyNotice(const std::string& planId, int noticeCode, long long n1)
+	{
+		std::string j = "{\"notice\":" + std::to_string(noticeCode) +
+		                ",\"n1\":" + std::to_string(n1) +
+		                ",\"planId\":\"" + jesc(planId) + "\"}";
+		notify(HGE_EV_ERROR, j);
+		char d[96];
+		std::snprintf(d, sizeof(d), "notice=%d n1=%lld plan=%s", noticeCode, n1, planId.c_str());
+		dataManager::logEvent("NOTICE", d);
+	}
+
 	void notifyError(errCode code, const char* msg)
 	{
 		// msg にはHTTP応答本文(引用符・波括弧を含む)がそのまま入ることがある。エスケープせずに
@@ -1150,6 +1165,7 @@ namespace
 			dataManager::logEvent("NET", d.c_str(), true);
 		}
 
+		S->runner->setNoticeCallback([S](int code, long long n1) { notifyNotice(S->planId, code, n1); });
 		S->runner->setCallbacks(
 			[S](int s) {
 				if (s == HGE_ST_CAPTURING && !S->logCapturing)

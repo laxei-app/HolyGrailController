@@ -1,5 +1,6 @@
 ﻿#include "common.h"
 #include "captureRunner.h"
+#include "notice.h"	// ユーザーへのお知らせはコードで持つ(文言はUI)
 #include "osSystemCall.h"
 #include "debugOut.h"
 #include "astroSched.h"		// ② 太陽高度(sunHoriz)から ev0 中心bmを算出
@@ -292,6 +293,59 @@ hgc::exposure captureRunner::appliedOrConverge(void) const
 //  もう一点、503 は「カメラが応答している」証拠なので接続断に数えてはいけない。従来は数えて
 //  いたため、つながっているカメラを切断と判定していた(直後のログに「再接続成功」が並ぶ)。
 //  接続断として数えるのは応答が返らなかった場合(status<=0)だけにする。
+// カメラの状態(記録メディア/電池/温度)を見て、必要ならお知らせを出す。
+//
+// 【なぜ定期的に見るか(2026-08-19)】カードが一杯で撮影が止まったとき、こちらは「記録できない」と
+//  断られて初めて気づいた。カメラは残量も電池も温度も聞けば教えてくれるので、止まる前に見る。
+//  ・撮影の合間(次のコマの準備前)に呼ぶ。問い合わせは3リクエストなので周期には影響しない
+//  ・毎コマは聞かない。状況が変わる速さに対して無駄なので kStatusEverySec 間隔にする
+//  ・同じお知らせは繰り返さない。状況が変わったときだけ出す
+//  ・**文言はここに書かない**。コード(hgc::notice)と数値だけを渡し、表示はUIが決める
+void captureRunner::checkDeviceStatus(bool force)
+{
+	constexpr long long kStatusEverySec = 300;	// 5分ごと(残量も温度もこれ以上速くは変わらない)
+	constexpr long long kCardLowShots   = 50;	// あと何枚を「残り少ない」とするか
+	if (dev_ == nullptr || !onNotice_) { return; }
+	const long long now = static_cast<long long>(std::time(nullptr));
+	if (!force && (now - lastStatusCheckSec_) < kStatusEverySec) { return; }
+	lastStatusCheckSec_ = now;
+
+	apiBase::deviceStatus ds;
+	if (cameraController::readDeviceStatus(*dev_, ds) != ERR_HGC_OK) { return; }
+
+	int       code = static_cast<int>(hgc::notice::none);
+	long long n1   = 0;
+	// 重いものから順に見る(撮影が止まる/止まりかけているものを優先)。
+	if (ds.tempValid && ds.tempStopped)             { code = static_cast<int>(hgc::notice::cameraTempStopped); }
+	else if (ds.cardValid && !ds.cardPresent)       { code = static_cast<int>(hgc::notice::cardMissing); }
+	else if (ds.cardValid && !ds.cardWritable)      { code = static_cast<int>(hgc::notice::cardReadOnly); }
+	else if (ds.battValid && ds.battLow)            { code = static_cast<int>(hgc::notice::cameraBatteryLow); }
+	else if (ds.tempValid && ds.tempWarning)        { code = static_cast<int>(hgc::notice::cameraTempWarning); }
+	else if (ds.cardValid && ds.cardPresent && ds.cardTotal > 0)
+	{
+		// あと何枚撮れるか。1枚の大きさは「使った量 ÷ 記録済み件数」で見積もる。
+		//  件数が無い(空のカード)ときは見積もれないので黙っておく。撮り始めれば分かる。
+		const long long used = ds.cardTotal - ds.cardFree;
+		if (ds.cardContents > 0 && used > 0)
+		{
+			const long long perShot = used / ds.cardContents;
+			if (perShot > 0)
+			{
+				const long long shots = ds.cardFree / perShot;
+				if (shots <= kCardLowShots) { code = static_cast<int>(hgc::notice::cardLow); n1 = shots; }
+			}
+		}
+	}
+
+	if (code == lastNotice_) { return; }	// 同じ状況を繰り返し言わない
+	if (code == static_cast<int>(hgc::notice::none))
+	{	// 直前のお知らせの原因が解消した
+		if (lastNotice_ != 0) { onNotice_(static_cast<int>(hgc::notice::recovered), lastNotice_); }
+	}
+	else { onNotice_(code, n1); }
+	lastNotice_ = code;
+}
+
 errCode captureRunner::fireShutter(const hgc::exposure& shotExp, double intervalSec, int& failStreak,
                                    bool quick)
 {
@@ -1033,6 +1087,7 @@ errCode captureRunner::loop(void)
 			err = this->fireShutter(shotExp, interval, shootFailStreak, cameraOffline);
 			++frame;
 			this->fillSensorFromShot(frame);	// マスターに無い機種のセンサー諸元を撮影画像から補う
+			this->checkDeviceStatus(frame == 1);	// カード残量/電池/温度(1コマ目は必ず・以降は間隔で)
 			if (onProgress_) { onProgress_(progressInfo{ frame, total, static_cast<int>(endSec - now), static_cast<int>(now - startSec) }); }
 			// 準備を始める時刻まで待つ。
 			//  周期 <= リード や 周期-リード < SS のような厳しい設定でも、遅れて実行されるだけで破綻はしない
@@ -1629,12 +1684,11 @@ errCode captureRunner::loop(void)
 			//  的外れな案内になり、ユーザーはカメラを探しに行ってしまう(実機で発生)。
 			//  張り直しても解決しないので再接続もしない。事実をそのまま伝える。
 			if (mediaBlocked_)
-			{
-				if (!mediaReported_ && onError_)
+			{	// 文言はUIが持つ。ここはコードだけを渡す。
+				if (!mediaReported_ && onNotice_)
 				{
 					mediaReported_ = true;
-					onError_(ERR_HGC_INVALID_STATE,
-					         "カメラがカードに記録できません。カードの残量と書き込み保護を確認してください");
+					onNotice_(static_cast<int>(hgc::notice::cardCannotWrite), 0);
 				}
 			}
 			else if (!recovered && !cameraOffline)
