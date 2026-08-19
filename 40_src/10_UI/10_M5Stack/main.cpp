@@ -271,8 +271,9 @@ static void blApply(bool on)
 //  ESP32-S3 では M5PaperS3 しか扱わない)ので、光らせられるのはバックライトだけ。
 //  最低輝度で一瞬だけ点ける。パネルは黒に塗ってあるので、見えるのは「黒画面越しの
 //  ごく淡い漏れ」で、生きていることだけが伝わる。
-//  kBeatBrightness は暗所で見える最小値。見えなければ上げる(実機で決める値)。
-static constexpr uint8_t kBeatBrightness = 1;
+//  kBeatBrightness は実機で決める値。1 は真っ暗闇でしか分からず、わずかでも照明が
+//  あると見えなかったので 10 にした(2026-08-20 実機確認)。明るすぎるようなら下げる。
+static constexpr uint8_t kBeatBrightness = 10;
 static void blBeat(bool on)
 {
 	M5.Display.setBrightness(on ? kBeatBrightness : 0);
