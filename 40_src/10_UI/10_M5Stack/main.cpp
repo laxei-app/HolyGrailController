@@ -667,7 +667,10 @@ static void enterProv(void)
 
 // ── BLEプロビジョニング(edgeProv)との連携(仕様8.2.2) ──
 // BLEの "start" 受信時: PoP生成+QR表示。
-void edgeProvShowQr(void) { enterProv(); }
+// スマホがQRを要求した=人が目の前で操作している。消灯していたら点ける(2026-08-20)。
+//  QRは画面を見せるための機能なので、暗いままでは用を成さない。
+//  BLEのコールバックから呼ばれるため、点灯そのものはループへ委ねる(g_blWake)。
+void edgeProvShowQr(void) { enterProv(); g_blWake = true; }
 // 復号できた設定を保存しネットワークへ反映する。mode="ap"=エッジ自身がAP / それ以外=STA参加。
 // AP/STA切替は保存→ESP.restart()で反映(setup()が選んだモードを素直に立ち上げ直す。統一)。
 // STA資格(自宅ルーターのSSID/パス)は BLE の PoP+AES-GCM 経路でのみ届く=盗聴に強い。
@@ -1353,6 +1356,11 @@ void loop(void)
 	}
 
 	// バックライト: 通知スレッドからの点灯要求を反映し、無操作が続いたら消す。
+	// 電源ボタンを押したら点ける(2026-08-20)。電源を切るのは長押しだが、画面が真っ暗だと
+	//  いつまで押していればよいのか分からない。押した時点で表示を戻して手掛かりにする。
+	//  CoreS3 の電源ボタンは AXP2101 の PEK なので M5.BtnPWR で取れる(M5.update() が更新する)。
+	//  点けるだけで、他の操作は起こさない(消灯中のタッチと同じ扱い)。
+	if (M5.BtnPWR.isPressed()) { g_blWake = true; }
 	if (g_blWake) { g_blWake = false; if (g_bl.poke(millis())) { g_dirty = true; } }
 	g_bl.update(millis());
 

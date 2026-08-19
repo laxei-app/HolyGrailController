@@ -800,7 +800,10 @@ static void enterProv(void)
 	pop[8] = 0;
 	g_pop = pop; g_provMode = true; g_dirty = true;
 }
-void edgeProvShowQr(void) { enterProv(); }
+// スマホがQRを要求した=人が目の前で操作している。消灯していたら点ける(2026-08-20)。
+//  QRは画面を見せるための機能なので、暗いままでは用を成さない。
+//  BLEのコールバックから呼ばれるため、点灯そのものはループへ委ねる(g_blWake)。
+void edgeProvShowQr(void) { enterProv(); g_blWake = true; }
 void edgeProvApply(const char* name, const char* ssid, const char* pass, const char* mode)
 {
 	std::string m = (mode && mode[0]) ? mode : "sta";
