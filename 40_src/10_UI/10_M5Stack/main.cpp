@@ -259,11 +259,23 @@ static constexpr int CLOCK_H  = 22;	// 最下段の時計予約帯の高さ(px)�
 //  0x35=点灯 / 0x05=消灯。消灯中は画面も電源LEDも光らせない。
 static void blApply(bool on)
 {
-	M5.Display.setBrightness(on ? 255 : 0);
-	if (M5.Power.getType() == m5::Power_Class::pmic_t::pmic_axp2101)
-	{
-		M5.Power.Axp2101.writeRegister8(0x69, on ? 0x35 : 0x05);
+	if (!on)
+	{	// 消す前にパネルを黒で塗る。心拍で一瞬光らせたときに中身が透けず、光量も最小になる。
+		//  点け直したときは g_dirty で描き直されるので、消える情報は無い。
+		M5.Display.fillScreen(TFT_BLACK);
 	}
+	M5.Display.setBrightness(on ? 255 : 0);
+}
+
+// 消灯中の心拍(2026-08-19)。CoreS3 は電源LEDを持たない(M5Unified の setLed も
+//  ESP32-S3 では M5PaperS3 しか扱わない)ので、光らせられるのはバックライトだけ。
+//  最低輝度で一瞬だけ点ける。パネルは黒に塗ってあるので、見えるのは「黒画面越しの
+//  ごく淡い漏れ」で、生きていることだけが伝わる。
+//  kBeatBrightness は暗所で見える最小値。見えなければ上げる(実機で決める値)。
+static constexpr uint8_t kBeatBrightness = 1;
+static void blBeat(bool on)
+{
+	M5.Display.setBrightness(on ? kBeatBrightness : 0);
 }
 
 static M5Canvas g_cv(&M5.Display);	// ダブルバッファ(ちらつき防止)
@@ -995,7 +1007,7 @@ void setup(void)
 	auto cfg = M5.config();
 	M5.begin(cfg);
 	dbg::init();
-	g_bl.begin(blApply, millis());	// バックライト自動消灯を開始(点灯状態から)
+	g_bl.begin(blApply, millis(), blBeat);	// 自動消灯 + 消灯中の心拍(生存確認)
 
 	// ①内部DRAM節約: malloc の PSRAM 振り分け閾値を実行時に下げる。512B超の確保(ライブビュー生文字列
 	// ~14KB・計画JSON・CCAPIパースの中〜大確保等)を PSRAM へ載せ、内部DRAMを空ける。tiny確保(<=512B)は

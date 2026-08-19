@@ -180,6 +180,14 @@ static void blApply(bool on)
 	else    { M5.In_I2C.bitOff(0x6E, 0x06, 1 << 4, 100000); }	// LED消灯
 }
 
+// 消灯中の心拍(2026-08-19)。この機種は電源LEDを持つので、そちらを一瞬だけ光らせる。
+//  バックライト(GPIO38)は消したまま。面で光らないぶん CoreS3 より目立たない。
+static void blBeat(bool on)
+{
+	if (on) { M5.In_I2C.bitOn (0x6E, 0x06, 1 << 4, 100000); }
+	else    { M5.In_I2C.bitOff(0x6E, 0x06, 1 << 4, 100000); }
+}
+
 // ── NVS 接続情報(CoreS3版と同一。§8.2.1) ──
 static const char* WIFI_SSID = "Buffalo-G-D850";
 static const char* WIFI_PASS = "rnhcftfbk75tf";
@@ -1084,7 +1092,7 @@ void setup(void)
 	gpio_reset_pin(GPIO_NUM_38);
 	gpio_set_direction(GPIO_NUM_38, GPIO_MODE_OUTPUT);
 	gpio_set_level(GPIO_NUM_38, 1);	// バックライトenable(実体の電源はM5PM1で安定化済み)
-	g_bl.begin(blApply, millis());	// バックライト自動消灯を開始(点灯状態から)
+	g_bl.begin(blApply, millis(), blBeat);	// 自動消灯 + 消灯中の心拍(生存確認)
 	g_scrW = g_lcd.width(); g_scrH = g_lcd.height();
 	// 全画面スプライト(240x135x2=64KB)を PSRAM に確保しダブルバッファ描画する。
 	// Arduino 3.x で Octal PSRAM が有効なので PSRAM に載る。失敗時は内蔵RAM(setPsram(false))へフォールバック。

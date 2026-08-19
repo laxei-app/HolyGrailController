@@ -22,6 +22,19 @@
 
 namespace edgeBL
 {
+	// 消灯中に「生きている」ことだけを知らせる心拍[ms](2026-08-19 ユーザー指示)。
+	//
+	// 【なぜ要るか】完全に消すと、電源が切れているのか消しただけなのか見分けがつかない。
+	//  屋外に置いてくるので「動いている」ことだけは知りたい。
+	// 【なぜ点けっぱなしにしないか】星景撮影の現場なので光を出したくない。
+	//  5秒に一度 kBeatMs だけ光らせれば、平均の光量は点灯の 1/100 以下に収まる。
+	//  伝える情報は「生きている」だけでよく、表示内容は見えなくてよい(ユーザー指示)。
+	// 【何を光らせるかは機種ごと】CoreS3 は電源LEDを持たない(M5Unified の setLed も
+	//  ESP32-S3 では M5PaperS3 しか扱わない)のでバックライトを最低輝度で一瞬だけ。
+	//  StickS3 は電源LEDがあるのでそちらを一瞬だけ。判断は beatFn を渡す機種側に置く。
+	constexpr uint32_t kBeatEveryMs = 5000;	// 心拍の間隔
+	constexpr uint32_t kBeatMs      = 60;	// 1回の点灯時間(loop の周期より十分長くとる)
+
 	// 無操作でこの時間が過ぎたら消す[ms]。
 	//  短すぎると設置作業のたびに消えて煩わしく、長すぎると放置時に光り続ける。
 	//  復帰は画面に触る/ボタンを押すだけなので、短めでも実害が小さい。
@@ -29,16 +42,21 @@ namespace edgeBL
 
 	// 機種側が用意する「実際に点ける/消す」処理。バックライトと電源LEDをまとめて扱う。
 	using applyFn = void (*)(bool on);
+	// 機種側が用意する「心拍を光らせる/消す」処理。何を光らせるかは機種が決める。
+	using beatFn  = void (*)(bool on);
 
 	class state
 	{
 	public:
 		// 起動時に1回呼ぶ。点灯状態から始める(設置作業のため)。
-		void begin(applyFn fn, uint32_t now)
+		void begin(applyFn fn, uint32_t now, beatFn bf = nullptr)
 		{
 			apply_ = fn;
+			beat_  = bf;
 			on_    = true;
 			last_  = now;
+			beatAt_  = now;
+			beatOn_  = false;
 			if (apply_) { apply_(true); }
 		}
 
@@ -63,20 +81,40 @@ namespace edgeBL
 			if (!on_) { return; }
 			on_ = false;
 			if (apply_) { apply_(false); }
+			beatAt_ = now; beatOn_ = false;	// 消した直後は光らせない(間隔を空けてから)
 		}
 
-		// 毎ループ呼ぶ。無操作が続いたら消す。
+		// 毎ループ呼ぶ。無操作が続いたら消す。消灯中は心拍を打つ。
 		void update(uint32_t now)
 		{
-			if (!on_) { return; }
-			if (now - last_ < kIdleOffMs) { return; }
-			on_ = false;
-			if (apply_) { apply_(false); }
+			if (on_)
+			{
+				if (now - last_ < kIdleOffMs) { return; }
+				on_ = false;
+				if (apply_) { apply_(false); }
+				beatAt_ = now; beatOn_ = false;
+				return;
+			}
+			// 消灯中: 一定間隔で短く光らせる(生きている合図)。
+			if (!beat_) { return; }
+			if (beatOn_)
+			{
+				if (now - beatAt_ < kBeatMs) { return; }
+				beatOn_ = false; beatAt_ = now; beat_(false);
+			}
+			else
+			{
+				if (now - beatAt_ < kBeatEveryMs) { return; }
+				beatOn_ = true; beatAt_ = now; beat_(true);
+			}
 		}
 
 	private:
 		applyFn  apply_ = nullptr;
-		bool     on_    = true;
-		uint32_t last_  = 0;
+		beatFn   beat_   = nullptr;
+		bool     on_     = true;
+		uint32_t last_   = 0;
+		uint32_t beatAt_ = 0;	// 心拍の最後の切り替え時刻
+		bool     beatOn_ = false;	// 今そのひと呼吸を光らせているか
 	};
 }
