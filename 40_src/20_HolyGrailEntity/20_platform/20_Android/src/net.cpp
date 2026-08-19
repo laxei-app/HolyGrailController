@@ -459,7 +459,7 @@ namespace net
 	}
 
 	// APモードのクライアントIP列挙はエッジ端末専用機能。Android は非対応(空を返す)。
-	std::vector<std::string> apClientIps()
+	std::vector<std::string> neighborHostIps()
 	{
 		return std::vector<std::string>();
 	}

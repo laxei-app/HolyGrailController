@@ -226,9 +226,9 @@ namespace netThread
     }
 
     // AP接続局IP一覧: 軽量な local 問い合わせなのでワーカーキューを通さず直接呼ぶ。
-    std::vector<std::string> apClientIps()
+    std::vector<std::string> neighborHostIps()
     {
-        return net::apClientIps();
+        return net::neighborHostIps();
     }
 
     /////////////////////////////////////////////////////////

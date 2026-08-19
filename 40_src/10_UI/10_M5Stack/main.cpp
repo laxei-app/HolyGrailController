@@ -42,6 +42,7 @@ static volatile bool g_blWake = false;
 #include "osClock.h"
 #include "net.h"		// 検証用: 限定サブネット :8080 バッチ探索の手動実行(zコマンド)
 #include "debugOut.h"
+#include "netThread.h"	// STA/APを区別しないIP列挙
 
 using json = nlohmann::json;
 
@@ -295,6 +296,8 @@ static const char* stName(int s)
 	case HGE_ST_STOPPING:  return "STOPPING";
 	case HGE_ST_ERROR:     return "ERROR";
 	case HGE_ST_DISCONNECTED: return "DISCONN";
+	case HGE_ST_WAITING:   return "WAITING";	// 撮影窓の手前で待機(カメラは在り)
+	case HGE_ST_NOCAMERA:  return "NOCAMERA";	// カメラが見つからない
 	default:               return "?";
 	}
 }
@@ -1176,8 +1179,11 @@ void loop(void)
 		}
 		else if (c == 'i')
 		{
-			Serial.printf("[INFO] state=%s wifi=%d IP=%s\n", stName(g_state),
-			              (int)(WiFi.status() == WL_CONNECTED), WiFi.localIP().toString().c_str());
+			{	// IPは STA/AP を区別せず net の列挙をそのまま出す(モードで場合分けしない)
+				std::string ips; for (const auto& s : netThread::getLocalIpList()) { ips += s + " "; }
+				Serial.printf("[INFO] state=%s netmode=%s IP=%s\n",
+				              stName(g_state), g_netMode.c_str(), ips.empty() ? "(none)" : ips.c_str());
+			}
 		}
 		else if (c == 'T')	// 検証用: SDカードの読み書き自己診断(挿し替えたカードの合否判定)
 		{

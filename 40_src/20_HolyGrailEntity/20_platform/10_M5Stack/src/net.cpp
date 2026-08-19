@@ -24,27 +24,50 @@ bool init()     {return true;}
 bool deInit()   {return true;}
 
 // 利用可能な全NICのIPアドレスを取得
+// 自分が持っている IPv4 インターフェース(IP+サブネットマスク)を列挙する。**ここが唯一の入口**。
+//
+// 【なぜ列挙にしたか(2026-08-19)】以前は使う側それぞれが「STAとして繋がっているか」を
+//  WiFi.status()==WL_CONNECTED で判定していた。APモードのエッジは STA ではないので、その判定を
+//  持つ処理が**丸ごと素通り**する。実際 SSDP の M-SEARCH は1回も飛ばず(在否監視が常に0台
+//  =待機中ずっと×)、サブネット探索も即 return していた。撮影開始の探索だけが AP 専用の
+//  別ルートを持っていたため、「撮影はできるのに待機中は見つからない」という食い違いになった。
+//
+//  「今どちらのモードか」は使う側が知る必要のないことなので、ここで両方まとめて答える。
+//  上位は AP/STA を区別せず同じ道を通る(Android は元から getifaddrs で同じ形)。
+struct localNetV4 { uint32_t ip; uint32_t mask; };	// いずれもネットワークバイト順
+static std::vector<localNetV4> localNetsV4()
+{
+    std::vector<localNetV4> out;
+    esp_netif_t* it = nullptr;
+#if ESP_IDF_VERSION_MAJOR >= 5
+    while ((it = esp_netif_next_unsafe(it)) != nullptr)
+#else
+    while ((it = esp_netif_next(it)) != nullptr)
+#endif
+    {
+        if (!esp_netif_is_netif_up(it)) { continue; }
+        esp_netif_ip_info_t info = {};
+        if (esp_netif_get_ip_info(it, &info) != ESP_OK) { continue; }
+        if (info.ip.addr == 0) { continue; }
+        out.push_back(localNetV4{ info.ip.addr, info.netmask.addr });
+    }
+    return out;
+}
+
+// 利用可能な全NICのIPアドレスを取得(STA/AP を区別しない)
 std::vector<std::string> getLocalIpList() 
 {
     std::vector<std::string> ips;
-    if (WiFi.status() == WL_CONNECTED) {
-        ips.push_back(WiFi.localIP().toString().c_str());
-    }
-    // 【APモードの自局も返す(2026-08-19)】この一覧は SSDP の M-SEARCH を投げる回数(NIC の数)に
-    //  使われる。APモードでは STA として繋がっていないので従来は**空**になり、M-SEARCH が
-    //  1回も飛ばなかった。撮影開始の探索は接続局IPを列挙する別経路を持つので気づかれなかったが、
-    //  在否監視(identifyTargets)は SSDP だけなので、APモードでは常に0台=カメラはずっとオフライン
-    //  扱いになっていた(待機中に×が出たまま戻らない。実機 Edge00/Edge01 で発生)。
-    if ((WiFi.getMode() & WIFI_MODE_AP) != 0) {
-        String ap = WiFi.softAPIP().toString();
-        if (ap.length() > 0 && ap != "0.0.0.0") { ips.push_back(ap.c_str()); }
+    for (const auto& n : localNetsV4())
+    {
+        ips.push_back(IPAddress(n.ip).toString().c_str());
     }
     return ips;
 }
 
 // APモード時、自SoftAPに接続中のクライアントのIP一覧を返す(SSDP不使用のカメラ発見用)。
 // エッジがDHCPサーバなので、接続局のMAC→IPを esp_netif から引ける。APでない時は空。
-std::vector<std::string> apClientIps()
+std::vector<std::string> neighborHostIps()
 {
     std::vector<std::string> ips;
     if ((WiFi.getMode() & WIFI_MODE_AP) == 0) { return ips; }	// APモード時のみ
@@ -80,7 +103,7 @@ std::vector<std::string> apClientIps()
     if (!ips.empty())
     {
         std::string joined; for (auto& s : ips) { joined += s + " "; }
-        DBGLN(col::CYN, "apClientIps: %d client(s): %s", (int)ips.size(), joined.c_str());
+        DBGLN(col::CYN, "neighborHostIps: %d client(s): %s", (int)ips.size(), joined.c_str());
     }
     return ips;
 }
@@ -90,11 +113,14 @@ std::vector<std::string> apClientIps()
 std::vector<std::string> scanSubnetPort(int port, int timeoutMs, int maxHosts)
 {
     std::vector<std::string> found;
-    if (WiFi.status() != WL_CONNECTED) { return found; }
+    // 自分の持つ全インターフェースを回る(2026-08-19)。以前は STA として繋がっているときしか
+    //  動かず、APモードでは即 return していた(=最後の砦が無かった)。localNetsV4 に一本化。
+    for (const auto& lnet : localNetsV4())
+    {
     // 自IP/サブネットマスク(いずれも s_addr = ネットワークバイト順の値)からホスト順の整数へ。
-    uint32_t ownH  = ntohl((uint32_t)WiFi.localIP());
-    uint32_t maskH = ntohl((uint32_t)WiFi.subnetMask());
-    if (maskH == 0) { return found; }
+    uint32_t ownH  = ntohl(lnet.ip);
+    uint32_t maskH = ntohl(lnet.mask);
+    if (maskH == 0) { continue; }
     uint32_t netH   = ownH & maskH;
     uint32_t bcastH = netH | ~maskH;
     // ホスト候補(ネットワーク/ブロードキャスト/自IPを除外)。maxHosts で上限。
@@ -141,6 +167,7 @@ std::vector<std::string> scanSubnetPort(int port, int timeoutMs, int maxHosts)
             close(fds[k]);
         }
     }
+    }	// インターフェースのループ
     if (!found.empty())
     {
         std::string joined; for (auto& s : found) { joined += s + " "; }

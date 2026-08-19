@@ -75,10 +75,11 @@ size_t cameraController::detectTarget(std::vector<class device> & devices)
 	{	// 各種別バックエンドで検出(統合・apiBase 初期化はバックエンド内で完結)。
 		be->detect(devices);
 	}
-	// APモード: エッジがSoftAPのDHCP元締めなので、SSDPに頼らず接続局IPを列挙し各IPをprobeする。
-	// STAモード/非対象プラットフォームでは apClientIps() が空=この枝は無影響(挙動不変)。
-	std::vector<std::string> apIps = netThread::apClientIps();
-	for (const auto& host : apIps)
+	// SSDP で拾えなかったぶんを、近傍ホストの手がかりから補う。自分がDHCPを配っているときは
+	//  貸出先のIPが分かるので、それを直接 probe する。手がかりが無ければ空なので何も起きない。
+	//  **ここにモードの分岐は無い**(2026-08-19)。以前は「APモードのときだけ」と書いていたが、
+	//  条件は netThread 側に閉じているので、上位は同じ道を通るだけでよい。
+	for (const auto& host : netThread::neighborHostIps())
 	{
 		bool known = false;
 		for (const auto& d : devices) { if (hostOfUrl(d.urlAccess) == host) { known = true; break; } }

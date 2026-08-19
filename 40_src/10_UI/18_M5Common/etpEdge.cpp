@@ -19,6 +19,7 @@
 #include "errorCode.h"
 #include "osFile.h"		// ログ一覧/分割読み出し(C_LOG_LIST / C_LOG_READ)
 #include "debugOut.h"
+#include "netThread.h"	// STA/APを区別しないIP列挙
 
 using json = nlohmann::json;
 
@@ -123,10 +124,13 @@ namespace
 	{
 		json j;
 		j["name"]  = g_name;
-		// STA接続時はそのIP、APモード時は softAP の自局IP(192.168.4.1)を通知する。
-		// (WiFi.localIP() はAP時 0.0.0.0 になり、スマホが繋げなくなるため)
-		bool sta = (WiFi.status() == WL_CONNECTED);
-		j["ip"]    = std::string((sta ? WiFi.localIP() : WiFi.softAPIP()).toString().c_str());
+		// 自分のIP。**モードで場合分けしない**(2026-08-19)。net が STA/AP を問わず
+		//  「今使えるIPv4」を返すので、その先頭をそのまま通知する。
+		//  (以前は WiFi.localIP() が AP時 0.0.0.0 になるため自前で分岐していた)
+		{
+			std::vector<std::string> ips = netThread::getLocalIpList();
+			j["ip"] = ips.empty() ? std::string() : ips.front();
+		}
 		j["port"]  = PORT_CONTROL;
 		j["model"] = "エッジ端末";
 		j["fw"]    = std::string(hge_version());

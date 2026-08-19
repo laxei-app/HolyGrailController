@@ -15,7 +15,8 @@ namespace netThread
 
     // APモード時、自SoftAP接続クライアントのIP一覧(SSDP不使用のカメラ発見用)。
     // 軽量なローカル問い合わせなので単一ワーカーキューは通さず直接呼ぶ。非AP/非対象は空。
-    std::vector<std::string> apClientIps();
+    // 探索の手がかりになる近傍ホストのIP(自分がDHCPを配っているときだけ中身がある)。
+    std::vector<std::string> neighborHostIps();
 
     // SSDP関連
     void* ssdpStart(const std::string& query, const std::string& localIp = "");

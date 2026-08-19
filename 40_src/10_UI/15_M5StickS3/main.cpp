@@ -46,6 +46,7 @@ static volatile bool g_blWake = false;
 #include "osFile.h"
 #include "osClock.h"
 #include "debugOut.h"
+#include "netThread.h"	// STA/APを区別しないIP列挙
 
 using json = nlohmann::json;
 
@@ -355,7 +356,10 @@ static const char* stName(int s)
 	case HGE_ST_IDLE: return "IDLE"; case HGE_ST_SEARCHING: return "SEARCH";
 	case HGE_ST_READY: return "READY"; case HGE_ST_CAPTURING: return "CAPTURING";
 	case HGE_ST_STOPPING: return "STOPPING"; case HGE_ST_ERROR: return "ERROR";
-	case HGE_ST_DISCONNECTED: return "DISCONN"; default: return "?";
+	case HGE_ST_DISCONNECTED: return "DISCONN";
+	case HGE_ST_WAITING:  return "WAITING";	// 撮影窓の手前で待機(カメラは在り)
+	case HGE_ST_NOCAMERA: return "NOCAMERA";	// カメラが見つからない
+	default: return "?";
 	}
 }
 // "YYYY-MM-DDThh:mm:ss" → "MM/dd HH:mm"
@@ -1249,9 +1253,12 @@ void loop(void)
 		else if (c == 'u') { hge_setUtcOffset(0);   hge_loadFixedPlan(); g_state = hge_getState(); g_dirty = true; }
 		else if (c == 'i')
 		{
-			Serial.printf("[INFO] dev=%s state=%s wifi=%d IP=%s edgeUp=%d LCD=%dx%d spriteOk=%d\n",
-			              g_devName.c_str(), stName(g_state), (int)(WiFi.status() == WL_CONNECTED),
-			              WiFi.localIP().toString().c_str(), (int)g_edgeUp, g_scrW, g_scrH, (int)g_spriteOk);
+			{	// IPは STA/AP を区別せず net の列挙をそのまま出す(モードで場合分けしない)
+				std::string ips; for (const auto& s : netThread::getLocalIpList()) { ips += s + " "; }
+				Serial.printf("[INFO] dev=%s state=%s netmode=%s IP=%s edgeUp=%d LCD=%dx%d spriteOk=%d\n",
+				              g_devName.c_str(), stName(g_state), g_netMode.c_str(),
+				              ips.empty() ? "(none)" : ips.c_str(), (int)g_edgeUp, g_scrW, g_scrH, (int)g_spriteOk);
+			}
 		}
 		else if (c == 'F') { Serial.printf("[FS] backend=%s\n", osfile::backendName()); }
 		else if (c == 'R')	// 保守用: 旧形式(テキスト)の撮影レポートを削除する
