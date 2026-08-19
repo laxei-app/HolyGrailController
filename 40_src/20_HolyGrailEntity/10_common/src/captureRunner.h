@@ -325,6 +325,11 @@ private:
 	hgc::exposure initialConverge(expo::exposureCtl& ctl, const hgc::exposure& initial, double evT);
 	void interruptibleSleep(long ms);
 
+	// カメラが「カードに書けない」と答えているか(2026-08-19)。
+	//  シャッターは届いているのに記録されないので、通信の問題(未検出/接続断)と取り違えない。
+	bool mediaBlocked_    = false;	// 直近のシャッターがカード起因で断られた
+	bool mediaReported_   = false;	// その旨を1回通知した(毎コマ出さない)
+
 	// マスターに無い機種のセンサー諸元を撮影画像から補う(1セッション1回だけ試す)。
 	void fillSensorFromShot(int frame);
 	bool sensorFillDone_ = false;

@@ -314,8 +314,16 @@ errCode captureRunner::fireShutter(const hgc::exposure& shotExp, double interval
 	{
 		++tries;
 		err = cameraController::actShutter(*dev_);
-		if (err == ERR_HGC_OK) { failStreak = 0; return err; }
+		if (err == ERR_HGC_OK) { failStreak = 0; mediaBlocked_ = false; mediaReported_ = false; return err; }
 		netThread::lastHttpFailure(status, body);
+		// 【カード起因かを見分ける(2026-08-19)】カメラは 503 の本文で理由を言う。
+		//  実測(EOS R50 V, カード満杯): {"message":"Can not write to card"}
+		//  仕様上の意味は「撮影中にメディアへ記録できなかった」(CCAPI Reference 3-40)。
+		//  カードが無い/入れ替え待ちのときは "Card not available" が来る。
+		//  どちらも**通信は成立している**ので、未検出や接続断として扱ってはいけない。
+		if (status == 503 && (body.find("Can not write to card") != std::string::npos ||
+		                      body.find("Card not available")   != std::string::npos))
+		{ mediaBlocked_ = true; }
 		if (!running_.load())                                 { break; }
 		if (static_cast<int>(tool::getElapse(t0)) >= budgetMs) { break; }
 		this->interruptibleSleep(kShutterRetryMs);
@@ -1605,13 +1613,31 @@ errCode captureRunner::loop(void)
 		{
 			if (noRecord) { noRecordStreak = 0; ++noRecordRounds; }
 			// セッションは毎回張り直しておく(電源を入れ直された後はこれが唯一の戻り道)。
-			const bool established = (onReconnect_ && onReconnect_() && establishSession());
+			//  ただしカード起因と分かっているなら張り直さない(2026-08-19)。接続は生きていて
+			//  原因はカメラの中にあるので、張り直しても何も変わらない。認証を使う機体では
+			//  無駄な張り直しが nc を乱して 403 の締め出しを招くため、やらない方が安全。
+			const bool established = mediaBlocked_
+			                       ? true
+			                       : (onReconnect_ && onReconnect_() && establishSession());
 			// ただし「応答するのに撮れていない」状態では establishSession は**成功してしまう**
 			// (情報系もライブビューも生きているため)。1回目だけは復帰したものとして様子を
 			// 見るが、2回目以降は成功を復帰の証拠にしない。撮れた画像が現れることだけが証拠。
 			const bool trustEstablish = !(noRecord && noRecordRounds > 1);
 			bool recovered = established && trustEstablish;
-			if (!recovered && !cameraOffline)
+			// 【カードが原因なら「未検出」と言わない(2026-08-19)】カメラは応答していて、
+			//  理由もはっきり言っている。✖(オフライン)にすると「カメラが見つかりません」という
+			//  的外れな案内になり、ユーザーはカメラを探しに行ってしまう(実機で発生)。
+			//  張り直しても解決しないので再接続もしない。事実をそのまま伝える。
+			if (mediaBlocked_)
+			{
+				if (!mediaReported_ && onError_)
+				{
+					mediaReported_ = true;
+					onError_(ERR_HGC_INVALID_STATE,
+					         "カメラがカードに記録できません。カードの残量と書き込み保護を確認してください");
+				}
+			}
+			else if (!recovered && !cameraOffline)
 			{	// ユーザーへ「オンラインでない」と提示する(✖点灯)。
 				cameraOffline = true;
 				if (onState_) { onState_(ST_NOCAMERA); }
