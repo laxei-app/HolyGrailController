@@ -36,6 +36,7 @@
 #include "dataManager.h"
 #include "batteryLevel.h"	// バッテリ残量レベル(実測放電カーブから決めたしきい値)
 #include "batteryIcon.h"	// 残量アイコンの描画
+#include "edgeBoot.h"	// 起動マーカー(リセット要因)
 #include "edgeBacklight.h"	// バックライト自動消灯(無操作1分。消灯中は電源LEDも消す)
 
 // バックライトの状態(無操作1分で消灯)。実際に消す処理は blApply()。
@@ -1135,6 +1136,9 @@ void setup(void)
 	loadRecvPlans();
 	loadNameBitmaps();
 	if (g_netMode == "ap") { startApAndEtp(); }
+	// 起動したことと理由を1行残す(2026-08-21)。落ちた原因を後から追えるようにする。
+	//  時計が使えるようになってから呼ぶ(APモードは startApAndEtp が RTC を復元済み)。
+	edgeBoot::logMarker(g_netMode.c_str(), hge_version());
 	g_state = hge_getState();
 	redraw(false);
 }

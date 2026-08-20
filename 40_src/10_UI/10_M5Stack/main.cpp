@@ -31,6 +31,7 @@
 #include "dataManager.h"
 #include "batteryLevel.h"	// バッテリ残量レベル(実測放電カーブから決めたしきい値)
 #include "batteryIcon.h"	// 残量アイコンの描画
+#include "edgeBoot.h"	// 起動マーカー(リセット要因)
 #include "edgeBacklight.h"	// バックライト自動消灯(無操作1分。消灯中は電源LEDも消す)
 
 // バックライトの状態(無操作1分で消灯)。実際に消す処理は blApply()。
@@ -1062,6 +1063,9 @@ void setup(void)
 	loadNameBitmaps();			// 受信済み計画の名前ビットマップを復元(再起動後も計画名を表示するため)
 	// 注意: STA時の撮影再開(hge_resumeCapture)は カメラを探すため WiFi 接続後に行う(loop内)。
 	if (g_netMode == "ap") { startApAndEtp(); }	// APモード: この時点でSoftAP+ETP+QRを立ち上げる
+	// 起動したことと理由を1行残す(2026-08-21)。落ちた原因を後から追えるようにする。
+	//  時計が使えるようになってから呼ぶ(APモードは startApAndEtp が RTC を復元済み)。
+	edgeBoot::logMarker(g_netMode.c_str(), hge_version());
 	g_state = hge_getState();
 	redraw();
 }
