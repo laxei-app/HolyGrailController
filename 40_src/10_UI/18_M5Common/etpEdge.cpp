@@ -19,6 +19,7 @@
 #include "errorCode.h"
 #include "osFile.h"		// ログ一覧/分割読み出し(C_LOG_LIST / C_LOG_READ)
 #include "debugOut.h"
+#include "notice.h"	// お知らせはコードで返す(文言はUI)
 #include "netThread.h"	// STA/APを区別しないIP列挙
 
 using json = nlohmann::json;
@@ -197,7 +198,14 @@ namespace
 			int32_t ir = hge_importPlan(id.c_str(), body.c_str(), static_cast<int32_t>(body.size()));
 			DBGLN(col::YEL, "etpEdge: CAPTURE_PLAN id='%s' bodyLen=%u import=%ld", id.c_str(), (unsigned)body.size(), (long)ir);
 			if (ir != ERR_HGC_OK)
-			{ rm = etp::M_NAK; }
+			{	// 【なぜ理由を返すか(2026-08-20)】従来は NAK だけを返していたので、スマホには
+				//  「開始できませんでした (code=-3)」としか出ず、何が悪いのか分からなかった。
+				//  実際に起きたのは SDカードの挿し忘れで、原因はエッジのシリアルログにしか出ていなかった。
+				//  保存先が書けるかを確かめ、書けないならその旨をコードで返す(文言はスマホが持つ)。
+				rm = etp::M_NAK;
+				if (!osfile::writable())
+				{ rd = std::to_string(static_cast<int>(hgc::notice::edgeStorageFail)); }
+			}
 			else { edgeAddReceivedPlan(id); }	// 受信した計画だけリスト表示する
 			break;
 		}

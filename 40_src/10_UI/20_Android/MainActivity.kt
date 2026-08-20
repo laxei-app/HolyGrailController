@@ -3529,6 +3529,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         20 -> "カメラの電池が残りわずかです"
         21 -> "カメラが高温になっています"
         22 -> "カメラが高温のため撮影できません。冷めるまで待ってください"
+        40 -> "エッジ端末に保存できません。SDカードが入っているか確認してください"
         30 -> "カメラの状態が元に戻りました"
         else -> "カメラからのお知らせ($code)"
     }
@@ -5929,7 +5930,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 } else {
                     capturingPlans.remove(planId); waitingPlans.remove(planId); disconnectedPlans.remove(planId)
                     refreshPlanList(); updateReadOnly()
-                    Toast.makeText(this, "エッジ端末 開始できませんでした (code=$r)", Toast.LENGTH_LONG).show()
+                    // エッジが理由を返していればそれを出す。「code=-3」だけでは何が悪いのか分からない
+                    //  (実際にSDカードの挿し忘れで気づけなかった。2026-08-20)。
+                    val nt = try { HgeNative.nativeLastEdgeNotice() } catch (_: Exception) { 0 }
+                    val why = if (nt != 0) noticeText(nt, 0) else "エッジ端末 開始できませんでした (code=$r)"
+                    Toast.makeText(this, why, Toast.LENGTH_LONG).show()
                 }
             }
         }

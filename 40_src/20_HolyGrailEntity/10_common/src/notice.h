@@ -29,6 +29,9 @@ namespace hgc
 		cameraTempWarning = 21,	// 高温の警告(まだ撮れる)。n1=未使用
 		cameraTempStopped = 22,	// 高温で撮影できない状態。n1=未使用
 
+		// --- エッジ端末そのもの ---
+		edgeStorageFail   = 40,	// エッジが計画やログを保存できない(SDカード未挿入/書けない)。n1=未使用
+
 		// --- 復帰 ---
 		recovered         = 30,	// 直前のお知らせの原因が解消した。n1=解消したコード
 	};

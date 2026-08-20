@@ -157,6 +157,8 @@ object HgeNative {
 
     external fun nativeEdgeSearch(timeoutMs: Int): String           // edgeInfo の JSON 配列
     external fun nativeEdgeStart(host: String, port: Int, datetime: String, offMin: Int, nameBmp: ByteArray, planId: String, planJson: String): Int
+    // 直近のエッジ操作でエッジが返した「お知らせコード」(0=なし)。文言はUIが持つ。
+    external fun nativeLastEdgeNotice(): Int
     external fun nativeEdgeStop(host: String, port: Int, planId: String): Int
     external fun nativeEdgeDeletePlan(host: String, port: Int, planId: String): Int   // 項目6: エッジから計画を削除(撮影中は停止してから)
     external fun nativeEdgeSyncTime(host: String, port: Int, datetime: String, offMin: Int): Int // 能動的な時刻同期(C_TIMEのみ)

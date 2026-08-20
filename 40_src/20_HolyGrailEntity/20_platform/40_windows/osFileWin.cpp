@@ -77,4 +77,7 @@ namespace osfile
 	{
 		return false;
 	}
+
+	// 保存先へ実際に書けるか。この環境ではアプリ専用領域なので常に真。
+	bool writable(void) { return true; }
 }

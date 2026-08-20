@@ -162,6 +162,8 @@ namespace
 	//  BLE にはブロードキャストが無く、探索も接続も名前で行うため。どちらを渡すかは
 	//  Kotlin 側が(このフラグと同じ判断で)決める。
 	std::atomic<bool> g_useBle{false};
+	// エッジが直近の操作で返した「お知らせコード」(0=なし)。文言はUIが持つので番号だけを渡す。
+	std::atomic<int>  g_lastEdgeNotice{0};
 
 	// BLE で 1 往復する。Android の BLE API は Kotlin にしかないので、そちらへ呼び返す。
 	//  return: method(ACK/NAK) or 0(失敗)。
@@ -366,6 +368,11 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeSearch(JNIEnv* env, jobject, jint t
 	return env->NewStringUTF(arr.c_str());
 }
 
+// 直近のエッジ操作でエッジが返した「お知らせコード」(0=なし)。何が悪かったのかを画面に出すのに使う。
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeLastEdgeNotice(JNIEnv*, jobject)
+{ return (jint)g_lastEdgeNotice.load(); }
+
 // エッジ端末へ time→capturePlan→action を送って撮影開始させる。return: 0=成功。
 JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring host_, jint port,
@@ -429,7 +436,11 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring
 			int mPlan = step(etp::C_CAPTURE_PLAN, etp::M_PUT, body, rd);
 			ELOG("edgeStart C_CAPTURE_PLAN bodyLen=%d method=%d", (int)body.size(), mPlan);
 			if (mPlan != etp::M_ACK)
-			{ result = -3; }
+			{	// エッジが理由をコードで返していれば控える(文言はUIが持つ)。
+				//  これが無いと画面には「code=-3」としか出ず、何が悪いのか分からない。
+				result = -3;
+				g_lastEdgeNotice.store(rd.empty() ? 0 : std::atoi(rd.c_str()));
+			}
 		}
 		else { result = -3; }
 	}

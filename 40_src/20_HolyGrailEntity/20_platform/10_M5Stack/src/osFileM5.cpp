@@ -71,6 +71,17 @@ namespace osfile
 		return p;
 	}
 
+	// 保存先へ実際に書けるか。dir() は無ければ作るので、作ったあとに在るかどうかで判る。
+	//  カードが無い/書けない状態では mkdir が失敗し、以後の保存がすべて失敗する。
+	bool writable(void)
+	{
+		ensureInit();
+		if (g_fs == nullptr) { return false; }
+		std::string p = dir("plan");
+		if (p.empty()) { return false; }
+		return g_fs->exists(p.c_str());
+	}
+
 	std::string logDir(void)
 	{
 		return dir("log");
