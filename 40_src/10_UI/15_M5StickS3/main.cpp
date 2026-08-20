@@ -46,6 +46,7 @@ static volatile bool g_blWake = false;
 #include "osFile.h"
 #include "osClock.h"
 #include "debugOut.h"
+#include "net.h"	// scanSubnetPort(診断コマンド z)
 #include "netThread.h"	// STA/APを区別しないIP列挙
 
 using json = nlohmann::json;
@@ -1272,6 +1273,40 @@ void loop(void)
 			}
 		}
 		else if (c == 'F') { Serial.printf("[FS] backend=%s\n", osfile::backendName()); }
+		else if (c == 'n')	// 診断: 自分のAPに繋がっている局のIP一覧(DHCPの貸出先)
+		{	// カメラがAPに居るのにSSDPへ答えないのか、そもそも居ないのかを切り分ける。
+			auto ips = netThread::neighborHostIps();
+			Serial.printf("[NEIGHBOR] %u client(s):", (unsigned)ips.size());
+			for (auto& h : ips) { Serial.printf(" %s", h.c_str()); }
+			Serial.println();
+		}
+		else if (c == 'z')	// 診断: 限定サブネット :8080 バッチ探索(CoreS3と同じ)
+		{
+			uint32_t t0 = millis();
+			std::vector<std::string> hosts = net::scanSubnetPort(8080, 250, 254);
+			Serial.printf("[SWEEP] :8080 hosts=%d in %lums:", (int)hosts.size(), (unsigned long)(millis() - t0));
+			for (auto& h : hosts) { Serial.printf(" %s", h.c_str()); }
+			Serial.println();
+		}
+		else if (c == 'G')	// 診断: /log 内のログファイル名一覧(CoreS3と同じ)
+		{
+			auto names = osfile::logFileNames();
+			Serial.printf("[LOGS] %u file(s)\n", (unsigned)names.size());
+			for (auto& nm : names) { Serial.printf("  %s\n", nm.c_str()); }
+			Serial.printf("[LOGS] end\n");
+		}
+		else if (c == 'l')	// 診断: 今日のログを丸ごと吸い出す(CoreS3と同じ)
+		{	// これが無くて、今回この端末のログを読めなかった(2026-08-20)。
+			std::string path = dataManager::currentLogPath();
+			std::string body;
+			if (osfile::readAll(path, body))
+			{
+				Serial.printf("[LOG] %s (%u bytes)\n", path.c_str(), (unsigned)body.size());
+				Serial.write(reinterpret_cast<const uint8_t*>(body.data()), body.size());
+				Serial.printf("[LOG] end\n");
+			}
+			else { Serial.printf("[LOG] read failed: %s\n", path.c_str()); }
+		}
 		else if (c == 'R')	// 保守用: 旧形式(テキスト)の撮影レポートを削除する
 		{
 			// 撮影レポートは 2026-08-05 に JSON へ移行した。旧 .txt はスマホの回収対象外

@@ -10,6 +10,8 @@
 class detectCanonCCapi : public detectSsdpBase
 {
 public:
+	// IP 直指定で身元だけ確かめる(記述XMLのみ。CCAPIは叩かない)。
+	bool identifyAt(const std::string& host, class device& out) override;
 	// IP 直指定で CCAPI カメラを構築する(http://<host>:8080/ccapi)。
 	bool makeManualDevice(const std::string& host, class device& out) override;
 

@@ -1305,6 +1305,13 @@ void loop(void)
 				              (int)(g_nameBmps.count(id) > 0), ok ? "yes" : "no", (unsigned)body.size());
 			}
 		}
+		else if (c == 'n')	// 診断: 自分のAPに繋がっている局のIP一覧(DHCPの貸出先)
+		{	// カメラがAPに居るのにSSDPへ答えないのか、そもそも居ないのかを切り分ける。
+			auto ips = netThread::neighborHostIps();
+			Serial.printf("[NEIGHBOR] %u client(s):", (unsigned)ips.size());
+			for (auto& h : ips) { Serial.printf(" %s", h.c_str()); }
+			Serial.println();
+		}
 		else if (c == 'z')	// 検証用: 限定サブネット :8080 バッチ探索(§3.3 tier3)を手動実行し応答IPを表示
 		{
 			uint32_t t0 = millis();

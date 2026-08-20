@@ -38,6 +38,25 @@ size_t cameraController::identifyTargets(std::vector<class device>& devices)
 	static std::mutex identifyMutex;
 	std::lock_guard<std::mutex> lock(identifyMutex);	// M-SEARCH の 1900 bind 競合を避ける
 	for (auto& be : backends()) { be->identify(devices); }
+
+	// SSDP に答えないカメラを、近傍ホストの手掛かりから拾い直す(2026-08-20)。
+	//  detectTarget(撮影の探索)は元からこの手掛かりを使っていたのに、在否監視は SSDP だけ
+	//  だった。そのため「撮影は始められるのに待機中は×」という食い違いが起きていた。
+	//  ここでも CCAPI は叩かない(記述XMLだけ)。手掛かりが無ければ空なので何も起きない。
+	for (const auto& host : netThread::neighborHostIps())
+	{
+		bool known = false;
+		for (const auto& d : devices)
+		{	// SSDP で既に拾えているものは二度手間にしない
+			if (hostOfUrl(d.urlAccess) == host || hostOfUrl(d.location) == host) { known = true; break; }
+		}
+		if (known) { continue; }
+		for (auto& be : backends())
+		{
+			class device dev;
+			if (be->identifyAt(host, dev)) { devices.push_back(dev); break; }
+		}
+	}
 	return devices.size();
 }
 

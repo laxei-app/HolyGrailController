@@ -25,6 +25,12 @@ public:
 	//  既定は detect(=従来どおり)。認証不要の身元確認ができる派生だけが上書きする。
 	virtual size_t identify(std::vector<class device>& out) { return detect(out); }
 
+	// IP 直指定で「身元だけ」を確かめる(SSDP不使用・CCAPIを叩かない)。
+	//  SSDP に答えなくなったカメラを在否監視が拾い直すために使う。実機で起きる:
+	//  キヤノン機はスマホ直結の後などに SSDP 応答を止めることがあり、HTTP は生きている。
+	//  記述XML(認証不要)だけを引くので「カメラに触るのは撮影主体だけ」の原則は保たれる。
+	virtual bool identifyAt(const std::string& host, class device& out) { (void)host; (void)out; return false; }
+
 	// IP 直指定でこの種別のデバイスを1台構築する(SSDP不使用)。
 	//  成功時 out に apiBase 設定済みデバイスを入れて true。非対応/失敗は false。
 	virtual bool makeManualDevice(const std::string& host, class device& out) = 0;
