@@ -1022,6 +1022,18 @@ void setup(void)
 	// 2カメラで minFree≒388B まで落ちる測光スパイクを緩和し、同時制御カメラ数を増やす下地にする。
 	heap_caps_malloc_extmem_enable(512);
 
+	// 電源ボタンを取れるようにする(2026-08-20)。M5.BtnPWR は AXP2101 の割り込み状態レジスタ
+	//  0x49 の PWRON 短押し/長押しビットを読んでいる(M5Unified: getPekPress)。ところが
+	//  M5Unified は割り込み許可レジスタ(0x40〜0x42)をどこにも書いていないため、許可が既定で
+	//  下りている個体では状態ビットが立たず、ボタンを押しても M5.BtnPWR が反応しない。
+	//  0x41 の bit2(短押し)/bit3(長押し)だけを read-modify-write で立てる。ここは割り込みの
+	//  有無を決めるだけのレジスタで、充電や出力には触れない。
+	if (M5.Power.getType() == m5::Power_Class::pmic_t::pmic_axp2101)
+	{
+		const uint8_t en = M5.Power.Axp2101.readRegister8(0x41);
+		M5.Power.Axp2101.writeRegister8(0x41, (uint8_t)(en | 0x0C));
+	}
+
 	g_cv.setPsram(true);
 	g_cv.setColorDepth(16);
 	g_cv.createSprite(320, 240);
@@ -1305,6 +1317,18 @@ void loop(void)
 				              (int)(g_nameBmps.count(id) > 0), ok ? "yes" : "no", (unsigned)body.size());
 			}
 		}
+		else if (c == 'P')	// 診断: 電源ボタンが取れているか(押しながら数回叩いて見る)
+		{
+			uint8_t irqEn = 0, irqSt = 0;
+			if (M5.Power.getType() == m5::Power_Class::pmic_t::pmic_axp2101)
+			{
+				irqEn = M5.Power.Axp2101.readRegister8(0x41);
+				irqSt = M5.Power.Axp2101.readRegister8(0x49);	// 読むだけ(クリアしない)
+			}
+			Serial.printf("[PWRBTN] irqEn(0x41)=0x%02X irqSt(0x49)=0x%02X pressed=%d wasPressed=%d clicked=%d hold=%d\n",
+			              irqEn, irqSt, (int)M5.BtnPWR.isPressed(), (int)M5.BtnPWR.wasPressed(),
+			              (int)M5.BtnPWR.wasClicked(), (int)M5.BtnPWR.wasHold());
+		}
 		else if (c == 'n')	// 診断: 自分のAPに繋がっている局のIP一覧(DHCPの貸出先)
 		{	// カメラがAPに居るのにSSDPへ答えないのか、そもそも居ないのかを切り分ける。
 			auto ips = netThread::neighborHostIps();
@@ -1367,7 +1391,10 @@ void loop(void)
 	//  いつまで押していればよいのか分からない。押した時点で表示を戻して手掛かりにする。
 	//  CoreS3 の電源ボタンは AXP2101 の PEK なので M5.BtnPWR で取れる(M5.update() が更新する)。
 	//  点けるだけで、他の操作は起こさない(消灯中のタッチと同じ扱い)。
-	if (M5.BtnPWR.isPressed()) { g_blWake = true; }
+	//  短押しは一瞬で終わるので isPressed だけでは取りこぼす(2026-08-20)。押し始め・クリック・
+	//  長押しのどれでも拾う。電源を切るための長押しでも、押し始めた時点で点く。
+	if (M5.BtnPWR.isPressed() || M5.BtnPWR.wasPressed() ||
+	    M5.BtnPWR.wasClicked() || M5.BtnPWR.wasHold()) { g_blWake = true; }
 	if (g_blWake) { g_blWake = false; if (g_bl.poke(millis())) { g_dirty = true; } }
 	g_bl.update(millis());
 
