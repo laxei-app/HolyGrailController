@@ -192,6 +192,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private val ccmTextMap = HashMap<Int, Int>()
     // 色の設定画面の状態
     private var colorType = "night"
+    private var gearColorsOpen = false   // メニューの「色の設定」を展開しているか(既定=畳む)
     private var colorTextPicker: com.jaredrummler.android.colorpicker.ColorPickerView? = null
     private var colorBgPicker: com.jaredrummler.android.colorpicker.ColorPickerView? = null
     // 撮影制御方法の初期値プリセット(型ごとに複数)
@@ -711,6 +712,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
                        Toast.LENGTH_SHORT).show()
     }
 
+    // 折りたたみ見出しの項目(▶/▼)。開閉を切り替えるだけで、中身は buildGearMenu が続けて積む。
+    private fun gearExpandItem(box: LinearLayout, title: String, open: Boolean, onToggle: () -> Unit) {
+        val tv = TextView(this); tv.text = (if (open) "▼ " else "▶ ") + title; tv.textSize = 16f
+        tv.setPadding(dp(28), dp(12), dp(12), dp(12))
+        tv.setTextColor(Color.BLACK)
+        tv.setOnClickListener { onToggle() }
+        box.addView(tv)
+        box.addView(thinDivider())
+    }
+
     // 色の設定の項目: 現在の色(背景/文字)で四角く囲って表示(設計書イメージ)。
     private fun gearColorItem(box: LinearLayout, typeKey: String, label: String) {
         val t = keyType(typeKey)
@@ -736,16 +747,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
         gearItem(box, "朝日撮影") { openPresetScreen("sunrise") }
         gearItem(box, "夕日撮影") { openPresetScreen("sunset") }
         gearItem(box, "日中撮影") { openPresetScreen("day") }
+        // 色は撮影制御方法ごとに持つものなので、帯を立てず初期値の下へ畳んで置く(2026-08-23 UI依頼)。
+        gearExpandItem(box, "色の設定", gearColorsOpen) { gearColorsOpen = !gearColorsOpen; buildGearMenu() }
+        if (gearColorsOpen) {
+            gearColorItem(box, "night", "夜間撮影")
+            gearColorItem(box, "sunrise", "朝日撮影")
+            gearColorItem(box, "sunset", "夕日撮影")
+            gearColorItem(box, "day", "日中撮影")
+            gearColorItem(box, "preNight", "夜間前移行")
+            gearColorItem(box, "postNight", "夜間後移行")
+        }
         gearBand(box, "自動露出")
         gearItem(box, "露出平滑化") { openSmoothingScreen() }
-        gearBand(box, "色の設定")
-        // 項目3: 「月の影響への対処」は色の設定から削除。
-        gearColorItem(box, "night", "夜間撮影")
-        gearColorItem(box, "sunrise", "朝日撮影")
-        gearColorItem(box, "sunset", "夕日撮影")
-        gearColorItem(box, "day", "日中撮影")
-        gearColorItem(box, "preNight", "夜間前移行")
-        gearColorItem(box, "postNight", "夜間後移行")
         gearBand(box, "所持機材")
         gearItem(box, "カメラリスト") { openCameraList() }
         gearItem(box, "レンズリスト") { openLensList() }
