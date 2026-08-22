@@ -5522,7 +5522,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         edgeSpinnerUserTouched = false   // 表示同期の前に、取りこぼしたユーザー操作フラグを落とす
         if (labels != edgeSpinnerLabels) {   // 表示が変わる時だけ作り直す(30秒スイープの度に通知を出さない)
             edgeSpinnerLabels = labels.toList()
-            val adapter = ArrayAdapter(this, R.layout.spinner_item_header, labels)   // ヘッダの青地に置くので白文字
+            val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, labels)
             adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
             edgeSpinner.adapter = adapter
         }
