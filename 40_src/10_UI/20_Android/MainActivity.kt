@@ -427,6 +427,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val placeClick = View.OnClickListener { if (!planReadOnly) showPlaceEditChooser() }
         placeText.setOnClickListener(placeClick)
         latlngText.setOnClickListener(placeClick)
+        findViewById<TextView>(R.id.plan_placeLabel).setOnClickListener(placeClick)   // 見出しを押しても入れる
         cameraText = findViewById(R.id.plan_cameraText)
         lensText = findViewById(R.id.plan_lensText)
         intervalText = findViewById(R.id.plan_intervalText)
@@ -520,6 +521,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  ユーザーがスピナーに触れた時だけ保存を許す。プログラムによる同期(refreshEdgeSpinner)で届く
         //  通知は常に無視する — これが「別計画へエッジ割当が漏れる」不具合の根治。
         edgeSpinner.setOnTouchListener { _, _ -> edgeSpinnerUserTouched = true; false }
+        // 見出し「エッジ端末」を押しても選択に入れる。スピナーを直接押したときと
+        // 同じ扱いにしないと、選んだ値が保存されない(上のガードで弾かれる)。
+        findViewById<TextView>(R.id.plan_edgeLabel).setOnClickListener {
+            if (edgeSpinner.isEnabled) { edgeSpinnerUserTouched = true; edgeSpinner.performClick() }
+        }
         edgeSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, pos: Int, idl: Long) {
                 if (!edgeSpinnerUserTouched) return           // プログラム由来の通知(=表示の同期)。保存しない
@@ -5516,7 +5522,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         edgeSpinnerUserTouched = false   // 表示同期の前に、取りこぼしたユーザー操作フラグを落とす
         if (labels != edgeSpinnerLabels) {   // 表示が変わる時だけ作り直す(30秒スイープの度に通知を出さない)
             edgeSpinnerLabels = labels.toList()
-            val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, labels)
+            val adapter = ArrayAdapter(this, R.layout.spinner_item_header, labels)   // ヘッダの青地に置くので白文字
             adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
             edgeSpinner.adapter = adapter
         }

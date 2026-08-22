@@ -16,11 +16,6 @@
         android:gravity="center_vertical"
         android:padding="8dp">
 
-        <!-- 戻り先が無いため戻るアイコンは廃止(タイトル中央揃え用のスペーサのみ残す) -->
-        <Space
-            android:layout_width="32dp"
-            android:layout_height="32dp" />
-
         <TextView
             android:id="@+id/plan_title"
             android:layout_width="0dp"
@@ -31,6 +26,47 @@
             android:textColor="#FFFFFF"
             android:textSize="20sp"
             android:textStyle="bold" />
+
+        <!-- 撮影場所とエッジ端末(2026-08-23 UI依頼でフォームからここへ移した)。
+             見出し・値のどちらをタップしても編集に入れる。 -->
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingStart="6dp"
+            android:paddingEnd="2dp">
+
+            <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:gravity="center_vertical">
+                <TextView android:id="@+id/plan_placeLabel" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" android:text="撮影場所" android:textSize="10sp"
+                    android:textColor="#BBDEFB" android:textStyle="bold"
+                    android:clickable="true" android:focusable="true" />
+                <TextView android:id="@+id/plan_placeText" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" android:text="Tokyo" android:textSize="12sp"
+                    android:textColor="#FFFFFF" android:maxWidth="130dp" android:singleLine="true"
+                    android:ellipsize="end" android:paddingStart="4dp"
+                    android:clickable="true" android:focusable="true" />
+            </LinearLayout>
+            <TextView android:id="@+id/plan_latlngText" android:layout_width="wrap_content"
+                android:layout_height="wrap_content" android:text="35.6810, 139.7670" android:textSize="9sp"
+                android:textColor="#BBDEFB" android:singleLine="true"
+                android:clickable="true" android:focusable="true" />
+
+            <LinearLayout android:layout_width="wrap_content" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:gravity="center_vertical">
+                <TextView android:id="@+id/plan_edgeLabel" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" android:text="エッジ端末" android:textSize="10sp"
+                    android:textColor="#BBDEFB" android:textStyle="bold"
+                    android:clickable="true" android:focusable="true" />
+                <Spinner android:id="@+id/plan_edgeSpinner" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" android:minWidth="96dp" android:dropDownWidth="220dp" />
+                <Button android:id="@+id/plan_edgeSearchButton" style="?android:attr/buttonBarButtonStyle"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:minWidth="0dp" android:minHeight="0dp" android:padding="4dp"
+                    android:text="検索" android:textSize="10sp" android:textColor="#FFFFFF" />
+            </LinearLayout>
+        </LinearLayout>
 
         <ImageView
             android:id="@+id/plan_menu"
@@ -134,25 +170,6 @@
                     <Button android:id="@+id/plan_resetButton"
                         android:layout_width="wrap_content" android:layout_height="wrap_content"
                         android:layout_gravity="end" android:text="リセット" android:textSize="12sp" />
-                </LinearLayout>
-
-                <!-- 撮影場所 -->
-                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp" android:text="撮影場所" android:textStyle="bold" />
-                <TextView android:id="@+id/plan_placeText" android:layout_width="match_parent"
-                    android:layout_height="wrap_content" android:text="Tokyo" />
-                <TextView android:id="@+id/plan_latlngText" android:layout_width="match_parent"
-                    android:layout_height="wrap_content" android:textSize="13sp" android:text="35.6810, 139.7670" />
-
-                <!-- エッジ端末 -->
-                <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp" android:text="エッジ端末" android:textStyle="bold" />
-                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:orientation="horizontal">
-                    <Spinner android:id="@+id/plan_edgeSpinner" android:layout_width="0dp"
-                        android:layout_weight="1" android:layout_height="wrap_content" />
-                    <Button android:id="@+id/plan_edgeSearchButton" android:layout_width="wrap_content"
-                        android:layout_height="wrap_content" android:text="検索" />
                 </LinearLayout>
 
                 <!-- カメラ/レンズ -->
