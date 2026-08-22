@@ -34,6 +34,15 @@ namespace hgc
 
 		// --- 復帰 ---
 		recovered         = 30,	// 直前のお知らせの原因が解消した。n1=解消したコード
+
+		// --- 撮影セッション(2026-08-22。Entity から日本語を無くすため文言をUIへ移した) ---
+		captureRecovered    = 50,	// 止まっていたカメラの撮影が戻った。n1=未使用
+		captureNotRecording = 51,	// シャッターは通るのに画像が記録されない(オフライン扱いにする)。n1=未使用
+		captureLinkLost     = 52,	// 撮影中に接続が切れた(中止まで再接続を続ける)。n1=未使用
+		standbyLinkLost     = 53,	// 待機中に接続断を検知して先回り再接続した。n1=未使用
+		firstExposureFailed = 54,	// 1枚目の露出をカメラへ適用できなかった。n1=試した回数
+		convergeFailed      = 55,	// 撮影開始前の露出合わせに失敗した。内訳はログ(CONV/ERR)。n1=未使用
+		cameraBusy          = 60,	// そのカメラは別の撮影で使用中。n1=未使用
 	};
 }
 

@@ -1228,13 +1228,13 @@ void loop(void)
 			const int  kRec   = 192;	// 1レコード長[B](SHOT/LVHIST 1行相当)
 			const int  kCount = 5200;	// 行数(192B×5200 ≒ 1.0MB = 通し1回ぶん)
 			std::string dir = osfile::logDir();
-			if (dir.empty()) { Serial.println("[SDTEST] logDir が取れない(未マウント)"); }
+			if (dir.empty()) { Serial.println("[SDTEST] no logDir (not mounted)"); }
 			else
 			{
 				unsigned long long tot = 0, usd = 0;
 				if (osfile::spaceInfo(tot, usd))
 				{
-					Serial.printf("[SDTEST] backend=%s 全体=%lluMB 使用=%lluMB 空き=%lluMB\n",
+					Serial.printf("[SDTEST] backend=%s total=%lluMB used=%lluMB free=%lluMB\n",
 					              osfile::backendName(), tot / (1024ULL * 1024ULL), usd / (1024ULL * 1024ULL),
 					              (tot > usd ? (tot - usd) : 0ULL) / (1024ULL * 1024ULL));
 				}
@@ -1256,7 +1256,7 @@ void loop(void)
 					if (!osfile::append(path, rec, kRec)) { ++ngWrite; if (firstNg < 0) { firstNg = i; } }
 					uint32_t d = millis() - a;
 					if (d > worstMs) { worstMs = d; worstAt = i; }
-					if ((i % 1000) == 999) { Serial.printf("[SDTEST] 書き込み %d/%d\n", i + 1, kCount); }
+					if ((i % 1000) == 999) { Serial.printf("[SDTEST] write %d/%d\n", i + 1, kCount); }
 					delay(0);	// WDT対策(他タスクへ譲る)
 				}
 				uint32_t wrMs = millis() - t0;
@@ -1280,11 +1280,11 @@ void loop(void)
 				uint32_t rdMs = millis() - t1;
 				
 				const unsigned long kb = static_cast<unsigned long>((static_cast<long>(kCount) * kRec) / 1024);
-				Serial.printf("[SDTEST] 書込 %lukB %ums (%.0fkB/s) 失敗=%d(最初=%d) 最悪1行=%ums(%d行目)\n",
+				Serial.printf("[SDTEST] write %lukB %ums (%.0fkB/s) fail=%d(first=%d) worstLine=%ums(line %d)\n",
 				              kb, wrMs, wrMs ? (kb * 1000.0 / wrMs) : 0.0, ngWrite, firstNg, worstMs, worstAt);
-				Serial.printf("[SDTEST] 読戻 %lukB %ums (%.0fkB/s) 照合NG=%d(最初=%d) 読めた行=%d/%d\n",
+				Serial.printf("[SDTEST] read %lukB %ums (%.0fkB/s) mismatch=%d(first=%d) lines=%d/%d\n",
 				              kb, rdMs, rdMs ? (kb * 1000.0 / rdMs) : 0.0, ngRead, badAt, got, kCount);
-				Serial.printf("[SDTEST] 判定: %s\n", (ngWrite == 0 && ngRead == 0) ? "合格" : "不合格");
+				Serial.printf("[SDTEST] verdict: %s\n", (ngWrite == 0 && ngRead == 0) ? "PASS" : "FAIL");
 				osfile::removeFile("log", "sdtest.tmp");
 			}
 		}

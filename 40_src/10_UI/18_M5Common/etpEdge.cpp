@@ -39,7 +39,7 @@ namespace
 	WiFiServer            g_server(PORT_CONTROL);
 	WiFiClient            g_client;
 	std::vector<uint8_t>  g_rx;		// TCP 受信バッファ(フレーミング用)
-	std::string           g_name = "エッジ端末";
+	std::string           g_name = "Edge";		// 未設定時の名乗り。プロビジョニングで上書きされる
 	uint32_t              g_lastRx = 0;			// g_client の最終受信時刻(ms)。stale接続の回収に使う
 	// これ以上無通信の接続は回収してスロットを空ける。スマホの状態ポーリングは約10秒間隔なので、
 	// それを十分上回る値にして永続接続がポール間で切れないようにする(案B)。half-open滞留は
@@ -133,7 +133,7 @@ namespace
 			j["ip"] = ips.empty() ? std::string() : ips.front();
 		}
 		j["port"]  = PORT_CONTROL;
-		j["model"] = "エッジ端末";
+		j["model"] = "Edge";
 		j["fw"]    = std::string(hge_version());
 		j["state"] = hge_getState();
 		// 実行中セッション一覧。スマホの常時スイープが「このエッジで何が走っているか」を検索応答1発で

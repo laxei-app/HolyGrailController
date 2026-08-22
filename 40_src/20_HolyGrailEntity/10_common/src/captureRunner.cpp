@@ -81,7 +81,7 @@ void captureRunner::fillSensorFromShot(int frame)
 	const errCode e = cameraController::readSensorSpec(*dev_, wmm, hmm, px);
 	if (e != ERR_HGC_OK || wmm <= 0.0 || px == 0)
 	{
-		dataManager::logEvent("GEAR", "センサー諸元を撮影画像から読めなかった(マスターに登録してください)", true);
+		dataManager::logEvent("GEAR", "sensor spec not found in captured image (register the body in the gear master)", true);
 		return;
 	}
 	// この撮影で使う控えにも入れる(画角を使う表示がこのセッション中も正しくなる)。
@@ -242,8 +242,8 @@ std::string captureRunner::withHttpDetail(const char* what) const
 	// 「TCPが繋がらない(こちら側)」のか「繋がったがカメラが返さない(カメラ側)」のかを
 	// 区別できなかった(2026-08-05)。プラットフォーム層が body に理由を載せる。
 	if (status > 0)        { std::snprintf(buf, sizeof(buf), "%s http=%d %s", what, status, body.c_str()); }
-	else if (!body.empty()){ std::snprintf(buf, sizeof(buf), "%s http=応答なし %s", what, body.c_str()); }
-	else                   { std::snprintf(buf, sizeof(buf), "%s http=応答なし", what); }
+	else if (!body.empty()){ std::snprintf(buf, sizeof(buf), "%s http=noreply %s", what, body.c_str()); }
+	else                   { std::snprintf(buf, sizeof(buf), "%s http=noreply", what); }
 	return std::string(buf);
 }
 
@@ -780,7 +780,7 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 	// 【診断 2026-08-14】収束が最終的にどの露出を1枚目に渡したか。上の CONV 各行と突き合わせる。
 	{
 		char cb[128];
-		std::snprintf(cb, sizeof(cb), "done step=%d shots=%d ng(apply=%d meter=%d) conv=%d -> iso=%s ss=%s fn=%s (%.2f段)",
+		std::snprintf(cb, sizeof(cb), "done step=%d shots=%d ng(apply=%d meter=%d) conv=%d -> iso=%s ss=%s fn=%s (%.2f stops)",
 		              step, calibShots, applyNg, meterNg, converged ? 1 : 0,
 		              ctl.current().iso.c_str(), ctl.current().ss.c_str(), ctl.current().fn.c_str(),
 		              expo::brightnessStops(ctl.current(), tables_));
@@ -799,19 +799,23 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 	//  また、HTTP の状態は「取得そのものが失敗した」(stage=22)ときしか意味を持たない。従来は
 	//  無条件に withHttpDetail を通していたため、通信は正常なのに "http=応答なし" と書かれていた。
 	{
-		std::string msg = "初期収束 有効" + std::to_string(step) + "回";
-		if (calibShots > 0) { msg += " 実写" + std::to_string(calibShots) + "枚"; }
-		if (pegRetry   > 0) { msg += " 張付継続" + std::to_string(pegRetry) + "回"; }
-		msg += " 測光ms=" + std::string(meterMs);
+		// 数値の内訳はログにだけ残す。画面へはコード1つ(convergeFailed)しか送らない。
+		//  内訳は applyNg/meterNg/stage/HTTP応答など6項目あり、ユーザーが見ても打つ手が無い。
+		//  原因を追うのはログなので、通知をコード化するためにここを多引数化しても得が無い。
+		std::string msg = "converge steps=" + std::to_string(step);
+		if (calibShots > 0) { msg += " shots=" + std::to_string(calibShots); }
+		if (pegRetry   > 0) { msg += " peg=" + std::to_string(pegRetry); }
+		msg += " meterMs=" + std::string(meterMs);
+		const bool bad = (!converged) || (applyNg > 0) || (meterNg > 0);
 		if (applyNg > 0 || meterNg > 0)
 		{
-			msg += " (適用失敗" + std::to_string(applyNg) + " 測光失敗" + std::to_string(meterNg) +
-			       " 最終stage=" + std::to_string(lastFailStage) + ")";
-			if (lastFailStage == 22) { msg += " " + this->withHttpDetail("直近の通信"); }
+			msg += " (applyNg=" + std::to_string(applyNg) + " meterNg=" + std::to_string(meterNg) +
+			       " lastStage=" + std::to_string(lastFailStage) +
+			       " err=" + std::to_string(static_cast<unsigned>(lastErr)) + ")";
+			if (lastFailStage == 22) { msg += " " + this->withHttpDetail("lastHttp"); }
 		}
-		const bool bad = (!converged) || (applyNg > 0) || (meterNg > 0);
-		if (bad && onError_) { onError_(lastErr, msg.c_str()); }
-		else                 { dataManager::logEvent("CONV", msg.c_str()); }
+		dataManager::logEvent(bad ? "ERR" : "CONV", msg.c_str(), bad);
+		if (bad && onNotice_) { onNotice_(static_cast<int>(hgc::notice::convergeFailed), 0); }
 	}
 	// 収束中にカメラ実装が動かした露出は差分適用キャッシュの外である。ここで無効化して
 	// 次の適用に全軸を必ず送らせる(キャッシュと実機がズレたまま1枚目を撮る事故の防止)。
@@ -1032,7 +1036,7 @@ errCode captureRunner::loop(void)
 							if (onReconnect_ && onReconnect_() && establishSession()) { waitFailStreak = 0; }	// 静かに復帰(ポップ無し)
 							else
 							{	waitDisconnected = true;
-								if (onError_) { onError_(ERR_HGC_NOT_FOUND, "待機中に接続断を検知 → 先回り再接続"); }
+								if (onNotice_) { onNotice_(static_cast<int>(hgc::notice::standbyLinkLost), 0); }
 								if (onState_) { onState_(ST_NOCAMERA); }	// 待機中のカメラ未検出(✖点灯)
 							}
 						}
@@ -1539,14 +1543,14 @@ errCode captureRunner::loop(void)
 				firstApplyTries_ = t1;
 				if (ae != ERR_HGC_OK)
 				{
-					if (onError_)
-					{
+					{	// 内訳(HTTP応答・試行回数)はログへ。画面へはコードだけ。
 						char eb[240];
-						std::snprintf(eb, sizeof(eb), "%s (try=%d %dms)",
-						              this->withHttpDetail("1枚目の露出をカメラへ適用できない").c_str(),
-						              t1, kFirstApplyMaxMs);
-						onError_(ae, eb);
+						std::snprintf(eb, sizeof(eb), "%s (try=%d %dms err=%u)",
+						              this->withHttpDetail("first exposure apply failed").c_str(),
+						              t1, kFirstApplyMaxMs, static_cast<unsigned>(ae));
+						dataManager::logEvent("ERR", eb, true);
 					}
+					if (onNotice_) { onNotice_(static_cast<int>(hgc::notice::firstExposureFailed), t1); }
 					// 乗らなかった。狙いは変えず、シャッター直前の再適用へ託す
 					// (ループ先頭の applyFailed_ 経路が1回だけ試し直す)。
 					applyFailed_ = true;
@@ -1656,7 +1660,7 @@ errCode captureRunner::loop(void)
 			{	// 復帰した(電源入れ直し等)。提示を撮影中へ戻す。
 				cameraOffline = false;
 				if (onState_) { onState_(ST_CAPTURING); }
-				if (onError_) { onError_(ERR_HGC_OK, "カメラの撮影が復帰しました"); }
+				if (onNotice_) { onNotice_(static_cast<int>(hgc::notice::captureRecovered), 0); }
 			}
 		}
 
@@ -1695,11 +1699,10 @@ errCode captureRunner::loop(void)
 			{	// ユーザーへ「オンラインでない」と提示する(✖点灯)。
 				cameraOffline = true;
 				if (onState_) { onState_(ST_NOCAMERA); }
-				if (onError_)
+				if (onNotice_)
 				{
-					onError_(ERR_HGC_NOT_FOUND, noRecord
-					         ? "カメラが撮影を完了しません(シャッターは通るのに画像が記録されない)。オフラインとして表示します"
-					         : "撮影中にカメラ接続が切れました。再接続を試行します(中止するまで継続)");
+					onNotice_(static_cast<int>(noRecord ? hgc::notice::captureNotRecording
+					                                    : hgc::notice::captureLinkLost), 0);
 				}
 			}
 			if (!recovered && lostLink)

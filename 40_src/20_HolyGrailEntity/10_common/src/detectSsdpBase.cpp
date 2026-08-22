@@ -103,9 +103,9 @@ size_t detectSsdpBase::discover(std::vector<class device>& out, bool identifyOnl
 			int st = 0; std::string dummy;
 			netThread::lastHttpFailure(st, dummy);
 			std::string why = (st == 401 || st == 403)
-			                  ? "カメラのユーザーID/パスワードを所持カメラに登録してください"
+			                  ? "register the camera user/password in owned cameras"
 			                  : "";
-			std::string d = "発見したが使えない " + (device.model.empty() ? std::string("?") : device.model)
+			std::string d = "found but unusable " + (device.model.empty() ? std::string("?") : device.model)
 			              + "/" + (device.serialno.empty() ? std::string("?") : device.serialno)
 			              + " HTTP=" + std::to_string(st) + (why.empty() ? "" : (" " + why));
 			dataManager::logEvent("NET", d.c_str(), true);

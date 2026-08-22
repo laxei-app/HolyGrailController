@@ -99,7 +99,7 @@ bool tryIpDirect(const std::string& wantSerial, const hgc::camera& cam, bool has
 		    && known[0].serialno == wantSerial && knownModelMatch(known[0].model, cam))
 		{
 			out = known[0];
-			dataManager::logEvent("NET", (std::string("カメラ接続 IP直結+本人確認 ip=") + kip + " serial=" + wantSerial).c_str());
+			dataManager::logEvent("NET", (std::string("camera connected: direct ip + identity check ip=") + kip + " serial=" + wantSerial).c_str());
 			return true;
 		}
 	}
@@ -111,7 +111,7 @@ bool tryIpDirect(const std::string& wantSerial, const hgc::camera& cam, bool has
 		    && knownModelMatch(known[0].model, cam) && !serialBusy(known[0].serialno))
 		{
 			out = known[0];
-			dataManager::logEvent("NET", (std::string("カメラ接続 IP直結(機種一意) ip=") + kip + " serial=" + known[0].serialno).c_str());
+			dataManager::logEvent("NET", (std::string("camera connected: direct ip (single body of the model) ip=") + kip + " serial=" + known[0].serialno).c_str());
 			return true;
 		}
 	}
@@ -125,7 +125,7 @@ bool trySubnetSweep(const std::string& wantSerial, const hgc::camera& cam, bool 
 	// 自サブネットで :8080 が開いているホストを一括抽出(生存かつCCAPIサービス有りの候補)。
 	std::vector<std::string> hosts = net::scanSubnetPort(8080, 250, 254);
 	if (hosts.empty()) { return false; }
-	dataManager::logEvent("NET", (std::string("サブネット探索 :8080応答=") + std::to_string(hosts.size()) + "台").c_str());
+	dataManager::logEvent("NET", (std::string("subnet scan: :8080 replies=") + std::to_string(hosts.size())).c_str());
 	// 応答IPのみ connectManual で本接続し (model, serial) 本人確認。一致した最初の1台を採用する。
 	for (const auto& ip : hosts)
 	{
@@ -137,7 +137,7 @@ bool trySubnetSweep(const std::string& wantSerial, const hgc::camera& cam, bool 
 		if (ok)
 		{
 			out = cand[0];
-			dataManager::logEvent("NET", (std::string("カメラ接続 サブネット探索+本人確認 ip=") + ip + " serial=" + cand[0].serialno).c_str());
+			dataManager::logEvent("NET", (std::string("camera connected: subnet scan + identity check ip=") + ip + " serial=" + cand[0].serialno).c_str());
 			return true;	// 成功IPの永続化(noteConnected)は呼び手側の共通経路が行う
 		}
 	}

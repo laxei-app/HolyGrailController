@@ -508,7 +508,7 @@ namespace
 	// 所持カメラリスト内で一意な表示名を返す(同名があれば " (2)"," (3)"... を付す)。name はリストのキー。
 	std::string uniqueOwnedName(const std::string& base)
 	{
-		std::string b = base.empty() ? std::string("カメラ") : base;
+		std::string b = base.empty() ? std::string("Camera") : base;
 		bool taken = false;
 		for (const auto& oc : g_ownedCameras) { if (oc.cam.name == b) { taken = true; break; } }
 		if (!taken) { return b; }
@@ -645,7 +645,7 @@ bool dataManager::addPlace(const std::string& name)
 {
 	ensurePlaces();
 	hgc::place p;
-	p.name = uniquePlaceName(name.empty() ? std::string("新しい場所") : name);
+	p.name = uniquePlaceName(name.empty() ? std::string("New place") : name);
 	g_places.push_back(std::move(p));
 	return savePlaces();
 }
@@ -1005,11 +1005,11 @@ namespace
 	// スケジュールやログ(CCMSW)でどの制御方法か分からなかった(2026-07-26 ユーザー指示で型別名へ)。
 	const char* presetSeedName(const std::string& t)
 	{
-		if (t == "night")   { return "星景"; }
-		if (t == "sunrise") { return "朝日"; }
-		if (t == "sunset")  { return "夕日"; }
-		if (t == "day")     { return "日中"; }
-		return "標準";
+		if (t == "night")   { return "Nightscape"; }
+		if (t == "sunrise") { return "Sunrise"; }
+		if (t == "sunset")  { return "Sunset"; }
+		if (t == "day")     { return "Daylight"; }
+		return "Standard";
 	}
 
 	std::string presetsPath(void)
@@ -1055,39 +1055,9 @@ namespace
 				changed = true;
 				if (!g_settings["preferredCcm"].contains(t)) { g_settings["preferredCcm"][t] = seedName; settingsChanged = true; }
 			}
-			else
-			{
-				// 移行: 旧種まき名のプリセットを型別名へ改名する(既存端末のデータ)。
-				// 旧種まきは全型「標準」だったが、重複名回避で「標準1」等に化けている型もある
-				// (実機のnightがそうだった)ので「標準+数字」も種まき由来とみなす。
-				// 同型に型別名が既に在る場合は重複を避けて改名しない。最初の1件だけ改名し、
-				// 2件目以降の「標準N」はユーザーデータとみなし触らない。preferredCcm も追従する。
-				auto isOldSeedName = [](const std::string& n) -> bool
-				{
-					const std::string base = "標準";
-					if (n.compare(0, base.size(), base) != 0) { return false; }
-					for (size_t i = base.size(); i < n.size(); ++i)
-					{ if (n[i] < '0' || n[i] > '9') { return false; } }
-					return true;	// 「標準」「標準1」「標準23」…
-				};
-				bool nameTaken = false;
-				for (auto& e : g_presets[t]) { if (e.is_object() && e.value("name", "") == seedName) { nameTaken = true; break; } }
-				if (!nameTaken)
-				{
-					for (auto& e : g_presets[t])
-					{
-						const std::string old = e.is_object() ? e.value("name", "") : "";
-						if (isOldSeedName(old))
-						{
-							e["name"] = seedName;
-							changed = true;
-							if (g_settings["preferredCcm"].value(t, "") == old)
-							{ g_settings["preferredCcm"][t] = seedName; settingsChanged = true; }
-							break;	// 種まき由来は型に1つの前提
-						}
-					}
-				}
-			}
+			// 既に1件でもあるなら触らない。旧バージョンの名前を改名する移行処理は廃止した
+			//  (2026-08-22。リリース前なので過去データの互換は考えない。日本語の照合値を
+			//   コードに残さないため)。
 		}
 		if (changed) { savePresets(); }
 		if (settingsChanged) { saveSettings(); }
@@ -1237,7 +1207,7 @@ int dataManager::recordConnectedCameraStatus(const device& dev, bool allowAdd)
 				if (!key.empty() && oc.cam.model != key)
 				{
 					const bool autoName = (oc.cam.name == oc.cam.model);
-					logEvent("GEAR", (oc.cam.model + " を " + key + " に直した(S/N " + dev.serialno + ")").c_str());
+					logEvent("GEAR", (oc.cam.model + " renamed to " + key + " (S/N " + dev.serialno + ")").c_str());
 					oc.cam.model = key;
 					if (autoName) { oc.cam.name = uniqueOwnedName(key); }
 					changed = true;
@@ -1248,7 +1218,7 @@ int dataManager::recordConnectedCameraStatus(const device& dev, bool allowAdd)
 				//  撮影で繋いだときは認証を通っているので、そこで埋まる。
 				if ((oc.cam.isoList.empty() || oc.cam.ssList.empty()) && fillListsFromCamera(dev, oc.cam))
 				{
-					logEvent("GEAR", (oc.cam.model + " のISO/SSをカメラから取得した(S/N " + dev.serialno + ")").c_str());
+					logEvent("GEAR", (oc.cam.model + " iso/ss taken from camera (S/N " + dev.serialno + ")").c_str());
 					changed = true;
 				}
 				if (changed) { saveOwnedCameras(); }
@@ -1297,8 +1267,8 @@ int dataManager::recordConnectedCameraStatus(const device& dev, bool allowAdd)
 		oc.cam.sensorSizeV = 0.0;
 		oc.cam.sensorPixel = 0;
 		const bool got = fillListsFromCamera(dev, oc.cam);
-		logEvent("GEAR", (key + " はマスタに無い。センサー寸法は未登録。ISO/SSは" +
-		                  (got ? "カメラから取得" : "取得できず空")).c_str());
+		logEvent("GEAR", (key + " not in gear master: sensor size unknown, iso/ss " +
+		                  (got ? "from camera" : "unavailable")).c_str());
 	}
 	if (oc.cam.model.empty()) { oc.cam.model = key.empty() ? dev.model : key; }	// 機種照合の基準(名称は一意化で変わるため model を確実に持たせる)
 	if (oc.cam.name.empty()) { oc.cam.name = dev.assignedName.empty() ? (key.empty() ? dev.model : key) : dev.assignedName; }
@@ -1346,7 +1316,7 @@ bool dataManager::fillOwnedCameraSensor(const std::string& serial, double sensor
 		if (!changed) { return false; }
 		saveOwnedCameras();
 		char msg[160];
-		std::snprintf(msg, sizeof(msg), "%s のセンサーを撮影画像から取得 %.2f x %.2f mm / %u px (S/N %s)",
+		std::snprintf(msg, sizeof(msg), "%s sensor from captured image %.2f x %.2f mm / %u px (S/N %s)",
 		              oc.cam.model.c_str(), oc.cam.sensorSize, oc.cam.sensorSizeV,
 		              static_cast<unsigned>(oc.cam.sensorPixel), serial.c_str());
 		logEvent("GEAR", msg);

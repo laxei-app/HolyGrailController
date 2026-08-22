@@ -67,7 +67,7 @@ namespace batt
 	{
 		char d[128];
 		std::snprintf(d, sizeof(d),
-		              "battery low: volt=%dmV pct=%d → 撮影を止めて電源を切ります(復電後は再開されます)",
+		              "battery low: volt=%dmV pct=%d -> stopping capture and powering off (resumes after recharge)",
 		              volt, pct);
 		dataManager::logEvent("PWROFF", d, true);	// ERR扱いで目立たせる
 		hge_markAllNoCameraForShutdown();			// スマホのポーリングが✖を拾えるようにする

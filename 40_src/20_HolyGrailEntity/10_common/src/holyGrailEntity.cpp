@@ -6,6 +6,7 @@
 #include "osClock.h"
 #include "cameraController.h"
 #include "dataManager.h"
+#include "notice.h"	// ユーザーへのお知らせはコードで持つ(文言はUI側)
 #include "roleDiscovery.h"	// 役割別の発見(エッジ=IP直結ヒント / スマホ=スタブ)。30_role
 #include "csJson.h"
 #include "netThread.h"
@@ -1025,9 +1026,9 @@ namespace
 		// カメラ検索が走ることを記録する。後続の「カメラ接続 …」(成功経路) または ERR「…見つかりません」と
 		// 対になる。タップ時刻はこのログのタイムスタンプ、撮影窓は detail で分かる。
 		{
-			std::string d = "撮影開始操作 計画=" + S->plan.name +
-			                " 窓=" + dtToStr(S->plan.start) + "~" + dtToStr(S->plan.end) +
-			                " カメラ探索開始(IP直結→SSDP)";
+			std::string d = "capture start plan=" + S->plan.name +
+			                " window=" + dtToStr(S->plan.start) + "~" + dtToStr(S->plan.end) +
+			                " searching camera (direct ip -> ssdp)";
 			dataManager::logEvent("NET", d.c_str());
 		}
 		// 撮影開始(=このシーケンスの実行)の都度、計画のカメラを特定する(§3.3)。
@@ -1084,7 +1085,7 @@ namespace
 		{
 			cameraController::detectTarget(found);
 			{	// 診断: SSDP検索で何台見つかったか(0台=SSDP不発の可能性)。機種/シリアルも残す。
-				std::string d = "SSDP検索結果 " + std::to_string(found.size()) + "台";
+				std::string d = "ssdp found " + std::to_string(found.size());
 				for (auto& fd : found) { if (fd.apiBase) { d += " [" + (fd.model.empty() ? fd.assignedName : fd.model) + "/" + (fd.serialno.empty() ? "?" : fd.serialno) + "]"; } }
 				dataManager::logEvent("NET", d.c_str());
 			}
@@ -1097,7 +1098,7 @@ namespace
 			for (auto& d : found) { if (d.apiBase && d.serialno == wantSerial && dataManager::cameraModelMatches(d, pc)) { hit = &d; break; } }
 			if (hit != nullptr && serialBusy(wantSerial))
 			{	// 既に撮影中のカメラを使う計画は開始しない(これは正当な拒否。未検出とは別)。
-				notifyError(ERR_HGC_INVALID_STATE, "このカメラは既に撮影中です");
+				notifyNotice(S->planId, static_cast<int>(hgc::notice::cameraBusy), 0);
 				S->state = HGE_ST_ERROR; notifyStateP(S->planId, HGE_ST_ERROR); refreshAggregateState();
 				return ERR_HGC_INVALID_STATE;
 			}
@@ -1116,8 +1117,8 @@ namespace
 			{
 				if (dataManager::ownedCountForModel(pc) >= 2)
 				{
-					dataManager::logEvent("NET", (pc.model + " は同機種を複数登録しているため、"
-					                              "個体(シリアル)が決まらない計画では代替しない").c_str(), true);
+					dataManager::logEvent("NET", (pc.model + " has two or more owned bodies of the same model: "
+					                              "no substitute when the plan does not name a serial").c_str(), true);
 				}
 				else
 				{ for (auto& d : found) { if (d.apiBase && dataManager::cameraModelMatches(d, pc) && !serialBusy(d.serialno)) { hit = &d; break; } } }
@@ -1142,7 +1143,7 @@ namespace
 			S->dev = *hit;	// セッション専用 device へコピー(アドレス安定。実行中の他セッションに影響しない)
 			{	// 接続経路(常にM-SEARCH発見)と IP/serial をログに残す。
 				std::string h = hostFromDevice(S->dev);
-				std::string d = std::string("カメラ接続 SSDP発見 ip=") + (h.empty() ? "?" : h)
+				std::string d = std::string("camera connected via ssdp ip=") + (h.empty() ? "?" : h)
 				              + (S->dev.serialno.empty() ? "" : (" serial=" + S->dev.serialno));
 				dataManager::logEvent("NET", d.c_str());
 			}
@@ -1161,7 +1162,7 @@ namespace
 		{	// 3a: カメラ未検出のまま撮影要求を受理する。中断せず、runner が取得まで NOCAMERA(✖点灯)で
 			// M-SEARCH(再送)で探し続ける。撮影窓の終了か中止まで継続。
 			S->dev.clear();
-			std::string d = "カメラ未検出のまま撮影要求を受理(探索を継続) SSDP=" + std::to_string(found.size()) + "台(未発見)";
+			std::string d = "armed without a camera, keep searching: ssdp=" + std::to_string(found.size()) + " (not found)";
 			dataManager::logEvent("NET", d.c_str(), true);
 		}
 
@@ -1184,8 +1185,8 @@ namespace
 						else if (pc->type == hgc::ccmType::night) { std::snprintf(pev, sizeof(pev), "fix"); }
 						else                                      { std::snprintf(pev, sizeof(pev), "-"); }
 						std::string wd = pc->name + " " + dtShort(w.start) + "~" + dtShort(w.end) +
-						                 " 明所=" + expoBrief(pc->limitDark) + " 暗所=" + expoBrief(pc->limitBright) +
-						                 " 初期=" + expoBrief(pc->initial) + " 目標ev=" + pev;
+						                 " bright=" + expoBrief(pc->limitDark) + " dark=" + expoBrief(pc->limitBright) +
+						                 " initial=" + expoBrief(pc->initial) + " targetEv=" + pev;
 						dataManager::logEvent("PLAN", wd.c_str());
 					}
 				}
@@ -1384,14 +1385,14 @@ namespace
 			// SSDP(M-SEARCH再送)+サブネット探索で見つからなければ hit は null のまま → 後で再試行(その間 NOCAMERA)。
 			if (hit == nullptr)
 			{	// 再探索で未発見。runner の取得/再接続フェーズが後で再試行する。
-				std::string d = "カメラ取得/再接続失敗 SSDP=" + std::to_string(found.size()) + "台(未発見)";
+				std::string d = "camera acquire/reconnect failed: ssdp=" + std::to_string(found.size()) + " (not found)";
 				dataManager::logEvent("NET", d.c_str(), true);
 				return false;
 			}
 			S->dev = *hit;	// runner の dev_ が指す先(=S->dev)を最新のIP/apiへ更新。
 			{
 				std::string h = hostFromDevice(S->dev);
-				std::string d = std::string("再接続成功 ip=") + (h.empty() ? "?" : h);
+				std::string d = std::string("reconnected ip=") + (h.empty() ? "?" : h);
 				dataManager::logEvent("NET", d.c_str());
 				// エッジ役: 再接続で確定した最新IPを不揮発へ記録(次回起動の前回IP直結を最新化)。
 				hge::role::noteConnected(S->dev.serialno, S->dev.model, h);
@@ -1451,9 +1452,9 @@ namespace
 	{
 		captureSession* s = g_sessions[i].get();
 		{
-			std::string d = "セッション停止 計画=" + s->plan.name + " id=" + s->planId
-			              + " 理由=" + (why ? why : "?")
-			              + " 状態=" + std::to_string(s->state.load());
+			std::string d = "session stop plan=" + s->plan.name + " id=" + s->planId
+			              + " reason=" + (why ? why : "?")
+			              + " state=" + std::to_string(s->state.load());
 			dataManager::logEvent("INFO", d.c_str());
 		}
 		s->cancel = true;	// 予約待ち中の開始スレッドを中断させてから join する(長時間 sleep のデッドロック回避)
@@ -1522,7 +1523,7 @@ int32_t hge_init(void)
 
 int32_t hge_term(void)
 {
-	while (!g_sessions.empty()) { stopSessionAt(g_sessions.size() - 1, "終了処理"); }	// 全セッション停止(最後の1つで待ち受けも停止)
+	while (!g_sessions.empty()) { stopSessionAt(g_sessions.size() - 1, "shutdown"); }	// 全セッション停止(最後の1つで待ち受けも停止)
 	cameraController::watchStop(); g_watching = false;	// 3b: 念のためSSDP待ち受けを確実に停止
 	if (g_searchThread) { ossc::threadEnd(g_searchThread); g_searchThread = nullptr; }
 	if (g_inited) { netThread::deInit(); g_inited = false; }
@@ -1640,9 +1641,9 @@ int32_t hge_importPlan(const char* id, const char* json, int32_t len)
 		std::string existing;
 		const bool  overwrite = dataManager::loadPlanFile(g_editId, existing);
 		const bool  running   = (sessionFor(g_editId) != nullptr);
-		std::string d = "計画受信 id=" + g_editId + " 名前=" + g_plan.name
-		              + (overwrite ? " 上書き" : " 新規")
-		              + (running   ? " ※走行中セッションあり(内容がずれる)" : "");
+		std::string d = "plan received id=" + g_editId + " name=" + g_plan.name
+		              + (overwrite ? " overwrite" : " new")
+		              + (running   ? " (a session is running: contents may diverge)" : "");
 		dataManager::logEvent("INFO", d.c_str());
 	}
 	return saveCurrentPlan();
@@ -1850,8 +1851,8 @@ int32_t hge_newPlan(const char* presetName)
 {
 	(void)presetName;	// Phase0: 出荷時設定のみ(プリセット連携は後続フェーズ)
 	if (!g_planReady) { loadFixedPlanImpl(); }	// g_offMin 確保
-	std::string nm = uniqueName("新規撮影計画", collectPlanNames(""));	// item5: 既存と重複しない名前
-	makeFactoryCurrent("新規撮影計画");
+	std::string nm = uniqueName("New plan", collectPlanNames(""));	// item5: 既存と重複しない名前
+	makeFactoryCurrent("New plan");
 	g_plan.name = nm;
 	{
 		hgc::place ap;	// §7.9: 「撮影計画に自動的に挿入する」場所があれば初期値に入れ、位置に応じて再生成
@@ -1875,7 +1876,7 @@ int32_t hge_copyPlan(const char* id)
 	if (!g_planReady) { loadFixedPlanImpl(); }
 	errCode e = loadPlanById(std::string(id));	// 元計画を現在へ読み込む
 	if (e != ERR_HGC_OK) { return e; }
-	g_plan.name = uniqueName(g_plan.name + " コピー", collectPlanNames(""));	// item5: 重複回避
+	g_plan.name = uniqueName(g_plan.name + " copy", collectPlanNames(""));	// item5: 重複回避
 	g_editId = makePlanId();			// 別 id で複製保存
 	buildScheduleJson();				// 名称変更を反映
 	dataManager::savePlanFile(g_editId, wrapCurrentPlan());
@@ -1894,7 +1895,7 @@ int32_t hge_deletePlan(const char* id)
 		setCapturing(pid, false);	// 実行意図を消す(再起動で再開しない)
 		for (size_t i = 0; i < g_sessions.size(); ++i)
 		{
-			if (g_sessions[i]->planId == pid) { stopSessionAt(i, "計画削除"); break; }	// cancel→runner->stop()→erase(スレッド破棄)
+			if (g_sessions[i]->planId == pid) { stopSessionAt(i, "plan deleted"); break; }	// cancel→runner->stop()→erase(スレッド破棄)
 		}
 	}
 	if (!dataManager::deletePlanFile(std::string(id))) { return ERR_HGC_NO_ELEMENT; }
@@ -2742,7 +2743,7 @@ int32_t hge_captureStartPlan(const char* planId_)
 	else if (!launchStartThread(raw))
 	{
 		raw->deferred = true; raw->nextTryEpoch = now + 5;
-		dataManager::logEvent("ERR", ("開始スレッド生成失敗(再試行待ち) 計画=" + raw->plan.name).c_str(), true);
+		dataManager::logEvent("ERR", ("start thread create failed (waiting to retry) plan=" + raw->plan.name).c_str(), true);
 	}
 	setCapturing(planId, true);	// item2: 撮影意図を記録(電源復帰/再起動で再開する)
 	return ERR_HGC_OK;
@@ -2778,7 +2779,7 @@ int32_t hge_pump(void)
 		else
 		{
 			s->nextTryEpoch = now + 10;
-			dataManager::logEvent("ERR", ("開始スレッド生成失敗(10秒後に再試行) 計画=" + s->plan.name).c_str(), true);
+			dataManager::logEvent("ERR", ("start thread create failed (retry in 10s) plan=" + s->plan.name).c_str(), true);
 		}
 		break;	// 1回のポンプで起動するのは1件(直列化)
 	}
@@ -2824,7 +2825,7 @@ int32_t hge_captureStopPlan(const char* planId_)
 	setCapturing(planId, false);	// item2: ユーザーによる明示停止 → 実行意図を消す(再起動で再開しない)
 	for (size_t i = 0; i < g_sessions.size(); ++i)
 	{
-		if (g_sessions[i]->planId == planId) { stopSessionAt(i, "停止要求"); return ERR_HGC_OK; }
+		if (g_sessions[i]->planId == planId) { stopSessionAt(i, "stop requested"); return ERR_HGC_OK; }
 	}
 	return ERR_HGC_OK;
 }
