@@ -48,31 +48,6 @@ namespace astro
 			return bodyHorizAt(BODY_SUN, t, obs);
 		}
 
-		// 太陽が画角に入っているか
-		bool inFrame(const horiz& sun, double shootAz, double shootAlt, const fov& f)
-		{
-			double d = sun.azimuth - shootAz;
-			while (d > 180.0)  { d -= 360.0; }
-			while (d < -180.0) { d += 360.0; }
-			return (std::fabs(d) <= f.h / 2.0) && (std::fabs(sun.altitude - shootAlt) <= f.v / 2.0);
-		}
-
-		// 1サンプルの撮影制御方法を分類する。
-		hgc::ccmType classify(double h, bool rising, bool sunInFrame, double nightAlt, double twiAlt)
-		{
-			constexpr double sunDirectMaxAlt = 3.0;	// これ以上高い太陽は日中扱い(朝日/夕日の上限既定+3°)
-			if (sunInFrame && h >= twiAlt && h <= sunDirectMaxAlt)
-			{
-				return rising ? hgc::ccmType::sunrise : hgc::ccmType::sunset;
-			}
-			if (h < nightAlt) { return hgc::ccmType::night; }
-			if (h >= twiAlt)  { return hgc::ccmType::day; }
-			// 薄明帯(nightAlt..twiAlt)で太陽が画角外:
-			//  朝(上昇)は夜間→次の自動露出への「夜間後移行」、
-			//  夕(下降)は自動露出→夜間への「夜間前移行」。
-			return rising ? hgc::ccmType::postNight : hgc::ccmType::preNight;
-		}
-
 		// 種別から区間に入れる撮影制御方法を返す。
 		// 夜間/朝日/夕日/日中は**計画が所有する実体をそのまま指す**(複製しない)。計画の ccm を
 		// 編集すれば同じ型の窓すべてに反映される。移行(夜間前/後)はユーザー設定を持たないのでその場で作る。
@@ -195,7 +170,6 @@ namespace astro
 		astro_time_t tEnd   = toAstro(plan.end, off);
 		if (tEnd.ut <= tStart.ut) { return ERR_HGC_INVALID_ARG; }
 
-		const fov f = calcFov(plan.camera, plan.lens, plan.landscape);
 		// 撮影制御方法の開始/終了高度はスケジュール画面の境界で決める(ccm画面のスライダーは廃止)。
 		// 既定の高度帯: 夜間 <-12° / 夜間前後移行 -12°〜0° / 朝日・夕日(直接撮影) 0°〜+3° / 日中 >+3°。
 		// 各境界はスケジュールで可動(夜間境界 -19〜-6, 移行↔朝日夕日 -1〜+2, 朝日夕日↔日中 +3〜+6)。
@@ -362,30 +336,6 @@ namespace astro
 				plan.ccmList[i].end       = nd;
 				plan.ccmList[i + 1].start = nd;
 				break;
-			}
-		}
-
-		// 開始(plan.start)直前に効いていたはずの撮影制御方法を求める(移行中開始の1枚目シード用)。
-		// 最初の窓と異なる種別が出るまで tStart から後方へ走査する(夜間前→日中/夕日, 夜間後→夜間)。
-		plan.startLeadCcm.reset();
-		if (!plan.ccmList.empty() && plan.ccmList.front().ccm)
-		{
-			hgc::ccmType firstType = plan.ccmList.front().ccm->type;
-			for (int i = 1; i <= 6 * 60; ++i)	// 最大6時間ぶん遡る
-			{
-				astro_time_t t  = Astronomy_AddDays(tStart, -stepDays * i);
-				astro_time_t tp = Astronomy_AddDays(t, -stepDays);
-				horiz s  = sunHorizAt(t,  obs);
-				horiz sp = sunHorizAt(tp, obs);
-				bool rising = (s.altitude - sp.altitude) >= 0.0;
-				double twiAlt = rising ? twiAltRise : twiAltSet;
-				hgc::ccmType ct = classify(s.altitude, rising,
-				                           inFrame(s, plan.azimuth, plan.elevation, f), nightAlt, twiAlt);
-				if (ct != firstType && ct != hgc::ccmType::invalid)
-				{
-					plan.startLeadCcm = makeCcm(plan.ccm, ct);
-					break;
-				}
 			}
 		}
 

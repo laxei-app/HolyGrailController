@@ -848,11 +848,26 @@ namespace
 		clampList(e.iso, cam.isoList, expo::expoKind::iso);
 		clampList(e.ss,  cam.ssList,  expo::expoKind::ss);
 		// fn はレンズの開放(fn)〜最小絞り(fnMax)。fnMax 0=未設定なら下限のみ。
+		// 丸めるときは元の値を fnWish へ控え、入るレンズに戻ったらそこへ復帰させる。
+		// 控えが無いと、暗いレンズを一度選んだだけで F1.4 の指定が F2.8 に化け、
+		// 元のレンズへ戻しても二度と戻らない(2026-08-23 指摘)。
 		if (!e.fn.empty() && lens.fn > 0.0)
 		{
+			const double lo = lens.fn;
+			const double hi = lens.fnMax;	// 0=未設定(上限なし)
+			auto fits = [&](double v) { return v > 0.0 && v >= lo && (hi <= 0.0 || v <= hi); };
+			// 今のレンズで控えが使えるなら先に戻す。
+			if (!e.fnWish.empty() && fits(expo::parseValue(e.fnWish, expo::expoKind::fn)))
+			{
+				e.fn = e.fnWish;
+				e.fnWish.clear();
+			}
 			double v = expo::parseValue(e.fn, expo::expoKind::fn);
-			if      (v > 0 && v < lens.fn)               { e.fn = fmtFn(lens.fn); }
-			else if (lens.fnMax > 0.0 && v > lens.fnMax) { e.fn = fmtFn(lens.fnMax); }
+			if (v > 0.0 && !fits(v))
+			{
+				if (e.fnWish.empty()) { e.fnWish = e.fn; }	// 最初に丸めるときだけ控える
+				e.fn = (v < lo) ? fmtFn(lo) : fmtFn(hi);
+			}
 		}
 	}
 	// 計画が所有する ccm 一式をカメラ/レンズの上下限へクランプする(item3)。
@@ -870,6 +885,17 @@ namespace
 
 	// ccmSet(初期値/プリセット由来) を計画の所有一式へ入れる。used は変えない
 	// (「使わない」に戻した型をもう一度使うとき、以前の編集内容を初期値で潰さないため)。
+	// ユーザーが F値を明示的に変えたら、レンズで丸める前の控え(fnWish)は破棄する。
+	// 残しておくと、後で明るいレンズへ替えたときに今の指定を上書きしてしまう。
+	void dropFnWishOnUserEdit(const hgc::ccmBase* before, hgc::ccmBase* after)
+	{
+		if (before == nullptr || after == nullptr) { return; }
+		auto one = [](const hgc::exposure& b, hgc::exposure& a) { if (a.fn != b.fn) { a.fnWish.clear(); } };
+		one(before->limitBright, after->limitBright);
+		one(before->limitDark,   after->limitDark);
+		one(before->initial,     after->initial);
+	}
+
 	void applyCcmSetToPlan(hgc::cs& plan, const astro::ccmSet& set)
 	{
 		if (set.night)   { plan.ccm.night   = set.night; }
@@ -1955,7 +1981,14 @@ int32_t hge_setPlanCcmJson(const char* json, int32_t len)
 	astro::ccmSet set;
 	if (!dataManager::parseCcmSetJson(std::string(json, static_cast<size_t>(len)), set))
 	{ return ERR_HGC_JSON_PARSE; }
+	// 変更前の控えを持っておき、F値が変わったものだけ fnWish を落とす。
+	auto oldN = g_plan.ccm.night; auto oldR = g_plan.ccm.sunrise;
+	auto oldS = g_plan.ccm.sunset; auto oldD = g_plan.ccm.day;
 	applyCcmSetToPlan(g_plan, set);
+	dropFnWishOnUserEdit(oldN.get(), g_plan.ccm.night.get());
+	dropFnWishOnUserEdit(oldR.get(), g_plan.ccm.sunrise.get());
+	dropFnWishOnUserEdit(oldS.get(), g_plan.ccm.sunset.get());
+	dropFnWishOnUserEdit(oldD.get(), g_plan.ccm.day.get());
 	clampPlanCcmToGear();	// item3: 計画のカメラ/レンズ上下限へccm露出をクランプ(初期値選択も含む)
 	errCode e = astro::buildSchedule(g_plan, g_offMin);
 	if (e != ERR_HGC_OK) { return e; }

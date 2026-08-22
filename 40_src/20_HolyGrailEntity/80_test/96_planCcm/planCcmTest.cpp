@@ -180,6 +180,23 @@ int main(void)
 		// 復元した計画の ccm を編集しても、元の計画には影響しない。
 		if (q.ccm.day) { q.ccm.day->name = "変更後"; }
 		checkStr(p.ccm.day->name, "日中D", "復元先を編集しても元の計画は変わらない");
+
+		// レンズで丸める前の F値(fnWish) も保存と復元を往復する。
+		// これが落ちると、保存して開き直しただけでユーザーの指定が消える。
+		{
+			hgc::cs r = makePlan("E");
+			r.ccm.night->limitBright = hgc::exposure{ "3200", "6", "2.8" };
+			r.ccm.night->limitBright.fnWish = "1.4";	// 暗いレンズで丸められた状態
+			check(astro::buildSchedule(r, 540) == ERR_HGC_OK, "スケジュール(fnWish)");
+			const std::string js2 = csjson::toJson(r);
+			check(js2.find("\"fnWish\":\"1.4\"") != std::string::npos, "fnWish を書く");
+			hgc::cs t;
+			check(csjson::fromJson(js2, t), "fnWish 入りを復元できる");
+			checkStr(t.ccm.night ? t.ccm.night->limitBright.fnWish : "", "1.4", "fnWish が保たれる");
+			checkStr(t.ccm.night ? t.ccm.night->limitBright.fn : "", "2.8", "丸めた後の F値も保たれる");
+			// 丸めていないときは書かない(従来の JSON の形を変えない)。
+			check(csjson::toJson(p).find("fnWish") == std::string::npos, "丸めていなければ fnWish を書かない");
+		}
 	}
 
 	// ---------------------------------------------------------------- ④-2

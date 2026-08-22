@@ -31,7 +31,9 @@ namespace csjson
 
 		json expToJson(const hgc::exposure& e)
 		{
-			return json{ {"iso", e.iso}, {"ss", e.ss}, {"fn", e.fn} };
+			json j{ {"iso", e.iso}, {"ss", e.ss}, {"fn", e.fn} };
+			if (!e.fnWish.empty()) { j["fnWish"] = e.fnWish; }	// 丸めているときだけ出す
+			return j;
 		}
 		// 文字列フィールドを安全に取り出す(型不一致や旧形式の数値でも例外を投げない)。
 		std::string getStr(const json& j, const char* key)
@@ -48,6 +50,7 @@ namespace csjson
 			e.iso = getStr(j, "iso");
 			e.ss  = getStr(j, "ss");
 			e.fn  = getStr(j, "fn");
+			e.fnWish = getStr(j, "fnWish");
 			return e;
 		}
 
@@ -305,7 +308,6 @@ namespace csjson
 			wl.push_back(wj);
 		}
 		j["ccmList"] = wl;
-		if (plan.startLeadCcm) { j["startLeadCcm"] = ccmToJsonObj(*plan.startLeadCcm); }
 		// 夜間の固定露出と移行目標ev(夜間ウィンドウが無くても移行のクランプ/基準に使う。仕様3.7/3.9)。
 		j["nightFixedExposure"] = expToJson(plan.nightFixedExposure);
 		j["nightPreNightEv"]    = plan.nightPreNightEv;
@@ -394,7 +396,6 @@ namespace csjson
 				plan.ccmList.push_back(std::move(win));
 			}
 		}
-		if (j.contains("startLeadCcm")) { plan.startLeadCcm = ccmFromJsonObj(j["startLeadCcm"]); }
 		if (j.contains("nightFixedExposure")) { plan.nightFixedExposure = expFromJson(j["nightFixedExposure"]); }
 		plan.nightPreNightEv  = j.value("nightPreNightEv", 0.0);
 		plan.nightPostNightEv = j.value("nightPostNightEv", 0.0);
