@@ -26,7 +26,6 @@ namespace hgc
 	{
 		ccmType      type = ccmType::invalid;	// 種別
 		std::string  name;						// ユーザー定義名称
-		uint32_t     color = 0;					// RGB の色
 		exposure     limitBright;				// 明るい側の限界(iso/ss/fn 上限)
 		exposure     limitDark;					// 暗い側の限界(iso/ss/fn 下限)
 		// 露出設定を変更する優先度(上位から先に変更)

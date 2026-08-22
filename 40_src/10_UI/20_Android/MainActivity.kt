@@ -2317,7 +2317,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val all = ccmJson ?: return null
         val src = all.optJSONObject(editingKey) ?: return null
         val o = JSONObject(src.toString())   // コピー(保存時まで元を変えない)
-        o.put("color", ccmBgMap[keyType(editingKey)] ?: 0)   // 色はシステム共通(転送用に派生値を入れる)
         // 開始/終了(太陽高度)はスケジュール画面の境界で設定するため、ここでは書き込まない。
         if (editingKey != "night") o.put("ev", seekToEv(sliderProgress(R.id.edit_ev_seek)))
         if (editingKey == "sunrise" || editingKey == "sunset") {

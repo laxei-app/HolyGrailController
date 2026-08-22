@@ -134,7 +134,6 @@ namespace csjson
 		{
 			j["type"]  = static_cast<int>(c.type);
 			j["name"]  = c.name;
-			j["color"] = c.color;
 			j["limitBright"] = expToJson(c.limitBright);
 			j["limitDark"]   = expToJson(c.limitDark);
 			j["initial"] = expToJson(c.initial);
@@ -147,7 +146,6 @@ namespace csjson
 		void baseFromJson(const json& j, hgc::ccmBase& c)
 		{
 			c.name  = j.value("name", std::string());
-			c.color = j.value("color", 0u);
 			if (j.contains("limitBright")) { c.limitBright = expFromJson(j["limitBright"]); }
 			if (j.contains("limitDark"))   { c.limitDark   = expFromJson(j["limitDark"]); }
 			// 基準(iso/ss/fn。JSONキーは initial 維持)。後方互換: 旧 initialBright(bool) しか無ければ限界から派生する
