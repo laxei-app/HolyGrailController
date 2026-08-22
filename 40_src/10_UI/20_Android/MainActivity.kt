@@ -124,6 +124,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private val disconnectedPlans = mutableSetOf<String>() // カメラ未検出(NOCAMERA/旧DISCONNECTED)の計画 id 群=✖点灯
     private val waitingPlans = mutableSetOf<String>()    // 撮影要求済・撮影窓前で待機中(カメラOK)の計画 id 群=カメラ点灯
     private val nocamDialogShown = mutableSetOf<String>() // カメラ未検出ポップアップを表示済みの計画 id(多重表示抑止。Phase3)
+    // 計画ごとの最新の進捗。ポーリング/イベントが来るたびに、その計画を表示中かどうかに関わらず必ず入れる。
+    //  こうしておくと、詳細を別の計画へ切り替えた瞬間に「次のポーリングを待たずに」今の枚数と残り時間を
+    //  出せる。従来は受信したその場で「表示中の計画なら」書いていたので、切り替え直後は枚数の無い
+    //  「● 撮影中」だけになり、数秒経つまで実態が分からなかった。
+    private data class CapProgress(val frame: Int, val total: Int, val remainSec: Int)
+    private val planProgress = mutableMapOf<String, CapProgress>()
+    // 進捗JSON({"frame","total","remainSec"})を計画ごとに控える。総数が入っていないものは捨てる
+    //  (0/0枚 と出すくらいなら、枚数なしの表示に留めるほうが誤解が無い)。
+    private fun rememberProgress(planId: String, o: JSONObject) {
+        if (planId.isEmpty()) return
+        val total = o.optInt("total")
+        if (total <= 0) return
+        planProgress[planId] = CapProgress(o.optInt("frame"), total, o.optInt("remainSec"))
+    }
     // 項目11: 撮影開始前(待機中)に未検出ポップアップを出した計画 id。待機中は1回だけ出すために使う。
     //  clearNoCam(状態復帰)では消さない — 消すと NOCAMERA↔SEARCHING の往復で毎回出てしまう。
     //  中止/エッジから削除で消し、次に開始要求したときは再び1回出るようにする。
@@ -349,7 +363,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 for (pid in localPlans) {
                     val pj = try { HgeNative.nativeEdgeProgress(ed.addr(), ed.port, pid) } catch (_: Exception) { "" }
                     if (pj.isEmpty()) continue
-                    val st = try { JSONObject(pj).optInt("state", HgeNative.ST_IDLE) } catch (_: Exception) { HgeNative.ST_IDLE }
+                    val po = try { JSONObject(pj) } catch (_: Exception) { JSONObject() }
+                    val st = po.optInt("state", HgeNative.ST_IDLE)
                     val active = st == HgeNative.ST_CAPTURING || st == HgeNative.ST_SEARCHING || st == HgeNative.ST_WAITING ||
                                  st == HgeNative.ST_NOCAMERA || st == HgeNative.ST_DISCONNECTED || st == HgeNative.ST_STOPPING
                     if (!active) continue   // このエッジはこの計画を走らせていない(IDLE)
@@ -358,14 +373,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     runOnUiThread {
                         setPlanEdgeName(pid, ed.name)   // この計画のエッジ担当を復元(以降の停止/ポールに使う)
                         when { disc -> disconnectedPlans.add(pid); wait -> waitingPlans.add(pid); else -> { capturingPlans.add(pid); startBlink() } }
-                        if (currentPlanId == pid) {
-                            when {
-                                disc -> { captureStatus.text = "● カメラが見つかりません(エッジ)"; captureStatus.setTextColor(0xFFD32F2F.toInt()) }
-                                wait -> { captureStatus.text = "● 撮影開始待ち(エッジ)"; captureStatus.setTextColor(0xFF1565C0.toInt()) }
-                                else -> { captureStatus.text = "● エッジ撮影中(復元)"; captureStatus.setTextColor(0xFF2E7D32.toInt()) }
-                            }
-                            captureStatus.visibility = View.VISIBLE
-                        }
+                        rememberProgress(pid, po)   // 復元でも枚数を控える(選び直した瞬間に出せる)
+                        refreshCaptureStatusForCurrent()
                         refreshPlanList(); updateReadOnly(); ensureEdgePoll()
                     }
                     // 複数エッジ/複数計画が並行撮影の場合もあるため continue で全て復元する。
@@ -3102,14 +3111,26 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 項目6: 進捗ステータス行(分割バー下)は「選択中の計画」に紐付ける。選択計画の状態で表示/非表示を決める。
     //  ・撮影中/待機/未検出 → その状態を表示(具体的な枚数は各ポーリングが currentPlanId 限定で上書きする)。
     //  ・それ以外(非稼働) → 非表示(前の計画や別カメラの表示を残さない)。2台撮影でも選択した方が出る。
+    //  ステータス行の文言はここだけで作る。ポーリングやイベントは「集合と planProgress を更新して
+    //  この関数を呼ぶ」だけにする(受信した場所ごとに文字列を組み立てると、経路によって出る内容が
+    //  食い違い、切り替え直後だけ枚数が消える、といったことが起きる)。
     private fun refreshCaptureStatusForCurrent() {
         if (!::captureStatus.isInitialized) return
         val id = currentPlanId
+        val onEdge = id.isNotEmpty() && planEdgeName(id).isNotEmpty()
+        val sfx = if (onEdge) "(エッジ)" else ""
+        fun show(text: String, color: Int) {
+            captureStatus.text = text; captureStatus.setTextColor(color); captureStatus.visibility = View.VISIBLE
+        }
         when {
             id.isEmpty() -> captureStatus.visibility = View.GONE
-            disconnectedPlans.contains(id) -> { captureStatus.text = "● カメラが見つかりません"; captureStatus.setTextColor(0xFFD32F2F.toInt()); captureStatus.visibility = View.VISIBLE }
-            capturingPlans.contains(id)    -> { captureStatus.text = "● 撮影中"; captureStatus.setTextColor(0xFF2E7D32.toInt()); captureStatus.visibility = View.VISIBLE }
-            waitingPlans.contains(id) || startingPlans.contains(id) -> { captureStatus.text = "● 撮影開始待ち"; captureStatus.setTextColor(0xFF1565C0.toInt()); captureStatus.visibility = View.VISIBLE }
+            disconnectedPlans.contains(id) -> show("● カメラが見つかりません$sfx", 0xFFD32F2F.toInt())
+            capturingPlans.contains(id)    -> {
+                val head = if (onEdge) "● エッジ撮影中" else "● 撮影中"
+                val p = planProgress[id]
+                show(if (p != null) "$head  ${p.frame}/${p.total}枚  残り${p.remainSec}秒" else head, 0xFF2E7D32.toInt())
+            }
+            waitingPlans.contains(id) || startingPlans.contains(id) -> show("● 撮影開始待ち$sfx", 0xFF1565C0.toInt())
             else -> captureStatus.visibility = View.GONE
         }
     }
@@ -3121,6 +3142,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         stoppingPlans.add(id)
         capturingPlans.remove(id); waitingPlans.remove(id); disconnectedPlans.remove(id)   // 即時にアイコンを戻す
         clearNoCam(id)
+        planProgress.remove(id)   // 中止した計画の枚数は捨てる
         if (capturingPlans.isEmpty()) stopBlink()
         if (currentPlanId == id) captureStatus.visibility = View.GONE
         refreshPlanList(); updateReadOnly()
@@ -3487,11 +3509,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     val o = JSONObject(json)
                     capProgress.text = "frame ${o.optInt("frame")}/${o.optInt("total")}  " +
                         "elapsed ${o.optInt("elapsedSec")}s  remain ${o.optInt("remainSec")}s"
-                    // 表示中の計画の進捗のみステータス行に出す。
-                    if (o.optString("planId") == currentPlanId && currentPlanId.isNotEmpty() && !disconnectedPlans.contains(currentPlanId)) {
-                        captureStatus.text = "● 撮影中  ${o.optInt("frame")}/${o.optInt("total")}枚  残り${o.optInt("remainSec")}秒"
-                        captureStatus.setTextColor(0xFF2E7D32.toInt()); captureStatus.visibility = View.VISIBLE
-                    }
+                    // 表示中かどうかに関わらず控える。描くのは refreshCaptureStatusForCurrent に任せる。
+                    rememberProgress(o.optString("planId"), o)
+                    refreshCaptureStatusForCurrent()
                 }
                 HgeNative.EV_CAPTURED -> {
                     val o = JSONObject(json)
@@ -5553,7 +5573,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     if (disconnectedPlans.add(pid)) changed = true
                     if (capturingPlans.remove(pid)) changed = true
                     if (waitingPlans.remove(pid)) changed = true
-                    if (currentPlanId == pid) { captureStatus.text = "● カメラが見つかりません(エッジ)"; captureStatus.setTextColor(0xFFD32F2F.toInt()); captureStatus.visibility = View.VISIBLE }
+                    refreshCaptureStatusForCurrent()
                     showNoCameraDialog(pid)   // Phase3c: 継続/中止ポップアップ(多重抑止あり)
                 }
                 HgeNative.ST_WAITING, HgeNative.ST_SEARCHING -> {
@@ -5561,21 +5581,23 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     if (capturingPlans.remove(pid)) changed = true
                     if (disconnectedPlans.remove(pid)) changed = true
                     clearNoCam(pid)   // 未検出→待機へ復帰: 表示中のNOCAMERAダイアログを閉じる
-                    if (currentPlanId == pid) { captureStatus.text = "● 撮影開始待ち(エッジ)"; captureStatus.setTextColor(0xFF1565C0.toInt()); captureStatus.visibility = View.VISIBLE }
+                    refreshCaptureStatusForCurrent()
                 }
                 HgeNative.ST_CAPTURING, HgeNative.ST_STOPPING -> {
                     if (capturingPlans.add(pid)) changed = true
                     if (waitingPlans.remove(pid)) changed = true
                     if (disconnectedPlans.remove(pid)) changed = true
                     clearNoCam(pid)   // 未検出→撮影へ復帰: 表示中のNOCAMERAダイアログを閉じる
-                    if (currentPlanId == pid) { captureStatus.text = "● エッジ撮影中  ${o.optInt("frame")}/${o.optInt("total")}枚  残り${o.optInt("remainSec")}秒"; captureStatus.setTextColor(0xFF2E7D32.toInt()); captureStatus.visibility = View.VISIBLE }
+                    rememberProgress(pid, o)
+                    refreshCaptureStatusForCurrent()
                 }
                 HgeNative.ST_IDLE, HgeNative.ST_ERROR -> {   // この計画は終了 → 各集合から除去
                     if (capturingPlans.remove(pid)) changed = true
                     if (waitingPlans.remove(pid)) changed = true
                     if (disconnectedPlans.remove(pid)) changed = true
                     clearNoCam(pid)
-                    if (currentPlanId == pid) captureStatus.visibility = View.GONE
+                    planProgress.remove(pid)   // 終わった計画の枚数は捨てる(次に選んだとき古い値を出さない)
+                    refreshCaptureStatusForCurrent()
                 }
                 // その他(READY 等)は無視
             }
