@@ -2994,14 +2994,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
     }
 
-    // 項目5/6(再修正): 開始要求などの非同期処理が終わっても、ユーザーが見ている計画を勝手に切り替えない。
-    //  native 側の「選択中の計画」は処理の都合で対象計画へ移動するが、UIの表示は動かさず、
-    //  終わったら native の選択を表示中の計画へ戻して UI と native の食い違いを解消する。
-    private fun restoreViewingSelection() {
-        val viewing = currentPlanId
-        if (viewing.isEmpty()) return
-        planExec.execute { try { HgeNative.nativeSelectPlan(viewing) } catch (_: Exception) {} }
-    }
+    // 2026-08-22 に廃止した restoreViewingSelection() の跡地。
+    //  native の「選択中の計画」を操作の都合で動かしてから元へ戻していたが、戻すのが非同期なので
+    //  ユーザーが一覧で計画を選ぶ操作と競り、詳細シートだけ前の計画に化けることがあった。
+    //  操作側が id 指定で計画を扱うようにしたので(nativeCaptureStartPlan / nativeGetPlanJsonById)、
+    //  選択は「ユーザーが一覧でタップしたとき」と「画面再入」だけが動かす。戻す処理は不要。
 
     private fun startPlan(id: String) {
         // 項目A/17: 開始アイコンをタップした瞬間に予約表で二重使用を確かめる。同じカメラを別の計画が
@@ -3033,7 +3030,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (name.isEmpty()) {
             // スマホで撮影。撮影開始要求(§7.4): 重なり2件超/受付100件超は受付時にエラー。
             planExec.execute {
-                HgeNative.nativeSelectPlan(id)
+                // 表示中の計画は動かさない。開始は id 指定でそのまま通る(hge_captureStartPlan)。
                 val r = HgeNative.nativeCaptureStartPlan(id)
                 runOnUiThread {
                     startingPlans.remove(id)   // 開始要求の結果確定
@@ -3043,7 +3040,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         else -> {}   // 待機はタップ時に反映済み。実状態はEV_STATEで即補正される
                     }
                     refreshPlanList(); updateReadOnly()
-                    restoreViewingSelection()   // 項目5: 表示中の計画を勝手に変えない
                 }
             }
             return
@@ -3063,14 +3059,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     return@runOnUiThread
                 }
                 updateEdgeIp(name, e.ip, e.port)   // 解決したIPを保持(停止/状態確認に使う)
-                // 項目5: planExec では「選択→計画JSON取得」だけを素早く原子的に行い(選択中の計画に依存する
-                //  グローバル取得のため直列化が必要)、遅いネットワーク送信は edgeExec へ逃がす。これで送信中も
-                //  計画選択(planExec)が詰まらず UI が固まらない。送る JSON は取得済みの値を startOnEdge へ渡す。
+                // 項目5: planExec では計画JSONの取得だけを素早く行い、遅いネットワーク送信は edgeExec へ
+                //  逃がす。これで送信中も計画選択(planExec)が詰まらず UI が固まらない。
+                // 2026-08-22: 取得を id 指定にした。表示中の計画を一度も動かさないので、後から元へ
+                //  戻す処理(旧 restoreViewingSelection)が要らなくなり、戻しがユーザーの選択と競って
+                //  詳細だけ前の計画に化ける不具合が原理的に起きなくなる。
                 planExec.execute {
-                    HgeNative.nativeSelectPlan(id)
-                    val planJson = try { HgeNative.nativeGetPlanJson() } catch (_: Exception) { "" }
-                    // 待機はタップ時に反映済み。項目5: 表示中の計画は動かさず、選択だけ元へ戻す。
-                    runOnUiThread { refreshPlanList(); updateReadOnly(); restoreViewingSelection() }
+                    val planJson = try { HgeNative.nativeGetPlanJsonById(id) } catch (_: Exception) { "" }
+                    runOnUiThread { refreshPlanList(); updateReadOnly() }
                     edgeExec.execute { startOnEdge(e, id, planJson) }   // 遅いI/Oは専用スレッドで(planExecを塞がない)
                 }
             }

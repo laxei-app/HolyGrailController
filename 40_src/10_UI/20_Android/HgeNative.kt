@@ -52,6 +52,8 @@ object HgeNative {
     external fun nativePokeAcquire(planId: String): Int   // 継続: スマホ直接撮影のNOCAMERA計画に即再探索を促す
     external fun nativeScheduleJson(): String
     external fun nativeGetPlanJson(): String
+    // 指定 id の計画JSON。表示中の計画を切り替えずに取り出す(エッジ送信用)
+    external fun nativeGetPlanJsonById(planId: String): String
     external fun nativeSetPlanJson(json: String): Int   // 撮影計画(cs)JSONを現在の編集計画へ復元(変更の取り消し用)
     // 撮影シミュレーション(画面360)。恒星リスト(fixed_star.json)を一度読み込む(戻り=星数)。
     external fun nativeSimLoadStars(starsJson: String): Int

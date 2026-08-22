@@ -183,6 +183,21 @@ Java_app_laxei_holygrail_HgeNative_nativeGetPlanJson(JNIEnv* env, jobject /*thiz
 	return env->NewStringUTF(buf.data());
 }
 
+// 指定 id の計画JSON。編集対象(画面が表示している計画)を動かさずに取り出す。
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeGetPlanJsonById(JNIEnv* env, jobject /*thiz*/, jstring id)
+{
+	const char* s = id ? env->GetStringUTFChars(id, nullptr) : nullptr;
+	int32_t len = 0;
+	hge_getPlanJsonById(s ? s : "", nullptr, &len);
+	if (len <= 0) { if (s) { env->ReleaseStringUTFChars(id, s); } return env->NewStringUTF(""); }
+	std::vector<char> buf(static_cast<size_t>(len));
+	const int32_t r = hge_getPlanJsonById(s ? s : "", buf.data(), &len);
+	if (s) { env->ReleaseStringUTFChars(id, s); }
+	if (r != 0) { return env->NewStringUTF(""); }
+	return env->NewStringUTF(buf.data());
+}
+
 // 撮影計画(cs)JSONを現在の編集計画へ復元する(変更の取り消し用)。保存はしない。
 JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeSetPlanJson(JNIEnv* env, jobject /*thiz*/, jstring json)

@@ -1739,6 +1739,54 @@ int32_t hge_getPlanJson(char* buf, int32_t* inoutLen)
 	return ERR_HGC_OK;
 }
 
+// 指定 id の撮影計画を JSON で取り出す。**編集対象(g_plan/g_editId)には触れない**。
+//
+// 【なぜ要るか】これまでは別の計画をエッジへ送るとき hge_selectPlan で編集対象を移し、
+//  取り終わってから元へ戻していた。戻すのが非同期なので、その隙にユーザーが一覧で計画を
+//  選ぶと戻し処理が後から走り、画面の詳細だけ前の計画に化けていた(一覧は新しい計画・
+//  詳細は前の計画)。取り出しが編集対象を動かさなければ、戻す処理そのものが要らなくなる。
+//
+// 中身は loadPlanById と同じ整え方を、g_plan ではなく手元の cs に対して行う
+//  (機材が空なら出荷時で補う → 撮影制御方法が欠けていたら初期値で補う → スケジュール再生成)。
+//  そうしないと、これまで hge_selectPlan 経由で得ていた JSON と中身が変わってしまう。
+int32_t hge_getPlanJsonById(const char* id, char* buf, int32_t* inoutLen)
+{
+	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
+	if (id == nullptr || id[0] == '\0') { return ERR_HGC_INVALID_ARG; }
+	if (!g_planReady)
+	{
+		errCode e = loadFixedPlanImpl();	// g_offMin(タイムゾーン)を確保するため
+		if (e != ERR_HGC_OK) { return e; }
+	}
+	// 編集対象そのものなら、既にメモリ上にある編集中の姿を返す(未保存の変更も含めるため)。
+	if (std::string(id) == g_editId) { return hge_getPlanJson(buf, inoutLen); }
+
+	std::string saved; hgc::cs cs;
+	if (!dataManager::loadPlanFile(id, saved) ||
+	    !csjson::fromJson(saved, cs)) { return ERR_HGC_NO_ELEMENT; }
+	if (cs.camera.model.empty())
+	{
+		hgc::cs fp; dataManager::factoryFixedPlan(fp);
+		cs.camera = fp.camera;
+		cs.lens   = fp.lens;
+	}
+	if (!cs.ccm.complete()) { seedPlanCcmFromDefaults(cs); }
+	const errCode be = astro::buildSchedule(cs, g_offMin);
+	if (be != ERR_HGC_OK) { return be; }
+	applyOwnedCameraSettings(cs.camera);
+
+	std::string s = csjson::toJson(cs);
+	int32_t need = static_cast<int32_t>(s.size()) + 1;
+	if (buf == nullptr || *inoutLen < need)
+	{
+		*inoutLen = need;
+		return ERR_HGC_BUF_SHORT;
+	}
+	std::memcpy(buf, s.c_str(), need);
+	*inoutLen = need;
+	return ERR_HGC_OK;
+}
+
 int32_t hge_savePlan(void)
 {
 	if (!g_planReady)
