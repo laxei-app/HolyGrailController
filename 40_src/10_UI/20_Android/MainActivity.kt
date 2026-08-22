@@ -730,8 +730,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         gearItem(box, "撮影計画") { flipper.displayedChild = 0 }
         gearItem(box, "撮影場所") { openPlacesList() }
         gearItem(box, "カメラ予約表") { openReserveTable() }   // 項目17
-        gearItem(box, "操作履歴") { openHistory() }            // 項目9
-        gearItem(box, "撮影レポート") { openReportList() }     // 670: 撮影1回ぶんの結果と所見
         gearBand(box, "撮影制御方法 初期値")
         // 項目3: 「月の影響への対処」は撮影制御方法初期値から削除。
         gearItem(box, "夜間撮影") { openPresetScreen("night") }
@@ -763,6 +761,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         gearBand(box, "ログ")
         // 撮影中/開始要求中はグレー表示で不可(コピー処理が撮影と競合しないように)。
         gearItem(box, "ログ取得", enabled = !isCaptureBusy()) { retrieveLogs() }
+        // この2つは「撮影計画」ではなく「記録を見る」側なのでログの下へ置く(2026-08-23 UI依頼)。
+        gearItem(box, "操作履歴") { openHistory() }            // 項目9
+        gearItem(box, "撮影レポート") { openReportList() }     // 670: 撮影1回ぶんの結果と所見
 
         // 版数を一番下に出す(2026-08-08 UI依頼)。どのビルドを使っているかを画面だけで確認できる。
         // major.minor はエッジ端末と一致させる約束なので、食い違っていたらどちらかの書き込み漏れ。
