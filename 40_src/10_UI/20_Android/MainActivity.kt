@@ -4064,7 +4064,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             return
         }
         // 一覧は新しい順。選択が無い/消えたときは一番新しいものを開く。
-        val names = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("name") }
+        val names = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("name") }.filter { it.isNotEmpty() }
         if (selectedReport == null || selectedReport !in names) { selectedReport = names.firstOrNull() }
         for (i in 0 until arr.length()) {
             val o = arr.optJSONObject(i) ?: continue
@@ -4075,8 +4075,24 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 o.optString("plan"), o.optString("camera"), o.optInt("frames"),
                 if (edge.isNotEmpty()) "   $edge" else "",
                 if (notes > 0) "   所見 ${notes}件" else "")
-            val menu: List<Pair<String, () -> Unit>> = listOf("削除" to { confirmDeleteReport(name) })
-            box.addView(listRow(o.optString("shotAt").ifEmpty { name }, sub, name == selectedReport,
+            val title = o.optString("shotAt").ifEmpty { name }
+            // 一覧は新しい順なので「これより古い」= この行より下に並んでいるものすべて。
+            // 読めなかったレポートは shotAt を持たず末尾へ落ちているので、ここにも入る(消せるようにしておく)。
+            val idx = names.indexOf(name)
+            val older = if (idx < 0) emptyList() else names.drop(idx + 1)
+            val menu: MutableList<Pair<String, () -> Unit>> = mutableListOf()
+            menu.add("削除" to { confirmDeleteReport(name) })
+            if (older.isNotEmpty()) {
+                menu.add("これより古いレポート削除" to {
+                    confirmDeleteReports("これより古いレポートの削除",
+                        "「$title」より古いレポート ${older.size}件を削除しますか？", older)
+                })
+            }
+            menu.add("全レポート削除" to {
+                confirmDeleteReports("全レポートの削除",
+                    "撮影レポート ${names.size}件をすべて削除しますか？", names)
+            })
+            box.addView(listRow(title, sub, name == selectedReport,
                 { selectedReport = name; buildReportList(); buildReportDetail() }, menu))
             box.addView(thinDivider())
         }
@@ -4118,6 +4134,28 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 HgeNative.nativeRemoveReport(name)
                 if (selectedReport == name) { selectedReport = null }
                 buildReportList(); buildReportDetail()
+            }
+            .setNegativeButton("やめる", null)
+            .show()
+    }
+
+    // まとめ削除(「これより古い」/「全部」)。渡す名前は一覧と同じ新しい順。
+    // スマホに保存されているレポートだけを消す(エッジに残っているものは次のスイープでまた拾う)。
+    private fun confirmDeleteReports(title: String, message: String, names: List<String>) {
+        if (names.isEmpty()) { return }
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage("$message" + "\n" + "削除したレポートは戻せません。")
+            .setPositiveButton("削除する") { _, _ ->
+                var ok = 0
+                for (n in names) { if (HgeNative.nativeRemoveReport(n) == 0) { ok++ } }
+                if (selectedReport in names) { selectedReport = null }
+                buildReportList(); buildReportDetail()
+                val ng = names.size - ok
+                Toast.makeText(this,
+                    if (ng == 0) "撮影レポート ${ok}件を削除しました"
+                    else "撮影レポート ${ok}件を削除しました(${ng}件は削除できませんでした)",
+                    Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("やめる", null)
             .show()
