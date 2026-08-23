@@ -165,11 +165,25 @@
                         android:layout_height="wrap_content" android:text="検索" />
                 </LinearLayout>
 
-                <!-- カメラ/レンズ -->
-                <TextView android:id="@+id/plan_cameraText" android:layout_width="match_parent"
-                    android:layout_height="wrap_content" android:layout_marginTop="8dp" android:text="カメラ: Canon EOS R10" />
-                <TextView android:id="@+id/plan_lensText" android:layout_width="match_parent"
-                    android:layout_height="wrap_content" android:text="レンズ: SIGMA 12mm F1.4 DC" />
+                <!-- カメラ/レンズ。上の撮影場所/エッジ端末と同じ、見出し 96dp + 内容の並びに揃える。 -->
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp" android:orientation="horizontal">
+                    <TextView android:id="@+id/plan_cameraLabel" android:layout_width="96dp"
+                        android:layout_height="wrap_content" android:text="カメラ" android:textStyle="bold"
+                        android:clickable="true" android:focusable="true" />
+                    <TextView android:id="@+id/plan_cameraText" android:layout_width="0dp"
+                        android:layout_weight="1" android:layout_height="wrap_content"
+                        android:text="Canon EOS R10" />
+                </LinearLayout>
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp" android:orientation="horizontal">
+                    <TextView android:id="@+id/plan_lensLabel" android:layout_width="96dp"
+                        android:layout_height="wrap_content" android:text="レンズ" android:textStyle="bold"
+                        android:clickable="true" android:focusable="true" />
+                    <TextView android:id="@+id/plan_lensText" android:layout_width="0dp"
+                        android:layout_weight="1" android:layout_height="wrap_content"
+                        android:text="SIGMA 12mm F1.4 DC" />
+                </LinearLayout>
                 <!-- センサー/焦点距離/画角はここから撮影シミュレーション画面へ移した(2026-08-08 UI依頼)。
                      撮影計画の1ページ目は「何を・いつ・どの機材で撮るか」に絞り、画角の確認は
                      実際に画角が見えるシミュレーション画面で行う。 -->

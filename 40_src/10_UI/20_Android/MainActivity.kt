@@ -611,6 +611,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 撮影計画(330)のカメラ/レンズをタップで所持から選択する。
         cameraText.setOnClickListener { choosePlanCamera() }
         lensText.setOnClickListener { choosePlanLens() }
+        // 見出しを押しても選択に入れる(撮影場所/エッジ端末と揃える)。
+        findViewById<TextView>(R.id.plan_cameraLabel).setOnClickListener { choosePlanCamera() }
+        findViewById<TextView>(R.id.plan_lensLabel).setOnClickListener { choosePlanLens() }
         findViewById<Button>(R.id.cmenu_night).setOnClickListener { openCcmEdit("night") }
         findViewById<Button>(R.id.cmenu_sunrise).setOnClickListener { openCcmEdit("sunrise") }
         findViewById<Button>(R.id.cmenu_sunset).setOnClickListener { openCcmEdit("sunset") }
@@ -3591,8 +3594,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
             latlngText.text = o.optString("latlng") + "  標高 " + o.optInt("altitude") + "m"
             // 同機種を複数台持つと名称だけでは区別できないので、カメラ本体で付けた名前を添える。
             val camAn = o.optString("cameraAssignedName")
-            cameraText.text = "カメラ: " + o.optString("camera") + (if (camAn.isNotEmpty()) "  ($camAn)" else "")
-            lensText.text = "レンズ: " + o.optString("lens")
+            // 見出しはレイアウト側にあるので、ここは中身だけを入れる。
+            cameraText.text = o.optString("camera") + (if (camAn.isNotEmpty()) "  ($camAn)" else "")
+            lensText.text = o.optString("lens")
             // センサー/焦点距離/画角は撮影シミュレーション画面へ移した(2026-08-08 UI依頼)。
             // センサー寸法はマスターにある機種しか分からない。未登録のときに 0.0×0.0 と出すと
             // 値が入っているように見えるので、寸法も画角も出さない(2026-08-19)。
