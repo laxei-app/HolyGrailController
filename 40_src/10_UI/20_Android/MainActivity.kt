@@ -176,7 +176,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private var planReadOnly = false                 // 撮影中の計画を表示中=編集不可(item7)
     private var blinkOn = true              // 撮影中カメラアイコンの点滅状態
     private lateinit var edgeSpinner: Spinner
-    private lateinit var edgeSearchButton: Button
     private lateinit var searchButton: Button
     private lateinit var ipInput: EditText
     private lateinit var connectButton: Button
@@ -441,7 +440,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         planListContainer = findViewById(R.id.plan_listContainer)
         captureStatus = findViewById(R.id.plan_captureStatus)
         edgeSpinner = findViewById(R.id.plan_edgeSpinner)
-        edgeSearchButton = findViewById(R.id.plan_edgeSearchButton)
         searchButton = findViewById(R.id.searchButton)
         ipInput = findViewById(R.id.ipInput)
         connectButton = findViewById(R.id.connectButton)
@@ -510,12 +508,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
             // 項目6c: スマホからの停止は、エッジ担当なら停止に加えてエッジからも削除しロック解除する。
             stopPlanFromPhone(currentPlanId)
             flipper.displayedChild = 0
-        }
-        edgeSearchButton.setOnClickListener {
-            Thread {
-                val js = HgeNative.nativeEdgeSearch(2000)
-                runOnUiThread { onEdgesFound(js) }
-            }.start()
         }
         // スピナーでエッジを選ぶと、表示中の計画にその選択を保存する(計画ごとにエッジを指定)。
         //  ユーザーがスピナーに触れた時だけ保存を許す。プログラムによる同期(refreshEdgeSpinner)で届く
@@ -5031,7 +5023,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // plan_endDate は自動決定で常時グレー・タップ不可のため対象外(2026-08-08 UI依頼)。
         intArrayOf(R.id.plan_startDate, R.id.plan_startTime, R.id.plan_endTime,
             R.id.plan_gearConst,
-            R.id.plan_edgeSearchButton, R.id.searchButton, R.id.connectButton)
+            R.id.searchButton, R.id.connectButton)
             .forEach { findViewById<View>(it).isEnabled = ed }
         intervalText.isEnabled = ed; landscapeCheck.isEnabled = ed
         cameraText.isEnabled = ed; lensText.isEnabled = ed; edgeSpinner.isEnabled = ed
@@ -5534,21 +5526,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // 検索で見つかったエッジを登録一覧へ統合する(名称で重複判定、IPは最新へ更新)。手動登録分は残す。
-    private fun onEdgesFound(jsonArray: String) {
-        try {
-            val arr = JSONArray(jsonArray)
-            for (i in 0 until arr.length()) {
-                val o = arr.getJSONObject(i)
-                val nm = o.optString("name"); if (nm.isEmpty()) continue
-                val ip = o.optString("ip"); val port = o.optInt("port", 50506)
-                val idx = edges.indexOfFirst { it.name == nm }
-                if (idx >= 0) edges[idx] = Edge(nm, ip, port) else edges.add(Edge(nm, ip, port))
-            }
-        } catch (_: Exception) {}
-        saveRegisteredEdges()
-        refreshEdgeSpinner()
-    }
-
     // エッジ端末名はエッジのLCD(英字フォントのみ表示)で出すため、印字可能なASCIIのみ許可する。
     // 日本語などの非ASCIIはエッジで表示できないため入力段階で弾く(貼り付けも除去)。
     private fun asciiEdgeNameFilter() = android.text.InputFilter { source, start, end, _, _, _ ->

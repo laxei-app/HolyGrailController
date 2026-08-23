@@ -161,8 +161,6 @@
                         android:clickable="true" android:focusable="true" />
                     <Spinner android:id="@+id/plan_edgeSpinner" android:layout_width="0dp"
                         android:layout_weight="1" android:layout_height="wrap_content" />
-                    <Button android:id="@+id/plan_edgeSearchButton" android:layout_width="wrap_content"
-                        android:layout_height="wrap_content" android:text="検索" />
                 </LinearLayout>
 
                 <!-- カメラ/レンズ。上の撮影場所/エッジ端末と同じ、見出し 96dp + 内容の並びに揃える。 -->
