@@ -202,23 +202,33 @@
                      撮影計画の1ページ目は「何を・いつ・どの機材で撮るか」に絞り、画角の確認は
                      実際に画角が見えるシミュレーション画面で行う。 -->
 
-                <!-- 撮影周期(タップでキーボード入力) + 横向き(ランドスケープ) -->
+                <!-- 撮影周期 / 横向き。上の項目と同じ、見出し 96dp + 内容の並びに揃える。 -->
                 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp" android:orientation="horizontal" android:gravity="center_vertical">
-                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                        android:text="撮影周期 " android:textSize="14sp" />
+                    android:layout_marginTop="12dp" android:orientation="horizontal" android:gravity="center_vertical">
+                    <TextView android:layout_width="96dp" android:layout_height="wrap_content"
+                        android:text="撮影周期" android:textStyle="bold" />
                     <TextView android:id="@+id/plan_intervalText" android:layout_width="wrap_content"
                         android:layout_height="wrap_content" android:clickable="true" android:focusable="true"
                         android:background="#F0F0F0" android:padding="6dp" android:text="15秒"
                         android:textSize="15sp" android:textStyle="bold" />
-                    <CheckBox android:id="@+id/plan_landscape" android:layout_width="wrap_content"
-                        android:layout_height="wrap_content" android:layout_marginStart="12dp"
-                        android:text="横向きで撮る" android:textSize="13sp" />
                 </LinearLayout>
-                <!-- NPF シャッター速度(参考表示) / 最小撮影周期 -->
-                <TextView android:id="@+id/plan_npfText" android:layout_width="match_parent"
-                    android:layout_height="wrap_content" android:textSize="12sp" android:textColor="#888888"
-                    android:text="NPF -- 秒   最小周期 -- 秒" />
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp" android:orientation="horizontal" android:gravity="center_vertical">
+                    <TextView android:layout_width="96dp" android:layout_height="wrap_content"
+                        android:text="横向きで撮る" android:textStyle="bold" />
+                    <CheckBox android:id="@+id/plan_landscape" android:layout_width="wrap_content"
+                        android:layout_height="wrap_content" />
+                </LinearLayout>
+                <!-- NPF シャッター速度(参考表示) / 最小撮影周期。
+                     見出しは無いが、**内容の列**(96dp の右)に揃えて置く。 -->
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+                    <Space android:layout_width="96dp" android:layout_height="1dp" />
+                    <TextView android:id="@+id/plan_npfText" android:layout_width="0dp"
+                        android:layout_weight="1" android:layout_height="wrap_content"
+                        android:textSize="12sp" android:textColor="#888888"
+                        android:text="NPF -- 秒   最小周期 -- 秒" />
+                </LinearLayout>
                 <Button android:id="@+id/plan_gearConst" style="?android:attr/buttonBarButtonStyle"
                     android:layout_width="wrap_content" android:layout_height="wrap_content"
                     android:text="センサー/レンズ定数を変更" android:textSize="12sp" />
