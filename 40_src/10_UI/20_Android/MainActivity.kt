@@ -945,7 +945,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         startDirtyWatch(colorCancel) { "${colorTextPicker?.color ?: 0},${colorBgPicker?.color ?: 0}" }
     }
 
-    private fun leaveColorScreen() { stopDirtyWatch(); saveColorScreen(); flipper.displayedChild = 4; buildGearMenu() }
+    // メニューの作り直しは saveColorScreen の保存完了後にやる。
+    // ここで同期に呼ぶと、保存と読み直しを待たずに描いて古い色が出る。
+    private fun leaveColorScreen() { stopDirtyWatch(); saveColorScreen(); flipper.displayedChild = 4 }
 
     // ---------- 630 露出平滑化(自動露出 全体設定。settings.json) ----------
     private fun openSmoothingScreen() {
@@ -980,7 +982,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val one = JSONObject().put("text", tp.color and 0xFFFFFF).put("bg", bp.color and 0xFFFFFF)
         all.put(colorType, one)
         val js = all.toString()
-        Thread { HgeNative.nativeSetColors(js); runOnUiThread { loadColors() } }.start()
+        // 保存は別スレッド。完了後に読み直してから、色を焼き込んでいる画面を作り直す。
+        //  バンド(renderOverview)と薄明ページ(rebuildTwilightPages)は生成時の色を持つので、
+        //  キャッシュを更新するだけでは変わらない(計画を編集するまで古い色のままだった)。
+        //  メニューの色チップも、ここで作ることで 1回ぶん遅れなくなる。
+        Thread {
+            HgeNative.nativeSetColors(js)
+            runOnUiThread {
+                loadColors()
+                buildGearMenu()
+                if (latestSchedule.isNotEmpty()) { updatePlanDisplay(latestSchedule) }
+            }
+        }.start()
     }
 
     // 600メニューから撮影制御方法の初期値を直接編集する(中間メニューを廃止)。
