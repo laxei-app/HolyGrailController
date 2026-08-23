@@ -81,17 +81,6 @@
                 android:orientation="vertical"
                 android:padding="12dp">
 
-                <!-- 撮影中ステータス(撮影中のみ表示。読取専用) -->
-                <TextView
-                    android:id="@+id/plan_captureStatus"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:visibility="gone"
-                    android:textColor="#D32F2F"
-                    android:textStyle="bold"
-                    android:textSize="13sp"
-                    android:text="撮影中" />
-
                 <!-- 撮影開始/終了 -->
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -100,6 +89,28 @@
                     android:background="#F0F0F0"
                     android:orientation="vertical"
                     android:padding="8dp">
+
+                    <!-- 撮影開始の上の行。左は撮影中の進捗、右は「変更の取り消し」。
+                         進捗は出ていないときも場所を残す(visibility は gone にしない)。
+                         撮影を始めても下の行が上下に動かないようにするため。 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+                        <TextView
+                            android:id="@+id/plan_captureStatus"
+                            android:layout_width="0dp"
+                            android:layout_weight="1"
+                            android:layout_height="wrap_content"
+                            android:textColor="#D32F2F"
+                            android:textStyle="bold"
+                            android:textSize="13sp"
+                            android:text="" />
+                        <Button android:id="@+id/plan_resetButton"
+                            android:layout_width="wrap_content" android:layout_height="wrap_content"
+                            android:text="リセット" android:textSize="12sp" />
+                    </LinearLayout>
 
                     <LinearLayout
                         android:layout_width="match_parent"
@@ -131,9 +142,6 @@
                             android:drawableStart="@drawable/ic_clock" android:text="02:00" />
                     </LinearLayout>
 
-                    <Button android:id="@+id/plan_resetButton"
-                        android:layout_width="wrap_content" android:layout_height="wrap_content"
-                        android:layout_gravity="end" android:text="リセット" android:textSize="12sp" />
                 </LinearLayout>
 
                 <!-- 撮影場所。見出しの右に内容を並べる(2026-08-23 UI依頼)。

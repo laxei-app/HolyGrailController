@@ -3134,10 +3134,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val onEdge = id.isNotEmpty() && planEdgeName(id).isNotEmpty()
         val sfx = if (onEdge) "(エッジ)" else ""
         fun show(text: String, color: Int) {
-            captureStatus.text = text; captureStatus.setTextColor(color); captureStatus.visibility = View.VISIBLE
+            captureStatus.text = text; captureStatus.setTextColor(color)
         }
         when {
-            id.isEmpty() -> captureStatus.visibility = View.GONE
+            id.isEmpty() -> captureStatus.text = ""
             disconnectedPlans.contains(id) -> show("● カメラが見つかりません$sfx", 0xFFD32F2F.toInt())
             capturingPlans.contains(id)    -> {
                 val head = if (onEdge) "● エッジ撮影中" else "● 撮影中"
@@ -3145,7 +3145,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 show(if (p != null) "$head  ${p.frame}/${p.total}枚  残り${p.remainSec}秒" else head, 0xFF2E7D32.toInt())
             }
             waitingPlans.contains(id) || startingPlans.contains(id) -> show("● 撮影開始待ち$sfx", 0xFF1565C0.toInt())
-            else -> captureStatus.visibility = View.GONE
+            else -> captureStatus.text = ""
         }
     }
 
@@ -3158,7 +3158,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         clearNoCam(id)
         planProgress.remove(id)   // 中止した計画の枚数は捨てる
         if (capturingPlans.isEmpty()) stopBlink()
-        if (currentPlanId == id) captureStatus.visibility = View.GONE
+        if (currentPlanId == id) captureStatus.text = ""
         refreshPlanList(); updateReadOnly()
         Thread { runCatching { doStop() } }.start()
         // 保険: 一定時間内に IDLE を検知できなくても抑止/集合を掃除し、UIとポーリングを正常化する。
@@ -3166,7 +3166,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             if (stoppingPlans.remove(id)) {
                 capturingPlans.remove(id); waitingPlans.remove(id); disconnectedPlans.remove(id); clearNoCam(id)
                 if (capturingPlans.isEmpty()) stopBlink()
-                if (currentPlanId == id) captureStatus.visibility = View.GONE
+                if (currentPlanId == id) captureStatus.text = ""
                 refreshPlanList(); updateReadOnly()
                 if (activeEdgePlans().isEmpty()) handler.removeCallbacks(edgePoll)
             }
@@ -5607,7 +5607,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     stoppingPlans.remove(pid)
                     capturingPlans.remove(pid); waitingPlans.remove(pid); disconnectedPlans.remove(pid); clearNoCam(pid)
                     if (capturingPlans.isEmpty()) stopBlink()
-                    if (currentPlanId == pid) captureStatus.visibility = View.GONE
+                    if (currentPlanId == pid) captureStatus.text = ""
                     refreshPlanList(); updateReadOnly()
                     if (activeEdgePlans().isEmpty()) handler.removeCallbacks(edgePoll)
                 }
@@ -5988,7 +5988,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     //  送信が成功した=エッジが持っている、は我々が確実に知っている事実なので待つ必要がない。
                     edgeHeldByEdge.getOrPut(e.name) { mutableSetOf() }.add(planId)
                     // waitingPlans には startPlan で追加済み。以降は edgePoll(全エッジ計画対象)が各計画の状態を反映する。
-                    if (currentPlanId == planId) { captureStatus.text = "● エッジ端末へ転送・撮影開始"; captureStatus.visibility = View.VISIBLE }
+                    if (currentPlanId == planId) { captureStatus.text = "● エッジ端末へ転送・撮影開始" }
                     ensureEdgePoll()
                 } else {
                     capturingPlans.remove(planId); waitingPlans.remove(planId); disconnectedPlans.remove(planId)
