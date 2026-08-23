@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <!-- 330 撮影計画設定(仕様書10 §7.3)。横スライドのページ構成:
      ページ0(先頭)=計画リスト+概要スケジュール+編集項目(縦スクロール可)。
      ページ1..=薄明スケジュール(ScheduleView。動的に追加。縦スクロールなし)。分割バーは廃止。 -->
@@ -226,9 +226,6 @@
                     <CheckBox android:id="@+id/plan_landscape" android:layout_width="wrap_content"
                         android:layout_height="wrap_content" />
                 </LinearLayout>
-                <Button android:id="@+id/plan_gearConst" style="?android:attr/buttonBarButtonStyle"
-                    android:layout_width="wrap_content" android:layout_height="wrap_content"
-                    android:text="センサー/レンズ定数を変更" android:textSize="12sp" />
 
                 <!-- 項目11: 「開始時の撮影方向/仰角」はここから削除した。朝日/夕日帯の自動判定(画角ゲート)を
                      廃止し、帯はユーザーが挿入/削除できるようになったため。方向/仰角は撮影シミュレーション

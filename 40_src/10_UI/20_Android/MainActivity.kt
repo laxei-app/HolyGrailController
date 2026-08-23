@@ -549,7 +549,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
             planExec.execute { HgeNative.nativeSetPlanLandscape(if (checked) 1 else 0) }
         }
         // センサー/レンズ定数の変更(機材リストに無い値の参考用)。
-        findViewById<Button>(R.id.plan_gearConst).setOnClickListener { editGearConst() }
         // 撮影制御方法の編集ボタン(全種・固定配置)をスケジュールの下に構築する。
         buildCcmEditButtons()
         // メニュー(plan_menu→600.メニュー)。帯付きの一覧から各画面へ分岐。
@@ -5033,7 +5032,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // plan_resetButton(=変更の取り消し)は planDirtyWatch が有効/無効を管理(撮影中は自動で無効)。
         // plan_endDate は自動決定で常時グレー・タップ不可のため対象外(2026-08-08 UI依頼)。
         intArrayOf(R.id.plan_startDate, R.id.plan_startTime, R.id.plan_endTime,
-            R.id.plan_gearConst,
             R.id.searchButton, R.id.connectButton)
             .forEach { findViewById<View>(it).isEnabled = ed }
         intervalText.isEnabled = ed; landscapeCheck.isEnabled = ed
@@ -5088,34 +5086,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // センサー/レンズ定数を変更する(機材リストに無い値の参考用。NPF/画角が再計算される)。
-    private fun editGearConst() {
-        val o = try { JSONObject(latestSchedule) } catch (_: Exception) { JSONObject() }
-        val box = LinearLayout(this); box.orientation = LinearLayout.VERTICAL; box.setPadding(dp(16), dp(8), dp(16), dp(8))
-        fun row(label: String, value: String): EditText {
-            val t = TextView(this); t.text = label; t.textSize = 12f; box.addView(t)
-            val e = EditText(this); e.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-            e.setText(value); box.addView(e); return e
-        }
-        val eW = row("センサー横[mm]", o.optDouble("sensorW").toString())
-        val eH = row("センサー縦[mm]", o.optDouble("sensorH").toString())
-        val eP = row("センサー横[pixel]", o.optInt("pixelW").toString())
-        val eF = row("焦点距離[mm]", o.optInt("focalLength").toString())
-        val eN = row("開放F値", o.optDouble("fn").toString())
-        androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("センサー/レンズ定数")
-            .setView(box)
-            .setPositiveButton("適用") { _, _ ->
-                val j = JSONObject()
-                eW.text.toString().toDoubleOrNull()?.let { j.put("sensorW", it) }
-                eH.text.toString().toDoubleOrNull()?.let { j.put("sensorH", it) }
-                eP.text.toString().toIntOrNull()?.let { j.put("pixelW", it) }
-                eF.text.toString().toDoubleOrNull()?.let { j.put("focalLength", it) }
-                eN.text.toString().toDoubleOrNull()?.let { j.put("fn", it) }
-                planExec.execute { HgeNative.nativeSetPlanGearConst(j.toString()) }
-            }
-            .setNegativeButton("キャンセル", null)
-            .show()
-    }
 
     // --- エッジ端末 ---
     private fun selectedEdge(): Edge? {

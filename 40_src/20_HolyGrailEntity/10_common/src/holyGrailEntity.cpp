@@ -2091,24 +2091,6 @@ int32_t hge_setPlanLandscape(int32_t landscape)
 	return saveCurrentPlan();	// 編集を即永続化
 }
 
-int32_t hge_setPlanGearConstJson(const char* json)
-{
-	if (json == nullptr) { return ERR_HGC_INVALID_ARG; }
-	if (!g_planReady) { errCode e = loadFixedPlanImpl(); if (e != ERR_HGC_OK) { return e; } }
-	nlohmann::json o = nlohmann::json::parse(json, nullptr, false);
-	if (o.is_discarded() || !o.is_object()) { return ERR_HGC_JSON_PARSE; }
-	if (o.contains("sensorW"))     { g_plan.camera.sensorSize  = o.value("sensorW", g_plan.camera.sensorSize); }
-	if (o.contains("sensorH"))     { g_plan.camera.sensorSizeV = o.value("sensorH", g_plan.camera.sensorSizeV); }
-	if (o.contains("pixelW"))      { g_plan.camera.sensorPixel = o.value("pixelW", g_plan.camera.sensorPixel); }
-	if (o.contains("focalLength")) { g_plan.lens.focalLength   = o.value("focalLength", g_plan.lens.focalLength); }
-	if (o.contains("fn"))          { g_plan.lens.fn            = o.value("fn", g_plan.lens.fn); }
-	errCode e = astro::buildSchedule(g_plan, g_offMin);
-	if (e != ERR_HGC_OK) { return e; }
-	buildScheduleJson();
-	notify(HGE_EV_SCHEDULE, g_schedJson);
-	return saveCurrentPlan();	// 編集を即永続化
-}
-
 int32_t hge_setBandMode(int32_t sunriseMode, int32_t sunsetMode)
 {
 	if (!g_planReady) { errCode e = loadFixedPlanImpl(); if (e != ERR_HGC_OK) { return e; } }

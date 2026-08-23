@@ -329,15 +329,6 @@ Java_app_laxei_holygrail_HgeNative_nativeSetPlanLandscape(JNIEnv* /*env*/, jobje
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetPlanGearConst(JNIEnv* env, jobject /*thiz*/, jstring json_)
-{
-	const char* j = env->GetStringUTFChars(json_, nullptr);
-	jint r = hge_setPlanGearConstJson(j ? j : "");
-	env->ReleaseStringUTFChars(json_, j);
-	return r;
-}
-
-JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeSetBandMode(JNIEnv* /*env*/, jobject /*thiz*/,
                                                      jint sunriseMode, jint sunsetMode)
 {

@@ -105,9 +105,6 @@ int32_t hge_renamePlan(const char* id, const char* name);
 // 横向き(ランドスケープ)を設定する。画角が変わるためスケジュールを再生成し通知する。
 int32_t hge_setPlanLandscape(int32_t landscape);
 
-// 計画のセンサー/レンズ定数を上書きする(機材リストに無い値の参考用。仕様 7.3 §センサーレンズ定数)。
-// JSONキー: sensorW/sensorH/pixelW/focalLength/fn。スケジュールを再生成して通知する。
-int32_t hge_setPlanGearConstJson(const char* json);
 
 // --- スケジュール手動編集(7.3.2) ---
 // 朝日/夕日の帯モード(0=自動判定, 1=挿入(強制), 2=排除(日中))。再生成して通知する。

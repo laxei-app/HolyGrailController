@@ -65,7 +65,6 @@ object HgeNative {
     external fun nativeSetPlanInterval(seconds: Double): Int   // 撮影周期。最小(最長ss+2)未満は失敗
     external fun nativeRenamePlan(id: String, name: String): Int  // 計画名をid指定で変更(リスト直接リネーム)
     external fun nativeSetPlanLandscape(landscape: Int): Int   // 横向き(ランドスケープ)。再生成
-    external fun nativeSetPlanGearConst(json: String): Int     // センサー/レンズ定数の上書き(sensorW/H/pixelW/focalLength/fn)
     // スケジュール手動編集(7.3.2)
     external fun nativeSetBandMode(sunriseMode: Int, sunsetMode: Int): Int  // 0=自動,1=挿入,2=排除
     external fun nativeSetBoundary(beforeType: Int, afterType: Int, occ: Int, whenIso: String): Int
