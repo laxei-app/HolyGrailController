@@ -16,6 +16,7 @@
 #include <esp_heap_caps.h>
 #include <cstdio>
 #include "dataManager.h"
+#include <mutex>
 
 namespace ossc
 {
@@ -24,7 +25,44 @@ namespace ossc
         void*                         userParm;
         std::function<errCode(void*)> userFunc;  // 値コピーで保持(呼び出し元のローカルが破棄されても安全)
         TaskHandle_t                  taskHandle;
+        int                           slot = -1; // 静的スタックプールの番号(-1=ヒープから確保)
     };
+
+    // --- 撮影セッション用スタックの静的確保(2026-08-23) ---
+    //
+    // 【なぜ静的にするか】開始→中止を繰り返すと、内部DRAMの**最大連続ブロック**だけが
+    //  削られていき、3回目の開始で xTaskCreate が失敗する(2026-08-23 実機で確定)。
+    //    中止後の largest: 27636 -> 18420 -> 14324
+    //    失敗時: xTaskCreate failed stack=14336 free=80540 largest=14324  ← **12バイト足りない**
+    //  空き総量(free)は毎回 92KB へ戻っており漏れてはいない。断片化だけが進む。
+    //  一度 largest が要求を下回ると固定され、何度リトライしても永久に通らない
+    //  (再起動しか復旧手段が無い)。スタックを縮めても延命にしかならないので、
+    //  確保先をヒープから外す。.bss ならリンク時に場所が決まるので断片化の影響を受けない。
+    //
+    // 【使う範囲】撮影セッションの起動スレッド(既定 14336)だけ。netThread ワーカー(6144)や
+    //  SSDP待ち受け(4096)は小さく、断片化で失敗していないので従来どおりヒープから取る。
+    // 【枚数】同時に撮れるカメラ台数(MAX_CONCURRENT=2)。埋まっていたら従来どおり
+    //  ヒープへフォールバックする(一斉開始などで一時的に3本要る場面を潰さない)。
+    constexpr uint32_t kPoolStackBytes = 14336;
+    constexpr int      kPoolSlots      = 2;
+    static StackType_t  s_poolStack[kPoolSlots][kPoolStackBytes / sizeof(StackType_t)];
+    static StaticTask_t s_poolTcb[kPoolSlots];
+    static bool         s_poolUsed[kPoolSlots] = { false };
+    static std::mutex   s_poolMtx;
+
+    static int poolAcquire(uint32_t stackBytes)
+    {
+        if (stackBytes != kPoolStackBytes) { return -1; }   // 撮影スレッド以外は対象外
+        std::lock_guard<std::mutex> lk(s_poolMtx);
+        for (int i = 0; i < kPoolSlots; ++i) { if (!s_poolUsed[i]) { s_poolUsed[i] = true; return i; } }
+        return -1;
+    }
+    static void poolRelease(int slot)
+    {
+        if (slot < 0) { return; }
+        std::lock_guard<std::mutex> lk(s_poolMtx);
+        s_poolUsed[slot] = false;
+    }
 
     // 内部ラッパー
     static void taskWrapper(void* arg) {
@@ -54,6 +92,17 @@ namespace ossc
         // ことがある(ヒープ総量は十分でも largest ブロックが足りない)。失敗を即諦めず、少し待って
         // 数回リトライする。先行タスクの初期化完了/一時確保の解放でほぼ通る(2本目の撮影runner不発を防ぐ)。
         BaseType_t created = pdFAIL;
+        // ① 静的スタックの空きがあればそちらで作る。ここは断片化に左右されない。
+        ctrl->slot = poolAcquire(stackBytes);
+        if (ctrl->slot >= 0)
+        {
+            ctrl->taskHandle = xTaskCreateStaticPinnedToCore(
+                taskWrapper, "ossNet", kPoolStackBytes / sizeof(StackType_t), ctrl, 3,
+                s_poolStack[ctrl->slot], &s_poolTcb[ctrl->slot], 0);
+            if (ctrl->taskHandle != nullptr) { return (void*)ctrl; }
+            poolRelease(ctrl->slot); ctrl->slot = -1;   // 引数不正等(通常起きない)。ヒープへ逃げる
+        }
+        // ② プールが埋まっている/対象外のサイズ → 従来どおりヒープから確保する。
         for (int attempt = 0; attempt < 6; ++attempt)
         {
             created = xTaskCreatePinnedToCore(
@@ -104,6 +153,21 @@ namespace ossc
 
         // タスクが終了を通知するまでブロックして待機する
         xSemaphoreTake(ctrl->doneSem, portMAX_DELAY);
+
+        // 静的スタックは「本当に消えてから」返す。
+        //  taskWrapper は xSemaphoreGive の**後**で vTaskDelete(NULL) するので、この時点では
+        //  まだ自分のスタックの上で動いている。ヒープ確保なら FreeRTOS が後始末するが、
+        //  静的だと即再利用したときに「まだ使われているスタック」を上書きする。
+        //  削除の仕上げはアイドルタスクがやるので、譲りながら eDeleted を待つ。
+        //  (ヒープ確保のハンドルは TCB ごと解放されるため、同じことをしてはいけない)
+        if (ctrl->slot >= 0)
+        {
+            for (int i = 0; i < 200 && eTaskGetState(ctrl->taskHandle) != eDeleted; ++i)
+            {
+                vTaskDelay(pdMS_TO_TICKS(5));
+            }
+            poolRelease(ctrl->slot);
+        }
 
         vSemaphoreDelete(ctrl->doneSem);
         delete ctrl;
