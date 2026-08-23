@@ -1362,6 +1362,20 @@ void loop(void)
 			if (n >= 0) { Serial.printf("[LOGCLR] removed %d internal log file(s)\n", n); }
 			else        { Serial.printf("[LOGCLR] failed (LittleFS mount)\n"); }
 		}
+		else if (c == 't')	// 診断: 今日のログの**末尾だけ**を吸い出す
+		{	// ログが大きくなると 'l' の全文転送は USB-CDC が追いつかず最新側が落ちる。
+			std::string path = dataManager::currentLogPath();
+			std::string body;
+			if (osfile::readAll(path, body))
+			{
+				const size_t kTail = 12288;
+				const size_t from  = (body.size() > kTail) ? (body.size() - kTail) : 0;
+				Serial.printf("[TAIL] %s (%u of %u bytes)\n", path.c_str(), (unsigned)(body.size() - from), (unsigned)body.size());
+				Serial.write(reinterpret_cast<const uint8_t*>(body.data() + from), body.size() - from);
+				Serial.printf("[TAIL] end\n");
+			}
+			else { Serial.printf("[TAIL] read failed: %s\n", path.c_str()); }
+		}
 		else if (c == 'l')
 		{
 			std::string path = dataManager::currentLogPath();

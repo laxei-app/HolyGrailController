@@ -3,6 +3,8 @@
 #include "netThread.h"
 #include "exposureMath.h"
 #include "jpegLuma.h"	// 撮影画像サムネイルの輝度ヒストグラム化(測光)
+#include "osSystemCall.h"	// 確立の内訳を測る計測点(調査用)
+#include "dataManager.h"	// 同上(ログ出力)
 #include "exifSensor.h"	// 撮影画像のEXIFからセンサー諸元を読む
 #include <json/nlohmann/json.hpp>
 #include <cmath>
@@ -95,16 +97,30 @@ static std::string topUrlForDev(const std::string& urlAccess)
 // device : カメラの情報。この呼び出し時には location が入っていること。
 //          location を読み取りdevice discovery の内容、コマンド一覧を取得する。
 // return : ERR_HGC_OK 成功、それ以外:失敗
+// 確立の内訳を割るための計測点(2026-08-23、調査用)。
+//  min(起動からの最低値)は単調減少なので、区間の前後で下がっていたら
+//  その区間が新しい底を作ったと判定できる(サンプリングの瞬間に依存しない)。
+static void apiMark(const char* where)
+{
+	const size_t f = ossc::internalFree();
+	if (f == 0) { return; }
+	dataManager::logEvent("RAM", (std::string(where) + " free=" + std::to_string(f)
+		+ " min=" + std::to_string(ossc::internalMinFree())).c_str());
+}
+
 errCode apiCanonCCAPI::init(class device& device)
 {
+    apiMark("init: enter");
     // Device Descriptor の内容を取得する
     auto err = getDeviceDescriptor(device);
+    apiMark("init: descriptor");
     if (err != ERR_HGC_OK) { return err; }
     
     // ★ダイジェスト認証が必要。
 	// カメラの設定で認証無しにしてあれば今のところ取得できる。	
     std::string catlog;
 	auto success = netThread::httpGet(device.urlAccess, catlog);
+    apiMark("init: catalog got");
     if(!success)                { return ERR_HGC_API_LIST; }	
 	if (catlog.length() == 0)   { return ERR_HGC_API_LIST; }	
 
@@ -125,6 +141,7 @@ errCode apiCanonCCAPI::init(class device& device)
 
     // 使用する api の path を保存する。
     err = analizeUseFunction(device, catlog);
+    apiMark("init: catalog parsed");
     // 一覧を出さない機種(EOS R50 V は {"value":"No list of APIs"})では何も登録できない。
     //  個別のエンドポイントは応答するので、既知のパスを直接叩いて組み立て直す。
     if (err != ERR_HGC_OK || funcList.find(funcNum::SHOT) == funcList.end())
@@ -190,6 +207,7 @@ errCode apiCanonCCAPI::initManual(class device& device)
 
     this->device = device;
     liveViewInfo.resize(1024 * 8);
+    apiMark("init: done");
     return err;
 }
 

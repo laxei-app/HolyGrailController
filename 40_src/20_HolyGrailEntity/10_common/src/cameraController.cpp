@@ -84,13 +84,11 @@ size_t cameraController::detectTarget(std::vector<class device> & devices, const
 			for (auto& be : backends())
 			{
 				class device dev;
-				// 欲しい1台が決まっているなら、先に身元(記述子・軽い)で見分ける。
-				if (want)
-				{
-					class device probe;
-					if (!be->identifyAt(host, probe) || !want(probe)) { continue; }
-				}
-				if (be->makeManualDevice(host, dev)) { devices.push_back(dev); break; }
+				// 記述子での事前判定はしない(上の近傍ホスト経路と同じ理由)。
+				if (!be->makeManualDevice(host, dev)) { continue; }
+				if (want && !want(dev)) { continue; }
+				devices.push_back(dev);
+				break;
 			}
 			if (want && !devices.empty()) { break; }
 		}
@@ -116,12 +114,14 @@ size_t cameraController::detectTarget(std::vector<class device> & devices, const
 		for (auto& be : backends())
 		{	// この種別として host に接続できれば(=/ccapi 応答があれば)カメラとして採用。
 			class device dev;
-			if (want)
-			{	// 先に身元だけ見て、合わなければ apiBase を作らずに次へ。
-				class device probe;
-				if (!be->identifyAt(host, probe) || !want(probe)) { continue; }
-			}
-			if (be->makeManualDevice(host, dev)) { devices.push_back(dev); break; }
+			// 【記述子で先に見分けてはいけない(2026-08-23)】
+			//  ここは SSDP に答えないカメラを拾うための経路。実際、SSDP に一切答えないが
+			//  CCAPI は応答する状態のカメラがある。記述子(:49152)を前提にするとその手の機体を
+			//  取りこぼすので、従来どおり **:8080 を直接叩いてから** 判定する。
+			if (!be->makeManualDevice(host, dev)) { continue; }
+			if (want && !want(dev)) { continue; }	// 探している1台ではなかった
+			devices.push_back(dev);
+			break;
 		}
 	}
 	// A-2: 発見できたホスト一覧を短命キャッシュへ記録(次の近接セッションが再構成に使う)。

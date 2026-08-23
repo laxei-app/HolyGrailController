@@ -97,8 +97,22 @@ size_t detectSsdpBase::discover(std::vector<class device>& out, bool identifyOnl
 		//  合わない台はここで捨てる。合った1台だけ init() へ進む。
 		if (want)
 		{
-			if (api->identify(device) != ERR_HGC_OK) { continue; }
-			if (!want(device)) { device.apiBase = nullptr; continue; }
+			if (api->identify(device) != ERR_HGC_OK)
+			{	// 記述子すら読めない。ここを黙って捨てると「0台」と区別がつかない。
+				dataManager::logEvent("NET", ("ssdp candidate: descriptor NG " + device.location).c_str(), true);
+				continue;
+			}
+			if (!want(device))
+			{	// 候補にはいたが探している1台ではなかった。
+				//  これを残さないと「居ない」と「居るが弾いている」がログで区別できない。
+				std::string d = "ssdp candidate: not the one model=" + (device.model.empty() ? std::string("?") : device.model)
+				              + " maker=" + (device.manufacturer.empty() ? std::string("?") : device.manufacturer)
+				              + " serial=" + (device.serialno.empty() ? std::string("?") : device.serialno)
+				              + " name=" + (device.assignedName.empty() ? std::string("?") : device.assignedName);
+				dataManager::logEvent("NET", d.c_str());
+				device.apiBase = nullptr;
+				continue;
+			}
 		}
 		// api の初期化をおこなう
 		errCode ie = api->init(device);

@@ -1327,6 +1327,21 @@ void loop(void)
 			for (auto& nm : names) { Serial.printf("  %s\n", nm.c_str()); }
 			Serial.printf("[LOGS] end\n");
 		}
+		else if (c == 't')	// 診断: 今日のログの**末尾だけ**を吸い出す
+		{	// ログが大きくなると 'l' の全文転送は USB-CDC が追いつかず最新側が落ちる。
+			// 知りたいのはいつも末尾なので、最後の 12KB だけ出す道を用意する。
+			std::string path = dataManager::currentLogPath();
+			std::string body;
+			if (osfile::readAll(path, body))
+			{
+				const size_t kTail = 12288;
+				const size_t from  = (body.size() > kTail) ? (body.size() - kTail) : 0;
+				Serial.printf("[TAIL] %s (%u of %u bytes)\n", path.c_str(), (unsigned)(body.size() - from), (unsigned)body.size());
+				Serial.write(reinterpret_cast<const uint8_t*>(body.data() + from), body.size() - from);
+				Serial.printf("[TAIL] end\n");
+			}
+			else { Serial.printf("[TAIL] read failed: %s\n", path.c_str()); }
+		}
 		else if (c == 'l')	// 診断: 今日のログを丸ごと吸い出す(CoreS3と同じ)
 		{	// これが無くて、今回この端末のログを読めなかった(2026-08-20)。
 			std::string path = dataManager::currentLogPath();

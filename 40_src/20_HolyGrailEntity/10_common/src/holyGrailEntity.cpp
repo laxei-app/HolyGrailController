@@ -1439,7 +1439,8 @@ namespace
 			// SSDP(M-SEARCH再送)+サブネット探索で見つからなければ hit は null のまま → 後で再試行(その間 NOCAMERA)。
 			if (hit == nullptr)
 			{	// 再探索で未発見。runner の取得/再接続フェーズが後で再試行する。
-				std::string d = "camera acquire/reconnect failed: ssdp=" + std::to_string(found.size()) + " (not found)";
+				std::string d = "camera acquire/reconnect failed: matched=" + std::to_string(found.size())
+				              + " (候補の内訳は直前の ssdp candidate 行を見る)";
 				dataManager::logEvent("NET", d.c_str(), true);
 				return false;
 			}
