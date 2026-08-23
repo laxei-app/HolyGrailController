@@ -1284,6 +1284,26 @@ void loop(void)
 			for (auto& h : ips) { Serial.printf(" %s", h.c_str()); }
 			Serial.println();
 		}
+		else if (c == 'W')	// 実験(2026-08-23): カメラへ Wi-Fi 切断を送る(ファーム更新前の行儀のよい切断)
+		{	// 接続中のカメラは SSDP を止めているので :8080 のサブネット探索で探す。
+			// 切断後にカメラが自動で繋ぎ直すか(仕様書はメニュー操作が要ると記載)を見る実験用。
+			std::vector<std::string> hosts = net::scanSubnetPort(8080, 250, 254);
+			Serial.printf("[WDISC] :8080 hosts=%d\n", (int)hosts.size());
+			bool done = false;
+			for (auto& h : hosts)
+			{
+				for (const char* ver : { "ver100", "ver110" })
+				{
+					std::string url = "http://" + h + ":8080/ccapi/" + ver + "/functions/wificonnection";
+					std::string resp;
+					bool ok = netThread::httpPost(url, "{\"action\":\"disconnect\"}", resp);
+					Serial.printf("[WDISC] POST %s -> %s resp=%s\n", url.c_str(), ok ? "OK" : "FAIL", resp.c_str());
+					if (ok) { done = true; break; }
+				}
+				if (done) { break; }
+			}
+			Serial.printf("[WDISC] end\n");
+		}
 		else if (c == 'z')	// 診断: 限定サブネット :8080 バッチ探索(CoreS3と同じ)
 		{
 			uint32_t t0 = millis();
