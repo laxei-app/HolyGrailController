@@ -1,4 +1,4 @@
-// osSystemCall.cpp
+﻿// osSystemCall.cpp
 // M5Stack の OS 依存部分をここに集約する。
 // スレッド join はバイナリセマフォで行う(どのタスクから threadEnd を呼んでも安全)。
 //
@@ -26,6 +26,7 @@ namespace ossc
         std::function<errCode(void*)> userFunc;  // 値コピーで保持(呼び出し元のローカルが破棄されても安全)
         TaskHandle_t                  taskHandle;
         int                           slot = -1; // 静的スタックプールの番号(-1=ヒープから確保)
+        uint32_t                      stackBytes = 0;  // 確保量(高水位ログで使う)
     };
 
     // --- 撮影セッション用スタックの静的確保(2026-08-23) ---
@@ -41,10 +42,10 @@ namespace ossc
     //
     // 【使う範囲】撮影セッションの起動スレッド(既定 14336)だけ。netThread ワーカー(6144)や
     //  SSDP待ち受け(4096)は小さく、断片化で失敗していないので従来どおりヒープから取る。
-    // 【枚数】同時に撮れるカメラ台数(MAX_CONCURRENT=2)。埋まっていたら従来どおり
+    // 【枚数】同時に撮れるカメラ台数(holyGrailEntity.cpp の MAX_CONCURRENT に合わせる)。埋まっていたら従来どおり
     //  ヒープへフォールバックする(一斉開始などで一時的に3本要る場面を潰さない)。
-    constexpr uint32_t kPoolStackBytes = 14336;
-    constexpr int      kPoolSlots      = 2;
+    constexpr uint32_t kPoolStackBytes = 12288;
+    constexpr int      kPoolSlots      = 3;
     static StackType_t  s_poolStack[kPoolSlots][kPoolStackBytes / sizeof(StackType_t)];
     static StaticTask_t s_poolTcb[kPoolSlots];
     static bool         s_poolUsed[kPoolSlots] = { false };
@@ -72,6 +73,18 @@ namespace ossc
             ctrl->userFunc(ctrl->userParm);
         }
 
+        // スタックの高水位(一度でも残りがここまで減った、という最小値)を残す(2026-08-23)。
+        //  14336 を詰められるか、枚数を増やせるかの判断材料にする。
+        //  ESP-IDF の uxTaskGetStackHighWaterMark は**バイト**を返す(本家 FreeRTOS はワード)。
+        {
+            const unsigned left = (unsigned)uxTaskGetStackHighWaterMark(NULL);
+            char d[96];
+            std::snprintf(d, sizeof(d), "task end size=%u leftMin=%u used=%u",
+                          (unsigned)ctrl->stackBytes, left,
+                          (ctrl->stackBytes > left) ? (unsigned)(ctrl->stackBytes - left) : 0u);
+            dataManager::logEvent("STACK", d);
+        }
+
         // 終了を通知する。ctrl の解放は threadEnd 側で行う(ここでは触らない)。
         xSemaphoreGive(ctrl->doneSem);
         vTaskDelete(NULL); // 自滅
@@ -86,6 +99,7 @@ namespace ossc
         ctrl->userParm = parm;
         ctrl->doneSem  = xSemaphoreCreateBinary();
         ctrl->taskHandle = NULL;
+        ctrl->stackBytes = stackBytes;
 
         // タスクスタック(16KB)は内部RAM必須。2カメラ同時の再開/開始バーストでは、他セッションの
         // タスク生成やWiFi/BLE初期化と重なって内部の「連続領域」が一時的に不足し xTaskCreate が失敗する

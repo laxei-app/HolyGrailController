@@ -19,14 +19,32 @@
 
 namespace edgeHeap
 {
+	// 内部RAMを使う上限を下げ、これを超える malloc を PSRAM へ回す(2026-08-23)。
+	//
+	// 【なぜ必要か】この機体は PSRAM が 8.3MB 丸々空いている一方で、内部RAM は撮影中に 53KB、
+	//  セッション確立の一瞬は 18KB まで細る。タスクスタックは内部RAM にしか置けないので、
+	//  そこを他の確保で埋めてしまうと撮影スレッドが作れなくなる(2026-08-23 に実際に発生)。
+	//
+	// 【既定との違い】framework の既定は 4096(CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL)。
+	//  つまり 4KB 超は元々 PSRAM へ行っている。下げると 1〜4KB の中型の確保も外へ出せる。
+	//  小さすぎる値にすると細かい確保が全部低速な PSRAM へ行き遅くなるので、欲張らない。
+	//  DMA が要るバッファや Wi-Fi/lwIP は MALLOC_CAP_DMA / 専用ヒープを明示するので影響を受けない。
+	inline void useExternalAbove(size_t limitBytes)
+	{
+		heap_caps_malloc_extmem_enable(limitBytes);
+	}
+
 	inline void log(const char* tag)
 	{
-		char d[96];
-		std::snprintf(d, sizeof(d), "%s free=%u largest=%u min=%u",
+		char d[160];
+		// 内部RAM(タスクスタックに必須)と PSRAM(大きな一時確保の逃げ先)を両方出す。
+		std::snprintf(d, sizeof(d), "%s free=%u largest=%u min=%u ps=%u psLargest=%u",
 		              (tag && tag[0]) ? tag : "-",
 		              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
 		              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
-		              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+		              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+		              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+		              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
 		dataManager::logEvent("HEAP", d);
 	}
 

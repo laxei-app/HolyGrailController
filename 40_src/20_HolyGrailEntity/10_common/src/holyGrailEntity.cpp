@@ -46,10 +46,14 @@ namespace
 	bool                  g_inited = false;
 
 	// --- 並行撮影セッション(Phase3。計画ごとに1セッション=1ランナー+1カメラ) ---
-	// 同時に「重なって」撮影できるのは MAX_CONCURRENT(=2)台まで(=カメラ台数)。
+	// 同時に「重なって」撮影できるのは MAX_CONCURRENT 台まで(=カメラ台数)。
 	// ただし撮影開始要求(=予約)は MAX_PENDING(=100)件まで登録でき、撮影期間が重ならなければ
 	// いくつでも受け付ける(§7.4)。将来はこの定数とカメラ台数を増やせば拡張できる。
-	constexpr size_t MAX_CONCURRENT = 2;
+	// 2026-08-23: 2 -> 3。内部RAMを実測して決めた。待機中 96KB / 撮影中 90KB / 確立時の最低 52KB
+	// に対し、1セッションの常騐が約10KB、確立の山が約44.5KB。3本なら最後の1本の確立時でも
+	// 28KB 残るが、4本だと 5KB しか残らない(薄氷)。増やすなら確立の山を削るのが先。
+	// ※ osSystemCAll.cpp の静的スタック枠数(kPoolSlots)もこの数に合わせること。
+	constexpr size_t MAX_CONCURRENT = 3;
 	constexpr size_t MAX_PENDING    = 100;	// 自撮影の撮影開始要求(予約含む)の受付上限
 	// 撮影期間 = [撮影窓 start の PRE_MARGIN_SEC 秒前, 撮影窓 end の 1フレーム(=interval秒)後]。
 	// PRE_MARGIN_SEC は撮影窓前の初期露出収束(captureRunner::kPreConvergeSec=30秒)に一致させる。
@@ -66,7 +70,6 @@ namespace
 		std::unique_ptr<captureRunner> runner;
 		class device                  dev;					// このセッション専用のカメラ(アドレス安定。撮影開始の都度ディスカバリで再取得)
 		std::atomic<int>              state{ HGE_ST_IDLE };
-		int                           slot = 0;				// Phase4: 同時撮影のずらしスロット(周期内位置=slot/MAX_CONCURRENT)
 		bool                          logCapturing = false;	// START/STOP検出
 		dataManager::captureReport    report;				// 撮影結果レポートの積算(STOP時にファイルへ出す)
 		std::string                   lastCcm;				// CCMSW検出
@@ -1039,14 +1042,6 @@ namespace
 		}
 		// カメラ確保フェーズへ。ずらしスロットは「今まさに確保中(armed)」の他セッションを避けて割り当てる。
 		S->armed = true;
-		{
-			bool used[MAX_CONCURRENT] = { false };
-			for (auto& s : g_sessions) { if (s.get() != S && s->armed.load() && s->slot >= 0 && (size_t)s->slot < MAX_CONCURRENT) { used[s->slot] = true; } }
-			int slot = 0;
-			while (slot < (int)MAX_CONCURRENT && used[slot]) { ++slot; }
-			S->slot = (slot < (int)MAX_CONCURRENT) ? slot : 0;
-			S->runner->setStagger((double)S->slot / (double)MAX_CONCURRENT);	// Phase4: 周期内スロット位置でずらす
-		}
 		S->state = HGE_ST_SEARCHING; notifyStateP(S->planId, HGE_ST_SEARCHING); refreshAggregateState();
 		// 撮影開始操作をした時点(=実際の撮影開始時刻より前。例: 1時間後開始の計画でもタップ時)で
 		// カメラ検索が走ることを記録する。後続の「カメラ接続 …」(成功経路) または ERR「…見つかりません」と
@@ -2741,7 +2736,7 @@ int32_t hge_captureStartPlan(const char* planId_)
 	{
 		long long ns = hgc::toUnixUtc(sess->plan.start, g_offMin) - PRE_MARGIN_SEC;
 		long long ne = hgc::toUnixUtc(sess->plan.end, g_offMin) + (long long)std::llround(sess->plan.interval);
-		if (selfCaptureOverlapExceeds(ns, ne)) { dataManager::logEvent("INFO", "capture request rejected: overlap limit (2)"); return ERR_HGC_OVERLAP_LIMIT; }
+		if (selfCaptureOverlapExceeds(ns, ne)) { dataManager::logEvent("INFO", ("capture request rejected: overlap limit (" + std::to_string(MAX_CONCURRENT) + ")").c_str()); return ERR_HGC_OVERLAP_LIMIT; }
 	}
 	sess->runner = std::make_unique<captureRunner>();
 	captureSession* raw = sess.get();

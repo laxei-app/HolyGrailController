@@ -1066,6 +1066,11 @@ void setup(void)
 	if (g_netMode == "ap") { startApAndEtp(); }	// APモード: この時点でSoftAP+ETP+QRを立ち上げる
 	// 起動したことと理由を1行残す(2026-08-21)。落ちた原因を後から追えるようにする。
 	//  時計が使えるようになってから呼ぶ(APモードは startApAndEtp が RTC を復元済み)。
+	// 内部RAMを使う上限を 4KB から 1KB へ下げる(2026-08-23)。
+	//  これを超える malloc は PSRAM へ回る。PSRAM は 8.3MB 丸々空いているのに対し、
+	//  タスクスタックを置ける内部RAM は確立時に 18KB まで細るため。
+	//  ログより先に呼ぶ(以降の確保を全部対象にしたい)。
+	edgeHeap::useExternalAbove(256);
 	edgeBoot::logMarker(g_netMode.c_str(), hge_version());
 	g_state = hge_getState();
 	redraw();

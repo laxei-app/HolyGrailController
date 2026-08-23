@@ -3069,7 +3069,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 runOnUiThread {
                     startingPlans.remove(id)   // 開始要求の結果確定
                     when (r) {
-                        HgeNative.ERR_OVERLAP_LIMIT -> { waitingPlans.remove(id); Toast.makeText(this, "撮影期間が重なる計画は2件までです。時間をずらすか他の計画を停止してください", Toast.LENGTH_LONG).show() }
+                        HgeNative.ERR_OVERLAP_LIMIT -> { waitingPlans.remove(id); Toast.makeText(this, "撮影期間が重なる計画は3件までです。時間をずらすか他の計画を停止してください", Toast.LENGTH_LONG).show() }
                         HgeNative.ERR_QUEUE_FULL   -> { waitingPlans.remove(id); Toast.makeText(this, "撮影開始要求が上限(100件)に達しました", Toast.LENGTH_LONG).show() }
                         else -> {}   // 待機はタップ時に反映済み。実状態はEV_STATEで即補正される
                     }

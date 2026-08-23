@@ -45,7 +45,7 @@ enum errCode : uint32_t
 	ERR_HGC_INVALID_STATE,		// 状態不正(その操作が許されない状態)
 	ERR_HGC_JSON_PARSE,			// JSON 解析失敗
 	ERR_HGC_NAME_DUP,			// 名称が既に使用されている(item5: リスト内で重複)
-	ERR_HGC_OVERLAP_LIMIT,		// 自撮影の撮影開始要求で、撮影期間が重なる計画が2件を超える(§7.4 受付制限)
+	ERR_HGC_OVERLAP_LIMIT,		// 自撮影の撮影開始要求で、撮影期間が重なる計画が上限(MAX_CONCURRENT)を超える(§7.4 受付制限)
 	ERR_HGC_QUEUE_FULL,			// 自撮影の撮影開始要求の受付上限(100件)を超えた(§7.4)
 
 	//
