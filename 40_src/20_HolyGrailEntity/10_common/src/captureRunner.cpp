@@ -622,6 +622,15 @@ hgc::exposure captureRunner::nightGoalAfter(long long nowSec) const
 //  3. もう一度測って誤差 ≤ kInitConvergeTolStops(1/3段) を確認できたら収束
 // 通常は測光2回で1/3段以内に入る。収束するまで撮影は始めない(時間予算内)。
 // ctl は呼び出し前に init 済みであること。戻り値=1枚目の露出(ctl もその値になる)。
+// 確立処理のどこで内部RAMが落ちるかを追う計測点(2026-08-23)。原因が分かったら消してよい。
+static void ramMark(const char* where)
+{
+	const size_t f = ossc::internalFree();
+	if (f == 0) { return; }
+	dataManager::logEvent("RAM", (std::string(where) + " free=" + std::to_string(f)
+		+ " min=" + std::to_string(ossc::internalMinFree())).c_str());
+}
+
 hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::exposure& initial, double evT)
 {
 	ctl.setCurrent(initial);	// 仕様 4.4 の基準(iso/ss/fn)から開始する
@@ -855,6 +864,7 @@ bool captureRunner::establishSession(void)
 	// getSettings(設定可能値テーブル作成)より前に行う: Av等ではtvのabilityが空になり ss テーブルが
 	// 作れないため、Mにしてから設定可能値を取得する。終了時に restoreShootingMode で元へ戻す。
 	{
+		ramMark("before shootMode");
 		errCode me = cameraController::setupShootingModeManual(*dev_);
 		if (me == ERR_HGC_OK)            { interruptibleSleep(800); }	// モード変更/ability更新の反映待ち(初回rdyShutterの取りこぼし防止)
 		else if (me == ERR_HGC_NOT_SUPPORTED) { /* モード変更非対応機。そのまま続行 */ }
@@ -862,6 +872,7 @@ bool captureRunner::establishSession(void)
 	}
 
 	// 設定可能値を取得して設定可能値テーブルを作る(仕様 4.2)
+	ramMark("before getSettings");
 	cmdt::shotRange range;
 	if (cameraController::getSettings(*dev_, range) == ERR_HGC_OK &&
 	    !range.iso.empty() && !range.ss.empty() && !range.fNum.empty())
@@ -875,6 +886,7 @@ bool captureRunner::establishSession(void)
 		double fmin = (plan_.lens.fn > 0.0) ? plan_.lens.fn : 1.0;
 		tables_ = expo::standardTables(fmin, 32.0);
 	}
+	ramMark("establish done");
 	return true;
 }
 

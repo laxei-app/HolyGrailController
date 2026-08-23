@@ -120,6 +120,17 @@ namespace
 	std::vector<captureRunner*>   g_pokeRunners;	// 撮影中セッションの runner(生存中のみ登録)
 	bool                          g_watching = false;	// 共有SSDPリスナ稼働中か
 
+	// 確立処理のどこで内部RAMが落ちるかを追うための計測点(2026-08-23)。
+	//  1秒サンプリングでは見えない(山は1秒未満で過ぎる)ので、要所に直接置く。
+	//  原因が分かって対処したら消してよい。
+	void ramMark(const char* where)
+	{
+		const size_t f = ossc::internalFree();
+		if (f == 0) { return; }	// スマホ(制約無し)は何も出さない
+		dataManager::logEvent("RAM", (std::string(where) + " free=" + std::to_string(f)
+			+ " min=" + std::to_string(ossc::internalMinFree())).c_str());
+	}
+
 	void pokeRegister(captureRunner* r)
 	{
 		if (r == nullptr) { return; }
@@ -1042,6 +1053,7 @@ namespace
 		}
 		// カメラ確保フェーズへ。ずらしスロットは「今まさに確保中(armed)」の他セッションを避けて割り当てる。
 		S->armed = true;
+		ramMark("seq begin");
 		S->state = HGE_ST_SEARCHING; notifyStateP(S->planId, HGE_ST_SEARCHING); refreshAggregateState();
 		// 撮影開始操作をした時点(=実際の撮影開始時刻より前。例: 1時間後開始の計画でもタップ時)で
 		// カメラ検索が走ることを記録する。後続の「カメラ接続 …」(成功経路) または ERR「…見つかりません」と
@@ -1111,6 +1123,7 @@ namespace
 				return dataManager::cameraModelMatches(d, pc);
 			};
 			cameraController::detectTarget(found, wantOne);
+			ramMark("after detect");
 			// シリアル指定で見つからなければ、機種一致だけでもう一度(従来の二段構えを保つ)。
 			if (found.empty() && !wantSerial.empty())
 			{
@@ -1670,7 +1683,9 @@ int32_t hge_setPlanJson(const char* json, int32_t len)
 // 同じ id の再送は上書き(重複しない)。id 空なら新規採番。
 int32_t hge_importPlan(const char* id, const char* json, int32_t len)
 {
+	ramMark("importPlan enter");
 	int32_t r = hge_setPlanJson(json, len);
+	ramMark("importPlan parsed");
 	if (r != ERR_HGC_OK) { return r; }
 	if (id != nullptr && id[0] != '\0') { g_editId = id; }
 	else if (g_editId.empty())          { g_editId = makePlanId(); }
@@ -1688,7 +1703,9 @@ int32_t hge_importPlan(const char* id, const char* json, int32_t len)
 		              + (running   ? " (a session is running: contents may diverge)" : "");
 		dataManager::logEvent("INFO", d.c_str());
 	}
-	return saveCurrentPlan();
+	const int32_t sr = saveCurrentPlan();
+	ramMark("importPlan saved");
+	return sr;
 }
 
 int32_t hge_setPlanTimes(const char* startIso, const char* endIso, int32_t offMin)

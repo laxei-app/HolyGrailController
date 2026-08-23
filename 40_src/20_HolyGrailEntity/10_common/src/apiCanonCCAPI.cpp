@@ -230,64 +230,119 @@ errCode apiCanonCCAPI::getDeviceDescriptor(class device& device)
 // 使用するコマンドを探す
 // コマンド一覧から使用するコマンドとその機能を取得する
 // catalog:json形式のコマンド一覧。device.urlAccessから取得する。
+// APIカタログ(/ccapi)を**解析木を作らずに**読むための SAX ハンドラ(2026-08-23)。
+//
+// 【なぜ要るか】カメラ3台をエッジに繋いで3計画を回すと、内部RAMの最低が 9,784 まで細った。
+//  区間を計測したところ、底を作っていたのはカメラ接続時のこのカタログ解析で、単独で 39KB を使っていた。
+//  カタログは対応 API を全部並べた JSON で、木にすると細かいノードが大量にできる。
+//  ノードは 256 バイト未満なので PSRAM へ逃げるしきい値の外で、内部RAMに残る。
+//  欲しいのは「必要な数本の URL とそのメソッド」だけなので、流し読みで拾えば木は要らない。
+//
+// 【カタログの形】{"ver100":[{"path":"/ccapi/ver100/...","get":true,"post":false,...}, ...], "ver110":[...]}
+//  開発者向け一覧(topurlfordev)は "path" ではなく絶対 URL の "url" で返す機種があるので両方受ける。
+namespace
+{
+	struct CatalogSax
+	{
+		using number_integer_t  = json::number_integer_t;
+		using number_unsigned_t = json::number_unsigned_t;
+		using number_float_t    = json::number_float_t;
+		using string_t          = json::string_t;
+		using binary_t          = json::binary_t;
+
+		// 1エントリ分を溜めて、オブジェクトの終わりで確定させる。
+		std::function<void(const std::string&, bool, bool, bool, bool)> onEntry;
+		std::string curKey;
+		std::string path;
+		bool getV = false, postV = false, putV = false, delV = false;
+		int  depth = 0;	// 0=根の外 1=根オブジェクト 2=各エントリ
+		bool stop = false;	// 必要なものが揃ったらそこでやめる
+
+		bool key(string_t& v)          { curKey = v; return true; }
+		bool start_object(std::size_t)
+		{
+			++depth;
+			if (depth >= 2) { path.clear(); getV = postV = putV = delV = false; }
+			curKey.clear();
+			return true;
+		}
+		bool end_object()
+		{
+			if (depth >= 2 && !path.empty() && onEntry) { onEntry(path, getV, postV, putV, delV); }
+			--depth;
+			return !stop;	// false を返すと解析を打ち切れる
+		}
+		bool start_array(std::size_t) { curKey.clear(); return true; }
+		bool end_array()              { return true; }
+		bool string(string_t& v)
+		{
+			if      (curKey == "path")                  { path = v; }
+			else if (curKey == "url" && path.empty())   { path = v; }
+			return true;
+		}
+		bool boolean(bool v)
+		{
+			if      (curKey == "get")    { getV  = v; }
+			else if (curKey == "post")   { postV = v; }
+			else if (curKey == "put")    { putV  = v; }
+			else if (curKey == "delete") { delV  = v; }
+			return true;
+		}
+		bool number_unsigned(number_unsigned_t) { return true; }
+		bool number_integer(number_integer_t)   { return true; }
+		bool number_float(number_float_t, const string_t&) { return true; }
+		bool null()            { return true; }
+		bool binary(binary_t&) { return true; }
+		bool parse_error(std::size_t, const std::string&, const json::exception&) { return false; }
+	};
+}
+
 errCode apiCanonCCAPI::analizeUseFunction(class device& device, std::string& catalog)
 {
     try {
-        auto data = json::parse(catalog);
-
-        for (auto& [version, endpoints] : data.items()) 
+        // 解析木を作らずに流し読みする(SAX)。理由は CatalogSax のコメント。
+        CatalogSax sax;
+        sax.onEntry = [&](const std::string& path, bool hasGet, bool hasPost, bool hasPut, bool hasDel)
         {
-            for (const auto& entry : endpoints) 
-            {
-                // path 取得。開発者向け一覧(topurlfordev)は "path" ではなく絶対URLの "url" で返す
-                //  機種がある(CCAPI Reference 4.2.2 / 公式サンプル APIDataSet も両対応)。
-                std::string path = entry.value("path", "");
-                if (path.length() == 0) { path = entry.value("url", ""); }
-                if (path.length() == 0) { continue; }
-                class func func;
-                for (auto& fncRef : useFunction)
-                {   // path で必要な機能を探す
-                    if (fncRef.find)                  { continue; }   // すでに見つけている
-                    auto ix = path.rfind(fncRef.surfix);
-                    if (ix == -1)                   { continue; }   // 違う
-                    if (ix + fncRef.surfix.length() != path.length()) { continue; }   // 最後ではない
+            class func func;
+            for (auto& fncRef : useFunction)
+            {   // path で必要な機能を探す
+                if (fncRef.find) { continue; }   // すでに見つけている
+                auto ix = path.rfind(fncRef.surfix);
+                if (ix == std::string::npos) { continue; }   // 違う
+                if (ix + fncRef.surfix.length() != path.length()) { continue; }   // 最後ではない
 
-                    // url にする
-                    auto httpIx = path.find("http");
-                    if (httpIx != -1) 
-                    {   // full path が入ってるのでそのまま使う
-                        func.funcNum = fncRef.funcNum;
-                        func.url = path;
-                        fncRef.find = true;
-                        break;
-                    }
-                    
-                    func.funcNum = fncRef.funcNum;
-
-                    // urlAccess とつなぐ
-                    // "/"の有無に関わらずつなぐ
+                func.funcNum = fncRef.funcNum;
+                if (path.find("http") != std::string::npos)
+                {   // full path が入ってるのでそのまま使う
+                    func.url = path;
+                }
+                else
+                {   // urlAccess とつなぐ。"/"の有無に関わらずつなぐ
                     auto ccapiIxTail = path.find("ccapi");
                     auto ccapiIxHead = device.urlAccess.rfind("ccapi");
                     func.url = device.urlAccess.substr(0, ccapiIxHead + 5) + path.substr(ccapiIxTail + 5);
-                    fncRef.find = true;
-                    break;
                 }
-                if (func.funcNum == funcNum::NON) { continue; }
-
-                // 動作を設定
-                if (entry.value("get", false))      { func.verb |= verb::GET; }
-                if (entry.value("post", false))     { func.verb |= verb::POS; }
-                if (entry.value("put", false))      { func.verb |= verb::PUT; }
-                if (entry.value("delete", false))   { func.verb |= verb::DEL; }
-
-                funcList[func.funcNum] = func;      // 機能リストに登録
-                if (funcList.size() == useFunction.size())     { break; }    // すべて登録された
+                fncRef.find = true;
+                break;
             }
-        }
+            if (func.funcNum == funcNum::NON) { return; }   // このエントリは使わない
+
+            // 動作を設定
+            if (hasGet)  { func.verb |= verb::GET; }
+            if (hasPost) { func.verb |= verb::POS; }
+            if (hasPut)  { func.verb |= verb::PUT; }
+            if (hasDel)  { func.verb |= verb::DEL; }
+
+            funcList[func.funcNum] = func;      // 機能リストに登録
+            // 必要なものが揃ったら、残りのカタログを読まずに打ち切る。
+            if (funcList.size() == useFunction.size()) { sax.stop = true; }
+        };
+        json::sax_parse(catalog, &sax);
     }
-    catch (const std::exception& e) 
+    catch (const std::exception& e)
     {
-        DBGLN(col::RED,"%s",e);
+        DBGLN(col::RED,"%s",e.what());
         return ERR_HGC_API_LIST;
     }
     return ERR_HGC_OK;

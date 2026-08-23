@@ -17,6 +17,8 @@ namespace ossc
 
 	// 生きているスレッドのスタック使用量をログへ出す(ESP32専用の計測)。
 	//  スマホは std::thread の既定スタック(数MB)で、削る動機が無いので何もしない。
+	size_t internalFree(void) { return 0; }	// スマホには内部RAMの制約が無い
+	size_t internalMinFree(void) { return 0; }
 	void logLiveThreads(void) {}
 
 	// スレッドの終了を待ってスレッドを破棄する。

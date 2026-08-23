@@ -25,6 +25,12 @@ namespace ossc
 	//  (在否監視/カメラ検索)も既定値で作られるため枠を奇取し、3本目の撮影が始まらなかった
 	//  (2026-08-23 実機)。サイズではなく**用途を明示**すること。
 	void* threadNet(THREAD_FUNC& func, void* parm, uint32_t stackBytes = 12288, bool useStaticPool = false);
+	// 内部RAM(タスクスタックに必須な領域)の空き[byte]。共通層から計測点を置くための窓口。
+	//  スマホはこの制約が無いので 0 を返す(ログを出さない判定に使う)。
+	size_t internalFree(void);
+	// 起動からの内部RAMの最低値[byte]。単調に下がるだけなので、区間の前後で比べれば
+	// 「その区間で新しい底を作ったか」が分かる(サンプリングの瞬間に依存しない)。
+	size_t internalMinFree(void);
 	void  logLiveThreads(void);	// 生きているスレッドの確保量と高水位をログへ(内部RAMを削るための計測)
 	void  threadEnd(void * handle);	
 

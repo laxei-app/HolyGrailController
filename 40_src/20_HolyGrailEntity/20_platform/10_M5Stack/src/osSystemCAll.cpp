@@ -178,6 +178,9 @@ namespace ossc
         return (void*)ctrl; // ハンドルとして ThreadControl* を返す
     }
 
+    size_t internalFree(void) { return heap_caps_get_free_size(MALLOC_CAP_INTERNAL); }
+    size_t internalMinFree(void) { return heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL); }
+
     // 生きているスレッドの確保量と高水位をログへ出す。スタックを削る判断材料。
     void logLiveThreads(void)
     {
