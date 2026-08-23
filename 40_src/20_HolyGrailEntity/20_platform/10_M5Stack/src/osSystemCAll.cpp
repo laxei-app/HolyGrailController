@@ -13,6 +13,9 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
+#include <esp_heap_caps.h>
+#include <cstdio>
+#include "dataManager.h"
 
 namespace ossc
 {
@@ -72,6 +75,17 @@ namespace ossc
         //   原因が見えなくなる。失敗時は明示ログ＋nullptr返し。
         if (created != pdPASS)
         {
+            // シリアルだけでなくログへも残す(2026-08-23)。無人運用ではシリアルを見ていないので、
+            // 後から「失敗した瞬間にどれだけ空いていたか」を追えないと原因に届かない。
+            // 空き総量(free)ではなく最大連続ブロック(largest)が足りないのが典型なので両方出す。
+            {
+                char d[96];
+                std::snprintf(d, sizeof(d), "xTaskCreate failed stack=%u free=%u largest=%u",
+                              (unsigned)stackBytes,
+                              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+                dataManager::logEvent("ERR", d, true);
+            }
             Serial.printf("[thread] xTaskCreate failed r=%d free=%u largest=%u\n",
                           (int)created, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
             vSemaphoreDelete(ctrl->doneSem);

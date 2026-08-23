@@ -44,6 +44,7 @@ static edgeBL::state g_bl;
 // ワーカースレッド(notifyCb)からの点灯要求。実際の点灯は loop() で行う(I2C/表示を別スレッドから触らない)。
 static volatile bool g_blWake = false;
 #include "batteryGuard.h"	// 限界での自動シャットダウン
+#include "edgeHeap.h"	// 内部RAMの推移(開始/停止で戻らない量を見る)
 #include "osFile.h"
 #include "osClock.h"
 #include "debugOut.h"
@@ -1216,7 +1217,7 @@ void loop(void)
 	// 遅延アームのポンプ(§7.4): 予約計画の開始スレッドを期日(窓90秒前)に生成する。毎秒1回で十分。
 	{
 		static uint32_t lastPump = 0;
-		if (now - lastPump >= 1000) { lastPump = now; hge_pump(); }
+		if (now - lastPump >= 1000) { lastPump = now; hge_pump(); edgeHeap::pump((int)g_state); }
 	}
 
 	// 項目2: 終わった撮影計画をエッジから自動削除する。

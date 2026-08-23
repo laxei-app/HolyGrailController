@@ -32,6 +32,7 @@
 #include "batteryLevel.h"	// バッテリ残量レベル(実測放電カーブから決めたしきい値)
 #include "batteryIcon.h"	// 残量アイコンの描画
 #include "edgeBoot.h"	// 起動マーカー(リセット要因)
+#include "edgeHeap.h"	// 内部RAMの推移(開始/停止で戻らない量を見る)
 #include "edgeBacklight.h"	// バックライト自動消灯(無操作1分。消灯中は電源LEDも消す)
 
 // バックライトの状態(無操作1分で消灯)。実際に消す処理は blApply()。
@@ -1143,7 +1144,7 @@ void loop(void)
 	{
 		static uint32_t lastPump = 0;
 		uint32_t nowMs = millis();
-		if (nowMs - lastPump >= 1000) { lastPump = nowMs; hge_pump(); }
+		if (nowMs - lastPump >= 1000) { lastPump = nowMs; hge_pump(); edgeHeap::pump((int)g_state); }
 	}
 
 	// 項目2: 終わった撮影計画をエッジから自動削除する。
