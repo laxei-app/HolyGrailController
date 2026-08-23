@@ -991,6 +991,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             runOnUiThread {
                 loadColors()
                 buildGearMenu()
+                buildCcmEditButtons()	// 計画1ページ目の撮影制御方法ボタンも生成時の色を持つ
                 if (latestSchedule.isNotEmpty()) { updatePlanDisplay(latestSchedule) }
             }
         }.start()
@@ -2072,19 +2073,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private val ccmTypeName = mapOf(1 to "夜間撮影", 2 to "朝日撮影", 3 to "夕日撮影", 4 to "日中撮影",
                                     5 to "夜間前移行", 6 to "夜間後移行")
 
-    // 撮影制御方法の編集ボタン(全5種)を常に定位置(スケジュールの下)に並べる。タップで編集画面へ。
-    // 3列グリッド(夜間/朝日/夕日 と 日中/月)。色分けして「ボタンらしい」見た目にする。
+    // 撮影制御方法の編集ボタンを常に定位置(スケジュールの下)に並べる。タップで編集画面へ。
+    // 夜間/朝日/夕日/日中の4つを横1列に並べる(以前は3列グリッドで日中だけが下に落ちていた)。
+    // 色はシステム共通の設定から取るので、色を変えたらここを呼び直す必要がある。
     private fun buildCcmEditButtons() {
         val parent = findViewById<LinearLayout>(R.id.plan_ccmButtons)
         parent.removeAllViews()
         // 1=夜間 2=朝日 3=夕日 4=日中(月は廃止)。
-        val groups = listOf(listOf(1, 2, 3), listOf(4))
-        for (group in groups) {
+        run {
             val row = LinearLayout(this)
             row.orientation = LinearLayout.HORIZONTAL
             row.layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            for (t in group) {
+            for (t in listOf(1, 2, 3, 4)) {
                 val key = ccmTypeToKey[t] ?: continue
                 // 他のボタン(保存/撮影開始/接続/リセット)と同じ形にするため、テーマ既定の
                 // materialButtonStyle で生成し、角丸はスタイル(=他ボタンと同一)を継承する。
@@ -2092,19 +2093,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     this, null, com.google.android.material.R.attr.materialButtonStyle)
                 btn.text = ccmTypeName[t]
                 btn.isAllCaps = false
-                btn.textSize = 13f
+                btn.textSize = 12f	// 4列にするので少し小さく
+                // MaterialButton の既定最小幅(88dp)を残すと 4列ではみ出すので外す。
+                btn.minWidth = 0; btn.minimumWidth = 0
+                btn.setPadding(dp(2), btn.paddingTop, dp(2), btn.paddingBottom)
                 btn.setTextColor(ccmTextColor(t))
                 btn.backgroundTintList = ColorStateList.valueOf(ccmColor(t))
                 btn.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                     .apply { setMargins(dp(2), dp(2), dp(2), dp(2)) }
                 btn.setOnClickListener { openPlanCcmEdit(key) }
                 row.addView(btn)
-            }
-            // 列数を3に揃えるための空きスペーサ(最終行の日中/月を左寄せ・同幅にする)
-            repeat(3 - group.size) {
-                val sp = android.view.View(this)
-                sp.layoutParams = LinearLayout.LayoutParams(0, 1, 1f)
-                row.addView(sp)
             }
             parent.addView(row)
         }
