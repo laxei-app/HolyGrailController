@@ -219,7 +219,10 @@ void presenceStart(std::function<void()> onChange)
 {
 	// useNotify=false: SSDP共有リスナは entity 側(ensureWatching=runner poke 用)が管理するため二重登録しない。
 	//  在否は定期M-SEARCH(60秒)+疎通で拾う(起動時から走るので、開始時には既に在否を把握済み)。
-	presenceMon::start(std::move(onChange), []() { return !hge_anyActiveCameraSession(); }, false);
+	// 第4引数: 撮影に使っている個体か。撮影中も**使っていないカメラだけ**を軽く突いて、
+	//  AP の無通信タイマ(既定300秒)で追い出されないようにする(2026-08-23)。
+	presenceMon::start(std::move(onChange), []() { return !hge_anyActiveCameraSession(); }, false,
+	                   [](const std::string& serial) { return hge_isCameraInUse(serial.c_str()); });
 }
 void presenceStop() { presenceMon::stop(); }
 std::string presenceJson() { return presenceMon::json(); }

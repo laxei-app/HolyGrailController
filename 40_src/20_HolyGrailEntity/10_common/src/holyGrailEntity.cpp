@@ -2856,6 +2856,22 @@ int32_t hge_pump(void)
 // 項目1(エッジ在否モニタ用): いずれかのセッションがカメラI/O中(取得/撮影/停止処理)か。
 //  true の間はエッジのプレゼンス探索(M-SEARCH/疎通)を止め、時間厳守のシャッターI/Oと単一netThreadで
 //  競合させない。撮影中の在否はランナー(取得フェーズ/接続断検知)が管理するので二重にならない。
+// このシリアルの個体を、今動いているセッションが使っているか(2026-08-23)。
+//  在否監視が「撮影中のカメラには触らない」を判定するために使う。
+bool hge_isCameraInUse(const char* serial)
+{
+	if (serial == nullptr || serial[0] == 0) { return false; }
+	const std::string sn(serial);
+	for (auto& up : g_sessions)
+	{
+		const int st = up->state.load();
+		const bool active = (st == HGE_ST_CAPTURING || st == HGE_ST_SEARCHING ||
+		                     st == HGE_ST_READY || st == HGE_ST_STOPPING);
+		if (active && up->dev.serialno == sn) { return true; }
+	}
+	return false;
+}
+
 bool hge_anyActiveCameraSession(void)
 {
 	for (auto& up : g_sessions)

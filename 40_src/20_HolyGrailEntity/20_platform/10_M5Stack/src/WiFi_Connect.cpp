@@ -1,5 +1,6 @@
-#include "commonM5.h"
+﻿#include "commonM5.h"
 #include <WiFi.h>
+#include <esp_wifi.h>	// esp_wifi_set_inactive_time(無通信で追い出すまでの時間)
 #include "WiFi_Connect.h"
 
 // wifi の初期化をおこなう
@@ -52,6 +53,15 @@ bool wifiConnect::startAp(const char * ssid, const char * passphrase, int maxCon
     // channel=1、SSID可視、maxConn(スマホ+カメラ2=3以上を確保)。pass 空文字ならオープン。
     bool ok = WiFi.softAP(ssid, (passphrase && passphrase[0]) ? passphrase : nullptr,
                           1 /*channel*/, 0 /*hidden*/, maxConn);
+    if (ok)
+    {   // 無通信で追い出すまでの時間を伸ばす(既定300秒 -> 3600秒。2026-08-23)。
+        //  ESP32 の SoftAP は接続中の端末から一定時間データが来ないと強制切断する。
+        //  カメラ複数台では撮影していない台が無通信になり、実機で reason=4(ASSOC_EXPIRE) を確認した。
+        //  主対策は在否監視の軽い接触。これはそれが滞ったときの保険。
+        //  伸ばしすぎると居なくなった端末が接続一覧に残り接続枠(最大4)を占めるので1時間にする。
+        //  この設定はフラッシュに保存されないので AP 起動のたびに呼ぶ。
+        esp_wifi_set_inactive_time(WIFI_IF_AP, 3600);
+    }
     return ok;
 }
 

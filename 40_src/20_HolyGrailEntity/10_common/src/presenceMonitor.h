@@ -1,4 +1,4 @@
-#ifndef _PRESENCE_MONITOR_H_
+﻿#ifndef _PRESENCE_MONITOR_H_
 #define _PRESENCE_MONITOR_H_
 // カメラ在否モニタ(共通)。スマホ役・エッジ役の両方が使う「同じ仕組み」。
 //  ・起動時と定期(既定60s)に M-SEARCH(cameraController::detectTarget)でオンラインカメラを洗い出す。
@@ -20,7 +20,15 @@ namespace presenceMon
 	// useNotify=受動NOTIFY(SSDP watchStart)で新カメラ出現を即拾うか。
 	//   スマホ=true(常時)。エッジ=false(SSDP共有リスナは entity 側=runner poke 用が使うため二重登録を避ける。
 	//   在否は定期M-SEARCHで拾えば#1には十分)。
-	void start(std::function<void()> onChange, std::function<bool()> canScan, bool useNotify = true);
+	// inUse=そのシリアルの個体を今撮影に使っているか(2026-08-23 追加)。
+	//  canScan が false の間(エッジの撮影中)も、**使っていない個体だけ**は軽く触る。
+	//  【なぜ要るか】ESP32 の SoftAP は接続中の端末から一定時間データが来ないと強制切断する
+	//  (既定300秒)。1台でも撮影を始めると監視が全部止まるため、**撮影していないカメラが
+	//  無通信で追い出される**。カメラ1台のときは「撮影中=そのカメラは通信中」なので表に出なかった。
+	//  実機で reason=4(ASSOC_EXPIRE) を確認済み(2026-08-23)。
+	//  触るのは記述URLへの GET だけ(認証不要・CCAPIを叩かない)。M-SEARCH は流さない。
+	void start(std::function<void()> onChange, std::function<bool()> canScan, bool useNotify = true,
+	           std::function<bool(const std::string&)> inUse = nullptr);
 	void stop(void);
 	// 現在のマップを JSON 配列 [{serial,model,assignedName,ip,online}] で返す。
 	std::string json(void);

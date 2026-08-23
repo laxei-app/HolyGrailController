@@ -23,6 +23,7 @@ namespace {
 	std::mutex              g_mapMutex;
 	std::function<void()>   g_onChange;
 	std::function<bool()>   g_canScan;		// この周期にネットワーク探索してよいか(エッジ=撮影中は false)
+	std::function<bool(const std::string&)> g_inUse;	// 撮影に使っている個体か(触らない判定)
 	std::atomic<bool>       g_running{false};
 	std::atomic<bool>       g_scanned{false};	// 一度でもフル探索(M-SEARCH)を終えたか。未探索なら在否は「不明」
 	std::atomic<bool>       g_wake{false};		// NOTIFY等で即フル探索を促す
@@ -126,6 +127,25 @@ namespace {
 	}
 
 	bool canScanNow() { return !g_canScan || g_canScan(); }
+	bool inUseNow(const std::string& serial) { return g_inUse && g_inUse(serial); }
+
+	// 撮影中の軽い接触。**撮影に使っていない個体だけ**を記述URLで突く。
+	//  目的は在否の更新ではなく、**AP の無通信タイマで追い出されないこと**。
+	//  撮影中の個体には一切触れない(シャッターI/O と競合させない。現行の設計を維持)。
+	void keepAliveLocked(long long now)
+	{
+		for (auto& c : g_map)
+		{
+			if (!c.online || c.location.empty()) { continue; }
+			if (inUseNow(c.serial))              { continue; }	// 撮影中の個体は触らない
+			std::string resp;
+			// 応答が無いときは平時と同じ TTL 規則でオフラインへ落とす(新しい規則は作らない)。
+			//  触るだけで判定しないと、カメラが死んでいてもアイコンは「居る」のままになる。
+			//  「カメラ側は繋がって見えるのにエッジからは見えない」状態を表示で見分けられないのは困る(2026-08-24 指摘)。
+			if (netThread::httpGet(c.location, resp) && !resp.empty()) { c.lastSeen = now; }
+			else if (now - c.lastSeen > kTtlSec)                       { c.online = false; }
+		}
+	}
 
 	void presenceLoop()
 	{
@@ -156,6 +176,11 @@ namespace {
 				std::string sig = signatureLocked();
 				if (sig != g_lastSig) { g_lastSig = sig; changed = true; }
 			}
+			else
+			{	// 撮影中。探索はしないが、使っていないカメラだけ軽く突いて追い出されないようにする。
+				std::lock_guard<std::mutex> lk(g_mapMutex);
+				keepAliveLocked(now);
+			}
 			if (changed && g_onChange) { g_onChange(); }
 			// 待ち。wake で早く起きるのは良いが、**1秒は必ず眠る**。そうしないと wake が
 			// 立て続けに来たときや、上のブロックを丸ごと飛ばす経路(撮影中=canScanNow false)で
@@ -170,12 +195,14 @@ namespace {
 
 namespace presenceMon {
 
-void start(std::function<void()> onChange, std::function<bool()> canScan, bool useNotify)
+void start(std::function<void()> onChange, std::function<bool()> canScan, bool useNotify,
+           std::function<bool(const std::string&)> inUse)
 {
 	if (g_running.exchange(true)) { return; }	// 二重起動防止
 	g_onChange = std::move(onChange);
 	g_canScan  = std::move(canScan);
 	g_useNotify = useNotify;
+	g_inUse    = std::move(inUse);
 	g_lastSig.clear();
 	// 受動NOTIFY: カメラ出現の広告を拾ったら即フル探索へ前倒し(useNotify のときのみ。
 	//  エッジは共有SSDPリスナを entity 側=runner poke 用が使うため、ここでは二重登録しない)。

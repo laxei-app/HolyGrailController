@@ -317,6 +317,8 @@ int32_t hge_pump(void);
 // 項目1: いずれかのセッションがカメラI/O中(取得/撮影/停止処理)か。エッジの在否モニタが撮影中は探索を
 // 止めるための判定に使う(時間厳守のシャッターI/Oと単一netThreadで競合させない)。
 bool hge_anyActiveCameraSession(void);
+// このシリアルの個体を今撮影に使っているか(在否監視が「触らない判定」に使う)。
+bool hge_isCameraInUse(const char* serial);
 
 // バッテリ切れによる自動シャットダウンの直前に呼ぶ。全セッションを NOCAMERA(✖)にして
 // スマホのポーリングが1回拾えるようにする。撮影の意図(capturing.json)は残すので、
