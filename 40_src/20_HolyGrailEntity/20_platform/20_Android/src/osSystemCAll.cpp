@@ -8,11 +8,16 @@ namespace ossc
 {
 	// スレッドを起動する。
 	// return : スレッドを破棄するためのハンドル
-	void* threadNet(THREAD_FUNC& func, void* parm, uint32_t /*stackBytes*/)
+	void* threadNet(THREAD_FUNC& func, void* parm, uint32_t /*stackBytes*/, bool /*useStaticPool*/)
 	{	// std::thread は既定スタック(数MB)を使うため stackBytes は無視(ESP32専用の調整)。
+		// useStaticPool も ESP32 専用。スマホは内部RAMの断片化でスレッド生成が失敗する問題が無い。
 		auto thread = new std::thread(func, parm);
 		return thread;
 	}
+
+	// 生きているスレッドのスタック使用量をログへ出す(ESP32専用の計測)。
+	//  スマホは std::thread の既定スタック(数MB)で、削る動機が無いので何もしない。
+	void logLiveThreads(void) {}
 
 	// スレッドの終了を待ってスレッドを破棄する。
 	void threadEnd(void* handle)

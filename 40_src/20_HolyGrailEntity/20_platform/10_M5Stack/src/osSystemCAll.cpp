@@ -17,6 +17,8 @@
 #include <cstdio>
 #include "dataManager.h"
 #include <mutex>
+#include <vector>
+#include <algorithm>
 
 namespace ossc
 {
@@ -51,13 +53,30 @@ namespace ossc
     static bool         s_poolUsed[kPoolSlots] = { false };
     static std::mutex   s_poolMtx;
 
-    static int poolAcquire(uint32_t stackBytes)
+    // --- 生きているスレッドの台帳(2026-08-23) ---
+    // 常駐スレッド(在否監視等)は終了しないので taskWrapper の終了ログが出ない。
+    // 内部RAMを削るには「今生きているスレッドがどれだけ使っているか」が要るので、
+    // ハンドルを控えて外から高水位を読めるようにする。
+    static std::vector<ThreadControl*> s_live;
+    static std::mutex                  s_liveMtx;
+
+    static int poolAcquire(void)
     {
-        if (stackBytes != kPoolStackBytes) { return -1; }   // 撮影スレッド以外は対象外
         std::lock_guard<std::mutex> lk(s_poolMtx);
         for (int i = 0; i < kPoolSlots; ++i) { if (!s_poolUsed[i]) { s_poolUsed[i] = true; return i; } }
         return -1;
     }
+    static void liveAdd(ThreadControl* c)
+    {
+        std::lock_guard<std::mutex> lk(s_liveMtx);
+        s_live.push_back(c);
+    }
+    static void liveRemove(ThreadControl* c)
+    {
+        std::lock_guard<std::mutex> lk(s_liveMtx);
+        s_live.erase(std::remove(s_live.begin(), s_live.end(), c), s_live.end());
+    }
+
     static void poolRelease(int slot)
     {
         if (slot < 0) { return; }
@@ -92,7 +111,7 @@ namespace ossc
 
     // スレッドを起動する。
     // return : スレッドを破棄するためのハンドル(ThreadControl*)
-    void* threadNet(THREAD_FUNC& func, void* parm, uint32_t stackBytes)
+    void* threadNet(THREAD_FUNC& func, void* parm, uint32_t stackBytes, bool useStaticPool)
     {
         ThreadControl* ctrl = new ThreadControl();
         ctrl->userFunc = func;     // std::function を値コピー
@@ -107,13 +126,13 @@ namespace ossc
         // 数回リトライする。先行タスクの初期化完了/一時確保の解放でほぼ通る(2本目の撮影runner不発を防ぐ)。
         BaseType_t created = pdFAIL;
         // ① 静的スタックの空きがあればそちらで作る。ここは断片化に左右されない。
-        ctrl->slot = poolAcquire(stackBytes);
+        ctrl->slot = useStaticPool ? poolAcquire() : -1;
         if (ctrl->slot >= 0)
         {
             ctrl->taskHandle = xTaskCreateStaticPinnedToCore(
                 taskWrapper, "ossNet", kPoolStackBytes / sizeof(StackType_t), ctrl, 3,
                 s_poolStack[ctrl->slot], &s_poolTcb[ctrl->slot], 0);
-            if (ctrl->taskHandle != nullptr) { return (void*)ctrl; }
+            if (ctrl->taskHandle != nullptr) { liveAdd(ctrl); return (void*)ctrl; }
             poolRelease(ctrl->slot); ctrl->slot = -1;   // 引数不正等(通常起きない)。ヒープへ逃げる
         }
         // ② プールが埋まっている/対象外のサイズ → 従来どおりヒープから確保する。
@@ -155,7 +174,24 @@ namespace ossc
             delete ctrl;
             return nullptr;
         }
+        liveAdd(ctrl);
         return (void*)ctrl; // ハンドルとして ThreadControl* を返す
+    }
+
+    // 生きているスレッドの確保量と高水位をログへ出す。スタックを削る判断材料。
+    void logLiveThreads(void)
+    {
+        std::lock_guard<std::mutex> lk(s_liveMtx);
+        for (ThreadControl* c : s_live)
+        {
+            if (c == nullptr || c->taskHandle == nullptr) { continue; }
+            const unsigned left = (unsigned)uxTaskGetStackHighWaterMark(c->taskHandle);
+            char d[96];
+            std::snprintf(d, sizeof(d), "live size=%u leftMin=%u used=%u pool=%d",
+                          (unsigned)c->stackBytes, left,
+                          (c->stackBytes > left) ? (unsigned)(c->stackBytes - left) : 0u, c->slot);
+            dataManager::logEvent("STACK", d);
+        }
     }
 
     // 終了を待ち合わせてスレッド資源を破棄する。
@@ -183,6 +219,7 @@ namespace ossc
             poolRelease(ctrl->slot);
         }
 
+        liveRemove(ctrl);
         vSemaphoreDelete(ctrl->doneSem);
         delete ctrl;
     }

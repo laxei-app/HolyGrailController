@@ -33,6 +33,7 @@
 #include "batteryIcon.h"	// 残量アイコンの描画
 #include "edgeBoot.h"	// 起動マーカー(リセット要因)
 #include "edgeHeap.h"	// 内部RAMの推移(開始/停止で戻らない量を見る)
+#include "edgeApEvents.h"	// SoftAP への参加/離脱(理由コード付き)をログへ
 #include "edgeBacklight.h"	// バックライト自動消灯(無操作1分。消灯中は電源LEDも消す)
 
 // バックライトの状態(無操作1分で消灯)。実際に消す処理は blApply()。
@@ -1071,6 +1072,7 @@ void setup(void)
 	//  タスクスタックを置ける内部RAM は確立時に 18KB まで細るため。
 	//  ログより先に呼ぶ(以降の確保を全部対象にしたい)。
 	edgeHeap::useExternalAbove(256);
+	edgeApEvents::start();	// APの参加/離脱を記録(3台目が切れる件の切り分け)
 	edgeBoot::logMarker(g_netMode.c_str(), hge_version());
 	g_state = hge_getState();
 	redraw();

@@ -9,9 +9,9 @@
 
 // SSDP(M-SEARCH)で検出し、同一カメラの統合と apiBase 初期化まで済ませて out に追加する。
 // (旧 cameraController::detectTarget の探索/統合/初期化処理をバックエンド側へ移設したもの。)
-size_t detectSsdpBase::detect(std::vector<class device>& out)
+size_t detectSsdpBase::detect(std::vector<class device>& out, const deviceMatch& want)
 {
-	return discover(out, false);
+	return discover(out, false, want);
 }
 
 // 身元だけ(デバイス記述まで)。CCAPI を叩かないので認証の影響を受けない。
@@ -21,7 +21,7 @@ size_t detectSsdpBase::identify(std::vector<class device>& out)
 	return discover(out, true);
 }
 
-size_t detectSsdpBase::discover(std::vector<class device>& out, bool identifyOnly)
+size_t detectSsdpBase::discover(std::vector<class device>& out, bool identifyOnly, const deviceMatch& want)
 {
 	std::vector<class device> devices;						// このバックエンド分の検出結果
 	auto num = deviceDiscovery::search(devices, interfaces());	// SSDP で探す(このバックエンドの service 定義で分類)
@@ -92,6 +92,14 @@ size_t detectSsdpBase::discover(std::vector<class device>& out, bool identifyOnl
 			continue;
 		}
 
+		// 欲しい1台が決まっているなら、**記述子だけ**で先に見分ける(2026-08-23)。
+		//  記述子は認証不要で数KB。重いのはこの先の API カタログ取得と解析なので、
+		//  合わない台はここで捨てる。合った1台だけ init() へ進む。
+		if (want)
+		{
+			if (api->identify(device) != ERR_HGC_OK) { continue; }
+			if (!want(device)) { device.apiBase = nullptr; continue; }
+		}
 		// api の初期化をおこなう
 		errCode ie = api->init(device);
 		if ( ie != ERR_HGC_OK )
@@ -115,6 +123,7 @@ size_t detectSsdpBase::discover(std::vector<class device>& out, bool identifyOnl
 		device.apiBase = api;			// 共有所有(device コピーで参照共有・最後の参照で解放)
 		out.push_back(device);
 		added++;
+		if (want) { break; }	// 目当てが見つかったので打ち切る(他の台は作らない)
 	}
 	return added;
 }

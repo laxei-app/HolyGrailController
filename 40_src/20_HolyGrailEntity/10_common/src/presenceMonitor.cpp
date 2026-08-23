@@ -181,7 +181,10 @@ void start(std::function<void()> onChange, std::function<bool()> canScan, bool u
 	//  エッジは共有SSDPリスナを entity 側=runner poke 用が使うため、ここでは二重登録しない)。
 	if (g_useNotify) { cameraController::watchStart([]() { g_wake.store(true); }); }
 	ossc::THREAD_FUNC fn = [](void*) -> errCode { presenceLoop(); return ERR_HGC_OK; };
-	g_thread = ossc::threadNet(fn, nullptr);
+	// スタックは 6144。既定(12288)は過大だった。実測で used=3616(2026-08-23)で、
+	// 同じ HTTP/UDP の I/O をする netThread ワーカー(6144 確保/2704 使用)と同水準。
+	// このスレッドは常駐なので、削った差分がそのまま内部RAMの余裕になる。
+	g_thread = ossc::threadNet(fn, nullptr, 6144);
 }
 
 void stop(void)

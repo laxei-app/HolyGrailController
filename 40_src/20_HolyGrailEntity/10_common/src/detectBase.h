@@ -16,8 +16,16 @@ class detectBase
 public:
 	virtual ~detectBase() {}
 
+	// 欲しい1台が決まっているときに渡す判定(2026-08-23)。
+	//  記述子(認証不要・軽い)だけで判定できること。model/serial/name が埋まった状態で呼ばれる。
+	using deviceMatch = std::function<bool(const class device&)>;
+
 	// 能動検出。見つかったこの種別のデバイス(apiBase 設定済み)を out に追加する。戻り=追加数。
-	virtual size_t detect(std::vector<class device>& out) = 0;
+	// want を渡すと**合致した1台だけ**を作って打ち切る。合わない台の apiBase は作らない。
+	//  【なぜ要るか】従来は応答した全台について API カタログの取得と解析を行い、
+	//  apiBase(機能リスト+送信テーブル+8KBバッファ)を台数ぶん作ってから、1台だけ使って
+	//  残りを捨てていた。カメラ3台で確立時の内部RAMが残り404バイトまで細った(2026-08-23 実測)。
+	virtual size_t detect(std::vector<class device>& out, const deviceMatch& want = nullptr) = 0;
 
 	// 身元だけを確かめる検出。見つかったデバイスの機種名/シリアル/愛称/IP を out に入れる。
 	//  **apiBase は作らない=CCAPI を叩かない**。在否監視のように「そこに居るか」だけ知りたい

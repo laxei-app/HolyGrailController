@@ -45,6 +45,7 @@ static edgeBL::state g_bl;
 static volatile bool g_blWake = false;
 #include "batteryGuard.h"	// 限界での自動シャットダウン
 #include "edgeHeap.h"	// 内部RAMの推移(開始/停止で戻らない量を見る)
+#include "edgeApEvents.h"	// SoftAP への参加/離脱(理由コード付き)をログへ
 #include "osFile.h"
 #include "osClock.h"
 #include "debugOut.h"
@@ -1144,6 +1145,7 @@ void setup(void)
 	//  タスクスタックを置ける内部RAM は確立時に 18KB まで細るため。
 	//  ログより先に呼ぶ(以降の確保を全部対象にしたい)。
 	edgeHeap::useExternalAbove(256);
+	edgeApEvents::start();	// APの参加/離脱を記録(3台目が切れる件の切り分け)
 	edgeBoot::logMarker(g_netMode.c_str(), hge_version());
 	g_state = hge_getState();
 	redraw(false);

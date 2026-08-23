@@ -1104,7 +1104,18 @@ namespace
 		// IP直結が不発なら SSDP M-SEARCH で探す(従来経路)。
 		if (!ipDirect)
 		{
-			cameraController::detectTarget(found);
+			// 探している1台を探索側へ渡す(2026-08-23)。従来は応答した全台の apiBase を作ってから
+			// ここで 1台選んでいたので、カメラ3台だと3台ぶんのカタログ取得と解析を毎回やっていた。
+			const auto wantOne = [&](const class device& d) -> bool {
+				if (!wantSerial.empty()) { return d.serialno == wantSerial && dataManager::cameraModelMatches(d, pc); }
+				return dataManager::cameraModelMatches(d, pc);
+			};
+			cameraController::detectTarget(found, wantOne);
+			// シリアル指定で見つからなければ、機種一致だけでもう一度(従来の二段構えを保つ)。
+			if (found.empty() && !wantSerial.empty())
+			{
+				cameraController::detectTarget(found, [&](const class device& d) { return dataManager::cameraModelMatches(d, pc); });
+			}
 			{	// 診断: SSDP検索で何台見つかったか(0台=SSDP不発の可能性)。機種/シリアルも残す。
 				std::string d = "ssdp found " + std::to_string(found.size());
 				for (auto& fd : found) { if (fd.apiBase) { d += " [" + (fd.model.empty() ? fd.assignedName : fd.model) + "/" + (fd.serialno.empty() ? "?" : fd.serialno) + "]"; } }
@@ -1383,7 +1394,16 @@ namespace
 			// ②外れたら M-SEARCH。判明シリアルで再特定(本人確認 model+serial)、無ければ機種一致。
 			if (hit == nullptr)
 			{
-				cameraController::detectTarget(found);
+				// 探している1台だけ作る(内部RAMの山を低くする。詳細は detectBase::detect)。
+				const hgc::camera& wc = S->plan.camera;
+				cameraController::detectTarget(found, [&](const class device& d) -> bool {
+					if (!wantSerial.empty()) { return d.serialno == wantSerial && dataManager::cameraModelMatches(d, wc); }
+					return dataManager::cameraModelMatches(d, wc);
+				});
+				if (found.empty() && !wantSerial.empty())
+				{
+					cameraController::detectTarget(found, [&](const class device& d) { return dataManager::cameraModelMatches(d, wc); });
+				}
 				if (!wantSerial.empty())
 				{
 					for (auto& d : found) { if (d.apiBase && d.serialno == wantSerial && dataManager::cameraModelMatches(d, S->plan.camera)) { hit = &d; break; } }
@@ -1457,7 +1477,8 @@ namespace
 			raw->seqActive = false;
 			return e;
 		};
-		raw->startThread = ossc::threadNet(fn, nullptr);
+		// 撮影ループはこのスレッド上で回る(runInline)。静的スタック枠を使うのはここだけ。
+		raw->startThread = ossc::threadNet(fn, nullptr, 12288, true);
 		if (raw->startThread == nullptr) { raw->seqActive = false; return false; }
 		return true;
 	}

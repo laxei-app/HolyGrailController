@@ -20,7 +20,12 @@ namespace ossc
 	//  (確保先は .bss の静的プールなので、連続ブロックの大きさには左右されない)。
 	//  通っていない経路(再接続/認証/R10のライブビュー測光)で深くなる可能性があるため、
 	//  セッション終了ごとに STACK ログ(leftMin)を残して監視し続けること。
-	void* threadNet(THREAD_FUNC& func, void* parm, uint32_t stackBytes = 12288);
+	// useStaticPool: true=撮影セッション用の静的スタック枠を使う(M5実装のみ意味を持つ)。
+	//  当初は「スタックサイズが既定値と一致したらプール」としていたが、常駐スレッド
+	//  (在否監視/カメラ検索)も既定値で作られるため枠を奇取し、3本目の撮影が始まらなかった
+	//  (2026-08-23 実機)。サイズではなく**用途を明示**すること。
+	void* threadNet(THREAD_FUNC& func, void* parm, uint32_t stackBytes = 12288, bool useStaticPool = false);
+	void  logLiveThreads(void);	// 生きているスレッドの確保量と高水位をログへ(内部RAMを削るための計測)
 	void  threadEnd(void * handle);	
 
 	// 通知

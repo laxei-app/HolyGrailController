@@ -16,6 +16,7 @@
 #include <esp_heap_caps.h>
 #include <cstdio>
 #include "dataManager.h"
+#include "osSystemCall.h"	// 生きているスレッドの高水位を一緒に残す
 
 namespace edgeHeap
 {
@@ -48,12 +49,18 @@ namespace edgeHeap
 		dataManager::logEvent("HEAP", d);
 	}
 
-	// 毎ループから呼ぶ。状態が変わったときと、60秒ごとに1行残す。
+	// 毎ループから呼ぶ。状態が変わったときと、60秒ごと、それに
+	// **空きが 4KB 以上動いたとき**に1行残す(2026-08-23 追加)。
+	//  確立処理の山は数秒で過ぎるので、60秒周期だと「いつ何で落ちたか」が残らない。
+	//  変化で拾えば、前後の NET/CONV の行と突き合わせて犯人を絞れる。
+	//  1秒に1行を上限にしてログが溢れないようにする。
 	//  状態変化のたびに出すのは、開始(SEARCHING→CAPTURING)と停止(→IDLE)の前後を突き合わせるため。
 	inline void pump(int state)
 	{
 		static int      lastState = -1;
 		static uint32_t lastMs    = 0;
+		static size_t   lastFree    = 0;
+		static uint32_t lastDeltaMs = 0;
 		const uint32_t  now       = millis();
 		if (state != lastState)
 		{
@@ -63,6 +70,17 @@ namespace edgeHeap
 			log(tag);
 			return;
 		}
-		if (now - lastMs >= 60000) { lastMs = now; log("periodic"); }
+		if (now - lastMs >= 60000) { lastMs = now; lastFree = 0; log("periodic"); ossc::logLiveThreads(); return; }
+		// 大きく動いたら即時に残す(確立の山を見逃さないため)。
+		const size_t nowFree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+		if (lastFree == 0) { lastFree = nowFree; return; }
+		const size_t diff = (nowFree > lastFree) ? (nowFree - lastFree) : (lastFree - nowFree);
+		if (diff >= 4096 && (now - lastDeltaMs) >= 1000)
+		{
+			const char* tag = (nowFree < lastFree) ? "drop" : "rise";
+			lastDeltaMs = now; lastFree = nowFree;
+			log(tag);
+		}
+		else if (diff >= 4096) { lastFree = nowFree; }
 	}
 }

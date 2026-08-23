@@ -16,7 +16,9 @@ class cameraController
 public:
 public:
 	// カメラの検出(全バックエンドを走査して device へ追加)
-	static size_t detectTarget(std::vector<class device>& device);
+	// want を渡すと合致した1台だけを作って打ち切る(合わない台の apiBase を作らない)。
+	//  確立時の内部RAMを削るため。詳細は detectBase::detect のコメント。
+	static size_t detectTarget(std::vector<class device>& device, const detectBase::deviceMatch& want = nullptr);
 	// 身元だけを確かめる検出(機種名/シリアル/愛称/IP)。**CCAPI を叩かない**ので apiBase は入らない。
 	//  在否監視のように「そこに居るか」だけ知りたい側が使う。認証が要るカメラを、撮影主体でない側が
 	//  叩くと認証がぶつかってカメラを締め出すため(EOS R50 V 実測 2026-08-16)。

@@ -60,7 +60,7 @@ size_t cameraController::identifyTargets(std::vector<class device>& devices)
 	return devices.size();
 }
 
-size_t cameraController::detectTarget(std::vector<class device> & devices)
+size_t cameraController::detectTarget(std::vector<class device> & devices, const detectBase::deviceMatch& want)
 {
 	// Phase4(netThread並行化との両立): 複数セッションが同時に発見(SSDP M-SEARCH)を走らせると
 	// ローカルポート1900のマルチキャストbindが競合し片方が「0台」になって取得リトライを繰り返す。
@@ -84,15 +84,23 @@ size_t cameraController::detectTarget(std::vector<class device> & devices)
 			for (auto& be : backends())
 			{
 				class device dev;
+				// 欲しい1台が決まっているなら、先に身元(記述子・軽い)で見分ける。
+				if (want)
+				{
+					class device probe;
+					if (!be->identifyAt(host, probe) || !want(probe)) { continue; }
+				}
 				if (be->makeManualDevice(host, dev)) { devices.push_back(dev); break; }
 			}
+			if (want && !devices.empty()) { break; }
 		}
 		if (!devices.empty()) { return devices.size(); }	// 全滅なら通常SSDPへフォールスルー(下へ)
 	}
 
 	for (auto& be : backends())
 	{	// 各種別バックエンドで検出(統合・apiBase 初期化はバックエンド内で完結)。
-		be->detect(devices);
+		be->detect(devices, want);
+		if (want && !devices.empty()) { break; }
 	}
 	// SSDP で拾えなかったぶんを、近傍ホストの手がかりから補う。自分がDHCPを配っているときは
 	//  貸出先のIPが分かるので、それを直接 probe する。手がかりが無ければ空なので何も起きない。
@@ -100,12 +108,19 @@ size_t cameraController::detectTarget(std::vector<class device> & devices)
 	//  条件は netThread 側に閉じているので、上位は同じ道を通るだけでよい。
 	for (const auto& host : netThread::neighborHostIps())
 	{
+		// 目当てが決まっていてすでに見つかっているなら、ここは見ない。
+		if (want && !devices.empty()) { break; }
 		bool known = false;
 		for (const auto& d : devices) { if (hostOfUrl(d.urlAccess) == host) { known = true; break; } }
 		if (known) { continue; }
 		for (auto& be : backends())
 		{	// この種別として host に接続できれば(=/ccapi 応答があれば)カメラとして採用。
 			class device dev;
+			if (want)
+			{	// 先に身元だけ見て、合わなければ apiBase を作らずに次へ。
+				class device probe;
+				if (!be->identifyAt(host, probe) || !want(probe)) { continue; }
+			}
 			if (be->makeManualDevice(host, dev)) { devices.push_back(dev); break; }
 		}
 	}
