@@ -222,9 +222,9 @@
                 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="12dp" android:orientation="horizontal" android:gravity="center_vertical">
                     <TextView android:layout_width="96dp" android:layout_height="wrap_content"
-                        android:text="横向きで撮る" android:textStyle="bold" />
-                    <CheckBox android:id="@+id/plan_landscape" android:layout_width="wrap_content"
-                        android:layout_height="wrap_content" />
+                        android:text="横向きで撮る(ランドスケープ)" android:textStyle="bold" />
+                    <Switch android:id="@+id/plan_landscape" android:layout_width="wrap_content"
+                        android:layout_height="wrap_content" android:layout_marginStart="12dp" />
                 </LinearLayout>
 
                 <!-- 項目11: 「開始時の撮影方向/仰角」はここから削除した。朝日/夕日帯の自動判定(画角ゲート)を

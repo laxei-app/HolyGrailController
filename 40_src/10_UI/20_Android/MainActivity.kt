@@ -77,7 +77,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private lateinit var lensText: TextView
     private lateinit var intervalText: TextView
     private lateinit var npfText: TextView
-    private lateinit var landscapeCheck: CheckBox
+    private lateinit var landscapeCheck: android.widget.Switch	// スライドSW(2026-08-24 UI依頼でチェックボックスから変更)
     private var suppressLandscape = false   // updatePlanDisplay でのチェック設定が native を呼ばないように
     // 項目11: 計画1ページ目の撮影方向/仰角ウィジェット(compass/elevationView/dirText)は廃止。
     // 方向・仰角は撮影シミュレーション画面で設定する(cs の azimuth/elevation は保持)。
