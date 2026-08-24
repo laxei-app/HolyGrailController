@@ -1,0 +1,8 @@
+# 実行のたびに作られるもの(残さない)
+*.log
+edgelog_*.txt
+measure_*.log
+plan_measure.json
+spec.json
+ownedCameras.json
+__pycache__/

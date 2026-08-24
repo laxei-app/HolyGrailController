@@ -1208,6 +1208,17 @@ void loop(void)
 		// 検証用: ネットワークモード切替。保存して再起動し、選んだモードで素直に立ち上げ直す。
 		else if (c == 'A') { Serial.println("[AP] switch to AP mode, restarting..."); saveNetMode("ap");  delay(200); ESP.restart(); }
 		else if (c == 'S') { Serial.println("[STA] switch to STA mode, restarting..."); saveNetMode("sta"); delay(200); ESP.restart(); }
+		// 保守用: STA の接続先をファーム既定(このファイル冒頭の WIFI_SSID/WIFI_PASS)へ戻す。
+		//  NVS の ssid が AP 側の名前で上書きされてしまうと STA モードでどこにも繋がらなくなる
+		//  (実機で発生: SSID=EDGE00 を探し続ける)。BLEプロビジョニングにはQRの読み取りが要り
+		//  遠隔では復旧できないので、シリアルから既定へ戻せる口を用意する。端末名は変えない。
+		else if (c == 'W')
+		{
+			saveEdgeCreds(WIFI_SSID, WIFI_PASS, g_devName);
+			Serial.printf("[STA] creds reset to default ssid=%s (name=%s). restarting...\n",
+			              WIFI_SSID, g_devName.c_str());
+			delay(200); ESP.restart();
+		}
 		// 検証用: timeコマンド受信を模擬してUTCオフセットを設定・永続化し固定計画を再生成。
 		else if (c == 'j') { hge_setUtcOffset(540); hge_loadFixedPlan(); g_state = hge_getState(); g_dirty = true; }	// JST(+9h)
 		else if (c == 'u') { hge_setUtcOffset(0);   hge_loadFixedPlan(); g_state = hge_getState(); g_dirty = true; }	// UTC

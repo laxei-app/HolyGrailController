@@ -347,6 +347,15 @@ static void noteHttpError(int code, std::string& response)
                 for (int i = 0; i < kMaxKeepConns; ++i)
                 {
                     if (g_slots[i].busy) { continue; }
+                    // 【別宛先へ回すときは必ず本当に切る(2026-08-25 実測で判明)】
+                    //  setReuse(true) のまま end() すると Arduino の HTTPClient はソケットを
+                    //  温存する。その状態で別の host:port へ begin() すると、**前の接続のまま**
+                    //  要求が飛び、別のカメラの応答が返る。
+                    //  実機(偽カメラ8台)で確認: 4台目以降のディスクリプタ取得が全部1台目の内容に
+                    //  なり、機種/シリアルを取り違えて「見つからない」になっていた。
+                    //  1カメラにつき :49152(記述子) と :8080(CCAPI) の2宛先を使うので、
+                    //  枠3本では **カメラ2台でも**この取り違えが起きうる。
+                    g_slots[i].cli.setReuse(false);
                     g_slots[i].cli.end(); g_slots[i].open = false; g_slots[i].ep.clear();
                     slot = i; break;
                 }
