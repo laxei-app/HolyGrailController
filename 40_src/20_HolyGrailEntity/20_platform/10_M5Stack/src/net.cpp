@@ -289,7 +289,13 @@ static void noteHttpError(int code, std::string& response)
     //  ② **排他が無かった**。netThread のワーカーは2本(kWorkerCount)あるので、カメラAの通信中に
     //     別スレッドがカメラB宛で prepare() を呼ぶと、使用中の接続を横から end() していた。
     // 借りている間は busy にして、他スレッドから触らせない。
-    constexpr int kMaxKeepConns = 3;	// ワーカー2本+別宛先1つぶんの余裕
+    // 【枚数は「宛先の数」で決める(2026-08-25)】
+    //  1カメラにつき :49152(記述子) と :8080(CCAPI) の2宛先を使う。枚が足りないと
+    //  要求のたびに他宛先を畳んで繋ぎ直すことになり、**1要求=1接続**へ逆戻りする。
+    //  それは keep-alive を入れて直した「接続が詰まる」問題そのもので、実機カメラ3台で
+    //  HTTP=0(接続失敗)が連発した。カメラ台数分 + 余裕を持たせる。
+    //  未接続の枠は HTTPClient のオブジェクト分だけで、ソケットは繋いだときにしか取らない。
+    constexpr int kMaxKeepConns = 10;
     struct httpSlot
     {
         HTTPClient  cli;

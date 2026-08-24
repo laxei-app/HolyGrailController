@@ -45,7 +45,14 @@ class SerialTap(threading.Thread):
 
     def run(self):
         try:
-            sp = serial.Serial(self.port, 115200, timeout=0.5, dsrdtr=False, rtscts=False)
+            # DTR/RTS を触らずに開く(触るとエッジがリセットする)
+            sp = serial.Serial()
+            sp.port = self.port
+            sp.baudrate = 115200
+            sp.timeout = 0.5
+            sp.dtr = False
+            sp.rts = False
+            sp.open()
         except Exception as e:
             print("シリアルを開けない(%s): %s" % (self.port, e))
             return

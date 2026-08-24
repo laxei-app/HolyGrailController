@@ -20,7 +20,15 @@ def main():
     ap.add_argument("--wait", type=float, default=25.0)
     args = ap.parse_args()
 
-    sp = serial.Serial(args.com, 115200, timeout=0.5, dsrdtr=False, rtscts=False)
+    # 【DTR/RTS を触らずに開く】ESP32-S3 の USB-CDC は DTR/RTS の変化でリセットする。
+    # 普通に open すると吸い出すたびにエッジが再起動してしまう(2026-08-25 実測)。
+    sp = serial.Serial()
+    sp.port = args.com
+    sp.baudrate = 115200
+    sp.timeout = 0.5
+    sp.dtr = False
+    sp.rts = False
+    sp.open()
     time.sleep(1.0)
     sp.reset_input_buffer()
     sp.write(b"t")
