@@ -1257,6 +1257,15 @@ errCode captureRunner::loop(void)
 		const hgc::ccmWindow* w = activeWindow(now);
 		if (w == nullptr || !w->ccm)
 		{	// 隙間: warmup中は待つだけ。通常コマは既に撮ったので周期まで待って次へ。
+			// 【診断】窓が見つからないとここで黙って回り続けるので、最初の1回だけ状況を残す。
+			if (!gapLogged_)
+			{
+				gapLogged_ = true;
+				char gb[160];
+				std::snprintf(gb, sizeof(gb), "no active window: windows=%u now=%lld start=%lld end=%lld",
+				              (unsigned)plan_.ccmList.size(), (long long)now, (long long)startSec, (long long)endSec);
+				dataManager::logEvent("INFO", gb, true);
+			}
 			if (warmedUp && anchorA != nullptr)
 			{
 				const long im = static_cast<long>(interval * 1000.0);

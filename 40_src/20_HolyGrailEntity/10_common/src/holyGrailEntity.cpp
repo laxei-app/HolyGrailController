@@ -93,7 +93,8 @@ namespace
 
 	// 撮影期間(±マージン)が同時に重なる自撮影セッション数の最大が MAX_CONCURRENT を超えるか。
 	// 既存の全セッション + 新規1件[ns,ne) を掃引して判定する(半開区間=端点接触は重ならない)。
-	bool selfCaptureOverlapExceeds(long long ns, long long ne)
+	//  panoOverlap : 新規計画がパノラマ撮影か。true のときは重なりを1件までに絞る。
+	bool selfCaptureOverlapExceeds(long long ns, long long ne, bool panoOverlap)
 	{
 		struct Ev { long long t; int d; };
 		std::vector<Ev> ev;
@@ -103,11 +104,17 @@ namespace
 			long long ss = hgc::toUnixUtc(s->plan.start, g_offMin) - PRE_MARGIN_SEC;
 			long long se = hgc::toUnixUtc(s->plan.end, g_offMin) + (long long)std::llround(s->plan.interval);
 			add(ss, se);
+			// 既に走っている側がパノラマでも同じ(あちらの単独実行を守る)。
+			if (s->plan.panorama && !s->plan.subCameras.empty()) { panoOverlap = true; }
 		}
 		add(ns, ne);
 		std::sort(ev.begin(), ev.end(), [](const Ev& a, const Ev& b) { return a.t != b.t ? a.t < b.t : a.d < b.d; });
 		int cur = 0, mx = 0;
 		for (auto& e : ev) { cur += e.d; if (cur > mx) { mx = cur; } }
+		// パノラマ撮影は単独実行(2026-08-25 ユーザー指示)。1計画で複数台のカメラを
+		// 掴むため、他の計画と重ねるとカメラも通信枠もメモリも足りなくなる。
+		// 新規/既存のどちらかがパノラマなら、重なりは1件までしか許さない。
+		if (panoOverlap) { return mx > 1; }
 		return mx > (int)MAX_CONCURRENT;
 	}
 
@@ -2882,7 +2889,16 @@ int32_t hge_captureStartPlan(const char* planId_)
 	{
 		long long ns = hgc::toUnixUtc(sess->plan.start, g_offMin) - PRE_MARGIN_SEC;
 		long long ne = hgc::toUnixUtc(sess->plan.end, g_offMin) + (long long)std::llround(sess->plan.interval);
-		if (selfCaptureOverlapExceeds(ns, ne)) { dataManager::logEvent("INFO", ("capture request rejected: overlap limit (" + std::to_string(MAX_CONCURRENT) + ")").c_str()); return ERR_HGC_OVERLAP_LIMIT; }
+		// パノラマ撮影は単独実行にする(2026-08-25 ユーザー指示)。
+		const bool pano = (sess->plan.panorama && !sess->plan.subCameras.empty());
+		if (selfCaptureOverlapExceeds(ns, ne, pano))
+		{
+			const std::string why = pano
+				? std::string("capture request rejected: panorama runs alone")
+				: ("capture request rejected: overlap limit (" + std::to_string(MAX_CONCURRENT) + ")");
+			dataManager::logEvent("INFO", why.c_str());
+			return ERR_HGC_OVERLAP_LIMIT;
+		}
 	}
 	sess->runner = std::make_unique<captureRunner>();
 	captureSession* raw = sess.get();

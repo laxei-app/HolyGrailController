@@ -368,6 +368,7 @@ private:
 		long long        nextTryMs  = 0;	// 次に確立を試してよい時刻[epoch ms]。落ちた台に毎コマ粘らない
 	};
 	std::vector<subCam> subs_;
+	bool gapLogged_ = false;	// 【診断】窓無しで空回りしたことを1回だけログへ出したか
 	// 追加カメラのセッションを確立する(失敗した台は ready=false のまま次回へ回す)。
 	void establishSubSessions(void);
 	// 主の露出を各台の設定値へ丸めて送る(変わった項目だけ)。
