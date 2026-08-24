@@ -105,6 +105,11 @@ int32_t hge_renamePlan(const char* id, const char* name);
 // 横向き(ランドスケープ)を設定する。画角が変わるためスケジュールを再生成し通知する。
 int32_t hge_setPlanLandscape(int32_t landscape);
 
+// パノラマ撮影(2026-08-25)。camera で測光した露出を追加カメラへも配り全台で撮る。
+int32_t hge_setPlanPanorama(int32_t on);
+// 追加カメラを所持カメラの名前配列 ["name",...] で差し替える。
+int32_t hge_setPlanSubCameras(const char* namesJson);
+
 
 // --- スケジュール手動編集(7.3.2) ---
 // 朝日/夕日の帯モード(0=自動判定, 1=挿入(強制), 2=排除(日中))。再生成して通知する。

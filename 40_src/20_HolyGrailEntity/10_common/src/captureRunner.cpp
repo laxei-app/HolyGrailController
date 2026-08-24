@@ -886,8 +886,126 @@ bool captureRunner::establishSession(void)
 		double fmin = (plan_.lens.fn > 0.0) ? plan_.lens.fn : 1.0;
 		tables_ = expo::standardTables(fmin, 32.0);
 	}
+	// パノラマの追加カメラも同じタイミングで張る(失敗しても撮影は続行する)。
+	this->establishSubSessions();
 	ramMark("establish done");
 	return true;
+}
+
+// --- パノラマ撮影(2026-08-25) ---------------------------------------------
+// 主カメラで測光して決めた露出を追加カメラへも配り、同じコマで全台のシャッターを切る。
+// 測光・露出計算は主カメラの経路のままで、ここは決まった露出を乗せるだけ。
+
+namespace
+{
+	// 値文字列を別のカメラの設定可能値へ丸める。
+	//  機種が違うと刻みが違う(例: 1/3段のカメラと1/2段のカメラ)ので、同じ文字列を
+	//  そのまま送るとカメラが断る。実数の比を log2 で見て一番近いものを選ぶ(=段数で最寄り)。
+	//  テーブルが空なら元の文字列をそのまま返す(最善努力)。
+	std::string nearestValue(const std::vector<expo::expoEntry>& tab,
+	                         const std::string& want, expo::expoKind k)
+	{
+		if (tab.empty() || want.empty()) { return want; }
+		for (const auto& e : tab) { if (e.value == want) { return want; } }	// そのまま使える
+		const double target = expo::parseValue(want, k);
+		if (!(target > 0.0)) { return want; }	// Bulb 等は丸めようがない
+		const std::string* best = nullptr;
+		double bestD = 0.0;
+		for (const auto& e : tab)
+		{
+			if (!(e.real > 0.0)) { continue; }
+			const double d = std::fabs(std::log2(e.real / target));
+			if (best == nullptr || d < bestD) { best = &e.value; bestD = d; }
+		}
+		return (best != nullptr) ? *best : want;
+	}
+}
+
+void captureRunner::setSubDevices(const std::vector<device*>& devs)
+{
+	subs_.clear();
+	subs_.reserve(devs.size());
+	for (device* d : devs)
+	{
+		if (d == nullptr) { continue; }
+		subCam sc; sc.dev = d;
+		subs_.push_back(sc);
+	}
+}
+
+// 追加カメラのセッションを確立する。
+//  主カメラと違い、ここでこけても撮影自体は続行する(ready=false のまま次回へ回す)。
+//  パノラマの1台が落ちても主カメラのタイムラプスを崩さないことを優先する。
+void captureRunner::establishSubSessions(void)
+{
+	if (subs_.empty()) { return; }
+	const long long now = tool::epochMs();
+	for (auto& sc : subs_)
+	{
+		if (sc.ready)                                        { continue; }
+		if (sc.dev == nullptr || sc.dev->apiBase == nullptr) { continue; }
+		if (now < sc.nextTryMs)                              { continue; }	// クールダウン中
+		// 追加カメラは測光しないので setMeterLv/meterReset は不要。
+		sc.lastFn.clear(); sc.lastSs.clear(); sc.lastIso.clear();
+		errCode err = cameraController::startShooting(*sc.dev);
+		if (err != ERR_HGC_OK)
+		{
+			if (onError_ && sc.failStreak == 0) { onError_(err, "panorama startShooting"); }
+			++sc.failStreak;
+			sc.nextTryMs = now + kSubRetryMs;	// 居ない台に毎コマ粘ると主カメラの準備を食う
+			continue;
+		}
+		{
+			errCode me = cameraController::setupShootingModeManual(*sc.dev);
+			if (me == ERR_HGC_OK) { interruptibleSleep(800); }	// ability 更新待ち(主と同じ)
+		}
+		cmdt::shotRange range;
+		if (cameraController::getSettings(*sc.dev, range) == ERR_HGC_OK &&
+		    !range.iso.empty() && !range.ss.empty() && !range.fNum.empty())
+		{
+			sc.tables.iso = expo::buildTable(range.iso,  expo::expoKind::iso);
+			sc.tables.ss  = expo::buildTable(range.ss,   expo::expoKind::ss);
+			sc.tables.fn  = expo::buildTable(range.fNum, expo::expoKind::fn);
+		}
+		else
+		{	// 取得失敗時は主カメラのテーブルを借りる(丸めなしと同等になる)。
+			sc.tables = tables_;
+		}
+		sc.ready = true;
+		sc.failStreak = 0;
+	}
+}
+
+// 主の露出を各台の設定値へ丸めて、変わった項目だけ送る。
+void captureRunner::applySubExposure(const hgc::exposure& exp)
+{
+	for (auto& sc : subs_)
+	{
+		if (!sc.ready || sc.dev == nullptr || sc.dev->apiBase == nullptr) { continue; }
+		const std::string fn  = nearestValue(sc.tables.fn,  exp.fn,  expo::expoKind::fn);
+		const std::string ss  = nearestValue(sc.tables.ss,  exp.ss,  expo::expoKind::ss);
+		const std::string iso = nearestValue(sc.tables.iso, exp.iso, expo::expoKind::iso);
+		if (fn  != sc.lastFn)  { if (cameraController::setFNumber(*sc.dev, fn) == ERR_HGC_OK) { sc.lastFn  = fn;  } }
+		if (ss  != sc.lastSs)  { if (cameraController::setSS(*sc.dev, ss)      == ERR_HGC_OK) { sc.lastSs  = ss;  } }
+		if (iso != sc.lastIso) { if (cameraController::setIso(*sc.dev, iso)    == ERR_HGC_OK) { sc.lastIso = iso; } }
+	}
+}
+
+// 追加カメラのシャッターを連続で切る。
+//  CCAPI は1台ずつ HTTP で叩くしかないので厳密な同時にはならない(台あたり0.1秒前後ずれる)。
+//  露出はこの前に配り終えているので、ここでは POST だけを並べてずれを最小にする。
+//  リトライはしない――粘ると主カメラの次のコマの準備を食うため。取りこぼしは次コマで拾う。
+void captureRunner::fireSubShutters(void)
+{
+	for (auto& sc : subs_)
+	{
+		if (!sc.ready || sc.dev == nullptr || sc.dev->apiBase == nullptr) { continue; }
+		const errCode err = cameraController::actShutter(*sc.dev);
+		if (err == ERR_HGC_OK) { sc.failStreak = 0; continue; }
+		if (onError_ && sc.failStreak == 0) { onError_(err, "panorama actShutter"); }
+		// 続けて落ちるならセッションが切れている。張り直させる(次の establish で拾う)。
+		if (++sc.failStreak >= 5) { sc.ready = false; sc.failStreak = 0; }
+	}
 }
 
 errCode captureRunner::loop(void)
@@ -1101,6 +1219,7 @@ errCode captureRunner::loop(void)
 			shotExp = pending;
 			shutterMs = tool::epochMs();	// シャッター投下直前の壁時計(ms精度)
 			err = this->fireShutter(shotExp, interval, shootFailStreak, cameraOffline);
+			this->fireSubShutters();	// パノラマ: 追加カメラを続けて切る(露出は配布済み)
 			++frame;
 			this->fillSensorFromShot(frame);	// マスターに無い機種のセンサー諸元を撮影画像から補う
 			this->checkDeviceStatus(frame == 1);	// カード残量/電池/温度(1コマ目は必ず・以降は間隔で)
@@ -1549,6 +1668,7 @@ errCode captureRunner::loop(void)
 			{
 				int t1 = 0;
 				const errCode ae = applyWithRetry(pending, t1, kFirstApplyMaxMs);
+				this->applySubExposure(pending);	// パノラマ: 同じ露出を追加カメラへも配る
 				// 何回目で乗ったかを残す(SHOTログの fa=)。この事象は放置後の初回にしか出ないので、
 				// 「そもそも失敗しなかった」のか「失敗したが待って乗った」のかを後から区別する。
 				// onError_ は UI へトーストも出すので、情報の記録には使わない。
@@ -1600,6 +1720,10 @@ errCode captureRunner::loop(void)
 		{
 			void* ta = tool::startElapse();
 			applyErr = applyWithRetry(target, applyTry);	// 通るまでリトライ(最大 kApplyMaxMs)
+			// パノラマ: 主に乗ったのと同じ露出を追加カメラへも配る(各台の刻みへ丸める)。
+			//  ここで台数分の HTTP を投げるが、次コマのシャッターまでには余裕がある区間。
+			this->establishSubSessions();	// 落ちていた台があればここで張り直す
+			this->applySubExposure(target);
 			applyMs  = static_cast<int>(tool::getElapse(ta));
 			if (applyErr != ERR_HGC_OK && onError_)
 			{	// リトライしても設定できなかった。放置するとカメラは古い露出のまま撮り続け、

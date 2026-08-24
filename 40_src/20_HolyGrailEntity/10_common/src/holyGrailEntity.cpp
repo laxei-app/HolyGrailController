@@ -69,6 +69,9 @@ namespace
 		hgc::cs                       plan;
 		std::unique_ptr<captureRunner> runner;
 		class device                  dev;					// このセッション専用のカメラ(アドレス安定。撮影開始の都度ディスカバリで再取得)
+		// パノラマ撮影の追加カメラ(2026-08-25)。dev と同じくセッション専用の実体。
+		//  unique_ptr なのは、vector が伸びても runner へ渡したポインタが生き続けるようにするため。
+		std::vector<std::unique_ptr<class device>> subDevs;
 		std::atomic<int>              state{ HGE_ST_IDLE };
 		bool                          logCapturing = false;	// START/STOP検出
 		dataManager::captureReport    report;				// 撮影結果レポートの積算(STOP時にファイルへ出す)
@@ -526,6 +529,20 @@ namespace
 		j += ",\"camera\":\"" + jesc(g_plan.camera.name.empty() ? g_plan.camera.model : g_plan.camera.name) + "\"";
 		// 同じ機種を複数台持つと名称だけでは分からないので、カメラ本体で付けた名前も添える。
 		j += ",\"cameraAssignedName\":\"" + jesc(g_plan.camera.assignedName) + "\"";
+		// パノラマ撮影(2026-08-25)。subCameras は名前と愛称を表示用に並べる。
+		j += ",\"panorama\":" + std::string(g_plan.panorama ? "true" : "false");
+		{
+			std::string a = "[";
+			for (size_t i = 0; i < g_plan.subCameras.size(); ++i)
+			{
+				const hgc::camera& c = g_plan.subCameras[i];
+				if (i) { a += ","; }
+				a += "{\"name\":\"" + jesc(c.name.empty() ? c.model : c.name) + "\"";
+				a += ",\"assignedName\":\"" + jesc(c.assignedName) + "\"}";
+			}
+			a += "]";
+			j += ",\"subCameras\":" + a;
+		}
 		j += ",\"lens\":\""   + jesc(g_plan.lens.name) + "\"";
 		std::snprintf(num, sizeof(num), "%.1f", g_plan.azimuth);
 		j += ",\"azimuth\":" + std::string(num);
@@ -1083,6 +1100,9 @@ namespace
 				int st = s->state.load();
 				bool active = (st == HGE_ST_CAPTURING || st == HGE_ST_SEARCHING || st == HGE_ST_READY || st == HGE_ST_STOPPING || st == HGE_ST_WAITING || st == HGE_ST_NOCAMERA);
 				if (active && s->dev.apiBase && s->dev.serialno == serial) { return true; }
+				if (!active) { continue; }
+				// パノラマの追加カメラも掴んでいる個体なので二重に割り当てない。
+				for (auto& sd : s->subDevs) { if (sd && sd->apiBase && sd->serialno == serial) { return true; } }
 			}
 			return false;
 		};
@@ -1209,6 +1229,62 @@ namespace
 			S->dev.clear();
 			std::string d = "armed without a camera, keep searching: ssdp=" + std::to_string(found.size()) + " (not found)";
 			dataManager::logEvent("NET", d.c_str(), true);
+		}
+
+		// --- パノラマ撮影: 追加カメラを確保する(2026-08-25) ---
+		//  主カメラの探索で拾えた found を先に当たり、無ければその1台だけを名指しで探す。
+		//  見つからない台はこのセッションでは諦める(主カメラのタイムラプスを止めないことを優先)。
+		S->subDevs.clear();
+		if (S->plan.panorama && !S->plan.subCameras.empty())
+		{
+			for (auto& sc : S->plan.subCameras)
+			{
+				applyOwnedCameraSettings(sc);	// 控えの空欄をシリアル等で埋める(主カメラと同じ扱い)
+				std::string sw = sc.serial;
+				if (sw.empty() && !sc.assignedName.empty())
+				{ std::string t; if (dataManager::serialForAssignedName(sc.assignedName, t)) { sw = t; } }
+				// 主カメラ自身や、既に割り当てた追加カメラと重複する個体は飛ばす。
+				auto already = [&](const std::string& sn) -> bool {
+					if (sn.empty()) { return false; }
+					if (S->dev.apiBase && S->dev.serialno == sn) { return true; }
+					for (auto& d : S->subDevs) { if (d && d->serialno == sn) { return true; } }
+					return false;
+				};
+				class device* sh = nullptr;
+				for (auto& d : found)
+				{
+					if (!d.apiBase)                              { continue; }
+					if (!dataManager::cameraModelMatches(d, sc)) { continue; }
+					if (!sw.empty() && d.serialno != sw)         { continue; }
+					if (already(d.serialno) || serialBusy(d.serialno)) { continue; }
+					sh = &d; break;
+				}
+				std::vector<class device> extra;
+				if (sh == nullptr)
+				{	// found に居ない -> この1台だけを名指しで探す(カタログ取得も1台分で済む)。
+					const auto wantSub = [&](const class device& d) -> bool {
+						if (!dataManager::cameraModelMatches(d, sc)) { return false; }
+						if (!sw.empty() && d.serialno != sw)         { return false; }
+						return !already(d.serialno) && !serialBusy(d.serialno);
+					};
+					cameraController::detectTarget(extra, wantSub);
+					for (auto& d : extra) { if (d.apiBase) { sh = &d; break; } }
+				}
+				if (sh != nullptr)
+				{
+					S->subDevs.push_back(std::unique_ptr<class device>(new class device(*sh)));
+					dataManager::recordConnectedCamera(*sh);
+					hge::role::noteConnected(sh->serialno, sh->model, hostFromDevice(*sh));
+					dataManager::logEvent("NET", (std::string("panorama camera added: ")
+						+ (sh->model.empty() ? sh->assignedName : sh->model)
+						+ "/" + (sh->serialno.empty() ? "?" : sh->serialno)).c_str());
+				}
+				else
+				{
+					dataManager::logEvent("NET", (std::string("panorama camera not found: ")
+						+ (sc.name.empty() ? sc.model : sc.name)).c_str(), true);
+				}
+			}
 		}
 
 		S->runner->setNoticeCallback([S](int code, long long n1) { notifyNotice(S->planId, code, n1); });
@@ -1463,6 +1539,12 @@ namespace
 		hgc::exposureSmoothing smooth = dataManager::currentSmoothing();
 		applyOwnedCameraSettings(S->plan.camera);	// スマホ直結でも所持カメラの測光方式で撮る
 		errCode e = S->runner->ready(S->plan, &S->dev, smooth, g_offMin);
+		{	// パノラマ: 確保できた追加カメラを runner へ渡す(ready の後・撮影開始の前)。
+			std::vector<class device*> sp;
+			sp.reserve(S->subDevs.size());
+			for (auto& d : S->subDevs) { if (d) { sp.push_back(d.get()); } }
+			S->runner->setSubDevices(sp);
+		}
 		if (e != ERR_HGC_OK) { notifyError(e, "ready"); S->state = HGE_ST_ERROR; notifyStateP(S->planId, HGE_ST_ERROR); refreshAggregateState(); return e; }
 		// 撮影ループを本スレッド上で実行する(セッションあたり1スレッド)。runner 用の2本目の
 		// タスクスタック(内部RAM14KB)の確保が断片化で慢性的に失敗する問題(2026-07-12 テスト4の
@@ -2383,6 +2465,49 @@ int32_t hge_setPlanCamera(const char* name)
 	return saveCurrentPlan();	// 編集を即永続化
 }
 
+// パノラマ撮影の切替(2026-08-25)。
+//  画角・スケジュールには影響しないので buildSchedule は呼ばない。
+int32_t hge_setPlanPanorama(int32_t on)
+{
+	if (!g_planReady) { errCode e = loadFixedPlanImpl(); if (e != ERR_HGC_OK) { return e; } }
+	g_plan.panorama = (on != 0);
+	buildScheduleJson();
+	notify(HGE_EV_SCHEDULE, g_schedJson);
+	return saveCurrentPlan();	// 編集を即永続化
+}
+
+// パノラマの追加カメラを名前の配列でまとめて差し替える(2026-08-25)。
+//  namesJson : ["EOS R10","EOS R100"] の形。測光担当(g_plan.camera)と同名のものと
+//  重複する名前は落とす(同じ個体を二重で握むと認証の nc が逆行し 403 になるため)。
+int32_t hge_setPlanSubCameras(const char* namesJson)
+{
+	if (namesJson == nullptr) { return ERR_HGC_INVALID_ARG; }
+	if (!g_planReady) { errCode e = loadFixedPlanImpl(); if (e != ERR_HGC_OK) { return e; } }
+	std::vector<hgc::camera> next;
+	try
+	{
+		nlohmann::json arr = nlohmann::json::parse(namesJson);
+		if (!arr.is_array()) { return ERR_HGC_INVALID_ARG; }
+		for (const auto& it : arr)
+		{
+			if (!it.is_string()) { continue; }
+			const std::string nm = it.get<std::string>();
+			if (nm.empty() || nm == g_plan.camera.name) { continue; }	// 測光担当と重複
+			bool dup = false;
+			for (const auto& c : next) { if (c.name == nm) { dup = true; break; } }
+			if (dup) { continue; }
+			hgc::camera c;
+			if (!dataManager::findOwnedCamera(nm, c)) { continue; }	// 所持カメラから消えたものは落とす
+			next.push_back(c);
+		}
+	}
+	catch (...) { return ERR_HGC_INVALID_ARG; }
+	g_plan.subCameras.swap(next);
+	buildScheduleJson();
+	notify(HGE_EV_SCHEDULE, g_schedJson);
+	return saveCurrentPlan();	// 編集を即永続化
+}
+
 int32_t hge_setPlanLens(const char* name)
 {
 	if (name == nullptr) { return ERR_HGC_INVALID_ARG; }
@@ -2850,6 +2975,9 @@ bool hge_isCameraInUse(const char* serial)
 		const bool active = (st == HGE_ST_CAPTURING || st == HGE_ST_SEARCHING ||
 		                     st == HGE_ST_READY || st == HGE_ST_STOPPING);
 		if (active && up->dev.serialno == sn) { return true; }
+		if (!active) { continue; }
+		// パノラマの追加カメラも撮影に使っている(在否監視はこの個体に触ってはいけない)。
+		for (auto& sd : up->subDevs) { if (sd && sd->serialno == sn) { return true; } }
 	}
 	return false;
 }

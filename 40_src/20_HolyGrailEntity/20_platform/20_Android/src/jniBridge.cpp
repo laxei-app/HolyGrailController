@@ -499,6 +499,16 @@ JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeSetPlanCamera(JNIEnv* env, jobject /*thiz*/, jstring name)
 { return callNameCmd(env, name, hge_setPlanCamera); }
 
+// パノラマ撮影(2026-08-25)
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetPlanPanorama(JNIEnv* /*env*/, jobject /*thiz*/, jint on)
+{ return hge_setPlanPanorama(on); }
+
+// 追加カメラを名前の JSON 配列 ["name",...] で差し替える
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetPlanSubCameras(JNIEnv* env, jobject /*thiz*/, jstring json)
+{ return callNameCmd(env, json, hge_setPlanSubCameras); }
+
 JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeSetPlanLocation(JNIEnv* env, jobject /*thiz*/, jdouble lat, jdouble lng, jstring name)
 {

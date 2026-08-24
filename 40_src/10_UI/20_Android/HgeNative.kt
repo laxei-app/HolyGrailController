@@ -100,6 +100,10 @@ object HgeNative {
     external fun nativeRemoveOwnedLens(name: String): Int
     external fun nativeSetOwnedCameraAutoInsert(name: String, autoInsert: Int): Int
     external fun nativeSetPlanCamera(name: String): Int   // 所持→撮影計画へ反映し再生成
+    // パノラマ撮影(2026-08-25)。主カメラで測光した露出を追加カメラへも配る。
+    external fun nativeSetPlanPanorama(on: Int): Int
+    // 追加カメラを所持カメラの名前配列 ["name",...] で差し替える。
+    external fun nativeSetPlanSubCameras(json: String): Int
     external fun nativeSetPlanLens(name: String): Int
     external fun nativeSetPlanLocation(lat: Double, lng: Double, name: String): Int  // 撮影場所(緯度経度)を直接設定し再生成
     // --- 撮影場所リスト(§7.9)。登録した場所を撮影計画で選択する ---

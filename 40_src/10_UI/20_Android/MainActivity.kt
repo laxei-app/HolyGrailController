@@ -78,6 +78,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private lateinit var intervalText: TextView
     private lateinit var npfText: TextView
     private lateinit var landscapeCheck: android.widget.Switch	// スライドSW(2026-08-24 UI依頼でチェックボックスから変更)
+    // パノラマ撮影(2026-08-25)。主カメラで測光した露出を追加カメラへも配って全台で撮る。
+    private lateinit var panoramaCheck: android.widget.Switch
+    private lateinit var subCamRow: android.view.View
+    private lateinit var subCamText: TextView
+    // 表示更新でのプログラム的セットが native を呼び返すのを防ぐ(landscape と同じ理由)。
+    private var suppressPanorama = false
+    // 現在の追加カメラの名前(選択ダイアログの初期チェック状態に使う)。
+    private var planSubCamNames: MutableList<String> = mutableListOf()
     private var suppressLandscape = false   // updatePlanDisplay でのチェック設定が native を呼ばないように
     // 項目11: 計画1ページ目の撮影方向/仰角ウィジェット(compass/elevationView/dirText)は廃止。
     // 方向・仰角は撮影シミュレーション画面で設定する(cs の azimuth/elevation は保持)。
@@ -432,6 +440,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         intervalText = findViewById(R.id.plan_intervalText)
         npfText = findViewById(R.id.plan_npfText)
         landscapeCheck = findViewById(R.id.plan_landscape)
+        panoramaCheck  = findViewById(R.id.plan_panorama)
+        subCamRow      = findViewById(R.id.plan_subCamRow)
+        subCamText     = findViewById(R.id.plan_subCamText)
         planOverview = findViewById(R.id.plan_overviewContainer)
         planPager = findViewById(R.id.plan_pager)
         planFormScroll = findViewById(R.id.plan_formScroll)
@@ -548,6 +559,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
             if (suppressLandscape) return@setOnCheckedChangeListener
             planExec.execute { HgeNative.nativeSetPlanLandscape(if (checked) 1 else 0) }
         }
+        // パノラマ撮影(2026-08-25)。ONで追加カメラの行を出す。
+        panoramaCheck.setOnCheckedChangeListener { _, checked ->
+            if (suppressPanorama) return@setOnCheckedChangeListener
+            subCamRow.visibility = if (checked) View.VISIBLE else View.GONE
+            planExec.execute {
+                HgeNative.nativeSetPlanPanorama(if (checked) 1 else 0)
+                val sched = HgeNative.nativeScheduleJson()
+                runOnUiThread { latestSchedule = sched; updatePlanDisplay(sched) }
+            }
+        }
+        // 追加カメラ。見出し・内容どちらのタップでも複数選択に入る(カメラ/レンズと同じ)。
+        subCamText.setOnClickListener { choosePlanSubCameras() }
+        findViewById<TextView>(R.id.plan_subCamLabel).setOnClickListener { choosePlanSubCameras() }
         // センサー/レンズ定数の変更(機材リストに無い値の参考用)。
         // 撮影制御方法の編集ボタン(全種・固定配置)をスケジュールの下に構築する。
         buildCcmEditButtons()
@@ -2020,6 +2044,44 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun camFieldsOrLens(key: String, et: EditText) { if (buildingLens) lensFields[key] = et else camFields[key] = et }
 
     // 撮影計画のカメラ/レンズを所持機材から選ぶ(無ければ登録画面へ誘導)。
+    // パノラマ撮影の追加カメラを複数選ぶ(2026-08-25)。
+    //  主カメラ(計画の camera)は測光担当として必ず撮るので、この一覧からは外す。
+    //  チェックの並び順ではなく所持カメラの並び順で確定する(順序に意味は無い)。
+    private fun choosePlanSubCameras() {
+        val arr = camArray(HgeNative.nativeGetOwnedCameras())
+        val cams = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optJSONObject("camera") }
+        val primary = latestSchedule.let {
+            if (it.isEmpty()) "" else try { org.json.JSONObject(it).optString("camera") } catch (_: Exception) { "" }
+        }
+        val pick = cams.filter { it.optString("name").isNotEmpty() && it.optString("name") != primary }
+        if (pick.isEmpty()) {
+            Toast.makeText(this, "追加できるカメラがありません(所持カメラを登録してください)", Toast.LENGTH_LONG).show()
+            return
+        }
+        val names = pick.map { it.optString("name") }
+        val labels = pick.map { c ->
+            val an = c.optString("assignedName")
+            if (an.isNotEmpty()) c.optString("name") + "  (" + an + ")" else c.optString("name")
+        }
+        val checked = BooleanArray(names.size) { planSubCamNames.contains(names[it]) }
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("追加で撮るカメラ")
+            .setMultiChoiceItems(labels.toTypedArray(), checked) { _, which, isChecked ->
+                checked[which] = isChecked
+            }
+            .setPositiveButton("決定") { _, _ ->
+                val sel = org.json.JSONArray()
+                for (i in names.indices) { if (checked[i]) sel.put(names[i]) }
+                planExec.execute {
+                    HgeNative.nativeSetPlanSubCameras(sel.toString())
+                    val sched = HgeNative.nativeScheduleJson()
+                    runOnUiThread { latestSchedule = sched; updatePlanDisplay(sched) }
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
     private fun choosePlanCamera() {
         val arr = camArray(HgeNative.nativeGetOwnedCameras())
         if (arr.length() == 0) { openCameraList(); return }
@@ -3613,6 +3675,28 @@ class MainActivity : AppCompatActivity(), HgeListener {
             suppressLandscape = true
             landscapeCheck.isChecked = o.optBoolean("landscape")
             suppressLandscape = false
+            // パノラマ撮影と追加カメラ(2026-08-25)。
+            val pano = o.optBoolean("panorama")
+            suppressPanorama = true
+            panoramaCheck.isChecked = pano
+            suppressPanorama = false
+            subCamRow.visibility = if (pano) View.VISIBLE else View.GONE
+            run {
+                val arr = o.optJSONArray("subCameras")
+                planSubCamNames = mutableListOf()
+                val labels = mutableListOf<String>()
+                if (arr != null) {
+                    for (i in 0 until arr.length()) {
+                        val c = arr.optJSONObject(i) ?: continue
+                        val nm = c.optString("name")
+                        if (nm.isEmpty()) continue
+                        planSubCamNames.add(nm)
+                        val an = c.optString("assignedName")
+                        labels.add(if (an.isNotEmpty()) "$nm ($an)" else nm)
+                    }
+                }
+                subCamText.text = if (labels.isEmpty()) "未選択" else labels.joinToString(", ")
+            }
             // npf が負 = センサー寸法/画素数が未登録で算出できない(Entityが -1 を返す)。
             val npf = o.optDouble("npf", -1.0)
             npfText.text = if (npf >= 0.0) "NPF %.1f秒   最小周期 %d秒".format(npf, o.optInt("minInterval"))
@@ -5035,6 +5119,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             R.id.searchButton, R.id.connectButton)
             .forEach { findViewById<View>(it).isEnabled = ed }
         intervalText.isEnabled = ed; landscapeCheck.isEnabled = ed
+        panoramaCheck.isEnabled = ed; subCamText.isEnabled = ed	// パノラマも撮影中は編集不可
         cameraText.isEnabled = ed; lensText.isEnabled = ed; edgeSpinner.isEnabled = ed
         schedulePages.forEach { it.isEnabled = ed }   // 項目11: compass/elevationView は廃止
         findViewById<LinearLayout>(R.id.plan_ccmButtons).let { for (i in 0 until it.childCount) it.getChildAt(i).isEnabled = ed }

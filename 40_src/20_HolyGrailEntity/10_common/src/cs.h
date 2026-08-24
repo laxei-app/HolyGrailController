@@ -69,6 +69,12 @@ namespace hgc
 		dateTime    end;				// 撮影終了の日時
 		hgc::place  place;				// 位置情報
 		hgc::camera camera;				// 使用するカメラ(実体)
+		// パノラマ撮影(2026-08-25)。camera で測光して決めた露出を
+		// subCameras の全台へも配り、同じ瞬間に全台のシャッターを切る。
+		//  ※ camera は従来どおり「測光担当兼撮影」。panorama=false なら subCameras は無視される。
+		//  ※ 機種が違うと設定値の刻みが違うので、適用時に APEX で最寄りへ丸める。
+		bool                     panorama = false;	// パノラマ撮影を行う
+		std::vector<hgc::camera> subCameras;		// 追加で撮るカメラ(控え。camera は含まない)
 		hgc::lens   lens;				// 使用するレンズ(実体)
 		double      interval  = 0.0;	// 撮影周期[秒]
 		double      azimuth   = 0.0;	// 開始時の撮影方位[°] 0.0～359.9

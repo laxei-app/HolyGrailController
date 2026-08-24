@@ -120,6 +120,12 @@ public:
 	// 撮影準備。plan は events/ccmList を生成済みであること。
 	errCode ready(const hgc::cs& plan, device* dev,
 	              const hgc::exposureSmoothing& smooth, int utcOffsetMin);
+
+	// パノラマ撮影(2026-08-25)。測光は dev(主)だけで行い、決まった露出を
+	// ここで渡した全台へも配って同じコマでシャッターを切る。
+	//  ※ ready() の後、start()/runInline() の前に呼ぶこと。
+	//  ※ 渡すのはポインタなので、指す実体は撮影中ずっと生きていること。
+	void setSubDevices(const std::vector<device*>& devs);
 	errCode start(void);	// ワーカースレッドで撮影ループ開始(即 return)
 	// 呼び出しスレッド上で撮影ループを実行する(start のインライン版。ループ終了まで戻らない)。
 	// エッジ(M5Stack)では runner 用の2本目のタスクスタック(内部RAM14KB)が断片化で確保できない
@@ -142,6 +148,9 @@ public:
 
 	// --- 接続維持・再接続のパラメータ ---
 	static constexpr int  kKeepAliveSec        = 60;	// 撮影窓まで待機中、無害なGETを送る周期[秒]
+	// パノラマ: 確立に失敗した追加カメラを次に試すまでの間隔[ms]。
+	// 居ない台へ毎コマ startShooting を投げると、その待ちが主カメラの準備を食う。
+	static constexpr long long kSubRetryMs     = 60000;
 	static constexpr int  kWaitMaxFail         = 2;		// 待機中keepAliveがこの回数連続失敗で先回り再接続(健全性チェック)
 	// シャッターが 503(記録中)で断られたときの粘り方(2026-07-30)。カメラが応答している間は
 	// そのコマの締め切りまで再試行する。締め切り = 周期 - 露光 - 余裕(上限あり)。
@@ -345,6 +354,26 @@ private:
 
 	hgc::cs plan_{};
 	device* dev_ = nullptr;
+
+	// --- パノラマ撮影の追加カメラ(2026-08-25) ---
+	// 主カメラと機種が違うと設定できる値の刻みが違うので、台ごとに
+	// 自分のテーブルを持ち、適用時に主の値を最寄りへ丸める。
+	struct subCam
+	{
+		device*          dev = nullptr;
+		expo::expoTables tables;
+		bool             ready = false;	// startShooting/M固定/テーブル取得まで済んだ
+		std::string      lastFn, lastSs, lastIso;	// 差分送信用(主と同じ考え方)
+		int              failStreak = 0;	// 連続失敗数(ログを毎コマ出さないため)
+		long long        nextTryMs  = 0;	// 次に確立を試してよい時刻[epoch ms]。落ちた台に毎コマ粘らない
+	};
+	std::vector<subCam> subs_;
+	// 追加カメラのセッションを確立する(失敗した台は ready=false のまま次回へ回す)。
+	void establishSubSessions(void);
+	// 主の露出を各台の設定値へ丸めて送る(変わった項目だけ)。
+	void applySubExposure(const hgc::exposure& exp);
+	// 追加カメラのシャッターを連続で切る(主の直後に呼ぶ)。
+	void fireSubShutters(void);
 	hgc::exposureSmoothing smooth_{};
 	int off_ = 0;
 

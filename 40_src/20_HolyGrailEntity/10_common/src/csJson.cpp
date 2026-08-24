@@ -260,6 +260,13 @@ namespace csjson
 		j["end"]       = dtToJson(plan.end);
 		j["place"]     = placeToJson(plan.place);
 		j["camera"]    = cameraToJson(plan.camera);
+		// パノラマ撮影(2026-08-25)。旧データ互換のため fromJson 側に既定値を置く。
+		j["panorama"]  = plan.panorama;
+		{
+			json arr = json::array();
+			for (const auto& c : plan.subCameras) { arr.push_back(cameraToJson(c)); }
+			j["subCameras"] = arr;
+		}
 		j["lens"]      = lensToJson(plan.lens);
 		j["interval"]  = plan.interval;
 		j["azimuth"]   = plan.azimuth;
@@ -327,6 +334,12 @@ namespace csjson
 		if (j.contains("end"))   { plan.end   = dtFromJson(j["end"]); }
 		if (j.contains("place"))  { plan.place  = placeFromJson(j["place"]); }
 		if (j.contains("camera")) { plan.camera = cameraFromJson(j["camera"]); }
+		plan.panorama = j.value("panorama", false);
+		plan.subCameras.clear();
+		if (j.contains("subCameras") && j["subCameras"].is_array())
+		{
+			for (const auto& c : j["subCameras"]) { plan.subCameras.push_back(cameraFromJson(c)); }
+		}
 		if (j.contains("lens"))   { plan.lens   = lensFromJson(j["lens"]); }
 		plan.interval  = j.value("interval", 0.0);
 		plan.azimuth   = j.value("azimuth", 0.0);
