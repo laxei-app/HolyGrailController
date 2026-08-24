@@ -61,6 +61,17 @@ bool wifiConnect::startAp(const char * ssid, const char * passphrase, int maxCon
         //  伸ばしすぎると居なくなった端末が接続一覧に残り接続枠(最大4)を占めるので1時間にする。
         //  この設定はフラッシュに保存されないので AP 起動のたびに呼ぶ。
         esp_wifi_set_inactive_time(WIFI_IF_AP, 3600);
+        // 接続枠の実効値を残す(2026-08-25)。softAP へは maxConn を渡しているが、
+        //  フレームワークのビルド設定(CONFIG_WIFI_AP_MAX_STATIONS)で下げられることがある。
+        //  パノラマ撮影で何台まで AP に入れるかはこの値が決めるので、推測せず実値を見る。
+        {
+            wifi_config_t cfg{};
+            if (esp_wifi_get_config(WIFI_IF_AP, &cfg) == ESP_OK)
+            {
+                Serial.printf("[AP] max_connection: requested=%d accepted=%u\n",
+                              maxConn, (unsigned)cfg.ap.max_connection);
+            }
+        }
     }
     return ok;
 }
