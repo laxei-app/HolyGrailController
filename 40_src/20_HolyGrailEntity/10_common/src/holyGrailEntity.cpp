@@ -1928,6 +1928,27 @@ int32_t hge_getPlanJson(char* buf, int32_t* inoutLen)
 // 中身は loadPlanById と同じ整え方を、g_plan ではなく手元の cs に対して行う
 //  (機材が空なら出荷時で補う → 撮影制御方法が欠けていたら初期値で補う → スケジュール再生成)。
 //  そうしないと、これまで hge_selectPlan 経由で得ていた JSON と中身が変わってしまう。
+// エッジへ送る前に、追加カメラの設定可能値リストを落として計画を小さくする(2026-08-26)。
+//
+// 【なぜ(実機で計測)】エッジは受け取った計画JSONをDOMで解析し、そのまま保存し直す。
+//  この一連で内部RAMの水位が大きく落ちる。パノラマは追加カメラ1台につき isoList/ssList で
+//  約1.3KB増えるため、台数が増えるほど山が高くなる。実測(Edge00/APモード):
+//    8,271B の計画 -> 水位が 31,692B 低下
+//    4,552B の計画 -> 水位が    184B 低下
+//  APモードは元々の空きがSTAより約31KB少ないので、この山が余裕を食い潰していた。
+//
+// 【落として良い理由】エッジは撮影セッションを張るときに getSettings でカメラ本体から
+//  設定可能値を取り直す(captureRunner::establishSubSessions)。計画に入っている控えは
+//  スマホ側の編集用で、エッジでは使わない。主カメラの分は従来どおり残す(影響範囲を最小にする)。
+static void slimSubCamerasForTransfer(hgc::cs& cs)
+{
+	for (auto& c : cs.subCameras)
+	{
+		c.isoList.clear(); c.isoList.shrink_to_fit();
+		c.ssList.clear();  c.ssList.shrink_to_fit();
+	}
+}
+
 int32_t hge_getPlanJsonById(const char* id, char* buf, int32_t* inoutLen)
 {
 	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
@@ -1938,7 +1959,19 @@ int32_t hge_getPlanJsonById(const char* id, char* buf, int32_t* inoutLen)
 		if (e != ERR_HGC_OK) { return e; }
 	}
 	// 編集対象そのものなら、既にメモリ上にある編集中の姿を返す(未保存の変更も含めるため)。
-	if (std::string(id) == g_editId) { return hge_getPlanJson(buf, inoutLen); }
+	//  この経路も**エッジへの転送用**なので、追加カメラの設定可能値は落とす。
+	if (std::string(id) == g_editId)
+	{
+		hgc::cs cs = g_plan;
+		applyOwnedCameraSettings(cs.camera);
+		slimSubCamerasForTransfer(cs);
+		const std::string s = csjson::toJson(cs);
+		const int32_t need = static_cast<int32_t>(s.size()) + 1;
+		if (buf == nullptr || *inoutLen < need) { *inoutLen = need; return ERR_HGC_BUF_SHORT; }
+		std::memcpy(buf, s.c_str(), need);
+		*inoutLen = need;
+		return ERR_HGC_OK;
+	}
 
 	std::string saved; hgc::cs cs;
 	if (!dataManager::loadPlanFile(id, saved) ||
@@ -1953,6 +1986,7 @@ int32_t hge_getPlanJsonById(const char* id, char* buf, int32_t* inoutLen)
 	const errCode be = astro::buildSchedule(cs, g_offMin);
 	if (be != ERR_HGC_OK) { return be; }
 	applyOwnedCameraSettings(cs.camera);
+	slimSubCamerasForTransfer(cs);
 
 	std::string s = csjson::toJson(cs);
 	int32_t need = static_cast<int32_t>(s.size()) + 1;

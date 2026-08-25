@@ -70,6 +70,11 @@ static std::string g_pop;				// 現在のPoP(乱数)
 //  モードは NVS 保持。切替は保存後に ESP.restart() し、setup() で選んだモードを素直に立ち上げる
 //  (WiFi netif の張り替え・UDP再bindの複雑さを避けるため)。
 static std::string g_netMode = "sta";	// NVS設定済み機の既定。未設定機(出荷時)は loadEdgeCreds が AP へ倒す(Phase5)
+// APの接続枠。ドライバはこの数だけ局の構造体を先に確保するので、内部RAMに効く。
+//  必要数 = カメラ台数 + スマホ1 + 余裕1。
+// APの接続枠。ドライバは局の構造体を必要時に確保するため、この値を減らしても
+// 内部RAMはほとんど増えない(10->5 で約1〜3KB。2026-08-26 実測)。台数の余裕を優先して10のまま。
+static constexpr int kApMaxConn = 10;
 static std::string g_apSsid;			// APモードのSSID(初回自動生成しNVS保存)
 static std::string g_apPass;			// APモードのパスワード(初回自動生成しNVS保存)
 static bool        g_apInfoMode = false;	// AP参加情報(SSID/パス)をLCD表示中か
@@ -794,14 +799,14 @@ static void startApAndEtp(void)
 	for (int i = 0; i < 3 && !apUp; ++i)
 	{
 		if (i) { delay(300); }
-		apUp = wifiConnect::startAp(g_apSsid.c_str(), g_apPass.c_str(), 10);
+		apUp = wifiConnect::startAp(g_apSsid.c_str(), g_apPass.c_str(), kApMaxConn);
 		if (!apUp) { Serial.printf("[AP] softAP start failed (try %d/3) ssid=%s (%u chars) pass=%u chars\n",
 		                           i + 1, g_apSsid.c_str(), (unsigned)g_apSsid.size(), (unsigned)g_apPass.size()); }
 	}
 	if (!apUp)
 	{
 		g_apSsid.clear(); g_apPass.clear(); ensureApCreds();	// 既定値へ作り直す(NVSも更新)
-		apUp = wifiConnect::startAp(g_apSsid.c_str(), g_apPass.c_str(), 10);
+		apUp = wifiConnect::startAp(g_apSsid.c_str(), g_apPass.c_str(), kApMaxConn);
 		Serial.printf("[AP] retry with default creds ssid=%s -> %s\n", g_apSsid.c_str(), apUp ? "up" : "still FAILED");
 	}
 	if (apUp)
