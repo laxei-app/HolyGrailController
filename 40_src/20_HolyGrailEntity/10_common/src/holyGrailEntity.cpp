@@ -2899,6 +2899,20 @@ int32_t hge_captureStartPlan(const char* planId_)
 	if (planId == g_editId)
 	{
 		sess->plan = g_plan;	// 編集中スナップショット(撮影制御方法も plan が持つ)
+		// 【窓が無ければここでも組み立てる(2026-08-25)】hge_setPlanJson は受信した
+		//  ccmList をそのまま使う(表示用JSONを作るだけ)。窓を持たない計画が届くと、
+		//  この経路では組み立て直さないため撮影ループが**黙って空回り**する
+		//  (状態は「撮影中」なのにカメラへ一切通信しない)。ファイル経由と同じ手当てをする。
+		if (!sess->plan.ccm.complete()) { seedPlanCcmFromDefaults(sess->plan); }
+		if (sess->plan.ccmList.empty())
+		{
+			const errCode be = astro::buildSchedule(sess->plan, g_offMin);
+			if (be != ERR_HGC_OK) { dataManager::logEvent("INFO", "buildSchedule failed at start (edit)"); return be; }
+			char sb[120];
+			std::snprintf(sb, sizeof(sb), "buildSchedule(edit): windows=%u off=%d",
+			              (unsigned)sess->plan.ccmList.size(), (int)g_offMin);
+			dataManager::logEvent("INFO", sb);
+		}
 	}
 	else
 	{
@@ -2911,6 +2925,14 @@ int32_t hge_captureStartPlan(const char* planId_)
 		{
 			const errCode be = astro::buildSchedule(sess->plan, g_offMin);
 			if (be != ERR_HGC_OK) { dataManager::logEvent("INFO", "buildSchedule failed at start"); return be; }
+			// 【何本の窓ができたかを残す】0本だと撮影ループが黙って空回りするので、
+			//  組み立て直後の本数とオフセットを控えておく(原因の切り分け用)。
+			{
+				char sb[120];
+				std::snprintf(sb, sizeof(sb), "buildSchedule: windows=%u off=%d",
+				              (unsigned)sess->plan.ccmList.size(), (int)g_offMin);
+				dataManager::logEvent("INFO", sb);
+			}
 		}
 	}
 	// §7.4 重なり制限: 撮影期間[start-30s, end+1フレーム]が同時に重なる自撮影は2件まで。

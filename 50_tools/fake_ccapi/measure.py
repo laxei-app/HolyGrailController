@@ -154,7 +154,9 @@ def main():
     # 計画
     subprocess.run([sys.executable, os.path.join(HERE, "make_plan.py"),
                     "--subs", str(args.cams - 1), "--lead", "40",
-                    "--minutes", str(args.minutes + 5)], cwd=HERE, check=True)
+                    "--owned", os.path.join(HERE, "ownedCameras.json"),
+                    "--base", "plan_20260823-145453.json",
+                    "--minutes", str(max(args.minutes + 5, 150))], cwd=HERE, check=True)
 
     try:
         e = etp.Edge(args.edge, timeout=30.0)

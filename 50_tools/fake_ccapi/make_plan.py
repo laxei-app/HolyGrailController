@@ -42,15 +42,25 @@ def main():
     ap.add_argument("--minutes", type=int, default=20, help="撮影の長さ[分]")
     ap.add_argument("--interval", type=float, default=15.0)
     ap.add_argument("--out", default=os.path.join(HERE, "plan_measure.json"))
+    ap.add_argument("--owned", help="所持カメラJSON(未指定ならスマホから読む)")
+    ap.add_argument("--base", help="雛形にする計画ファイル名(未指定なら先頭)")
+    ap.add_argument("--force-bands", action="store_true", help="4帯を強制的に有効にする")
     args = ap.parse_args()
 
     names = [n.strip() for n in adb("shell", "ls", PLAN_DIR).split() if n.strip()]
     if not names:
         raise SystemExit("スマホに計画が無い")
-    base = json.loads(adb("shell", "cat", "%s/%s" % (PLAN_DIR, names[0])))
-    print("土台にした計画: %s (%s)" % (names[0], base.get("name")))
+    pick = args.base if args.base else names[0]
+    if pick not in names:
+        raise SystemExit("雛形が見つからない: %s (候補 %s)" % (pick, names))
+    base = json.loads(adb("shell", "cat", "%s/%s" % (PLAN_DIR, pick)))
+    print("土台にした計画: %s (%s)" % (pick, base.get("name")))
 
-    owned = json.loads(adb("shell", "cat", OWNED))
+    # --owned を渡せばスマホを触らずに手元のファイルを使う(実機の撮影を邪魔しない)
+    if args.owned:
+        owned = json.loads(io.open(args.owned, encoding="utf-8").read())
+    else:
+        owned = json.loads(adb("shell", "cat", OWNED))
     cams = [o["camera"] for o in owned]
     if len(cams) < args.subs + 1:
         raise SystemExit("所持カメラが足りない(%d台、必要%d台)" % (len(cams), args.subs + 1))
@@ -61,14 +71,16 @@ def main():
     base["end"] = dt(now + args.lead + args.minutes * 60)
     base["interval"] = args.interval
     base["panorama"] = True
-    # 測定はいつ走らせても撮影窓に入るよう、4帯すべてを有効にする。
-    #  既定の計画は朝日/夕日が「使わない」で、日の出直後だと窓が1つも作られず
-    #  WAITING のまま撮影に入らない(2026-08-25 実測)。
-    for k in ("useNight", "useSunrise", "useSunset", "useDay"):
-        base.setdefault("ccm", {})[k] = True
+    # 【帯の有効/無効は計画のまま使う(2026-08-25)】当初はどの時刻でも窓に入るよう
+    #  4帯すべてを強制ONにしていたが、そうすると窓が1つも作られないことがあった
+    #  (診断ログ "no active window: windows=0" で判明)。実機で撮れている計画の
+    #  設定をそのまま使うのが確実。
+    if args.force_bands:
+        for k in ("useNight", "useSunrise", "useSunset", "useDay"):
+            base.setdefault("ccm", {})[k] = True
     base["camera"] = cams[0]
     base["subCameras"] = cams[1:1 + args.subs]
-    # 窓はエッジ側の buildSchedule が組み直すので空でよい
+    # 窓はエッジ側の buildSchedule が start/end から組み直す
     base["ccmList"] = []
     base["boundaries"] = []
     base["events"] = []

@@ -1262,8 +1262,8 @@ errCode captureRunner::loop(void)
 			{
 				gapLogged_ = true;
 				char gb[160];
-				std::snprintf(gb, sizeof(gb), "no active window: windows=%u now=%lld start=%lld end=%lld",
-				              (unsigned)plan_.ccmList.size(), (long long)now, (long long)startSec, (long long)endSec);
+				std::snprintf(gb, sizeof(gb), "no active window: windows=%u off=%d now=%lld start=%lld end=%lld",
+				              (unsigned)plan_.ccmList.size(), off_, (long long)now, (long long)startSec, (long long)endSec);
 				dataManager::logEvent("INFO", gb, true);
 			}
 			if (warmedUp && anchorA != nullptr)
