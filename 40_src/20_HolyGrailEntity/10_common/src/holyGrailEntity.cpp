@@ -1239,7 +1239,13 @@ namespace
 		}
 
 		// --- パノラマ撮影: 追加カメラを確保する(2026-08-25) ---
-		//  主カメラの探索で拾えた found を先に当たり、無ければその1台だけを名指しで探す。
+		//  探し方は主カメラと**同じ3段**にする: IP直結 → SSDP → サブネット掃引。
+		//  【なぜ3段が要るか(2026-08-25 実機で判明)】当初は SSDP だけで探していたが、
+		//   キヤノン機はスマホ等に一度掴まれると M-SEARCH に答えなくなることがある
+		//   ([[camera-ssdp-stops-after-phone]])。主カメラはIP直結と掃引で救えるのに
+		//   追加カメラだけ救えず、実機で R100/R50V が毎回「見つかりません」になった。
+		//   しかも誰も話しかけない台はカメラ側の都合でAPから抜け(reason=3/8)、
+		//   再接続のたびにDHCPが新しいIPを配るため、最後はIPが重複して収拾がつかなくなる。
 		//  見つからない台はこのセッションでは諦める(主カメラのタイムラプスを止めないことを優先)。
 		S->subDevs.clear();
 		if (S->plan.panorama && !S->plan.subCameras.empty())
@@ -1267,15 +1273,33 @@ namespace
 					sh = &d; break;
 				}
 				std::vector<class device> extra;
+				// 割り当て済み/他セッション使用中を除いた上で「この1台か」を判定する。
+				const auto subBusy = [&](const std::string& sn) -> bool {
+					return already(sn) || serialBusy(sn);
+				};
+				const bool scHasModel = !sc.model.empty() || !sc.name.empty();
 				if (sh == nullptr)
-				{	// found に居ない -> この1台だけを名指しで探す(カタログ取得も1台分で済む)。
+				{	// ① IP直結(エッジ役のみ実体を持つ)。前回つないだIPを直接叩いて本人確認する。
+					//    SSDPに答えなくなった機体はここでしか救えない。
+					extra.emplace_back();
+					if (hge::role::tryIpDirect(sw, sc, scHasModel, subBusy, extra.back())) { sh = &extra.back(); }
+					else { extra.pop_back(); }
+				}
+				if (sh == nullptr)
+				{	// ② SSDP。この1台だけを名指しで探す(カタログ取得も1台分で済む)。
 					const auto wantSub = [&](const class device& d) -> bool {
 						if (!dataManager::cameraModelMatches(d, sc)) { return false; }
 						if (!sw.empty() && d.serialno != sw)         { return false; }
-						return !already(d.serialno) && !serialBusy(d.serialno);
+						return !subBusy(d.serialno);
 					};
 					cameraController::detectTarget(extra, wantSub);
 					for (auto& d : extra) { if (d.apiBase) { sh = &d; break; } }
+				}
+				if (sh == nullptr)
+				{	// ③ 限定サブネットの :8080 掃引(最後の砦)。
+					extra.emplace_back();
+					if (hge::role::trySubnetSweep(sw, sc, scHasModel, subBusy, extra.back())) { sh = &extra.back(); }
+					else { extra.pop_back(); }
 				}
 				if (sh != nullptr)
 				{
@@ -1288,8 +1312,13 @@ namespace
 				}
 				else
 				{
+					// 【欲しかった個体を必ず書く(2026-08-25)】名前だけだと、同機種の別ボディが
+					//  繋がっているのか、そもそも居ないのかが区別できない。実機で「EOS R50 V が
+					//  見つからない」と出ていたが、実際は別ボディ(501CFC)が繋がっていただけだった。
 					dataManager::logEvent("NET", (std::string("panorama camera not found: ")
-						+ (sc.name.empty() ? sc.model : sc.name)).c_str(), true);
+						+ (sc.name.empty() ? sc.model : sc.name)
+						+ " serial=" + (sw.empty() ? std::string("?") : sw)
+						+ " name=" + (sc.assignedName.empty() ? std::string("?") : sc.assignedName)).c_str(), true);
 				}
 			}
 		}

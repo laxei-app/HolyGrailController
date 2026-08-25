@@ -70,6 +70,21 @@ bool wifiConnect::startAp(const char * ssid, const char * passphrase, int maxCon
             {
                 Serial.printf("[AP] max_connection: requested=%d accepted=%u\n",
                               maxConn, (unsigned)cfg.ap.max_connection);
+                // 【PMF(管理フレーム保護)は使わない(2026-08-25)】
+                //  実機で AP がカメラを reason=209(SA_QUERY_TIMEOUT) で切っていた。
+                //  PMF を張ろうとして応答が返らず AP 側だけが接続を落とす形で、
+                //  **カメラ側は繋がっているつもりのまま**になる(ユーザー報告と一致)。
+                //  キヤノン機は WPA2-PSK(PMF無し)で足りるので、こちらから明示的に切る。
+                Serial.printf("[AP] pmf: capable=%d required=%d authmode=%d\n",
+                              (int)cfg.ap.pmf_cfg.capable, (int)cfg.ap.pmf_cfg.required,
+                              (int)cfg.ap.authmode);
+                if (cfg.ap.pmf_cfg.capable || cfg.ap.pmf_cfg.required)
+                {
+                    cfg.ap.pmf_cfg.capable  = false;
+                    cfg.ap.pmf_cfg.required = false;
+                    const esp_err_t pe = esp_wifi_set_config(WIFI_IF_AP, &cfg);
+                    Serial.printf("[AP] pmf disabled (err=%d)\n", (int)pe);
+                }
             }
         }
     }
