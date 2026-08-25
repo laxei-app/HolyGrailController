@@ -90,7 +90,15 @@ def main():
         # 既存に無い EOS 機を、センサーの大きい順ではなく一覧順に足す
         cand = [m for m in master
                 if (m.get("name") or "").startswith("EOS") and m.get("name") not in have]
-        n = 1
+        # 【採番は既存の続きから(2026-08-26)】毎回1から振ると、台数を増やして
+        #  作り直したときに前回と同じシリアル/愛称になり、エッジが「同じ個体」と
+        #  みなして弾く(12台のつもりが8台しか参加しなかった)。
+        used = []
+        for o in owned:
+            sn = o["camera"].get("serial", "")
+            if sn.startswith(FAKE_SERIAL_PREFIX) and sn[len(FAKE_SERIAL_PREFIX):].isdigit():
+                used.append(int(sn[len(FAKE_SERIAL_PREFIX):]))
+        n = (max(used) + 1) if used else 1
         while len(owned) < args.count and cand:
             m = cand.pop(0)
             iso = [str(x) for x in m.get("iso", [])] or ["100", "200", "400", "800",

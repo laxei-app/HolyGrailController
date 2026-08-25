@@ -45,6 +45,7 @@ def main():
     ap.add_argument("--owned", help="所持カメラJSON(未指定ならスマホから読む)")
     ap.add_argument("--base", help="雛形にする計画ファイル名(未指定なら先頭)")
     ap.add_argument("--force-bands", action="store_true", help="4帯を強制的に有効にする")
+    ap.add_argument("--keep-lists", action="store_true", help="追加カメラの設定可能値を落とさない(比較用)")
     args = ap.parse_args()
 
     names = [n.strip() for n in adb("shell", "ls", PLAN_DIR).split() if n.strip()]
@@ -80,6 +81,12 @@ def main():
             base.setdefault("ccm", {})[k] = True
     base["camera"] = cams[0]
     base["subCameras"] = cams[1:1 + args.subs]
+    # 本番(hge_getPlanJsonById)はエッジへ送る前に追加カメラの設定可能値を落とす。
+    #  ここでも同じにしないと、実機より重い計画で測ることになる(2026-08-26)。
+    if not args.keep_lists:
+        for c in base["subCameras"]:
+            c["isoList"] = []
+            c["ssList"] = []
     # 窓はエッジ側の buildSchedule が start/end から組み直す
     base["ccmList"] = []
     base["boundaries"] = []

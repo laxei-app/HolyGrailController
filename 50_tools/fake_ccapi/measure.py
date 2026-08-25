@@ -135,6 +135,21 @@ def main():
 
     print("=== %d 台で測定 ===" % args.cams)
 
+    # 【測定のたびにエッジを再起動する(2026-08-26)】水位(min)は起動してからの最小値なので、
+    #  前の測定の値を引き継いでしまい台数ごとの比較にならない。ここだけは意図的に
+    #  DTR/RTS を触ってリセットする(通常の監視では触らないこと)。
+    try:
+        rs = serial.Serial(args.com, 115200, timeout=0.5)
+        rs.dtr = False; rs.rts = True; time.sleep(0.2); rs.rts = False
+        t0 = time.time()
+        while time.time() - t0 < 20:
+            rs.read(4096)
+        rs.close()
+        print("エッジを再起動して水位をリセットしました")
+        time.sleep(12)
+    except Exception as ex:
+        print("再起動できませんでした(そのまま続行): %s" % ex)
+
     tap = SerialTap(args.com, log)
     tap.start()
     time.sleep(2)
