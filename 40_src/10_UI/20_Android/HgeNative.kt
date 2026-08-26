@@ -35,6 +35,7 @@ object HgeNative {
     const val ERR_NAME_DUP = 31     // 名称が既に使用されている(errCode の ERR_HGC_NAME_DUP。item5)
     const val ERR_OVERLAP_LIMIT = 32 // 撮影期間が重なる自撮影計画が上限(MAX_CONCURRENT)を超える(§7.4)
     const val ERR_QUEUE_FULL = 33    // 撮影開始要求の受付上限(100件)超過(§7.4)
+    const val ERR_PANORAMA_LIMIT = 34 // パノラマの台数がこの端末の上限を超えた(上限値は端末が返す)
 
     external fun nativeSetLogDir(dir: String)
     external fun nativeInit(): Int
@@ -164,6 +165,10 @@ object HgeNative {
     external fun nativeEdgeStart(host: String, port: Int, datetime: String, offMin: Int, nameBmp: ByteArray, planId: String, planJson: String): Int
     // 直近のエッジ操作でエッジが返した「お知らせコード」(0=なし)。文言はUIが持つ。
     external fun nativeLastEdgeNotice(): Int
+    // お知らせの付随数値(例: エッジが扱えるカメラ台数)
+    external fun nativeLastEdgeNoticeN1(): Int
+    // 直前の撮影開始(スマホ直結)が失敗した理由の付随数値(台数など)
+    external fun nativeLastStartNoticeN1(): Int
     external fun nativeEdgeStop(host: String, port: Int, planId: String): Int
     external fun nativeEdgeDeletePlan(host: String, port: Int, planId: String): Int   // 項目6: エッジから計画を削除(撮影中は停止してから)
     external fun nativeEdgeSyncTime(host: String, port: Int, datetime: String, offMin: Int): Int // 能動的な時刻同期(C_TIMEのみ)

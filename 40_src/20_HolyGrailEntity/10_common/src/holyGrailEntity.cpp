@@ -54,6 +54,13 @@ namespace
 	// 28KB 残るが、4本だと 5KB しか残らない(薄氷)。増やすなら確立の山を削るのが先。
 	// ※ osSystemCAll.cpp の静的スタック枠数(kPoolSlots)もこの数に合わせること。
 	constexpr size_t MAX_CONCURRENT = 3;
+	// パノラマ撮影で扱えるカメラ台数(主カメラを含む合計。2026-08-26 実測に基づく)。
+	//  APモードは SoftAP と DHCP が内部RAMを食い、STAより約31KB空きが少ない。
+	//  実測(CoreS3): AP 4台で水位8,020 / STA 8台で36,924・10台で27,372・12台で19,272。
+	//  上限は**この端末の事情**なので端末側で判定する(スマホに焼き込まない。
+	//  そうしないと端末の仕様を変えるたびにスマホも直すことになる)。
+	constexpr size_t MAX_PANO_AP    = 4;
+	constexpr size_t MAX_PANO_STA   = 8;
 	constexpr size_t MAX_PENDING    = 100;	// 自撮影の撮影開始要求(予約含む)の受付上限
 	// 撮影期間 = [撮影窓 start の PRE_MARGIN_SEC 秒前, 撮影窓 end の 1フレーム(=interval秒)後]。
 	// PRE_MARGIN_SEC は撮影窓前の初期露出収束(captureRunner::kPreConvergeSec=30秒)に一致させる。
@@ -90,6 +97,9 @@ namespace
 		std::string                   pgCcm;
 	};
 	std::vector<std::unique_ptr<captureSession>> g_sessions;
+	bool g_apMode = false;		// この端末がAPモードか(エッジのUI層が起動時に教える)
+	int  g_startNoticeCode = 0;	// 直前の撮影開始が失敗した理由(hgc::notice)
+	int  g_startNoticeN1   = 0;	// その付随数値
 
 	// 撮影期間(±マージン)が同時に重なる自撮影セッション数の最大が MAX_CONCURRENT を超えるか。
 	// 既存の全セッション + 新規1件[ns,ne) を掃引して判定する(半開区間=端点接触は重ならない)。
@@ -2969,6 +2979,25 @@ int32_t hge_captureStartPlan(const char* planId_)
 			}
 		}
 	}
+	// パノラマ撮影の台数がこの端末で扱えるか(2026-08-26 ユーザー指示で端末側判定)。
+	//  超えていたら理由をお知らせコードで残し、通信路経由でスマホへ返す。
+	g_startNoticeCode = 0; g_startNoticeN1 = 0;
+	{
+		const size_t total = 1 + (sess->plan.panorama ? sess->plan.subCameras.size() : 0);
+		const size_t lim   = static_cast<size_t>(hge_maxPanoramaCameras());
+		if (total > lim)
+		{
+			char lb[140];
+			std::snprintf(lb, sizeof(lb),
+			              "capture request rejected: panorama %u cameras > limit %u (%s)",
+			              (unsigned)total, (unsigned)lim, g_apMode ? "ap" : "sta");
+			dataManager::logEvent("INFO", lb, true);
+			g_startNoticeCode = static_cast<int>(hgc::notice::panoramaTooMany);
+			g_startNoticeN1   = static_cast<int>(lim);
+			return ERR_HGC_PANORAMA_LIMIT;
+		}
+	}
+
 	// §7.4 重なり制限: 撮影期間[start-30s, end+1フレーム]が同時に重なる自撮影は2件まで。
 	//  受付(=撮影開始要求)の時点でエラーにする。スマホ→エッジ投げ(hge_edgeStart)はこの経路を通らず対象外。
 	{
@@ -3066,6 +3095,28 @@ int32_t hge_pump(void)
 //  競合させない。撮影中の在否はランナー(取得フェーズ/接続断検知)が管理するので二重にならない。
 // このシリアルの個体を、今動いているセッションが使っているか(2026-08-23)。
 //  在否監視が「撮影中のカメラには触らない」を判定するために使う。
+// エッジのUI層が起動時に呼ぶ(スマホ役は呼ばない=STA相当の上限)。
+int32_t hge_setApMode(int32_t ap)
+{
+	g_apMode = (ap != 0);
+	return ERR_HGC_OK;
+}
+
+// この端末がパノラマ撮影で扱えるカメラ台数(主カメラを含む合計)。
+int32_t hge_maxPanoramaCameras(void)
+{
+	return static_cast<int32_t>(g_apMode ? MAX_PANO_AP : MAX_PANO_STA);
+}
+
+// 直前の hge_captureStartPlan が失敗した理由。成功していれば code=0。
+int32_t hge_lastStartNotice(int32_t* code, int32_t* n1)
+{
+	if (code == nullptr) { return ERR_HGC_INVALID_ARG; }
+	*code = g_startNoticeCode;
+	if (n1 != nullptr) { *n1 = g_startNoticeN1; }
+	return ERR_HGC_OK;
+}
+
 bool hge_isCameraInUse(const char* serial)
 {
 	if (serial == nullptr || serial[0] == 0) { return false; }

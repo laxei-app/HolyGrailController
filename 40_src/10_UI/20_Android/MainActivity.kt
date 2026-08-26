@@ -3132,6 +3132,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     when (r) {
                         HgeNative.ERR_OVERLAP_LIMIT -> { waitingPlans.remove(id); Toast.makeText(this, "撮影期間が重なる計画は3件までです。時間をずらすか他の計画を停止してください", Toast.LENGTH_LONG).show() }
                         HgeNative.ERR_QUEUE_FULL   -> { waitingPlans.remove(id); Toast.makeText(this, "撮影開始要求が上限(100件)に達しました", Toast.LENGTH_LONG).show() }
+                        // パノラマの台数超過。上限は Entity(=撮影する端末)が持つので、
+                        // ここは理由コードと台数を受け取って文章にするだけ。
+                        HgeNative.ERR_PANORAMA_LIMIT -> {
+                            waitingPlans.remove(id)
+                            val nn = try { HgeNative.nativeLastStartNoticeN1() } catch (_: Exception) { 0 }
+                            Toast.makeText(this, noticeText(61, nn.toLong()), Toast.LENGTH_LONG).show()
+                        }
                         else -> {}   // 待機はタップ時に反映済み。実状態はEV_STATEで即補正される
                     }
                     refreshPlanList(); updateReadOnly()
@@ -3640,6 +3647,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         54 -> "1枚目の露出をカメラへ設定できませんでした(${n1}回試行)。撮影は続けます"
         55 -> "撮影開始前の露出合わせに失敗しました。ログに内訳が残っています"
         60 -> "このカメラは別の撮影で使用中です"
+        // 台数の上限は端末(エッジ/スマホ)が決めて n1 で送ってくる。ここでは埋めるだけで、
+        // 数字をアプリに持たない(端末の仕様が変わってもアプリを直さずに済む)。
+        61 -> "パノラマのカメラが多すぎます。この端末で撮れるのは${n1}台までです"
         else -> "カメラからのお知らせ($code)"
     }
 
@@ -6062,7 +6072,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     // エッジが理由を返していればそれを出す。「code=-3」だけでは何が悪いのか分からない
                     //  (実際にSDカードの挿し忘れで気づけなかった。2026-08-20)。
                     val nt = try { HgeNative.nativeLastEdgeNotice() } catch (_: Exception) { 0 }
-                    val why = if (nt != 0) noticeText(nt, 0) else "エッジ端末 開始できませんでした (code=$r)"
+                    val n1 = try { HgeNative.nativeLastEdgeNoticeN1() } catch (_: Exception) { 0 }
+                    val why = if (nt != 0) noticeText(nt, n1.toLong()) else "エッジ端末 開始できませんでした (code=$r)"
                     Toast.makeText(this, why, Toast.LENGTH_LONG).show()
                 }
             }

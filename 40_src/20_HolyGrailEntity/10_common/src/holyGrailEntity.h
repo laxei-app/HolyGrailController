@@ -110,6 +110,18 @@ int32_t hge_setPlanPanorama(int32_t on);
 // 追加カメラを所持カメラの名前配列 ["name",...] で差し替える。
 int32_t hge_setPlanSubCameras(const char* namesJson);
 
+// この端末がAPモードで動いているかを Entity へ伝える(エッジのUI層が起動時に呼ぶ)。
+//  APモードは SoftAP と DHCP が内部RAMを食うため、扱えるカメラ台数が少ない。
+//  スマホ役は呼ばなくてよい(既定=false=STA相当の上限)。
+int32_t hge_setApMode(int32_t ap);
+
+// この端末がパノラマ撮影で扱えるカメラ台数(主カメラを含む合計)。
+int32_t hge_maxPanoramaCameras(void);
+
+// 直前の hge_captureStartPlan が失敗した理由。成功していれば code=0。
+//  code = hgc::notice の値、n1 = その付随数値。UI へ理由を返すために使う。
+int32_t hge_lastStartNotice(int32_t* code, int32_t* n1);
+
 
 // --- スケジュール手動編集(7.3.2) ---
 // 朝日/夕日の帯モード(0=自動判定, 1=挿入(強制), 2=排除(日中))。再生成して通知する。

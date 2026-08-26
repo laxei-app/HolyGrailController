@@ -164,6 +164,8 @@ namespace
 	std::atomic<bool> g_useBle{false};
 	// エッジが直近の操作で返した「お知らせコード」(0=なし)。文言はUIが持つので番号だけを渡す。
 	std::atomic<int>  g_lastEdgeNotice{0};
+	// お知らせの付随数値(例: 扱えるカメラ台数)。data は "<code>	<n1>" 形式。
+	std::atomic<int>  g_lastEdgeNoticeN1{0};
 
 	// BLE で 1 往復する。Android の BLE API は Kotlin にしかないので、そちらへ呼び返す。
 	//  return: method(ACK/NAK) or 0(失敗)。
@@ -373,6 +375,10 @@ JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeLastEdgeNotice(JNIEnv*, jobject)
 { return (jint)g_lastEdgeNotice.load(); }
 
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeLastEdgeNoticeN1(JNIEnv*, jobject)
+{ return (jint)g_lastEdgeNoticeN1.load(); }
+
 // エッジ端末へ time→capturePlan→action を送って撮影開始させる。return: 0=成功。
 JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring host_, jint port,
@@ -466,7 +472,16 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring
 	{
 		int mAct = step(etp::C_ACTION, etp::M_POST, pidS, rd);
 		ELOG("edgeStart C_ACTION planId=%s method=%d", pidS.c_str(), mAct);
-		if (mAct != etp::M_ACK) { result = -4; }
+		if (mAct != etp::M_ACK)
+		{	// エッジが理由をコードで返していれば控える(2026-08-26)。
+			//  台数上限のような端末側の事情は端末が判定し、ここは受け取るだけ。
+			result = -4;
+			g_lastEdgeNotice.store(rd.empty() ? 0 : std::atoi(rd.c_str()));
+			int n1 = 0;
+			const size_t tab = rd.find('	');
+			if (tab != std::string::npos) { n1 = std::atoi(rd.c_str() + tab + 1); }
+			g_lastEdgeNoticeN1.store(n1);
+		}
 	}
 
 	if (!g_useBle.load())

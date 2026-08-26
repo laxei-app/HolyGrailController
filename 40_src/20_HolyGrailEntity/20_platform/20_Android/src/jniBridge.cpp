@@ -117,6 +117,16 @@ Java_app_laxei_holygrail_HgeNative_nativeCaptureStartPlan(JNIEnv* env, jobject /
 	return r;
 }
 
+// 直前の撮影開始が失敗した理由の付随数値(パノラマの上限台数など)。
+//  上限は Entity(=撮影する端末)が持つ。UI は数字を持たず、これを埋めるだけ。
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeLastStartNoticeN1(JNIEnv*, jobject)
+{
+	int32_t code = 0, n1 = 0;
+	hge_lastStartNotice(&code, &n1);
+	return (jint)n1;
+}
+
 JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeCaptureStopPlan(JNIEnv* env, jobject /*thiz*/, jstring id)
 {

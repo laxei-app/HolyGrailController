@@ -226,7 +226,19 @@ namespace
 		{
 			int32_t ar = (!pk.data.empty()) ? hge_captureStartPlan(pk.data.c_str()) : hge_captureStart();
 			DBGLN(col::YEL, "etpEdge: ACTION planId='%s' start=%ld state=%d", pk.data.c_str(), (long)ar, (int)hge_getState());
-			if (ar != ERR_HGC_OK) { rm = etp::M_NAK; }	// 診断+改善: 開始失敗をスマホへ返す(従来は常にACKだった)
+			if (ar != ERR_HGC_OK)
+			{	// 診断+改善: 開始失敗をスマホへ返す(従来は常にACKだった)
+				rm = etp::M_NAK;
+				// 【理由をコードで返す(2026-08-26)】台数上限のような**端末側の事情**は
+				//  端末が判定する。スマホに上限を焼き込むと、端末の仕様を変えるたびに
+				//  スマホも直すことになるため。data = "<noticeコード>	<付随数値>"。
+				//  古いスマホは先頭の整数だけ読むので、後ろが増えても壊れない。
+				int32_t nc = 0, n1 = 0;
+				if (hge_lastStartNotice(&nc, &n1) == ERR_HGC_OK && nc != 0)
+				{
+					rd = std::to_string(nc) + "	" + std::to_string(n1);
+				}
+			}
 			break;
 		}
 		case etp::C_STOP:
