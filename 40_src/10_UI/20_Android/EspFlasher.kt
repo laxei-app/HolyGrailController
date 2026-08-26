@@ -176,6 +176,34 @@ class EspFlasher(private val io: EspTransport) {
         checkCommand(FLASH_DEFL_END, le32(1), 0, 5000)
     }
 
+    /**
+     * 端末のフラッシュを読む。**スタブが要る**(ROM だけのときは使えない)。
+     *
+     * 相手は要求した長さぶんを次々と送りつけてくるので、受け取った累計を都度返して
+     * 流れを止めないようにする(返さないと相手は待ち続ける)。最後に MD5 が1つ届くので、
+     * 受け取った中身と突き合わせて取りこぼしが無いことを確かめる。
+     */
+    fun readFlash(offset: Int, length: Int): ByteArray {
+        if (!stubRunning) throw EspFlashError("読み出しにはスタブが要ります")
+        val sector = 0x1000
+        checkCommand(READ_FLASH, le32(offset, length, sector, 64), 0, 10000)
+        val out = ByteArrayOutputStream(length)
+        while (out.size() < length) {
+            val p = readPacket(10000)
+            out.write(p)
+            if (out.size() < length && p.size < sector) {
+                throw EspFlashError("読み出しが途切れました(%d/%d)".format(out.size(), length))
+            }
+            io.write(slipEncode(le32(out.size())))      // ここまで受け取った、と返す
+        }
+        val digest = readPacket(10000)
+        if (digest.size != 16) throw EspFlashError("読み出しの照合値が来ません")
+        val data = out.toByteArray()
+        val want = digest.joinToString("") { "%02x".format(it) }
+        if (md5hex(data) != want) throw EspFlashError("読み出した中身が壊れています")
+        return data
+    }
+
     /** MD5 の応答本体をそのまま返す(形が読めないときの手掛かり用)。 */
     fun flashMd5Raw(offset: Int, size: Int): ByteArray =
         command(SPI_FLASH_MD5, le32(offset, size, 0, 0), 0, 120000).second
@@ -192,6 +220,16 @@ class EspFlasher(private val io: EspTransport) {
             body.size >= 16 -> body.copyOfRange(0, 16).joinToString("") { "%02x".format(it) }
             else -> ""
         }
+    }
+
+    /**
+     * 端末の [offset] から [expect] と同じ中身が載っているか。読み出さず、端末に MD5 を
+     * 計算させて突き合わせる(2.6MB でも数秒)。
+     * 「今入っているのは同じ土台か」を焼く前に確かめるのに使う。
+     */
+    fun regionMatches(offset: Int, expect: ByteArray): Boolean {
+        val got = flashMd5(offset, expect.size)
+        return got.isNotEmpty() && got.equals(md5hex(expect), ignoreCase = true)
     }
 
     /** 焼いたものが本当に載っているかを端末側の MD5 で確かめる。 */
@@ -367,6 +405,7 @@ class EspFlasher(private val io: EspTransport) {
         const val FLASH_DEFL_DATA = 0x11
         const val FLASH_DEFL_END = 0x12
         const val SPI_FLASH_MD5 = 0x13
+        const val READ_FLASH = 0xD2         // スタブだけが持つ(ROM には無い)
 
         const val CHECKSUM_MAGIC = 0xEF
         const val STATUS_BYTES = 2          // 応答の末尾2バイトが成否

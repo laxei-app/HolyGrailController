@@ -239,26 +239,60 @@ class EdgeFlashActivity : AppCompatActivity() {
             val image = EdgeFirmware.download(entry) { done, total -> progress(done, total) }
             log("照合しました (${image.size} バイト)")
 
+            // 【端末に今入っているものを見てから決める】
+            //  ・アプリの素性(名前・版数)は決まった番地にある。読み取って版数を比べる
+            //  ・ブートローダと区切りが同じなら、本体だけ入れ替えても起動する。その場合
+            //    NVS(0x9000〜0xE000)を跨がないので設定がそのまま残る
+            //  確かめられないときは安全側(まるごと書く)へ倒す。
+            val imgId = EdgeFirmware.parseIdentity(
+                image.copyOfRange(FlashMap.APP_DESC, FlashMap.APP_DESC + FlashMap.APP_DESC_LEN))
+            val devId = runCatching {
+                EdgeFirmware.parseIdentity(f.readFlash(FlashMap.APP_DESC, FlashMap.APP_DESC_LEN))
+            }.getOrElse { FwIdentity("", "", false) }
+            log("端末のファーム: $devId")
+            log("焼くファーム  : $imgId")
+
+            val sameBase = runCatching {
+                f.regionMatches(FlashMap.BOOTLOADER,
+                                image.copyOfRange(FlashMap.BOOTLOADER, FlashMap.BOOTLOADER_END)) &&
+                f.regionMatches(FlashMap.PART_TABLE,
+                                image.copyOfRange(FlashMap.PART_TABLE,
+                                                  FlashMap.PART_TABLE + FlashMap.PART_TABLE_LEN))
+            }.getOrElse { false }
+
+            val action = EdgeFirmware.decide(devId, imgId, sameBase)
+            val plan = EdgeFirmware.planWrite(image, action)
+            if (plan == null) {
+                log("同じ版数が入っています。書き込む必要はありません。")
+                log("--- 何もせずに終わります ---")
+                f.watchdogReset()
+                return@use
+            }
+            if (plan.keepsSettings) {
+                log("同じ土台です。**設定を残して**本体だけ書き換えます。")
+            } else if (!devId.valid) {
+                log("端末の素性が読めません。土台ごと全部書きます。**設定は消えます**。")
+            } else {
+                log("土台が違います(区切りの変更など)。まるごと書きます。**設定は消えます**。")
+            }
+
+            // 設定が本当に残ったかを、書き込みの前後で見比べられるようにしておく。
+            //  「残すつもりだったが実は消していた」を後から気づけないのが一番まずい。
+            val nvsBefore = if (plan.keepsSettings) {
+                runCatching { f.flashMd5(FlashMap.NVS, FlashMap.NVS_END - FlashMap.NVS) }
+                    .getOrElse { "" }
+            } else ""
+
             log("書き込みます。**抜かないでください**")
-            f.writeFlash(entry.offset, image) { phase, done, total ->
+            f.writeFlash(plan.offset, plan.data) { phase, done, total ->
                 if (phase == "write") progress(done, total)
             }
             progress(100, 100)
 
             log("端末側で照合しています…")
-            val want = EspFlasher.md5hex(image)
-            val got = runCatching { f.flashMd5(entry.offset, image.size) }
+            val want = EspFlasher.md5hex(plan.data)
+            val got = runCatching { f.flashMd5(plan.offset, plan.data.size) }
                 .getOrElse { log("照合できません: ${it.message}"); "" }
-            when {
-                got.isEmpty() || got != want -> {
-                    // 形が読めない/合わないときは、生の応答をそのまま残す。
-                    val raw = runCatching { f.flashMd5Raw(entry.offset, image.size) }
-                        .getOrElse { ByteArray(0) }
-                    log("応答 %d バイト: %s".format(raw.size,
-                        raw.take(40).joinToString("") { "%02x".format(it) }))
-                }
-                else -> {}
-            }
             when {
                 got.isEmpty() ->
                     // 端末が MD5 を計算できない場合。書き込み自体はブロックごとに検査値を
@@ -266,23 +300,32 @@ class EdgeFlashActivity : AppCompatActivity() {
                     //  照合できないことだけを残して先へ進む(黙って成功にはしない)。
                     log("※ 端末側の照合はできませんでした。書き込みは完了しています。")
                 got != want -> {
-                    // 頭の 4KB だけでも比べる。頭が合っていれば「後ろが違う」、
-                    //  頭から違えば「そもそも別物」と切り分けられる。
-                    val headWant = EspFlasher.md5hex(image.copyOfRange(0, 0x1000))
-                    val headGot = runCatching { f.flashMd5(entry.offset, 0x1000) }.getOrElse { "取得失敗" }
-                    log("全体 期待 $want")
-                    log("全体 端末 $got")
-                    log("頭4KB 期待 $headWant")
-                    log("頭4KB 端末 $headGot")
+                    val raw = runCatching { f.flashMd5Raw(plan.offset, plan.data.size) }
+                        .getOrElse { ByteArray(0) }
+                    log("期待 $want")
+                    log("端末 $got")
+                    log("応答 %d バイト: %s".format(raw.size,
+                        raw.take(40).joinToString("") { "%02x".format(it) }))
                     throw EspFlashError("書き込んだ中身が一致しません。")
                 }
                 else -> log("一致しました。")
             }
 
+            if (plan.keepsSettings && nvsBefore.isNotEmpty()) {
+                val nvsAfter = runCatching { f.flashMd5(FlashMap.NVS, FlashMap.NVS_END - FlashMap.NVS) }
+                    .getOrElse { "" }
+                if (nvsAfter == nvsBefore) log("設定の領域は手つかずです(照合値 ${nvsBefore.take(8)}…)")
+                else log("※ 設定の領域が変わっています。BLE で入れ直してください。")
+            }
+
             // DTR/RTS のリセットではダウンロードモードから抜けられない(実測)。
             f.watchdogReset()
             log("--- 完了。端末が起動します ---")
-            log("設定は消えているので、BLE で端末名と Wi-Fi を入れ直してください。")
+            if (plan.keepsSettings) {
+                log("設定は残してあります。そのまま使えます。")
+            } else {
+                log("設定は消えているので、BLE で端末名と Wi-Fi を入れ直してください。")
+            }
         }
     }
 }

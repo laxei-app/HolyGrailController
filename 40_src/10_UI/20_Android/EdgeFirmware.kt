@@ -41,6 +41,50 @@ data class EdgeFirmwareEntry(
 
 class EdgeFirmwareError(message: String) : Exception(message)
 
+/**
+ * どこへ何を書くかの見立て。
+ *  keepsSettings=true … 端末の設定(NVS)を残したまま、本体だけを書き換える
+ *  keepsSettings=false … 0 番地からまるごと。設定は消える(新品はこちら)
+ */
+class WritePlan(val offset: Int, val data: ByteArray, val keepsSettings: Boolean)
+
+/** 端末に何をするか。 */
+enum class FlashAction {
+    SKIP,       // 同じ版数が入っている。書かない
+    APP_ONLY,   // 本体だけ入れ替える。設定は残る
+    FULL        // 土台(ブートローダ・区切り)ごと全部書く。設定は消える
+}
+
+/**
+ * 結合イメージの中の区切り。0 番地から順に、ブートローダ / パーティション表 /
+ * NVS(設定) / otadata / アプリ本体 が並んでいる。
+ *
+ * 【設定を残せる理由】NVS は 0x9000〜0xE000 にある。0xE000 から後ろだけを書けば、
+ *  otadata とアプリ本体は新しくなり、その手前の設定はそのまま残る。
+ *  0xE000 は 4KB の境目に乗っているので、消去の単位ともぶつからない。
+ */
+object FlashMap {
+    const val BOOTLOADER = 0x0
+    const val BOOTLOADER_END = 0x8000
+    const val PART_TABLE = 0x8000
+    const val PART_TABLE_LEN = 0xC00
+    const val NVS = 0x9000
+    const val NVS_END = 0xE000
+    const val OTADATA = 0xE000        // ここから後ろが「設定を残す」ときに書く範囲
+    const val APP = 0x10000
+
+    // アプリの素性は **アプリ先頭 +0x20** に必ず置かれる(ESP-IDF の esp_app_desc_t)。
+    //  番地が仕様で決まっているので、こちらで場所を作らずに済む。
+    const val APP_DESC = APP + 0x20
+    const val APP_DESC_LEN = 256
+}
+
+/** ファームの素性。決まった番地から読み出したもの。 */
+class FwIdentity(val name: String, val version: String, val valid: Boolean) {
+    override fun toString(): String =
+        if (valid) "$name $version" else "読めません"
+}
+
 object EdgeFirmware {
 
     const val BASE = "https://raw.githubusercontent.com/laxei-app/hgc-master/main/firmware/"
@@ -82,6 +126,67 @@ object EdgeFirmware {
         val got = MessageDigest.getInstance("SHA-256").digest(data)
             .joinToString("") { "%02x".format(it) }
         return got == entry.sha256
+    }
+
+    /**
+     * アプリの素性(名前・版数)を読み取る。desc は APP_DESC から APP_DESC_LEN バイト。
+     *
+     * 見るもの:
+     *  ・+0 の magic_word が 0xABCD5432 か(そもそも app_desc の場所か)
+     *  ・+176 の検査値が version+name の CRC32 と合うか(私たちが刻んだものか)
+     * どちらか欠ければ valid=false。**そのときは土台ごと書き直す**判断にする。
+     * 私たちのものでないファーム(工場出荷など)は検査値を持たないので、ここで弾ける。
+     */
+    fun parseIdentity(desc: ByteArray): FwIdentity {
+        if (desc.size < FlashMap.APP_DESC_LEN) return FwIdentity("", "", false)
+        val magic = (0 until 4).fold(0L) { a, k -> a or ((desc[k].toLong() and 0xFF) shl (8 * k)) }
+        if (magic != 0xABCD5432L) return FwIdentity("", "", false)
+
+        fun field(off: Int): String {
+            var end = off
+            while (end < off + 32 && desc[end].toInt() != 0) end++
+            return String(desc, off, end - off, Charsets.US_ASCII)
+        }
+        val version = field(16)
+        val name = field(48)
+
+        val stored = (0 until 4).fold(0L) { a, k -> a or ((desc[176 + k].toLong() and 0xFF) shl (8 * k)) }
+        val crc = java.util.zip.CRC32().apply { update(desc, 16, 64) }.value
+        return FwIdentity(name, version, stored == crc)
+    }
+
+    /**
+     * どうするかを決める。
+     *
+     * dev … 端末から読み取った素性 / img … これから焼くものの素性
+     * sameBase … 端末のブートローダとパーティション表が、焼くものと同じか。
+     *            同じなら区切りが変わらないので本体だけ入れ替えてよい。違うとき
+     *            (新品・別のファーム・区切りを変えた改修)は表ごと入れ替えないと起動しない。
+     *
+     * 決め方(2026-08-26 ユーザー指示):
+     *  ・**検査値が合わない** → 素性が読めない/私たちのものでない → 土台ごと全部書く
+     *  ・**版数が同じ**       → 書く必要が無いので何もしない
+     *  ・**版数が違う**       → 書いてよい。土台が同じなら本体だけ(設定が残る)
+     */
+    fun decide(dev: FwIdentity, img: FwIdentity, sameBase: Boolean): FlashAction = when {
+        !dev.valid -> FlashAction.FULL
+        // 焼く側に素性が無い(まだ刻んでいない古い公開物)ときは版数を比べようが無いので、
+        //  「同じかもしれない」で飛ばさず必ず書く。安全側に倒す。
+        !img.valid -> if (sameBase) FlashAction.APP_ONLY else FlashAction.FULL
+        dev.name != img.name -> FlashAction.FULL          // 別のアプリが入っている
+        dev.version == img.version -> FlashAction.SKIP
+        sameBase -> FlashAction.APP_ONLY
+        else -> FlashAction.FULL
+    }
+
+    /** 決めた内容に沿って、どこへ何を書くかを組み立てる。SKIP なら null。 */
+    fun planWrite(image: ByteArray, action: FlashAction): WritePlan? = when {
+        action == FlashAction.SKIP -> null
+        action == FlashAction.APP_ONLY && image.size > FlashMap.OTADATA ->
+            WritePlan(FlashMap.OTADATA,
+                      image.copyOfRange(FlashMap.OTADATA, image.size),
+                      keepsSettings = true)
+        else -> WritePlan(0, image, keepsSettings = false)
     }
 
     /** 資産に入れてあるスタブローダ(esp-flasher-stub。Apache-2.0 / MIT)を読む。 */
