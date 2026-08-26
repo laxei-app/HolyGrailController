@@ -104,7 +104,33 @@ namespace
 	// 撮影期間(±マージン)が同時に重なる自撮影セッション数の最大が MAX_CONCURRENT を超えるか。
 	// 既存の全セッション + 新規1件[ns,ne) を掃引して判定する(半開区間=端点接触は重ならない)。
 	//  panoOverlap : 新規計画がパノラマ撮影か。true のときは重なりを1件までに絞る。
-	bool selfCaptureOverlapExceeds(long long ns, long long ne, bool panoOverlap)
+	// 半開区間 [a1,a2) と [b1,b2) が重なるか(端点接触は重ならない)。
+	bool rangesOverlap(long long a1, long long a2, long long b1, long long b2)
+	{
+		return a1 < b2 && b1 < a2;
+	}
+
+	// パノラマ撮影は単独実行(2026-08-25 ユーザー指示)。1計画で複数台のカメラを掴むため、
+	// 他の計画と重ねるとカメラも通信枠もメモリも足りない。**どちらの向きでも**禁じる:
+	//  ・新規がパノラマ    → 時間が重なる撮影が1つでもあれば不可
+	//  ・既存がパノラマ    → それに時間が重なる新規は(通常計画でも)不可
+	// 【重なりを見る理由】時間が離れていれば同時には走らないので許してよい。
+	//  以前は「パノラマが1つでも居れば全体を1件までに絞る」実装で、時間の離れた
+	//  無関係な通常計画2件まで弾いていた(2026-08-26 修正)。
+	bool panoramaConflicts(long long ns, long long ne, bool newIsPano)
+	{
+		for (auto& s : g_sessions)
+		{
+			const long long ss = hgc::toUnixUtc(s->plan.start, g_offMin) - PRE_MARGIN_SEC;
+			const long long se = hgc::toUnixUtc(s->plan.end, g_offMin) + (long long)std::llround(s->plan.interval);
+			if (!rangesOverlap(ns, ne, ss, se)) { continue; }
+			const bool otherIsPano = (s->plan.panorama && !s->plan.subCameras.empty());
+			if (newIsPano || otherIsPano) { return true; }
+		}
+		return false;
+	}
+
+	bool selfCaptureOverlapExceeds(long long ns, long long ne)
 	{
 		struct Ev { long long t; int d; };
 		std::vector<Ev> ev;
@@ -115,16 +141,12 @@ namespace
 			long long se = hgc::toUnixUtc(s->plan.end, g_offMin) + (long long)std::llround(s->plan.interval);
 			add(ss, se);
 			// 既に走っている側がパノラマでも同じ(あちらの単独実行を守る)。
-			if (s->plan.panorama && !s->plan.subCameras.empty()) { panoOverlap = true; }
+				// (パノラマの単独実行は panoramaConflicts が別に見る)
 		}
 		add(ns, ne);
 		std::sort(ev.begin(), ev.end(), [](const Ev& a, const Ev& b) { return a.t != b.t ? a.t < b.t : a.d < b.d; });
 		int cur = 0, mx = 0;
 		for (auto& e : ev) { cur += e.d; if (cur > mx) { mx = cur; } }
-		// パノラマ撮影は単独実行(2026-08-25 ユーザー指示)。1計画で複数台のカメラを
-		// 掴むため、他の計画と重ねるとカメラも通信枠もメモリも足りなくなる。
-		// 新規/既存のどちらかがパノラマなら、重なりは1件までしか許さない。
-		if (panoOverlap) { return mx > 1; }
 		return mx > (int)MAX_CONCURRENT;
 	}
 
@@ -3003,13 +3025,21 @@ int32_t hge_captureStartPlan(const char* planId_)
 	{
 		long long ns = hgc::toUnixUtc(sess->plan.start, g_offMin) - PRE_MARGIN_SEC;
 		long long ne = hgc::toUnixUtc(sess->plan.end, g_offMin) + (long long)std::llround(sess->plan.interval);
-		// パノラマ撮影は単独実行にする(2026-08-25 ユーザー指示)。
+		// パノラマ撮影は単独実行(どちらの向きでも)。理由はお知らせコードでUIへ返す。
 		const bool pano = (sess->plan.panorama && !sess->plan.subCameras.empty());
-		if (selfCaptureOverlapExceeds(ns, ne, pano))
+		if (panoramaConflicts(ns, ne, pano))
 		{
-			const std::string why = pano
-				? std::string("capture request rejected: panorama runs alone")
-				: ("capture request rejected: overlap limit (" + std::to_string(MAX_CONCURRENT) + ")");
+			dataManager::logEvent("INFO", pano
+				? "capture request rejected: panorama runs alone (another capture overlaps)"
+				: "capture request rejected: a panorama capture overlaps", true);
+			g_startNoticeCode = static_cast<int>(hgc::notice::panoramaRunsAlone);
+			g_startNoticeN1   = 0;
+			return ERR_HGC_OVERLAP_LIMIT;
+		}
+		if (selfCaptureOverlapExceeds(ns, ne))
+		{
+			const std::string why = "capture request rejected: overlap limit ("
+			                      + std::to_string(MAX_CONCURRENT) + ")";
 			dataManager::logEvent("INFO", why.c_str());
 			return ERR_HGC_OVERLAP_LIMIT;
 		}

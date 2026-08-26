@@ -127,6 +127,15 @@ Java_app_laxei_holygrail_HgeNative_nativeLastStartNoticeN1(JNIEnv*, jobject)
 	return (jint)n1;
 }
 
+// 直前の撮影開始が失敗した理由(hgc::notice)。0=理由なし。
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeLastStartNotice(JNIEnv*, jobject)
+{
+	int32_t code = 0, n1 = 0;
+	hge_lastStartNotice(&code, &n1);
+	return (jint)code;
+}
+
 JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeCaptureStopPlan(JNIEnv* env, jobject /*thiz*/, jstring id)
 {

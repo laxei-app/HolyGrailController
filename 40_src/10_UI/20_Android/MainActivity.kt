@@ -3130,7 +3130,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 runOnUiThread {
                     startingPlans.remove(id)   // 開始要求の結果確定
                     when (r) {
-                        HgeNative.ERR_OVERLAP_LIMIT -> { waitingPlans.remove(id); Toast.makeText(this, "撮影期間が重なる計画は3件までです。時間をずらすか他の計画を停止してください", Toast.LENGTH_LONG).show() }
+                        // 理由コードが付いていればそれを出す(パノラマの単独実行など)。
+                        // 判定と文言の対応は Entity 側が決めるので、ここは分岐しない。
+                        HgeNative.ERR_OVERLAP_LIMIT -> {
+                            waitingPlans.remove(id)
+                            val nc = try { HgeNative.nativeLastStartNotice() } catch (_: Exception) { 0 }
+                            val nn = try { HgeNative.nativeLastStartNoticeN1() } catch (_: Exception) { 0 }
+                            val msg = if (nc != 0) noticeText(nc, nn.toLong())
+                                      else "撮影期間が重なる計画は3件までです。時間をずらすか他の計画を停止してください"
+                            Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+                        }
                         HgeNative.ERR_QUEUE_FULL   -> { waitingPlans.remove(id); Toast.makeText(this, "撮影開始要求が上限(100件)に達しました", Toast.LENGTH_LONG).show() }
                         // パノラマの台数超過。上限は Entity(=撮影する端末)が持つので、
                         // ここは理由コードと台数を受け取って文章にするだけ。
@@ -3650,6 +3659,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 台数の上限は端末(エッジ/スマホ)が決めて n1 で送ってくる。ここでは埋めるだけで、
         // 数字をアプリに持たない(端末の仕様が変わってもアプリを直さずに済む)。
         61 -> "パノラマのカメラが多すぎます。この端末で撮れるのは${n1}台までです"
+        62 -> "パノラマ撮影は単独で行います。時間が重なる撮影を止めるか、時間をずらしてください"
         else -> "カメラからのお知らせ($code)"
     }
 

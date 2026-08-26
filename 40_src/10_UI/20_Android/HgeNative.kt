@@ -169,6 +169,8 @@ object HgeNative {
     external fun nativeLastEdgeNoticeN1(): Int
     // 直前の撮影開始(スマホ直結)が失敗した理由の付随数値(台数など)
     external fun nativeLastStartNoticeN1(): Int
+    // 直前の撮影開始(スマホ直結)が失敗した理由コード(hgc::notice)。0=理由なし
+    external fun nativeLastStartNotice(): Int
     external fun nativeEdgeStop(host: String, port: Int, planId: String): Int
     external fun nativeEdgeDeletePlan(host: String, port: Int, planId: String): Int   // 項目6: エッジから計画を削除(撮影中は停止してから)
     external fun nativeEdgeSyncTime(host: String, port: Int, datetime: String, offMin: Int): Int // 能動的な時刻同期(C_TIMEのみ)
