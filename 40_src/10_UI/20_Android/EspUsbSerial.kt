@@ -142,12 +142,15 @@ class EspUsbSerial private constructor(
     // ── EspTransport ────────────────────────────────────────
 
     override fun write(data: ByteArray) {
+        // 【まとめて渡す】1パケットずつに割るとパケットの切れ目が不自然になり、相手の
+        //  受け取り方によっては詰まる。bulkTransfer は中で勝手に分割してくれるので、
+        //  こちらは丸ごと渡してよい(1回の送信は最大でもスタブの 6KB 程度)。
         var off = 0
         while (off < data.size) {
-            val n = minOf(epOut.maxPacketSize, data.size - off)
-            val chunk = if (off == 0 && n == data.size) data else data.copyOfRange(off, off + n)
-            val sent = conn.bulkTransfer(epOut, chunk, chunk.size, 2000)
+            val chunk = if (off == 0) data else data.copyOfRange(off, data.size)
+            val sent = conn.bulkTransfer(epOut, chunk, chunk.size, 3000)
             if (sent < 0) throw EspFlashError("USB へ送れません")
+            if (sent == 0) throw EspFlashError("USB へ送れません(0バイト)")
             off += sent
         }
     }

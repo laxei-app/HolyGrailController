@@ -56,6 +56,14 @@ class EdgeFlashActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * USB の抜き差しで表示を追う。ダウンロードモードへ入ると PID が変わって**別の機器**に
+     * 見えるため(実測)、抜き差ししていなくても再列挙が起きる。追わないと画面が嘘をつく。
+     */
+    private val usbReceiver = object : BroadcastReceiver() {
+        override fun onReceive(c: Context?, i: Intent?) = refreshState()
+    }
+
     override fun onCreate(saved: Bundle?) {
         super.onCreate(saved)
         setContentView(R.layout.activity_edge_flash)
@@ -74,6 +82,13 @@ class EdgeFlashActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(permReceiver, f, Context.RECEIVER_NOT_EXPORTED)
         else registerReceiver(permReceiver, f)
 
+        val u = IntentFilter().apply {
+            addAction(android.hardware.usb.UsbManager.ACTION_USB_DEVICE_ATTACHED)
+            addAction(android.hardware.usb.UsbManager.ACTION_USB_DEVICE_DETACHED)
+        }
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(usbReceiver, u, Context.RECEIVER_EXPORTED)
+        else registerReceiver(usbReceiver, u)
+
         refreshState()
     }
 
@@ -82,6 +97,7 @@ class EdgeFlashActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         runCatching { unregisterReceiver(permReceiver) }
+        runCatching { unregisterReceiver(usbReceiver) }
     }
 
     // ── 画面 ────────────────────────────────────────────────
@@ -162,6 +178,7 @@ class EdgeFlashActivity : AppCompatActivity() {
 
     /** スタブを載せる。載らなくても ROM だけで焼けるので、失敗しても止めない。 */
     private fun tryStub(f: EspFlasher) {
+        if (f.isStubRunning()) { log("スタブは既に載っています。"); return }
         runCatching { f.runStub(EdgeFirmware.loadStub(this)) }
             .onSuccess { log("高速化のためのスタブを載せました。") }
             .onFailure { log("スタブを載せられませんでした。ROM だけで進めます(遅くなります)。") }
@@ -183,8 +200,11 @@ class EdgeFlashActivity : AppCompatActivity() {
             }
             log("機種       : $model")
             log("--- 何も書き込んでいません ---")
-            // 調べただけなので、元のファームへ戻しておく
-            runCatching { f.watchdogReset() }
+            // 【ここで再起動させない(2026-08-26 実機で判明)】調べ終わりに元のファームへ戻すと、
+            //  ダウンロードモードから抜けてしまう。工場出荷の端末はこちらから入れ直せないので、
+            //  「調べる」の直後に「書き込む」を押しても、また手で長押しする羽目になる。
+            //  調べた後はそのまま焼ける状態で置いておくのが素直。
+            log("ダウンロードモードのままにしてあります。続けて「書き込む」を押せます。")
         }
     }
 
@@ -224,10 +244,38 @@ class EdgeFlashActivity : AppCompatActivity() {
             progress(100, 100)
 
             log("端末側で照合しています…")
-            if (!f.verify(entry.offset, image)) {
-                throw EspFlashError("書き込んだ中身が一致しません。もう一度お試しください。")
+            val want = EspFlasher.md5hex(image)
+            val got = runCatching { f.flashMd5(entry.offset, image.size) }
+                .getOrElse { log("照合できません: ${it.message}"); "" }
+            when {
+                got.isEmpty() || got != want -> {
+                    // 形が読めない/合わないときは、生の応答をそのまま残す。
+                    val raw = runCatching { f.flashMd5Raw(entry.offset, image.size) }
+                        .getOrElse { ByteArray(0) }
+                    log("応答 %d バイト: %s".format(raw.size,
+                        raw.take(40).joinToString("") { "%02x".format(it) }))
+                }
+                else -> {}
             }
-            log("一致しました。")
+            when {
+                got.isEmpty() ->
+                    // 端末が MD5 を計算できない場合。書き込み自体はブロックごとに検査値を
+                    //  付けて送っており、落としたファームも SHA256 で確かめてある。
+                    //  照合できないことだけを残して先へ進む(黙って成功にはしない)。
+                    log("※ 端末側の照合はできませんでした。書き込みは完了しています。")
+                got != want -> {
+                    // 頭の 4KB だけでも比べる。頭が合っていれば「後ろが違う」、
+                    //  頭から違えば「そもそも別物」と切り分けられる。
+                    val headWant = EspFlasher.md5hex(image.copyOfRange(0, 0x1000))
+                    val headGot = runCatching { f.flashMd5(entry.offset, 0x1000) }.getOrElse { "取得失敗" }
+                    log("全体 期待 $want")
+                    log("全体 端末 $got")
+                    log("頭4KB 期待 $headWant")
+                    log("頭4KB 端末 $headGot")
+                    throw EspFlashError("書き込んだ中身が一致しません。")
+                }
+                else -> log("一致しました。")
+            }
 
             // DTR/RTS のリセットではダウンロードモードから抜けられない(実測)。
             f.watchdogReset()

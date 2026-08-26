@@ -2,6 +2,7 @@ package app.laxei.holygrail
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -106,6 +107,17 @@ class EspFlasherTest {
     }
 
     @Test
+    fun 応答の長さの欄が短くても本体を取りこぼさない() {
+        // 実機のスタブは MD5(16)+成否(2)=18 バイトを送りながら、長さの欄に 2 と書いてきた。
+        // 長さで切ると MD5 の先頭2バイトだけが残り、それを成否と読んで嘘の失敗になる。
+        val md5 = ByteArray(16) { (0x20 + it).toByte() }
+        val pkt = byteArrayOf(0x01, 0x13, 0x02, 0x00, 0, 0, 0, 0) + md5 + byteArrayOf(0, 0)
+        val r = EspFlasher.parseResponse(pkt)!!
+        assertEquals("長さの欄ではなく実際の中身を見ること", 18, r.body.size)
+        assertArrayEquals(md5, r.body.copyOfRange(0, 16))
+    }
+
+    @Test
     fun 圧縮は展開すると元に戻る() {
         val src = ByteArray(200_000) { ((it / 977) % 251).toByte() }
         val comp = EspFlasher.deflate(src)
@@ -154,6 +166,26 @@ class EspFlasherTest {
     }
 
     @Test
+    fun スタブが既に走っていれば載せ直さない() {
+        // 実機で踏んだ: 前回の書き込みでスタブが載ったまま、もう一度載せようとして壊れた。
+        // ROM は同期に 0 以外を返し、スタブは 0 を返す。そこで見分ける。
+        val rom = FakeRom()
+        val f = EspFlasher(rom)
+        f.sync()
+        assertFalse("最初は ROM のはず", f.isStubRunning())
+        f.runStub(EspStub(0x40378000, ByteArray(100), 0x40378000, ByteArray(8), 0x3FCA0000))
+        assertTrue(rom.stubStarted)
+
+        // 繋ぎ直した想定でもう一度同期すると、今度はスタブだと分かる
+        val f2 = EspFlasher(rom)
+        f2.sync()
+        assertTrue("スタブだと見分けられていない", f2.isStubRunning())
+        rom.memBeginCount = 0
+        f2.runStub(EspStub(0x40378000, ByteArray(100), 0x40378000, ByteArray(8), 0x3FCA0000))
+        assertEquals("載せ直してはいけない", 0, rom.memBeginCount)
+    }
+
+    @Test
     fun 壊れた応答は失敗として扱う() {
         val rom = FakeRom().also { it.failNext = true }
         val f = EspFlasher(rom)
@@ -192,6 +224,7 @@ class EspFlasherTest {
         var flashOffset = -1
         var failNext = false
         var flashImage: ByteArray = ByteArray(0)
+        var memBeginCount = 0
 
         private val flash = ByteArrayOutputStream()
         private val outbox = ByteArrayOutputStream()
@@ -217,12 +250,13 @@ class EspFlasherTest {
         override fun setControlLines(dtr: Boolean, rts: Boolean) {}
         override fun discardInput() { outbox.reset() }
 
-        private fun reply(op: Int, value: Int, extra: ByteArray = ByteArray(0)) {
+        private fun reply(op: Int, value: Int, extra: ByteArray = ByteArray(0), declaredLen: Int = -1) {
             val body = extra + byteArrayOf(0, 0)          // 末尾2バイト=成功
             val pkt = ByteArray(8 + body.size)
+            val dl = if (declaredLen >= 0) declaredLen else body.size
             pkt[0] = 0x01; pkt[1] = op.toByte()
-            pkt[2] = (body.size and 0xFF).toByte()
-            pkt[3] = ((body.size shr 8) and 0xFF).toByte()
+            pkt[2] = (dl and 0xFF).toByte()
+            pkt[3] = ((dl shr 8) and 0xFF).toByte()
             for (k in 0 until 4) pkt[4 + k] = ((value shr (8 * k)) and 0xFF).toByte()
             body.copyInto(pkt, 8)
             outbox.write(EspFlasher.slipEncode(pkt))
@@ -240,7 +274,8 @@ class EspFlasherTest {
             val chk = le(pkt, 4)
             val body = pkt.copyOfRange(8, pkt.size)
             when (op) {
-                EspFlasher.SYNC -> reply(op, 0)
+                // 本物と同じにする: ROM は 0 以外、スタブが走っていれば 0 を返す
+                EspFlasher.SYNC -> reply(op, if (stubStarted) 0 else 0x07)
                 EspFlasher.READ_REG -> {
                     val addr = le(body, 0)
                     val v = when (addr) {
@@ -259,7 +294,8 @@ class EspFlasherTest {
                     reply(op, 0)
                 }
                 EspFlasher.SPI_ATTACH -> reply(op, 0)
-                EspFlasher.MEM_BEGIN, EspFlasher.MEM_DATA -> reply(op, 0)
+                EspFlasher.MEM_BEGIN -> { memBeginCount++; reply(op, 0) }
+                EspFlasher.MEM_DATA -> reply(op, 0)
                 EspFlasher.MEM_END -> {
                     reply(op, 0)
                     outbox.write(EspFlasher.slipEncode("OHAI".toByteArray()))
@@ -275,8 +311,9 @@ class EspFlasherTest {
                 }
                 EspFlasher.FLASH_DEFL_END -> reply(op, 0)
                 EspFlasher.SPI_FLASH_MD5 -> {
+                    // 実機のスタブと同じ意地悪をする: 長さの欄には成否ぶんの 2 しか書かない
                     val md5 = MessageDigest.getInstance("MD5").digest(flashImage)
-                    reply(op, 0, md5)
+                    reply(op, 0, md5, declaredLen = 2)
                 }
                 else -> reply(op, 0)
             }

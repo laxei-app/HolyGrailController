@@ -85,7 +85,11 @@ class EspFlasher(private val io: EspTransport) {
             try {
                 io.discardInput()
                 rx.reset()
-                command(SYNC, payload, 0, 500)
+                val (value, _) = command(SYNC, payload, 0, 500)
+                // 【相手がもう スタブ かどうかはここで分かる(2026-08-26 実機で判明)】
+                //  ROM は 0 以外を返し、スタブは 0 を返す。前回の書き込みでスタブが載ったまま
+                //  再び載せようとすると壊れて「USB へ送れません」になる。見分けて二度載せない。
+                stubRunning = (value == 0)
                 // ROM は同じ応答を何度か返すので、残りを吸っておく
                 repeat(7) { runCatching { readPacket(100) } }
                 return
@@ -96,8 +100,12 @@ class EspFlasher(private val io: EspTransport) {
         throw EspFlashError("ダウンロードモードの端末が応答しません: ${last?.message}")
     }
 
-    /** RAM へスタブを送り込んで走らせる。以後の書き込みが速くなる。 */
+    /** 相手がもうスタブなら true([sync] が判定する)。 */
+    fun isStubRunning(): Boolean = stubRunning
+
+    /** RAM へスタブを送り込んで走らせる。以後の書き込みが速くなる。既に走っていれば何もしない。 */
     fun runStub(stub: EspStub) {
+        if (stubRunning) { return }
         for ((data, addr) in listOf(stub.text to stub.textStart, stub.data to stub.dataStart)) {
             if (data.isEmpty()) continue
             val blocks = (data.size + RAM_BLOCK - 1) / RAM_BLOCK
@@ -164,17 +172,32 @@ class EspFlasher(private val io: EspTransport) {
         checkCommand(FLASH_DEFL_END, le32(1), 0, 5000)
     }
 
-    /** 焼いたものが本当に載っているかを端末側の MD5 で確かめる。 */
-    fun verify(offset: Int, image: ByteArray): Boolean {
-        val want = MessageDigest.getInstance("MD5").digest(image)
-            .joinToString("") { "%02x".format(it) }
-        val res = command(SPI_FLASH_MD5, le32(offset, image.size, 0, 0), 0, 120000).second
-        val body = res.copyOfRange(0, maxOf(0, res.size - STATUS_BYTES))
-        val got = when {
-            body.size >= 32 -> String(body, 0, 32)                       // ROM は16進文字列
+    /**
+     * 端末に載っている中身の MD5 を、端末自身に計算させて聞く。
+     * 応答はスタブなら生16バイト、ROM なら16進32文字で返ってくる。
+     */
+    /** MD5 の応答本体をそのまま返す(形が読めないときの手掛かり用)。 */
+    fun flashMd5Raw(offset: Int, size: Int): ByteArray =
+        command(SPI_FLASH_MD5, le32(offset, size, 0, 0), 0, 120000).second
+
+    /**
+     * 端末が計算した MD5。応答の形は相手によって変わる:
+     *   ROM  … 16進32文字 + 末尾2バイトの成否
+     *   スタブ … 生16バイト + 末尾2バイトの成否
+     */
+    fun flashMd5(offset: Int, size: Int): String {
+        val body = checkCommand(SPI_FLASH_MD5, le32(offset, size, 0, 0), 0, 120000)
+        return when {
+            body.size >= 32 -> String(body, 0, 32).lowercase()
             body.size >= 16 -> body.copyOfRange(0, 16).joinToString("") { "%02x".format(it) }
             else -> ""
         }
+    }
+
+    /** 焼いたものが本当に載っているかを端末側の MD5 で確かめる。 */
+    fun verify(offset: Int, image: ByteArray): Boolean {
+        val want = md5hex(image)
+        val got = flashMd5(offset, image.size)
         return got.isNotEmpty() && got.equals(want, ignoreCase = true)
     }
 
@@ -368,6 +391,10 @@ class EspFlasher(private val io: EspTransport) {
         const val RTC_OPTION1 = 0x6000812C
         const val FORCE_DOWNLOAD_BOOT = 0x1
 
+        /** MD5 を16進文字列で。端末が言う値と突き合わせるため。 */
+        fun md5hex(data: ByteArray): String =
+            MessageDigest.getInstance("MD5").digest(data).joinToString("") { "%02x".format(it) }
+
         /** ROM の検査値。1バイトずつ排他的論理和を取るだけ。 */
         fun checksum(data: ByteArray): Int {
             var s = CHECKSUM_MAGIC
@@ -392,16 +419,22 @@ class EspFlasher(private val io: EspTransport) {
 
         class Response(val op: Int, val value: Int, val body: ByteArray)
 
-        /** 応答の先頭は 0x01。違うもの・短いものは黙って捨てる(ROM は雑音も混ぜてくる)。 */
+        /**
+         * 応答の先頭は 0x01。違うもの・短いものは黙って捨てる(ROM は雑音も混ぜてくる)。
+         *
+         * 【長さの欄を信用しないこと(2026-08-26 実機で判明)】ヘッダには長さが入っているが、
+         *  中身より短い値を入れてくる相手が居る。実機のスタブは MD5(16バイト)+成否(2バイト)
+         *  =18バイトを送りながら、長さの欄には 2 と書いてきた。長さで切ると MD5 の先頭2バイト
+         *  だけが残り、それを成否と読んで「書き込んだ中身が一致しません」という嘘の失敗になる。
+         *  esptool も長さの欄は使わず、頭8バイトの後ろを丸ごと本体として扱っている。
+         */
         fun parseResponse(pkt: ByteArray): Response? {
             if (pkt.size < 8) return null
             if (pkt[0].toInt() != 0x01) return null
             val op = pkt[1].toInt() and 0xFF
-            val len = (pkt[2].toInt() and 0xFF) or ((pkt[3].toInt() and 0xFF) shl 8)
             var value = 0
             for (k in 0 until 4) value = value or ((pkt[4 + k].toInt() and 0xFF) shl (8 * k))
-            val avail = minOf(len, pkt.size - 8)
-            return Response(op, value, pkt.copyOfRange(8, 8 + maxOf(0, avail)))
+            return Response(op, value, pkt.copyOfRange(8, pkt.size))
         }
 
         /** SLIP の包み。0xC0 で挟み、中の 0xC0 と 0xDB を逃がす。 */

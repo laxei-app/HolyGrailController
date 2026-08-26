@@ -53,8 +53,12 @@
              USB_DEVICE_ATTACHED を受けるのは、挿したときに権限を貰っておくため。
              端末の PID は状態で変わる(工場出荷=8120 / ダウンロードモード・本体=1001)ので、
              device_filter.xml に両方を並べてある。 -->
+        <!-- singleTop にしておくこと。書き込みの途中で端末はダウンロードモードへ入るために
+             再起動し、そのたびに USB が出直す。標準の起動方法だと画面が作り直され、
+             経過の記録が消えて何が起きたのか追えなくなる(実機で踏んだ)。 -->
         <activity
             android:name="app.laxei.holygrail.EdgeFlashActivity"
+            android:launchMode="singleTop"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
