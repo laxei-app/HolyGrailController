@@ -100,4 +100,8 @@ dependencies {
     implementation("com.jaredrummler:colorpicker:1.1.0")   // 色の設定(文字/背景)のカラーピッカー
     implementation("com.google.android.gms:play-services-code-scanner:16.1.0")  // エッジ設定QR(PoP)スキャン §8.2.2(GMSコードスキャナ。Camera2ベースで実機堅牢)
     implementation("org.osmdroid:osmdroid-android:6.1.20")  // 撮影場所の地図選択(OpenStreetMap。APIキー不要・無料)
+
+    // USB書き込み(EspFlasher)の枠組み・パケット組み立て・圧縮を、実機もスマホも使わずに
+    //  確かめるための単体試験。テストは app/src/test/java 配下(既定の場所)に置く。
+    testImplementation("junit:junit:4.13.2")
 }
