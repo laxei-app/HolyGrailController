@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- エッジ端末へ USB でファームを書き込む画面(2026-08-26)。
+     買ってきたばかりの端末には自分たちのファームが入っていないので、OTA では焼けない。
+     ここだけが「開封した端末を使える状態にする」唯一の道になる。
+     まず「調べる」で1バイトも書かずに素性を確かめ、そのあと「書き込む」。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="#1565C0"
+        android:gravity="center_vertical"
+        android:padding="8dp">
+        <ImageView android:id="@+id/fl_back" android:layout_width="32dp" android:layout_height="32dp"
+            android:clickable="true" android:focusable="true" android:src="@drawable/ic_back_r" />
+        <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+            android:gravity="center" android:text="エッジ端末へ書き込み (USB)" android:textColor="#FFFFFF"
+            android:textSize="20sp" android:textStyle="bold" />
+        <View android:layout_width="32dp" android:layout_height="32dp" />
+    </LinearLayout>
+
+    <!-- つないだ端末の状態 -->
+    <TextView android:id="@+id/fl_state"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:padding="12dp" android:textSize="16sp"
+        android:text="USB ケーブルでエッジ端末をつないでください。" />
+
+    <LinearLayout
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:padding="8dp">
+        <Button android:id="@+id/fl_probe"
+            android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+            android:text="調べる" />
+        <Button android:id="@+id/fl_write"
+            android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+            android:text="書き込む" />
+    </LinearLayout>
+
+    <!-- 「調べる」は1バイトも書かないので、いつ押しても端末を壊さない -->
+    <TextView
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:paddingStart="12dp" android:paddingEnd="12dp" android:paddingBottom="4dp"
+        android:textSize="12sp" android:textColor="#9E9E9E"
+        android:text="「調べる」は端末に何も書き込みません。" />
+
+    <ProgressBar android:id="@+id/fl_bar"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginStart="12dp" android:layout_marginEnd="12dp"
+        android:max="100" android:progress="0" />
+
+    <ScrollView android:id="@+id/fl_logScroll"
+        android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+        <TextView android:id="@+id/fl_log"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:padding="12dp" android:textSize="13sp" android:typeface="monospace"
+            android:textIsSelectable="true" />
+    </ScrollView>
+</LinearLayout>

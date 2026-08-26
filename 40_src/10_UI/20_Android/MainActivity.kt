@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import android.content.ContentValues
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.net.ConnectivityManager
@@ -790,6 +791,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 2026-08-08 UI依頼: 「登録」と「設定」を1画面へ統合した(登録は画面内の
         // 「＋ 新規エッジ端末」から行う)。
         gearItem(box, "エッジ端末設定") { openEdgeSettings() }
+        // 買ってきたばかりの端末には自分たちのファームが入っていない。OTA も STA での自己更新も
+        //  「今動いているファームが受け取って書く」仕組みなので最初の1回には使えず、
+        //  USB で焼くここだけが「開封した端末を使える状態にする」道になる(2026-08-26)。
+        gearItem(box, "ファーム書き込み(USB)") {
+            startActivity(Intent(this, EdgeFlashActivity::class.java))
+        }
         // 通信路の切替。エッジは常に Wi-Fi と BLE の両方で待ち受けているので、
         // ここを倒すだけで切り替わる(エッジへ知らせる必要は無い)。
         //  ・屋外でエッジが AP のときは BLE にすると SSID を切り替えずに全台と話せる

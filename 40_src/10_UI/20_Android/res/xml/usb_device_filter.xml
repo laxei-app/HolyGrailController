@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- USB で挿されたときにこのアプリを候補に出す相手(2026-08-26)。
+     10進で書く決まりなので、16進は括弧に添える。
+
+     エッジ端末は状態によって別の機器に見える(実測)。
+     Android は PID が変わると別物として扱うので、全部並べておかないと、
+     ダウンロードモードへ入った瞬間に権限を取り直すことになる。
+       0x303A:0x8120  買ってきたばかり(M5 の工場出荷ファーム。TinyUSB)
+       0x303A:0x1001  ROM のダウンロードモード / 私たちのファーム(USB-Serial/JTAG) -->
+<resources>
+    <usb-device vendor-id="12346" product-id="33057" />   <!-- 0x303A:0x8121 予備 -->
+    <usb-device vendor-id="12346" product-id="33056" />   <!-- 0x303A:0x8120 工場出荷 -->
+    <usb-device vendor-id="12346" product-id="4097" />    <!-- 0x303A:0x1001 DLモード/本体 -->
+</resources>

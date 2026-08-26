@@ -104,4 +104,7 @@ dependencies {
     // USB書き込み(EspFlasher)の枠組み・パケット組み立て・圧縮を、実機もスマホも使わずに
     //  確かめるための単体試験。テストは app/src/test/java 配下(既定の場所)に置く。
     testImplementation("junit:junit:4.13.2")
+    // 単体試験では android.jar が中身の無い差し替え版になり org.json が例外を投げるので、
+    //  本物を試験の側だけに載せる(目録の読み取りを実機なしで確かめるため)。
+    testImplementation("org.json:json:20240303")
 }

@@ -47,5 +47,21 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 買ってきたエッジ端末へ USB でファームを書き込む画面。
+             新品には自分たちのファームが入っていないため OTA では焼けず、ここが唯一の道。
+             USB_DEVICE_ATTACHED を受けるのは、挿したときに権限を貰っておくため。
+             端末の PID は状態で変わる(工場出荷=8120 / ダウンロードモード・本体=1001)ので、
+             device_filter.xml に両方を並べてある。 -->
+        <activity
+            android:name="app.laxei.holygrail.EdgeFlashActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/usb_device_filter" />
+        </activity>
     </application>
 </manifest>
