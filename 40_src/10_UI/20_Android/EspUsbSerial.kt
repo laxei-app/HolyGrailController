@@ -23,10 +23,12 @@ import java.io.ByteArrayOutputStream
 //   303A:1001  ROM のダウンロードモード(USB-Serial/JTAG)
 //   303A:1001  私たちのファーム(同じ USB-Serial/JTAG を使っている)
 //
-// 【新品は自動でダウンロードモードに入れられない(実測)】工場出荷のファームは DTR/RTS を
-//  見ておらず、そもそもホストからの書き込みを受け取らない。**電源ボタン長押し2秒**
-//  (LED が点滅する)で手で入れてもらうしかない。私たちのファームが入った後は
-//  [usbJtagResetToDownload] で自動的に入れられる。
+// 【新品で自動で入れるかは機種で違う(2026-08-26 両機で実測)】
+//  CoreS3 … 工場出荷FWでも 303A:1001(ハードウェアの USB-Serial/JTAG)なので
+//           [usbJtagResetToDownload] だけで入る。ボタン操作は要らない。
+//  StickS3 … 工場出荷FWは 303A:8120(TinyUSB)で DTR/RTS を見ておらず、そもそもホストからの
+//           書き込みを受け取らない。**電源ボタン長押し2秒**で手で入れてもらうしかない。
+//  どちらも私たちのファームが入った後は 303A:1001 になるので自動で入れられる。
 
 object EspUsb {
     const val VID_ESPRESSIF = 0x303A

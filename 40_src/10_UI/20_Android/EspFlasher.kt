@@ -18,8 +18,12 @@ import java.util.zip.Deflater
 //    ダウンロードモードから抜けず、無反応のままになる(「焼けたのに起動しない」に見える)。
 //    RTC のウォッチドッグを仕掛けて自分を蹴らせるのが正解。
 //  ・USB-Serial/JTAG は USB なので **ボーレートは意味を持たない**。速度変更は要らない。
-//  ・新品(工場出荷FW)は自動でダウンロードモードに入れられない。**電源ボタン長押し2秒**
-//    (LEDが点滅する)で手で入れてもらう。私たちのファームが入った後は自動で入れる。
+//  ・**ダウンロードモードへ自動で入れるかは機種で違う**(2026-08-26 両機で実測)。
+//    CoreS3 は工場出荷FWでもハードウェアの USB-Serial/JTAG(303A:1001)なので、
+//    リセットをチップ側が処理してくれて**ボタン操作なしで入る**。
+//    StickS3 の工場出荷FWは TinyUSB(303A:8120)で DTR/RTS を見ておらず入れない。
+//    **電源ボタン長押し2秒**(LEDが点滅する)で手で入れてもらう。
+//    どちらも私たちのファームが入った後は自動で入る(303A:1001 になるため)。
 //  ・機種はフラッシュ容量で見分ける(8MB=StickS3 / 16MB=CoreS3)。ESP32-S3 は Chip ID を
 //    持たないので MAC しか出ない。容量は1バイトも書かずに読める。
 
@@ -73,7 +77,7 @@ class EspFlasher(private val io: EspTransport) {
 
     /**
      * ROM ローダと同期する。相手がダウンロードモードに居ることが前提。
-     * 新品は自動では入れないので、入っていなければ呼ぶ側が案内を出すこと。
+     * 入っていなければ呼ぶ側で自動投入(DTR/RTS)を試し、それでも駄目なら案内を出すこと。
      */
     fun sync(retries: Int = 10) {
         val payload = ByteArray(36).also {
@@ -172,10 +176,6 @@ class EspFlasher(private val io: EspTransport) {
         checkCommand(FLASH_DEFL_END, le32(1), 0, 5000)
     }
 
-    /**
-     * 端末に載っている中身の MD5 を、端末自身に計算させて聞く。
-     * 応答はスタブなら生16バイト、ROM なら16進32文字で返ってくる。
-     */
     /** MD5 の応答本体をそのまま返す(形が読めないときの手掛かり用)。 */
     fun flashMd5Raw(offset: Int, size: Int): ByteArray =
         command(SPI_FLASH_MD5, le32(offset, size, 0, 0), 0, 120000).second
