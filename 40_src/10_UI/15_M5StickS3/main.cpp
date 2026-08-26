@@ -46,6 +46,7 @@ static volatile bool g_blWake = false;
 #include "batteryGuard.h"	// 限界での自動シャットダウン
 #include "edgeHeap.h"	// 内部RAMの推移(開始/停止で戻らない量を見る)
 #include "edgeApEvents.h"	// SoftAP への参加/離脱(理由コード付き)をログへ
+#include "edgeApLeases.h"	// 配ったIPを覚えて次回の配布範囲を外す(IP重複の防止)
 #include "osFile.h"
 #include "osClock.h"
 #include "debugOut.h"
@@ -914,6 +915,10 @@ static void renderApInfo(void)
 static void startApAndEtp(void)
 {
 	ensureApCreds();
+	// 【DHCPの配布位置(2026-08-26)】ESP32 の DHCP サーバは貸出表をRAMにしか持たないので、
+	//  再起動すると必ず 192.168.4.2 から配り直し、電源が落ちていなかったカメラと同じIPを
+	//  二重に配る(実機で再現済み)。前に配った先を記録から読み、そこを外した位置から配る。
+	const IPAddress leaseStart = edgeApLeases::startIp();
 	// 【立たなかったら諦めない(2026-08-17)】ここで失敗すると AP が無く、参加情報の画面も出ず
 	//  カメラも繋がらない。屋外ではBLE以外の到達手段が消えるので、数回やり直し、それでも
 	//  駄目なら資格を端末固有の既定値へ作り直して最後にもう一度試す(必ずAPを立てる)。
@@ -921,14 +926,16 @@ static void startApAndEtp(void)
 	for (int i = 0; i < 3 && !apUp; ++i)
 	{
 		if (i) { delay(300); }
-		apUp = wifiConnect::startAp(g_apSsid.c_str(), g_apPass.c_str(), 10);
+		apUp = wifiConnect::startAp(g_apSsid.c_str(), g_apPass.c_str(), 10,
+		                            (uint32_t)leaseStart);
 		if (!apUp) { Serial.printf("[AP] softAP start failed (try %d/3) ssid=%s (%u chars) pass=%u chars\n",
 		                           i + 1, g_apSsid.c_str(), (unsigned)g_apSsid.size(), (unsigned)g_apPass.size()); }
 	}
 	if (!apUp)
 	{
 		g_apSsid.clear(); g_apPass.clear(); ensureApCreds();	// 既定値へ作り直す(NVSも更新)
-		apUp = wifiConnect::startAp(g_apSsid.c_str(), g_apPass.c_str(), 10);
+		apUp = wifiConnect::startAp(g_apSsid.c_str(), g_apPass.c_str(), 10,
+		                            (uint32_t)leaseStart);
 		Serial.printf("[AP] retry with default creds ssid=%s -> %s\n", g_apSsid.c_str(), apUp ? "up" : "still FAILED");
 	}
 	if (apUp)
@@ -1137,6 +1144,9 @@ void setup(void)
 	hge_loadFixedPlan();
 	loadRecvPlans();
 	loadNameBitmaps();
+	// APの参加/離脱/貸出を記録する。**AP起動より前に**登録しないと、最初に配った
+	//  IPのイベントを取り逃がして記録に穴が空く(2026-08-26)。
+	edgeApEvents::start();
 	if (g_netMode == "ap") { startApAndEtp(); }
 	// 起動したことと理由を1行残す(2026-08-21)。落ちた原因を後から追えるようにする。
 	//  時計が使えるようになってから呼ぶ(APモードは startApAndEtp が RTC を復元済み)。
@@ -1145,7 +1155,6 @@ void setup(void)
 	//  タスクスタックを置ける内部RAM は確立時に 18KB まで細るため。
 	//  ログより先に呼ぶ(以降の確保を全部対象にしたい)。
 	edgeHeap::useExternalAbove(256);
-	edgeApEvents::start();	// APの参加/離脱を記録(3台目が切れる件の切り分け)
 	edgeBoot::logMarker(g_netMode.c_str(), hge_version());
 	g_state = hge_getState();
 	redraw(false);
@@ -1224,7 +1233,7 @@ void loop(void)
 	// 遅延アームのポンプ(§7.4): 予約計画の開始スレッドを期日(窓90秒前)に生成する。毎秒1回で十分。
 	{
 		static uint32_t lastPump = 0;
-		if (now - lastPump >= 1000) { lastPump = now; hge_pump(); edgeHeap::pump((int)g_state); }
+		if (now - lastPump >= 1000) { lastPump = now; hge_pump(); edgeHeap::pump((int)g_state); edgeApLeases::pump(); }
 	}
 
 	// 項目2: 終わった撮影計画をエッジから自動削除する。
@@ -1285,6 +1294,10 @@ void loop(void)
 			}
 		}
 		else if (c == 'F') { Serial.printf("[FS] backend=%s\n", osfile::backendName()); }
+		else if (c == 'L')	// 診断: DHCPで配ったIPの記録(次に配り始める位置も出す)
+		{
+			edgeApLeases::dump();
+		}
 		else if (c == 'n')	// 診断: 自分のAPに繋がっている局のIP一覧(DHCPの貸出先)
 		{	// カメラがAPに居るのにSSDPへ答えないのか、そもそも居ないのかを切り分ける。
 			auto ips = netThread::neighborHostIps();

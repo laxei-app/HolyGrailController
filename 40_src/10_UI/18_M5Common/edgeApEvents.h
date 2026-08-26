@@ -17,6 +17,7 @@
 #include <WiFi.h>
 #include <cstdio>
 #include "dataManager.h"
+#include "edgeApLeases.h"	// 配った IP を覚えて次回の配布範囲を外す(IP重複の防止)
 
 namespace edgeApEvents
 {
@@ -42,9 +43,14 @@ namespace edgeApEvents
 		}
 		else if (id == ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED)
 		{
-			std::snprintf(d, sizeof(d), "lease ip=%s",
-			              IPAddress(info.wifi_ap_staipassigned.ip.addr).toString().c_str());
+			// このイベントは配った IP と**相手の MAC**の両方をくれる(esp-idf 5 / arduino 3.x)。
+			//  MAC があるので「同じ端末が別の IP をもらった=古い IP は空いた」と判断できる。
+			const uint8_t* m = info.wifi_ap_staipassigned.mac;
+			std::snprintf(d, sizeof(d), "lease ip=%s mac=%02X:%02X:%02X:%02X:%02X:%02X",
+			              IPAddress(info.wifi_ap_staipassigned.ip.addr).toString().c_str(),
+			              m[0], m[1], m[2], m[3], m[4], m[5]);
 			dataManager::logEvent("APSTA", d);
+			edgeApLeases::onAssigned(m, info.wifi_ap_staipassigned.ip.addr);
 		}
 	}
 

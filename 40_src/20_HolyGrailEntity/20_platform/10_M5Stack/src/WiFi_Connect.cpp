@@ -1,6 +1,8 @@
 ﻿#include "commonM5.h"
 #include <WiFi.h>
 #include <esp_wifi.h>	// esp_wifi_set_inactive_time(無通信で追い出すまでの時間)
+#include <esp_netif.h>	// DHCP の配布範囲を読み戻して確かめる
+#include "dhcpserver/dhcpserver.h"	// dhcps_lease_t
 #include "WiFi_Connect.h"
 
 // wifi の初期化をおこなう
@@ -47,9 +49,22 @@ bool wifiConnect::connect(const char * ssid, const char * passphrase)
 // エッジ自身をアクセスポイントにする(純AP。上流には繋がない=AP+STA共存は行わない)。
 // カメラ(EOS R10 をインフラ参加)とスマホがこのAPに参加し、CCAPI/ETP を同一サブネットで行う。
 // SoftAP 既定サブネット=192.168.4.0/24、自局=192.168.4.1、内蔵DHCPがクライアントへ配布。
-bool wifiConnect::startAp(const char * ssid, const char * passphrase, int maxConn)
+bool wifiConnect::startAp(const char * ssid, const char * passphrase, int maxConn,
+                          uint32_t dhcpStart)
 {
     WiFi.mode(WIFI_AP);
+    // 【DHCPの配布範囲(2026-08-26)】呼び出し側が「前に配った先」を避けた開始位置をくれたら、
+    //  SoftAP を立てる前に入れておく。softAPConfig の4番目が配布開始IPで、範囲は
+    //  start〜start+10 の11個に固定される(NetworkInterface::config)。
+    //  ここを既定のままにすると、再起動のたびに 192.168.4.2 から配り直して、
+    //  電源が落ちていなかったカメラとIPがぶつかる。
+    if (dhcpStart != 0)
+    {
+        const bool cok = WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1),
+                                           IPAddress(255, 255, 255, 0), IPAddress(dhcpStart));
+        Serial.printf("[AP] dhcp pool start=%s -> %s\n",
+                      IPAddress(dhcpStart).toString().c_str(), cok ? "ok" : "FAILED");
+    }
     // channel=1、SSID可視、maxConn(スマホ+カメラ2=3以上を確保)。pass 空文字ならオープン。
     bool ok = WiFi.softAP(ssid, (passphrase && passphrase[0]) ? passphrase : nullptr,
                           1 /*channel*/, 0 /*hidden*/, maxConn);
@@ -61,6 +76,20 @@ bool wifiConnect::startAp(const char * ssid, const char * passphrase, int maxCon
         //  伸ばしすぎると居なくなった端末が接続一覧に残り接続枠(最大4)を占めるので1時間にする。
         //  この設定はフラッシュに保存されないので AP 起動のたびに呼ぶ。
         esp_wifi_set_inactive_time(WIFI_IF_AP, 3600);
+        // 配布範囲は**読み戻して**残す(2026-08-26)。softAP() が設定を上書きしないか、
+        //  推測ではなく実値で確かめられるようにする。IP重複の調査で効く。
+        {
+            esp_netif_t* ni = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+            dhcps_lease_t ls{};
+            if (ni != nullptr &&
+                esp_netif_dhcps_option(ni, ESP_NETIF_OP_GET, ESP_NETIF_REQUESTED_IP_ADDRESS,
+                                       &ls, sizeof(ls)) == ESP_OK)
+            {
+                Serial.printf("[AP] dhcp range: %s -- %s (enable=%d)\n",
+                              IPAddress(ls.start_ip.addr).toString().c_str(),
+                              IPAddress(ls.end_ip.addr).toString().c_str(), (int)ls.enable);
+            }
+        }
         // 接続枠の実効値を残す(2026-08-25)。softAP へは maxConn を渡しているが、
         //  フレームワークのビルド設定(CONFIG_WIFI_AP_MAX_STATIONS)で下げられることがある。
         //  パノラマ撮影で何台まで AP に入れるかはこの値が決めるので、推測せず実値を見る。
