@@ -52,6 +52,9 @@ public:
 	// UI の「追加リスト」表示用 JSON(配列)。読込失敗時は出荷時フォールバック。
 	static std::string masterCamerasJson(void);
 	static std::string masterLensesJson(void);
+	// 一覧を読み直す(公開リポジトリから新しいものを取り込んだ後に呼ぶ)。
+	//  次に一覧を求められたときに /master から読み直す。
+	static void reloadMaster(void);
 
 	// --- 所持機材(ユーザー資産。/asset/ownedCameras.json・ownedLenses.json) ---
 	static std::string ownedCamerasJson(void);

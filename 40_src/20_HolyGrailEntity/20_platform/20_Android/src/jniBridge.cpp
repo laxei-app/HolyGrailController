@@ -470,6 +470,10 @@ JNIEXPORT jstring JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeGetOwnedLenses(JNIEnv* env, jobject /*thiz*/)
 { return callBufGetter(env, hge_getOwnedLensesJson); }
 
+JNIEXPORT void JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeReloadMaster(JNIEnv* /*env*/, jobject /*thiz*/)
+{ hge_reloadMaster(); }
+
 JNIEXPORT jstring JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeOwnedCameraAuthPass(JNIEnv* env, jobject /*thiz*/, jstring name)
 {

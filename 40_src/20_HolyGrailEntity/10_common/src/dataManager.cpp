@@ -241,6 +241,52 @@ hgc::exposureSmoothing dataManager::factorySmoothing(void)
 }
 
 // 固定撮影計画の出荷時設定部分(場所=東京・機材=EOS R10 + 16mm 等)。
+// 出荷時の機材(EOS R10 + SIGMA 12mm)。**機材マスタと同じ値**にする。
+//  ここは2つの用途で使う。食い違うと後から必ず混乱するので、1か所にまとめて両方から呼ぶ。
+//   ・固定撮影計画の初期値(factoryFixedPlan)
+//   ・マスタが読めないときの代わり(masterFallback)
+//  【meterLv と一覧を落とさないこと(2026-08-27)】以前ここは maker/model/センサー寸法しか
+//   埋めておらず、iso/ss の一覧が空で meterLv も false だった。R10 はサムネイル取得が
+//   電源投入あたり200回程度で止まる機種なので、false のままだと一晩持たない。
+static void factoryCamera(hgc::camera& c)
+{
+	c.maker = "Canon";
+	c.model = "EOS R10";
+	c.name  = "EOS R10";
+	c.sensorSize  = 22.3;	// センサー横[mm]
+	c.sensorSizeV = 15.0;	// センサー縦[mm]
+	c.sensorPixel = 6000;
+	c.meterLv     = true;	// ライブビュー主体で測る機種か
+	c.isoList = {
+		"100", "125", "160", "200", "250", "320", "400", "500",
+		"640", "800", "1000", "1250", "1600", "2000", "2500", "3200",
+		"4000", "5000", "6400", "8000", "10000", "12800", "16000", "20000",
+		"25600", "32000"
+	};
+	c.ssList = {
+		"1/4000", "1/3200", "1/2500", "1/2000", "1/1600", "1/1250",
+		"1/1000", "1/800", "1/640", "1/500", "1/400", "1/320",
+		"1/250", "1/200", "1/160", "1/125", "1/100", "1/80",
+		"1/60", "1/50", "1/40", "1/30", "1/25", "1/20",
+		"1/15", "1/13", "1/10", "1/8", "1/6", "1/5",
+		"1/4", "1/3", "0.4", "0.5", "0.6", "0.8",
+		"1", "1.3", "1.6", "2", "2.5", "3.2",
+		"4", "5", "6", "8", "10", "13",
+		"15", "20", "25", "30", "Bulb"
+	};
+}
+
+static void factoryLens(hgc::lens& l)
+{
+	l.maker       = "Sigma";
+	l.name        = "12mm F1.4 DC DN | Contemporary";	// マスタと同じ綴りにすること(名前で引けなくなる)
+	l.focalLength = 12.0;
+	l.fn          = 1.4;
+	l.fnMax       = 16.0;
+	l.hasContact  = true;
+	l.fisheye     = false;
+}
+
 void dataManager::factoryFixedPlan(hgc::cs& plan)
 {
 	plan.name = "FixedPlan";
@@ -250,17 +296,9 @@ void dataManager::factoryFixedPlan(hgc::cs& plan)
 	plan.place.longitude = 139.767;
 	plan.place.altitude  = 40.0;
 
-	plan.camera.maker = "Canon";
-	plan.camera.model = "EOS R10";
-	plan.camera.name  = "EOS R10";
-	plan.camera.sensorSize  = 22.4;	// センサー横[mm](APS-C)
-	plan.camera.sensorSizeV = 14.9;	// センサー縦[mm]
-	plan.camera.sensorPixel = 6000;
+	factoryCamera(plan.camera);
+	factoryLens(plan.lens);
 
-	plan.lens.maker = "Sigma";
-	plan.lens.name  = "SIGMA 12mm F1.4 DC";
-	plan.lens.focalLength = 12.0;
-	plan.lens.fn = 1.4;
 
 	plan.interval  = 15.0;	// 撮影周期[秒](EOS最小)
 	plan.azimuth   = 90.0;	// 東向き(日の出方向)
@@ -287,12 +325,10 @@ namespace
 	// 出荷時フォールバック(マスタ未配置時)。最低限 EOS R10 + 16mm が選べるようにする。
 	void masterFallback(void)
 	{
-		hgc::cs fp;
-		dataManager::factoryFixedPlan(fp);
-		g_masterCameras.clear();
-		g_masterCameras.push_back(fp.camera);
-		g_masterLenses.clear();
-		g_masterLenses.push_back(fp.lens);
+		hgc::camera c; factoryCamera(c);
+		hgc::lens   l; factoryLens(l);
+		g_masterCameras.clear(); g_masterCameras.push_back(std::move(c));
+		g_masterLenses.clear();  g_masterLenses.push_back(std::move(l));
 	}
 
 	void ensureMaster(void)
@@ -521,6 +557,14 @@ namespace
 		}
 		return b;
 	}
+}
+
+// 一覧を読み直す。取り込んだ直後に呼ばれ、次の要求で /master から読み直す。
+void dataManager::reloadMaster(void)
+{
+	g_masterLoaded = false;
+	g_masterCameras.clear();
+	g_masterLenses.clear();
 }
 
 std::string dataManager::masterCamerasJson(void)

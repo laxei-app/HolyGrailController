@@ -95,6 +95,9 @@ object HgeNative {
     external fun nativeGetOwnedLenses(): String
     // 所持カメラのダイジェスト認証パスワードを平文で取得(編集画面の表示用。JSON側は暗号文)
     external fun nativeOwnedCameraAuthPass(name: String): String
+
+    // 機材マスタを読み直す(公開リポジトリから取り込んだ直後に呼ぶ)
+    external fun nativeReloadMaster()
     external fun nativeAddOwnedCamera(name: String): Int
     external fun nativeAddOwnedLens(name: String): Int
     external fun nativeRemoveOwnedCamera(name: String): Int

@@ -3126,6 +3126,13 @@ int32_t hge_pump(void)
 // このシリアルの個体を、今動いているセッションが使っているか(2026-08-23)。
 //  在否監視が「撮影中のカメラには触らない」を判定するために使う。
 // エッジのUI層が起動時に呼ぶ(スマホ役は呼ばない=STA相当の上限)。
+// 機材マスタを読み直す(取り込んだ直後に呼ばれる)。
+int32_t hge_reloadMaster(void)
+{
+	dataManager::reloadMaster();
+	return ERR_HGC_OK;
+}
+
 int32_t hge_setApMode(int32_t ap)
 {
 	g_apMode = (ap != 0);

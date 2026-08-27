@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "revision": 1,
+  "updated": "2026-08-27",
+  "files": [
+    {
+      "name": "cameras.json",
+      "size": 13559,
+      "sha256": "b9836eaad3ad25a8547a854b764b81d7f118b0cff887e2117d4c6788ad65de20",
+      "count": 18
+    },
+    {
+      "name": "lenses.json",
+      "size": 40620,
+      "sha256": "67a8079d03afad97f4d9f59c534cf72ae3a281f06cf87829e048ee7f318137ae",
+      "count": 150
+    }
+  ]
+}

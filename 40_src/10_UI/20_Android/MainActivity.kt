@@ -297,7 +297,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         acquireMulticastLock()   // 3b: ネイティブSSDP受動待ち受けがマルチキャストを受信するため(無いと破棄される)
 
         val baseDir = getExternalFilesDir(null) ?: filesDir
-        copyMasterAssets(baseDir)   // インストール同梱の機材マスタを /master へ展開(nativeInit より前)
+        // 機材マスタ: 同梱は**同梱のほうが新しいときだけ**置く(取り込んだ一覧を消さない)。
+        GearMaster.installBundledIfNewer(this, baseDir)   // nativeInit より前
+        startGearMasterCheck(baseDir)                     // 1日1回、公開リポジトリを見に行く
         HgeNative.nativeSetLogDir(baseDir.absolutePath)
         HgeNative.nativeInit()
         // スマホ⇄エッジの通信路(2026-08-14 指示)。選ぶのはスマホだけ。エッジは常に両方で待ち受ける。
@@ -1270,24 +1272,23 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  機材マスタ・所持機材(600/620/622/630/632。データ構造仕様書43 §5.5〜5.9 / §7.6)
     // ============================================================
 
-    // インストール同梱の assets/master/*.json を /master へコピーする。
-    // osfile のベース = getExternalFilesDir(null) なので dataManager は /master で読める。
-    // 同梱アセットを常に上書きコピーする: lenses_list.json 等の機材マスタ(fisheye 等)を
-    // 編集→ビルドすれば、次回起動で即反映される(「ファイルを変更すれば即反映」)。
-    // (将来サーバ更新を入れる場合は、内容差分やバージョンで上書き可否を判断する。)
-    private fun copyMasterAssets(baseDir: java.io.File) {
-        try {
-            val dir = java.io.File(baseDir, "master")
-            if (!dir.exists()) dir.mkdirs()
-            for (name in listOf("cameras.json", "lenses.json")) {
-                val out = java.io.File(dir, name)
-                assets.open("master/$name").use { ins ->
-                    out.outputStream().use { os -> ins.copyTo(os) }
-                }
+    // 機材マスタ(カメラ/レンズ)を1日1回だけ公開リポジトリへ見に行く。
+    //  ・最初の起動でしか動かない(1日1回)。撮影中に通信を増やさないため
+    //  ・失敗は握りつぶす。圏外でもエッジのAPに繋いでいても、手元の一覧で動き続ける
+    //  ・取り込みは版(revision)が手元より大きいときだけ。構造(schema)が読めなければ触らない
+    private fun startGearMasterCheck(baseDir: java.io.File) {
+        if (GearMaster.checkedToday(this)) return
+        Thread {
+            // 何が起きたかは記録に残す。黙って失敗すると「更新されない」原因を追えない。
+            val rev = GearMaster.fetchIfNewer(this, baseDir) { m ->
+                android.util.Log.i("GearMaster", m)
             }
-        } catch (e: Exception) {
-            // マスタ未配置でも entity 側の出荷時フォールバックで最低限動く。
-        }
+            GearMaster.markChecked(this)
+            if (rev != null) {
+                // 取り込めたら Entity に読み直させる(次に一覧を開いたときから新しくなる)
+                runOnUiThread { HgeNative.nativeReloadMaster() }
+            }
+        }.start()
     }
 
     // --- 選択状態と詳細編集の参照 ---

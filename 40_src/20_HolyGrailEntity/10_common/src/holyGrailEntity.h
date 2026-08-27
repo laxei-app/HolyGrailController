@@ -115,6 +115,10 @@ int32_t hge_setPlanSubCameras(const char* namesJson);
 //  スマホ役は呼ばなくてよい(既定=false=STA相当の上限)。
 int32_t hge_setApMode(int32_t ap);
 
+// 機材マスタ(/master のカメラ/レンズ一覧)を読み直す。
+//  公開リポジトリから新しいものを取り込んだ直後に呼ぶ。次に一覧を求められたときに読み直す。
+int32_t hge_reloadMaster(void);
+
 // この端末がパノラマ撮影で扱えるカメラ台数(主カメラを含む合計)。
 int32_t hge_maxPanoramaCameras(void);
 
