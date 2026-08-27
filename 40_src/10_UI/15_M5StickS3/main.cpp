@@ -803,6 +803,11 @@ static void enterProv(void)
 	char pop[9];
 	for (int i = 0; i < 8; ++i) { uint32_t r = esp_random() % 36; pop[i] = (r < 10) ? char('0' + r) : char('A' + (r - 10)); }
 	pop[8] = 0;
+	// 【AP参加情報を閉じてから QR を出す(2026-08-27)】APモードで電源を入れると SSID と
+	//  パスワードの画面(g_apInfoMode)が出たままになる。描画はそちらが優先なので、
+	//  スマホから QR を要求しても画面が変わらず、人が画面を触って閉じるまで QR が出ない。
+	//  スマホの前に人が居るとは限らない(屋外の三脚の上など)ので、ここで閉じる。
+	g_apInfoMode = false;
 	g_pop = pop; g_provMode = true; g_dirty = true;
 }
 // スマホがQRを要求した=人が目の前で操作している。消灯していたら点ける(2026-08-20)。
