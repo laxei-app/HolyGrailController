@@ -133,7 +133,9 @@ object EdgeFirmware {
      *
      * 見るもの:
      *  ・+0 の magic_word が 0xABCD5432 か(そもそも app_desc の場所か)
-     *  ・+176 の検査値が version+name の CRC32 と合うか(私たちが刻んだものか)
+     *  ・+180 の検査値が version+name の CRC32 と合うか(私たちが刻んだものか)
+     *    (+176 は ESP-IDF 5.3 で eFuse リビジョンの下限・上限に使われている。
+     *     そこへ書くと起動しなくなるので、予約領域はその後ろから)
      * どちらか欠ければ valid=false。**そのときは土台ごと書き直す**判断にする。
      * 私たちのものでないファーム(工場出荷など)は検査値を持たないので、ここで弾ける。
      */
@@ -150,7 +152,7 @@ object EdgeFirmware {
         val version = field(16)
         val name = field(48)
 
-        val stored = (0 until 4).fold(0L) { a, k -> a or ((desc[176 + k].toLong() and 0xFF) shl (8 * k)) }
+        val stored = (0 until 4).fold(0L) { a, k -> a or ((desc[180 + k].toLong() and 0xFF) shl (8 * k)) }
         val crc = java.util.zip.CRC32().apply { update(desc, 16, 64) }.value
         return FwIdentity(name, version, stored == crc)
     }

@@ -17,7 +17,8 @@ ESP-IDF のアプリイメージは **先頭 +0x20 に esp_app_desc_t** を必�
   desc+0    magic_word    4  0xABCD5432(これで場所の正しさが分かる)
   desc+16   version      32  ← ここへ私たちの版数
   desc+48   project_name 32  ← ここへ私たちの名前
-  desc+176  reserv2[0]    4  ← ここへ検査値(CRC32)
+  desc+176  min/max_efuse_blk_rev_full … **起動条件。絶対に触らないこと**
+  desc+180  reserv2[0]    4  ← ここへ検査値(CRC32)
 
 既定では arduino-lib-builder の版数と名前が入っている。私たちには使えない値なので、
 本来の用途どおり自分たちの値へ書き換える。端末側の esp_app_get_description() も
@@ -28,6 +29,12 @@ ESP-IDF のアプリイメージは **先頭 +0x20 に esp_app_desc_t** を必�
 version と project_name は隣り合っている(desc+16 から 64 バイト)。その 64 バイトの
 CRC32 を reserv2[0] へ置く。読み出した値がこの検査値と合わなければ、そこは私たちの
 ファームではないか壊れているので、土台ごと書き直す判断に使う。
+
+【置き場所に注意】ESP-IDF 5.3 で esp_app_desc_t に min/max_efuse_blk_rev_full が足され、
+desc+176 はもう予約領域ではない。ここへ書くとブートローダが
+「Image requires efuse blk rev >= v328.11」と言って**起動しなくなる**。実機で壊した。
+しかも esptool image_info の検査(checksum / validation hash)は通ってしまうので気づけない。
+そのため、刻んだあとに起動条件が変わっていないことを必ず確かめている。
 
 末尾のハッシュ
 --------------
@@ -51,7 +58,13 @@ MAGIC = 0xABCD5432
 OFF_VERSION = 16
 OFF_NAME = 48
 LEN_FIELD = 32
-OFF_CRC = 176
+# 【検査値は desc+180 へ。176 は空いていない(2026-08-26 実機で壊して判明)】
+#  ESP-IDF 5.3 で esp_app_desc_t に min/max_efuse_blk_rev_full(u16 が2つ)が足され、
+#  desc+176..180 はもう予約領域ではない。ここへ書くとブートローダが
+#  「Image requires efuse blk rev >= v328.11」と言って**起動しなくなる**。
+#  予約領域(reserv2)はその後ろの desc+180 から。
+OFF_EFUSE_REV = 176      # ここは絶対に触らないこと
+OFF_CRC = 180
 CRC_SPAN = (OFF_VERSION, OFF_VERSION + LEN_FIELD * 2)   # version+project_name の 64 バイト
 
 
@@ -80,6 +93,11 @@ def stamp(data, name, version):
 
     crc = binascii.crc32(bytes(buf[d + CRC_SPAN[0]: d + CRC_SPAN[1]])) & 0xFFFFFFFF
     buf[d + OFF_CRC: d + OFF_CRC + 4] = crc.to_bytes(4, "little")
+
+    # 起動条件(eFuse リビジョンの下限・上限)を巻き込んでいないことを必ず確かめる。
+    #  ここを壊すと「イメージの検査には通るのに起動しない」という一番たちの悪い形になる。
+    if bytes(buf[d + OFF_EFUSE_REV: d + OFF_EFUSE_REV + 4]) != data[d + OFF_EFUSE_REV: d + OFF_EFUSE_REV + 4]:
+        raise SystemExit("起動条件(efuse rev)を書き換えてしまっています。置き場所を見直すこと")
 
     # 【守りが二重にある】中身を触ったので両方とも付け直す。片方でも忘れると起動しない。
     #  ・XOR の検査バイト … セグメントの中身を 0xEF から順に排他的論理和したもの

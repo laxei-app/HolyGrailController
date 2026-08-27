@@ -200,7 +200,9 @@ class EdgeFirmwareTest {
         name.toByteArray(Charsets.US_ASCII).copyInto(d, 48)
         var crc = java.util.zip.CRC32().apply { update(d, 16, 64) }.value
         if (breakCrc) crc = crc xor 1L
-        for (k in 0 until 4) d[176 + k] = ((crc shr (8 * k)) and 0xFF).toByte()
+        for (k in 0 until 4) d[180 + k] = ((crc shr (8 * k)) and 0xFF).toByte()
+        // 起動条件の欄(+176..180)は触らない。ここへ書くと起動しなくなる(実機で壊した)
+        d[178] = 0xC7.toByte(); d[179] = 0x00
         return d
     }
 
