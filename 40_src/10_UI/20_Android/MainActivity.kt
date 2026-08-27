@@ -2015,9 +2015,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         row.setPadding(0, dp(3), 0, dp(3))
         val lab = TextView(this); lab.text = label; lab.textSize = 14f; lab.width = dp(118)
         val et = EditText(this); et.setText(value); et.textSize = 14f
-        et.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        // 【既定で見えるようにする(2026-08-27 UI依頼)】伏せてあると打ち間違いに気づけず、
+        //  カメラが繋がらない原因を絞れない。人に見られて困る場面では外してもらう。
+        et.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
         et.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        val cb = CheckBox(this); cb.text = "表示"; cb.textSize = 12f
+        val cb = CheckBox(this); cb.text = "表示"; cb.textSize = 12f; cb.isChecked = true
         cb.setOnCheckedChangeListener { _, on ->
             val p = et.selectionStart
             et.inputType = if (on) InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
@@ -5360,7 +5362,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val ssidPickBtn = Button(ctx).apply { text = "SSIDを選択(周辺のWi-Fiから)" }
         box.addView(ssidPickBtn)
         val passLabel = label("接続先 password")
-        val passE = EditText(ctx).apply { inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }
+        // 既定で見えるようにする(2026-08-27 UI依頼)。理由はカメラのパスワード欄と同じ。
+        val passE = EditText(ctx).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+        }
         // 【伏せ字を外せるようにする(2026-08-27 UI依頼)】繋がらないときに打ち間違いを
         //  確かめられないと原因が絞れない。所持カメラのパスワード欄と同じ作りにする。
         box.addView(LinearLayout(ctx).apply {
@@ -5368,7 +5373,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             gravity = Gravity.CENTER_VERTICAL
             addView(passE, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             addView(CheckBox(ctx).apply {
-                text = "表示"; textSize = 12f
+                text = "表示"; textSize = 12f; isChecked = true
                 setOnCheckedChangeListener { _, on ->
                     val p = passE.selectionStart
                     passE.inputType = if (on) InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
