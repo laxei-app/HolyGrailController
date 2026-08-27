@@ -1,4 +1,4 @@
-package app.laxei.holygrail
+﻿package app.laxei.holygrail
 
 // スマホ⇄エッジの ETP を BLE で運ぶ経路(エッジ側は 18_M5Common/etpBle.cpp)。
 //
@@ -177,6 +177,9 @@ object EdgeBleLink {
         val filter = ScanFilter.Builder().setServiceUuid(ParcelUuid(SVC)).build()
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
         try {
+            // 検索の枠はアプリ全体で共有(30秒に5回)。ここで使った分も数えておかないと、
+            //  プロビジョニング側の「あと◯秒あけてください」の案内が実態と合わない。
+            BleScanBudget.record()
             scanner.startScan(listOf(filter), settings, sc)
             latch.await(timeoutMs, TimeUnit.MILLISECONDS)
         } catch (_: Exception) {
@@ -353,6 +356,9 @@ object EdgeBleLink {
         val filter = ScanFilter.Builder().setServiceUuid(ParcelUuid(SVC)).build()
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
         try {
+            // 検索の枠はアプリ全体で共有(30秒に5回)。ここで使った分も数えておかないと、
+            //  プロビジョニング側の「あと◯秒あけてください」の案内が実態と合わない。
+            BleScanBudget.record()
             scanner.startScan(listOf(filter), settings, sc)
             Thread.sleep(timeoutMs)
         } catch (_: Exception) {

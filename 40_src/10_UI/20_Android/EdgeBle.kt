@@ -1,4 +1,4 @@
-package app.laxei.holygrail
+﻿package app.laxei.holygrail
 
 // エッジ端末 設定プロビジョニングの BLE セントラル(仕様 8.2.2)。
 //  HGC-Edge(サービスUUID)をスキャン→接続→MTU拡張→STAT通知有効化→
@@ -30,6 +30,45 @@ import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
+/**
+ * BLE の検索回数の残り(2026-08-27)。
+ *
+ * 【なぜ数えるか】Android はアプリごとに BLE の検索回数を絞っており、**30秒に5回**を
+ *  超えると検索そのものを始めてくれない(記録に
+ *  `BtScan.ScanController: ... is scanning too frequently` が出る)。
+ *  こちらには「見つからない」としか見えないので、原因が分からないまま何度も押して
+ *  さらに深みにはまる。押す前に数えて、待つべき秒数を伝える。
+ *
+ * 数えるのはアプリ全体ぶん。エッジとの常時BLE通信(EdgeBleLink)も同じ枠を使うので、
+ * そちらの検索も同じところへ記録する。片方だけ数えても実態と合わない。
+ */
+object BleScanBudget {
+    private const val WINDOW_MS = 30_000L
+    private const val MAX_IN_WINDOW = 5
+    private val starts = ArrayDeque<Long>()
+
+    /** 検索を始めたことを記録する。 */
+    @Synchronized fun record() {
+        val now = System.currentTimeMillis()
+        while (starts.isNotEmpty() && now - starts.first() > WINDOW_MS) starts.removeFirst()
+        starts.addLast(now)
+    }
+
+    /** 今始めたら弾かれるなら、待つべきミリ秒。0 なら始めてよい。 */
+    @Synchronized fun waitMs(): Long {
+        val now = System.currentTimeMillis()
+        while (starts.isNotEmpty() && now - starts.first() > WINDOW_MS) starts.removeFirst()
+        if (starts.size < MAX_IN_WINDOW) return 0
+        return (WINDOW_MS - (now - starts.first())).coerceAtLeast(0)
+    }
+
+    /** 数えを白紙に戻す(単体試験のため。本番から呼ぶところは無い)。 */
+    @Synchronized fun reset() { starts.clear() }
+
+    /** 「あと◯秒」の文言。 */
+    fun waitText(ms: Long): String = "あと %d 秒ほど".format((ms + 999) / 1000)
+}
+
 @SuppressLint("MissingPermission")  // 呼び出し側(MainActivity)で BLUETOOTH_SCAN/CONNECT を確認してから使う
 class EdgeBle(
     private val ctx: Context,
@@ -38,6 +77,9 @@ class EdgeBle(
 ) {
     companion object {
         val SVC  = UUID.fromString("a1b2c3d4-0001-4a5b-8c6d-000000000001")
+        // Android が返す「検索が多すぎる」。API30 で足された定数だが値は固定なので直に書く
+        //  (ScanCallback.SCAN_FAILED_SCANNING_TOO_FREQUENTLY)。
+        const val SCAN_TOO_FREQUENT = 6
         // 端末名が入っていないエッジが広告する名前(端末側の既定 g_devName = "NoName")。
         //  ファームを土台ごと書き直すとこの姿に戻る。
         const val UNSET_ADV_NAME = "HGC-NoName"
@@ -120,7 +162,15 @@ class EdgeBle(
                 return
             } catch (_: Exception) { /* だめならスキャンにフォールバック */ }
         }
+        // 続けて押されると Android が検索を止めてしまう。始める前に見て、待つよう伝える。
+        val wait = BleScanBudget.waitMs()
+        if (wait > 0) {
+            finish(false, "BLEの検索を続けて行ったため、Android が検索を受け付けません。" +
+                          "${BleScanBudget.waitText(wait)}あけてから、もう一度お試しください")
+            return
+        }
         unnamedCandidate = null
+        unprovisioned.clear()
         scanner = adapter.bluetoothLeScanner
         val filter = ScanFilter.Builder().setServiceUuid(ParcelUuid(SVC)).build()
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
@@ -138,8 +188,18 @@ class EdgeBle(
                 log("発見 ${advName(r) ?: r.device.address}。接続中...")
                 connect(r.device)
             }
-            override fun onScanFailed(errorCode: Int) { finish(false, "スキャン失敗 code=$errorCode") }
+            override fun onScanFailed(errorCode: Int) {
+                finish(false, when (errorCode) {
+                    SCAN_TOO_FREQUENT ->
+                        "BLEの検索が続きすぎたため、Android が検索を止めました。" +
+                        "30秒ほどあけてから、もう一度お試しください"
+                    1 -> "すでに検索中です。少し待ってからお試しください"
+                    2 -> "BLEの検索を始められません。Bluetooth を入れ直してみてください"
+                    else -> "スキャン失敗 code=$errorCode"
+                })
+            }
         }
+        BleScanBudget.record()
         scanner?.startScan(listOf(filter), settings, scanCb)
         handler.postDelayed({
             if (!done && gatt == null) {
