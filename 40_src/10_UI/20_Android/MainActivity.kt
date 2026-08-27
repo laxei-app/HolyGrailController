@@ -5361,7 +5361,22 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.addView(ssidPickBtn)
         val passLabel = label("接続先 password")
         val passE = EditText(ctx).apply { inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD }
-        box.addView(passE)
+        // 【伏せ字を外せるようにする(2026-08-27 UI依頼)】繋がらないときに打ち間違いを
+        //  確かめられないと原因が絞れない。所持カメラのパスワード欄と同じ作りにする。
+        box.addView(LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(passE, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(CheckBox(ctx).apply {
+                text = "表示"; textSize = 12f
+                setOnCheckedChangeListener { _, on ->
+                    val p = passE.selectionStart
+                    passE.inputType = if (on) InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                                      else InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+                    passE.setSelection(p.coerceIn(0, passE.text.length))
+                }
+            })
+        })
         edgeSsidEt = ssidE; edgePassEt = passE; edgeSsidLabel = ssidLabel; edgePassLabel = passLabel
 
         fun applyModeLabels(ap: Boolean) {

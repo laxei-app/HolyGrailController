@@ -38,6 +38,9 @@ class EdgeBle(
 ) {
     companion object {
         val SVC  = UUID.fromString("a1b2c3d4-0001-4a5b-8c6d-000000000001")
+        // 端末名が入っていないエッジが広告する名前(端末側の既定 g_devName = "NoName")。
+        //  ファームを土台ごと書き直すとこの姿に戻る。
+        const val UNSET_ADV_NAME = "HGC-NoName"
         val CTRL = UUID.fromString("a1b2c3d4-0001-4a5b-8c6d-000000000002")  // write "start": エッジにQR(PoP)を表示させる
         val CRED = UUID.fromString("a1b2c3d4-0001-4a5b-8c6d-000000000003")
         val STAT = UUID.fromString("a1b2c3d4-0001-4a5b-8c6d-000000000004")
@@ -83,6 +86,16 @@ class EdgeBle(
     // こうしないと、エッジを更新するまで設定を送れず詰む。
     private var unnamedCandidate: BluetoothDevice? = null
 
+    // 名前が未設定のエッジ(端末側は "NoName" のまま広告する)。
+    //
+    // 【なぜ拾うか(2026-08-27)】ファームを土台ごと書き直すと端末名が消える。すると一覧で
+    //  選んだ名前では二度と見つからず、「更新したら設定画面から触れなくなった」という
+    //  行き止まりになる(実機で踏んだ)。焼き直した直後はまさにこの姿なので、名前一致が
+    //  無かったときの受け皿にする。
+    //  ただし**1台だけのときに限る**。未設定の端末が複数居ると取り違えて、別の機体へ
+    //  設定を送ってしまう。そのときは繋がずに、何が起きているかを伝えて止める。
+    private val unprovisioned = LinkedHashMap<String, BluetoothDevice>()
+
     // エッジに "start" を送って QR(PoP)を LCD に表示させる(スキャン前に呼ぶ)。
     fun startQr() {
         done = false; startOnly = true
@@ -116,7 +129,9 @@ class EdgeBle(
             override fun onScanResult(callbackType: Int, r: ScanResult) {
                 // 名前が一致するものだけ拾う(2026-08-08 UI依頼)。一致しなければスキャンを続ける。
                 if (!matches(r)) {
-                    if (advName(r) == null && unnamedCandidate == null) { unnamedCandidate = r.device }
+                    val n = advName(r)
+                    if (n == null && unnamedCandidate == null) { unnamedCandidate = r.device }
+                    if (n == UNSET_ADV_NAME) { unprovisioned[r.device.address] = r.device }
                     return
                 }
                 stopScan()
@@ -130,13 +145,25 @@ class EdgeBle(
             if (!done && gatt == null) {
                 stopScan()
                 val fallback = unnamedCandidate
-                if (fallback != null) {
-                    // 名前を広告しないエッジしか居ない = 旧ファーム。従来動作で接続する。
-                    log("名前を広告しないエッジへ接続します(エッジのファームが古い可能性)")
-                    connect(fallback)
-                } else {
-                    finish(false, if (wantName.isEmpty()) "エッジが見つかりません(広告なし)"
-                                  else "エッジ「$wantName」が見つかりません(電源とBluetoothを確認してください)")
+                val unset = unprovisioned.values.toList()
+                when {
+                    fallback != null -> {
+                        // 名前を広告しないエッジしか居ない = 旧ファーム。従来動作で接続する。
+                        log("名前を広告しないエッジへ接続します(エッジのファームが古い可能性)")
+                        connect(fallback)
+                    }
+                    // 焼き直した直後は名前が消えている。1台だけならそれが目当ての機体。
+                    wantName.isNotEmpty() && unset.size == 1 -> {
+                        log("「$wantName」は見つかりませんが、名前が未設定のエッジが1台あります。" +
+                            "ファームを書き直した直後はこうなります。そちらへ接続します")
+                        connect(unset[0])
+                    }
+                    wantName.isNotEmpty() && unset.size > 1 ->
+                        finish(false, "「$wantName」が見つかりません。名前が未設定のエッジが${unset.size}台あるため、" +
+                                      "取り違えを避けて中止しました。1台だけ電源を入れてやり直してください")
+                    else ->
+                        finish(false, if (wantName.isEmpty()) "エッジが見つかりません(広告なし)"
+                                      else "エッジ「$wantName」が見つかりません(電源とBluetoothを確認してください)")
                 }
             }
         }, 12000)
