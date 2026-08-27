@@ -185,8 +185,14 @@ class EspUsbSerial private constructor(
     override fun discardInput() {
         spill = ByteArray(0)
         val buf = ByteArray(epIn.maxPacketSize)
-        // 残っているものを短い待ちで吸い出す
-        while (conn.bulkTransfer(epIn, buf, buf.size, 20) > 0) { /* 捨てる */ }
+        // 【必ず打ち切ること(2026-08-26 実機で判明)】「来なくなるまで捨てる」だと、本体ファームが
+        //  動いている端末では**永遠に終わらない**。ダウンロードモードの相手は黙っているので
+        //  気づきにくいが、動いているエッジは SSDP などのログを絶えず吐き続けている。
+        //  これで書き込みの2回目が固まった。
+        val until = System.currentTimeMillis() + 200
+        while (System.currentTimeMillis() < until) {
+            if (conn.bulkTransfer(epIn, buf, buf.size, 20) <= 0) break
+        }
     }
 
     // ── ここから USB ならではの部分 ───────────────────────────

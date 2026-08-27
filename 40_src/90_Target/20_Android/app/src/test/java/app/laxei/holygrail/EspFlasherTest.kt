@@ -186,6 +186,30 @@ class EspFlasherTest {
     }
 
     @Test
+    fun 喋り続ける相手でも同期を諦められる() {
+        // 実機で踏んだ: 本体ファームが動いている端末はログを吐き続ける。
+        // 「来なくなるまで捨てる」実装だと永遠に終わらず、書き込みの2回目が固まった。
+        // 経路側は打ち切るように直したが、同期そのものも時間内に諦めること。
+        val chatty = object : EspTransport {
+            var discards = 0
+            override fun write(data: ByteArray) {}
+            override fun read(max: Int, timeoutMs: Int): ByteArray =
+                ByteArray(minOf(max, 64)) { 0x2E }      // '.' を延々と返す(SLIPの包みではない)
+            override fun setControlLines(dtr: Boolean, rts: Boolean) {}
+            override fun discardInput() { discards++ }
+        }
+        val f = EspFlasher(chatty)
+        val t0 = System.currentTimeMillis()
+        try {
+            f.sync(retries = 2)
+            throw AssertionError("包みが来ていないのに同期できてしまった")
+        } catch (e: EspFlashError) {
+            val ms = System.currentTimeMillis() - t0
+            assertTrue("諦めるまでに時間がかかりすぎ (%d ms)".format(ms), ms < 10_000)
+        }
+    }
+
+    @Test
     fun 壊れた応答は失敗として扱う() {
         val rom = FakeRom().also { it.failNext = true }
         val f = EspFlasher(rom)

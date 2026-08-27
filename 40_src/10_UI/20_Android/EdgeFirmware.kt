@@ -224,7 +224,15 @@ object EdgeFirmware {
     }
 
     private fun httpGet(url: String, expect: Int = 0, progress: ((Int, Int) -> Unit)? = null): ByteArray {
-        val c = URL(url).openConnection() as HttpURLConnection
+        // 【公開直後は古いものが返る(2026-08-26 実機で確認)】置き場は 5 分ほどキャッシュされ、
+        //  しかも配信ノードごとに持ち方が違う。実際、PC からは新しい版が見えるのにスマホには
+        //  古い版が返り、「公開したのに端末が更新されない」状態が数分続いた。
+        //  下の細工でこちら側の持ち回しは避けられるが、**配信側の 5 分は待つしかない**。
+        //  公開直後に焼くときは数分おいてからにすること。
+        val fresh = url + (if (url.contains('?')) "&" else "?") + "t=" + System.currentTimeMillis()
+        val c = URL(fresh).openConnection() as HttpURLConnection
+        c.setRequestProperty("Cache-Control", "no-cache")
+        c.useCaches = false
         c.connectTimeout = 15000
         c.readTimeout = 60000
         c.instanceFollowRedirects = true
