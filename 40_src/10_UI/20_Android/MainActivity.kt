@@ -6001,8 +6001,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 val cb = CheckBox(ctx)
                 cb.text = label
                 cb.isChecked = on
-                cb.isEnabled = !isCaptureBusy()      // 撮影中は触らせない
-                if (!cb.isEnabled) { cb.setTextColor(Color.GRAY) }
+                // 【ここで無効にしないこと(2026-08-29 実機報告)】以前は isCaptureBusy()
+                //  (=どこかの端末が撮影中)を見ていたため、**1台が撮影しているだけで
+                //  全端末のログ設定が触れなくなっていた**。禁止の判定は画面全体で1か所
+                //  (下の isEdgeCaptureBusy)に任せ、こちらは何もしない。
                 cb.setOnCheckedChangeListener { _, v -> set(v); saveEdgeLogOpt(selectedEdgeName, lo) }
                 box.addView(cb)
                 return cb
