@@ -84,7 +84,8 @@ namespace
 		std::vector<std::unique_ptr<class device>> subDevs;
 		std::atomic<int>              state{ HGE_ST_IDLE };
 		bool                          logCapturing = false;	// START/STOP検出
-		bool                          refusedTold  = false;	// 締め出しを1回だけ知らせたか(何度も出さない)
+		bool                          authTold     = false;	// 認証まわりの理由を1回だけ知らせたか
+		int                           authNotice   = 0;		// その理由(進捗に載せてスマホへ運ぶ)
 		dataManager::captureReport    report;				// 撮影結果レポートの積算(STOP時にファイルへ出す)
 		std::string                   lastCcm;				// CCMSW検出
 		void*                         startThread = nullptr;
@@ -1655,12 +1656,17 @@ namespace
 				std::string d = "camera acquire/reconnect failed: matched=" + std::to_string(found.size())
 				              + " (候補の内訳は直前の ssdp candidate 行を見る)";
 				dataManager::logEvent("NET", d.c_str(), true);
-				// 締め出されているなら、探し続けても永久に見つからない。理由を1回だけ伝える。
-				//  「見つかりません」だけだと、ユーザーはカメラの電源やWi-Fiを疑って堂々巡りになる。
-				if (httpAuth::anyRefused() && !S->refusedTold)
+				// 【理由を分けて伝える】「見つかりません」だけだと、ユーザーはカメラの電源や
+				//  Wi-Fi を疑って堂々巡りになる。記述子は認証不要で読めているので、
+				//  「居るが認証で弾かれた」ことはこちらで分かっている。1回だけ伝える。
+				if (!S->authTold)
 				{
-					S->refusedTold = true;
-					notifyNotice(S->planId, static_cast<int>(hgc::notice::cameraRefused), 0);
+					int code = 0;
+					if      (httpAuth::anyRefused())      { code = (int)hgc::notice::cameraRefused; }
+					else if (httpAuth::anyUnauthorized()) { code = httpAuth::hasCandidates()
+					                                             ? (int)hgc::notice::authWrong
+					                                             : (int)hgc::notice::authMissing; }
+					if (code != 0) { S->authTold = true; S->authNotice = code; notifyNotice(S->planId, code, 0); }
 				}
 				return false;
 			}
@@ -2998,21 +3004,23 @@ int32_t hge_getProgressJsonFor(const char* planId, char* buf, int32_t* inoutLen)
 	int st = HGE_ST_IDLE; std::string nm, ccm; hgc::exposure exp{};
 	int fr = 0, tot = 0, rem = 0, el = 0;
 	std::string cSerial, cAssignedName, cModel;	// 接続確定カメラの識別情報(エッジ→スマホ書き戻し用)
+	int cNotice = 0;	// 認証まわりの理由(hgc::notice)。0=無し
 	if (captureSession* S = sessionFor(planId))
 	{
 		st = S->state.load(); nm = S->plan.name;
 		fr = S->pgFrame; tot = S->pgTotal; rem = S->pgRemain; el = S->pgElapsed;
 		ccm = S->pgCcm; exp = S->pgExp;
 		cSerial = S->dev.serialno; cAssignedName = S->dev.assignedName; cModel = S->dev.model;	// 未接続なら空
+		cNotice = S->authNotice;	// 認証で弾かれている理由(0=無し)。スマホの案内を言い換えるため
 	}
 	char tmp[512];
 	std::snprintf(tmp, sizeof(tmp),
 		"{\"state\":%d,\"name\":\"%s\",\"frame\":%d,\"total\":%d,\"remainSec\":%d,\"elapsedSec\":%d,"
 		"\"ccm\":\"%s\",\"iso\":\"%s\",\"ss\":\"%s\",\"fn\":\"%s\","
-		"\"serial\":\"%s\",\"assignedName\":\"%s\",\"model\":\"%s\"}",
+		"\"serial\":\"%s\",\"assignedName\":\"%s\",\"model\":\"%s\",\"notice\":%d}",
 		st, jesc(nm).c_str(), fr, tot, rem, el,
 		jesc(ccm).c_str(), exp.iso.c_str(), exp.ss.c_str(), exp.fn.c_str(),
-		jesc(cSerial).c_str(), jesc(cAssignedName).c_str(), jesc(cModel).c_str());
+		jesc(cSerial).c_str(), jesc(cAssignedName).c_str(), jesc(cModel).c_str(), cNotice);
 	int32_t need = static_cast<int32_t>(std::strlen(tmp)) + 1;
 	if (buf == nullptr || *inoutLen < need) { *inoutLen = need; return ERR_HGC_BUF_SHORT; }
 	std::memcpy(buf, tmp, need);

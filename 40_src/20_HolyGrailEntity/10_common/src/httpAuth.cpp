@@ -21,6 +21,7 @@ namespace
 		bool        exhausted = false;	// 候補を全部試して全滅した(資格情報が直るまで打ち止め)
 		bool        bumped    = false;	// nc を大きく飛ばして試したか(この nonce につき1回)
 		bool        refused   = false;	// 403 を受けた(締め出された)。叩き直しても戻らない
+		bool        unauth    = false;	// 401 で弾かれた(資格情報が無い/違う)
 	};
 
 	std::mutex                                          g_mtx;	// ワーカー2本から触られる
@@ -120,7 +121,7 @@ namespace httpAuth
 		g_creds.emplace_back(user, pass);
 		// 学習済みの内容は消さない。候補が増えただけで、通っている相手の認証は生きている。
 		// ただし打ち止めは解除する。新しい候補で通るかもしれない。
-		for (auto& e : g_hosts) { e.second.exhausted = false; e.second.refused = false; }
+		for (auto& e : g_hosts) { e.second.exhausted = false; e.second.refused = false; e.second.unauth = false; }
 	}
 
 	bool hasCandidates(void)
@@ -256,6 +257,19 @@ namespace httpAuth
 		return it->second.exhausted;					// 候補を全部試して全滅
 	}
 
+	void noteUnauthorized(const std::string& host)
+	{
+		std::lock_guard<std::mutex> lk(g_mtx);
+		g_hosts[host].unauth = true;
+	}
+
+	bool anyUnauthorized(void)
+	{
+		std::lock_guard<std::mutex> lk(g_mtx);
+		for (const auto& e : g_hosts) { if (e.second.unauth) { return true; } }
+		return false;
+	}
+
 	bool anyRefused(void)
 	{
 		std::lock_guard<std::mutex> lk(g_mtx);
@@ -293,7 +307,7 @@ namespace httpAuth
 	{
 		std::lock_guard<std::mutex> lk(g_mtx);
 		auto it = g_hosts.find(host);
-		if (it != g_hosts.end()) { it->second.proven = true; }
+		if (it != g_hosts.end()) { it->second.proven = true; it->second.unauth = false; }
 	}
 
 	hostGuard::hostGuard(const std::string& host)

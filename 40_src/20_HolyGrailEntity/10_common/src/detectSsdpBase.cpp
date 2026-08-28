@@ -154,6 +154,8 @@ size_t detectSsdpBase::discover(std::vector<class device>& out, bool identifyOnl
 			netThread::lastHttpFailure(st, dummy);
 			// 403 はここで打ち止めにする。以後この相手は上の「叩かない」判定で弾かれる。
 			if (st == 403) { httpAuth::noteRefused(authKeyOf(device.urlAccess)); }
+			// 401 = 資格情報が無い/違う。カメラは居るので「見つかりません」ではなくその旨を伝える。
+			if (st == 401) { httpAuth::noteUnauthorized(authKeyOf(device.urlAccess)); }
 			std::string why = (st == 401 || st == 403)
 			                  ? "register the camera user/password in owned cameras"
 			                  : "";

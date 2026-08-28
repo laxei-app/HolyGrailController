@@ -163,6 +163,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  ロック判定はこれ(=エッジが持っている)＋開始操作の過渡(下 isPlanOnEdge)で行う。エッジ選択(スピナー=
     //  pe_ 割り当て)だけでは「保有」にはならないので、選んだだけの未開始計画はロックしない。
     private val edgeHeldByEdge = HashMap<String, MutableSet<String>>()
+    // 計画ごとの「認証で弾かれている理由」(hgc::notice)。エッジの進捗で運ばれてくる。
+    //  カメラは見つかっているので、「見つかりません」ではなく理由を出すために使う。
+    private val planAuthNotice = HashMap<String, Int>()
     // 【ロックの解除は遅らせる(2026-08-28 仕様確定)】
     //  エッジへ送った計画で使っているカメラは、スマホ側で変更も削除もできない。エッジは
     //  受け取った計画をそのまま使い続け、**スマホ抜きでも単独で開始できる**ので、手元だけ
@@ -3368,9 +3371,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
         nocamDialogShown.add(id)
         val cam = planCameraLabel(id)
         val e = planEdge(id)   // null=スマホ直接
+        // 【理由が分かっているなら、そちらを出す】カメラは見つかっていて認証で弾かれている
+        //  だけ、という場合がある。「見つかりません」と言うと電源やWi-Fiを疑って堂々巡りに
+        //  なるので、分かっている理由を優先する(63=締め出し / 64=未登録 / 65=誤り)。
+        val an = planAuthNotice[id] ?: 0
+        val title = if (an != 0) "カメラに接続できません" else "カメラが見つかりません"
+        val body  = if (an != 0) "${cam}: " + noticeText(an, 0)
+                    else "${cam}が見つかりません。オンラインにしてください。"
         val dlg = androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("カメラが見つかりません")
-            .setMessage("${cam}が見つかりません。オンラインにしてください。")
+            .setTitle(title)
+            .setMessage(body)
             .setCancelable(false)
             .setPositiveButton("継続") { d, _ ->
                 d.dismiss(); nocamDialogs.remove(id)
@@ -3749,6 +3759,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         61 -> "パノラマのカメラが多すぎます。この端末で撮れるのは${n1}台までです"
         62 -> "パノラマ撮影は単独で行います。時間が重なる撮影を止めるか、時間をずらしてください"
         63 -> "カメラが接続を拒否しています。カメラ本体のWi-Fi設定を一度削除して入れ直してください(認証情報の登録漏れが原因のことがあります)"
+        64 -> "カメラの認証情報が登録されていません。機材のカメラ設定にユーザーIDとパスワードを入れてください"
+        65 -> "カメラの認証情報が正しくありません。機材のカメラ設定のユーザーIDとパスワードを確認してください"
         else -> "カメラからのお知らせ($code)"
     }
 
@@ -5805,6 +5817,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val o = JSONObject(pj)
             // ① エッジ書き戻し: エッジが接続確定したカメラの serial/assignedName を所持カメラへ反映する
             //  (エッジ撮影ではスマホがカメラに接続しないため、この経路が唯一の識別情報伝播)。serial単位で1回だけ適用。
+            // 認証で弾かれているなら、その理由を覚えておく(「見つかりません」を言い換えるため)。
+            val nt = o.optInt("notice", 0)
+            if (nt != 0) planAuthNotice[pid] = nt else planAuthNotice.remove(pid)
             val cSerial = o.optString("serial")
             if (cSerial.isNotEmpty() && edgeAppliedSerials.add(cSerial)) {
                 val cModel = o.optString("model"); val cAssignedName = o.optString("assignedName")
