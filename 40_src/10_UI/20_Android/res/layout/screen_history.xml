@@ -18,8 +18,8 @@
         <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
             android:gravity="center" android:text="操作履歴" android:textColor="#FFFFFF"
             android:textSize="20sp" android:textStyle="bold" />
-        <ImageView android:id="@+id/history_menu" android:layout_width="32dp" android:layout_height="32dp"
-            android:clickable="true" android:focusable="true" android:src="@drawable/ic_menu_r" />
+        <!-- 右上のメニューは廃止(2026-08-29 UI依頼)。題が中央に見えるよう幅だけ残す -->
+        <View android:layout_width="32dp" android:layout_height="32dp" />
     </LinearLayout>
 
     <LinearLayout

@@ -603,17 +603,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<ImageView>(R.id.gmenu_back).setOnClickListener { flipper.displayedChild = 0; capturePlanBaseline() }
         // 650 カメラ予約表(項目17)。戻る/メニューどちらもメニューへ戻す。
         findViewById<ImageView>(R.id.reserve_back).setOnClickListener { flipper.displayedChild = 4; buildGearMenu() }
-        findViewById<ImageView>(R.id.reserve_menu).setOnClickListener { flipper.displayedChild = 4; buildGearMenu() }
         // 660 操作履歴(項目9)
         findViewById<ImageView>(R.id.history_back).setOnClickListener { flipper.displayedChild = 4; buildGearMenu() }
-        findViewById<ImageView>(R.id.history_menu).setOnClickListener { flipper.displayedChild = 4; buildGearMenu() }
         // 670 撮影レポート。読むだけの画面なので離脱時に保存するものは無い。
         findViewById<ImageView>(R.id.report_back).setOnClickListener { flipper.displayedChild = 4; buildGearMenu() }
-        findViewById<ImageView>(R.id.report_menu).setOnClickListener { flipper.displayedChild = 4; buildGearMenu() }
         setupDivider(R.id.report_divider, R.id.report_listScroll)
         // 8.2 エッジ端末設定(2026-08-08 UI依頼で画面化)
         findViewById<ImageView>(R.id.edge_back).setOnClickListener { stashEdgeForm(); flipper.displayedChild = 4; buildGearMenu() }
-        findViewById<ImageView>(R.id.edge_menu).setOnClickListener { flipper.displayedChild = 4; buildGearMenu() }
         setupDivider(R.id.edge_divider, R.id.edge_listScroll)
         findViewById<Button>(R.id.history_clear).setOnClickListener {
             AlertDialog.Builder(this)
@@ -628,7 +624,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         // 620 所持カメラ(戻る/メニューで離脱時に自動保存)
         findViewById<ImageView>(R.id.cameralist_back).setOnClickListener { leaveCameraList() }
-        findViewById<ImageView>(R.id.cameralist_menu).setOnClickListener { leaveCameraList() }
         setupDivider(R.id.cameralist_divider, R.id.cameralist_listScroll)
         // 622 カメラ追加(離脱時にチェックを追加 / 取消でチェック解除)
         findViewById<ImageView>(R.id.cameraadd_back).setOnClickListener { leaveCameraAdd(false) }
@@ -636,7 +631,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<Button>(R.id.cameraadd_cancel).setOnClickListener { checkedCamAdd.clear(); buildCameraAdd() }
         // 630 所持レンズ
         findViewById<ImageView>(R.id.lenslist_back).setOnClickListener { leaveLensList() }
-        findViewById<ImageView>(R.id.lenslist_menu).setOnClickListener { leaveLensList() }
         setupDivider(R.id.lenslist_divider, R.id.lenslist_listScroll)
         // 632 レンズ追加
         findViewById<ImageView>(R.id.lensadd_back).setOnClickListener { leaveLensAdd(false) }
@@ -644,7 +638,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<Button>(R.id.lensadd_cancel).setOnClickListener { checkedLensAdd.clear(); buildLensAdd() }
         // 640 撮影場所リスト(§7.9)。戻る/メニューで離脱時に自動保存。
         findViewById<ImageView>(R.id.places_back).setOnClickListener { leavePlacesList() }
-        findViewById<ImageView>(R.id.places_menu).setOnClickListener { leavePlacesList() }
         setupDivider(R.id.places_divider, R.id.places_listScroll)
         // 撮影計画(330)のカメラ/レンズをタップで所持から選択する。
         cameraText.setOnClickListener { choosePlanCamera() }
@@ -660,10 +653,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<Button>(R.id.edit_save).visibility = View.GONE   // 取消はエディタ先頭行へ移動
         // 色はメニュー「色の設定」(システム共通)で設定する(per-ccm色は廃止)。
         findViewById<ImageView>(R.id.color_back).setOnClickListener { leaveColorScreen() }
-        findViewById<ImageView>(R.id.color_menu).setOnClickListener { leaveColorScreen() }
         // 露出平滑化(630)。戻る/メニューで保存して離脱。取り消しで保存値から再読込。
         findViewById<ImageView>(R.id.smooth_back).setOnClickListener { leaveSmoothingScreen() }
-        findViewById<ImageView>(R.id.smooth_menu).setOnClickListener { leaveSmoothingScreen() }
         findViewById<Button>(R.id.smooth_cancel).setOnClickListener { loadSmoothingScreen(); resetDirtyBaseline() }
         setupValueSlider(R.id.smooth_hyst_seek, 20) {
             findViewById<TextView>(R.id.smooth_hyst_val).text = String.format("%.1fev", seekToHyst(it))
