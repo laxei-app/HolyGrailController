@@ -5,7 +5,17 @@
 #include "tool.h"
 #include "netThread.h"
 #include "dataManager.h"	// 発見できたのに使えない機体を記録する
+#include "httpAuth.h"		// 叩いても無駄と分かっている相手は叩かない
 #include <algorithm>
+
+// httpAuth が相手を覚えるときの鍵("http://ip:port")。net.cpp の endpointOf と揃えること。
+static std::string authKeyOf(const std::string& url)
+{
+	const size_t p = url.find("://");
+	if (p == std::string::npos) { return std::string(); }
+	const size_t s = url.find('/', p + 3);
+	return url.substr(0, (s == std::string::npos) ? url.size() : s);
+}
 
 // SSDP(M-SEARCH)で検出し、同一カメラの統合と apiBase 初期化まで済ませて out に追加する。
 // (旧 cameraController::detectTarget の探索/統合/初期化処理をバックエンド側へ移設したもの。)
@@ -114,6 +124,24 @@ size_t detectSsdpBase::discover(std::vector<class device>& out, bool identifyOnl
 				continue;
 			}
 		}
+		// 【叩いても無駄と分かっている相手は叩かない(2026-08-28)】
+		//  資格情報が未登録/誤りのまま取得ループを回すと、1周で数発の 401 を投げる。60秒周期でも
+		//  数分で数十発になり、カメラが 403 "Not access" で締め出す。本体の接続設定を入れ直すまで
+		//  戻らない。実機で3回踏んだ。403 を受けた相手は叩き直しても絶対に回復しないので、
+		//  ここで止めるのが唯一正しい。資格情報が変われば自動的に解除される(httpAuth::blocked)。
+		//  記述子(認証不要)は上で読めているので、在否と身元は分かる。落ちるのは「使える台」だけ。
+		{
+			const std::string ep = authKeyOf(device.urlAccess);
+			if (!ep.empty() && httpAuth::blocked(ep))
+			{
+				std::string d = "skip (auth blocked) " + (device.model.empty() ? std::string("?") : device.model)
+				              + "/" + (device.serialno.empty() ? std::string("?") : device.serialno)
+				              + " " + ep + " [" + httpAuth::diagnose(ep) + "]";
+				dataManager::logEvent("NET", d.c_str(), true);
+				device.apiBase = nullptr;
+				continue;
+			}
+		}
 		// api の初期化をおこなう
 		errCode ie = api->init(device);
 		if ( ie != ERR_HGC_OK )
@@ -124,6 +152,8 @@ size_t detectSsdpBase::discover(std::vector<class device>& out, bool identifyOnl
 			//  身元(記述XML)は認証不要で取れているので、どの機体かは書ける。
 			int st = 0; std::string dummy;
 			netThread::lastHttpFailure(st, dummy);
+			// 403 はここで打ち止めにする。以後この相手は上の「叩かない」判定で弾かれる。
+			if (st == 403) { httpAuth::noteRefused(authKeyOf(device.urlAccess)); }
 			std::string why = (st == 401 || st == 403)
 			                  ? "register the camera user/password in owned cameras"
 			                  : "";

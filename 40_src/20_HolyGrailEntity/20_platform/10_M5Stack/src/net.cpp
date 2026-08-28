@@ -451,6 +451,9 @@ static void noteHttpError(int code, std::string& response)
             if (!learned) { break; }		// 401 でない、または資格情報が無い → そのまま返す
         }
         noteHttpStatus(code);
+        // 403 = 締め出された。以後この相手へは認証付きで叩かない(httpAuth::blocked)。
+        //  叩き直しても回復せず、悪化するだけ(2026-08-28 実機で3回踏んだ)。
+        if (code == 403) { httpAuth::noteRefused(endpointOf(url)); }
         noteHttpError(code, response);	// 失敗なら理由(接続不可か無返答か)を残す
         return code;
     }
@@ -487,6 +490,9 @@ static void noteHttpError(int code, std::string& response)
             if (!learned) { break; }		// 資格情報が無い → 401 のまま上へ返す
         }
         noteHttpStatus(code);
+        // 403 = 締め出された。以後この相手へは認証付きで叩かない(httpAuth::blocked)。
+        //  叩き直しても回復せず、悪化するだけ(2026-08-28 実機で3回踏んだ)。
+        if (code == 403) { httpAuth::noteRefused(endpointOf(url)); }
         bool success = false;
         // 206 = 部分応答(Range を受け入れた)。200 と同じ手順で本文を読む。
         if ((code == 200 || code == 206) && slot >= 0)

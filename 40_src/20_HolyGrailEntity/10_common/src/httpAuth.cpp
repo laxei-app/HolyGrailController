@@ -20,6 +20,7 @@ namespace
 		bool        proven  = false;	// この資格情報で一度でも通ったか(誤判定の防止)
 		bool        exhausted = false;	// 候補を全部試して全滅した(資格情報が直るまで打ち止め)
 		bool        bumped    = false;	// nc を大きく飛ばして試したか(この nonce につき1回)
+		bool        refused   = false;	// 403 を受けた(締め出された)。叩き直しても戻らない
 	};
 
 	std::mutex                                          g_mtx;	// ワーカー2本から触られる
@@ -119,7 +120,7 @@ namespace httpAuth
 		g_creds.emplace_back(user, pass);
 		// 学習済みの内容は消さない。候補が増えただけで、通っている相手の認証は生きている。
 		// ただし打ち止めは解除する。新しい候補で通るかもしれない。
-		for (auto& e : g_hosts) { e.second.exhausted = false; }
+		for (auto& e : g_hosts) { e.second.exhausted = false; e.second.refused = false; }
 	}
 
 	bool hasCandidates(void)
@@ -246,6 +247,28 @@ namespace httpAuth
 		return h;
 	}
 
+	bool blocked(const std::string& host)
+	{
+		std::lock_guard<std::mutex> lk(g_mtx);
+		auto it = g_hosts.find(host);
+		if (it == g_hosts.end()) { return false; }		// まだ何も分かっていない相手は試してよい
+		if (it->second.refused)   { return true; }		// 403。叩き直しても回復しない
+		return it->second.exhausted;					// 候補を全部試して全滅
+	}
+
+	bool anyRefused(void)
+	{
+		std::lock_guard<std::mutex> lk(g_mtx);
+		for (const auto& e : g_hosts) { if (e.second.refused) { return true; } }
+		return false;
+	}
+
+	void noteRefused(const std::string& host)
+	{
+		std::lock_guard<std::mutex> lk(g_mtx);
+		g_hosts[host].refused = true;
+	}
+
 	std::string diagnose(const std::string& host)
 	{
 		std::lock_guard<std::mutex> lk(g_mtx);
@@ -259,9 +282,9 @@ namespace httpAuth
 		const hostState& st = it->second;
 		// nonce は先頭8文字だけ。毎回作り直されているかが分かればよい。
 		std::string head = st.nonce.substr(0, 8);
-		std::snprintf(b, sizeof(b), "creds=%d idx=%d known=%d exhausted=%d bumped=%d proven=%d nc=%08x nonce=%s",
+		std::snprintf(b, sizeof(b), "creds=%d idx=%d known=%d exhausted=%d refused=%d bumped=%d proven=%d nc=%08x nonce=%s",
 		              static_cast<int>(g_creds.size()), static_cast<int>(st.credIdx),
-		              st.known ? 1 : 0, st.exhausted ? 1 : 0, st.bumped ? 1 : 0, st.proven ? 1 : 0,
+		              st.known ? 1 : 0, st.exhausted ? 1 : 0, st.refused ? 1 : 0, st.bumped ? 1 : 0, st.proven ? 1 : 0,
 		              static_cast<unsigned>(st.nc), head.c_str());
 		return std::string(b);
 	}

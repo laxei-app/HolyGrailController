@@ -418,6 +418,9 @@ namespace net
 			}
 
 			response = content;
+			// 403 = 締め出された。以後この相手へは認証付きで叩かない(httpAuth::blocked)。
+			//  叩き直しても回復せず、悪化するだけ(2026-08-28 実機で3回踏んだ)。
+			if (code == 403) { httpAuth::noteRefused(hostKey); }
 			g_lastHttpStatus = code;
 			return code;
 		}

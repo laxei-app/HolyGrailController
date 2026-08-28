@@ -84,6 +84,7 @@ namespace
 		std::vector<std::unique_ptr<class device>> subDevs;
 		std::atomic<int>              state{ HGE_ST_IDLE };
 		bool                          logCapturing = false;	// START/STOP検出
+		bool                          refusedTold  = false;	// 締め出しを1回だけ知らせたか(何度も出さない)
 		dataManager::captureReport    report;				// 撮影結果レポートの積算(STOP時にファイルへ出す)
 		std::string                   lastCcm;				// CCMSW検出
 		void*                         startThread = nullptr;
@@ -1654,6 +1655,13 @@ namespace
 				std::string d = "camera acquire/reconnect failed: matched=" + std::to_string(found.size())
 				              + " (候補の内訳は直前の ssdp candidate 行を見る)";
 				dataManager::logEvent("NET", d.c_str(), true);
+				// 締め出されているなら、探し続けても永久に見つからない。理由を1回だけ伝える。
+				//  「見つかりません」だけだと、ユーザーはカメラの電源やWi-Fiを疑って堂々巡りになる。
+				if (httpAuth::anyRefused() && !S->refusedTold)
+				{
+					S->refusedTold = true;
+					notifyNotice(S->planId, static_cast<int>(hgc::notice::cameraRefused), 0);
+				}
 				return false;
 			}
 			S->dev = *hit;	// runner の dev_ が指す先(=S->dev)を最新のIP/apiへ更新。
