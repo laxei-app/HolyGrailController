@@ -5900,6 +5900,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // エッジへ渡した台帳の指紋(エッジ名 → 中身のハッシュ)。同じ物を送り直さないため。
     private val edgeBookSent = HashMap<String, Int>()
+    // 最後に渡した時刻(エッジ名 → ms)。同じ内容の送り直しに間隔をあけるため。
+    private val edgeBookAt = HashMap<String, Long>()
+    // 同じ内容を送り直す最短の間隔。エッジを入れ替えた/初期化した場合の取り返しは要るが、
+    //  毎スイープ送る必要はない。時刻の送り直し(30分)と同じ考え方。
+    private val kEdgeBookRefreshMs = 30L * 60L * 1000L
 
     // 所持カメラ台帳をエッジへ渡す。
     //  【なぜ計画と別に要るか】エッジは撮影計画を受け取るまでカメラの資格情報を持てないが、
@@ -5914,6 +5919,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             try {
                 if (HgeNative.nativeEdgeSendCameraBook(ed.addr(), ed.port, book) == 0) {
                     edgeBookSent[ed.name] = book.hashCode()
+                    edgeBookAt[ed.name]   = System.currentTimeMillis()
                 }
             } catch (_: Exception) {}
         }.start()
@@ -5984,9 +5990,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
                             sendEdgeTime(f.edge)
                         }
                         // 台帳は中身が変わったときだけ送る(4台で571バイト・1往復0.1秒)。
-                        //  見えた瞬間は指紋に関わらず送る。エッジを入れ替えた/初期化した場合に届く。
+                        //  【送りすぎないこと(2026-08-28 実機で StickS3 がリセット)】以前は
+                        //   「見えた瞬間」でも無条件に送っていた。ところがAPモードのエッジでは
+                        //   オンライン判定が毎回立ち直るため、実質**スイープのたび(30秒おき)**に
+                        //   送っていた。受け取る側は計画を読み直すので内部ヒープを食い潰す。
+                        //   見えた瞬間の再送は残すが、同じ内容なら間隔をあける。
                         val bookNow = try { HgeNative.nativeCameraBookJson().hashCode() } catch (_: Exception) { 0 }
-                        if (appeared || edgeBookSent[nm] != bookNow) { sendEdgeCameraBook(f.edge) }
+                        val bookAge = System.currentTimeMillis() - (edgeBookAt[nm] ?: 0L)
+                        if (edgeBookSent[nm] != bookNow || (appeared && bookAge > kEdgeBookRefreshMs)) {
+                            sendEdgeCameraBook(f.edge)
+                        }
                         updateEdgeIp(nm, f.edge.ip, f.edge.port)   // DHCPのIP変動を常時追従
                         if (f.hasSessions) reconcileEdgeSessions(f.edge, f.sessions)
                         if (f.hasHeld) reconcileEdgeRoster(f.edge, f.heldPlans)   // 項目6: エッジ側削除の検知→ロック解除

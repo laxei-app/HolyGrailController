@@ -1128,6 +1128,16 @@ namespace
 		preloadPlanCredentials();		// 手元に残っている計画の分は足し直す
 	}
 
+	// 直近に採り込んだ台帳。**同じ物が来たら何もしない**ための控え。
+	//
+	// 【なぜ要るか(2026-08-28 実機で StickS3 がリセット)】スマホは見つけるたびに台帳を
+	//  送ってくる(実測30秒おき)。受け取るたびに applyCameraBook が保存済みの計画を
+	//  **全部読み直して**いた。計画1本の hgc::cs は大きく、これを30秒ごとに作っては
+	//  捨てると内部ヒープが持たない。実測で最低残量が 288 バイトまで落ち、確保に失敗して
+	//  リセットしていた(リセット直前の行が毎回 "camera book received" だった)。
+	//  中身が変わっていなければ、書き込みも読み直しもログも要らない。
+	std::string g_cameraBook;
+
 	// 起動時に台帳を読む。無ければ何もしない(まだ一度もスマホと会っていない)。
 	void loadCameraBook(void)
 	{
@@ -1135,6 +1145,7 @@ namespace
 		const std::string path = cameraBookPath();
 		std::string body;
 		if (path.empty() || !osfile::readAll(path, body) || body.empty()) { return; }
+		g_cameraBook = body;
 		applyCameraBook(body);
 	}
 
@@ -1887,10 +1898,15 @@ int32_t hge_setCameraBook(const char* json, int32_t len)
 	nlohmann::json j = nlohmann::json::parse(body, nullptr, false);
 	if (j.is_discarded() || !j.is_array()) { return ERR_HGC_INVALID_ARG; }
 
+	// 同じ物なら何もしない。スマホは見つけるたびに送ってくるので、ここを素通しにすると
+	//  計画の読み直しを30秒おきに繰り返してヒープを食い潰す(g_cameraBook の説明を参照)。
+	if (body == g_cameraBook) { return ERR_HGC_OK; }
+
 	const std::string path = cameraBookPath();
 	if (!path.empty()) { osfile::writeAll(path, body.data(), body.size()); }
+	g_cameraBook = body;
 	applyCameraBook(body);
-	dataManager::logEvent("CAMERA", ("camera book received: " + std::to_string(j.size()) + " camera(s)").c_str());
+	dataManager::logEvent("CAMERA", ("camera book updated: " + std::to_string(j.size()) + " camera(s)").c_str());
 	return ERR_HGC_OK;
 }
 
