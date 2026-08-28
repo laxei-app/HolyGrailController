@@ -312,9 +312,10 @@ namespace net
 			return v;
 		}
 
+		// useAuth=false: 401 を受けても資格情報を付けて投げ直さない(挨拶用)。
 		int httpRequest(const std::string& method, const std::string& url,
 		                const std::string& body, bool hasBody, std::string& response,
-		                const char* extraHeader = nullptr)
+		                const char* extraHeader = nullptr, bool useAuth = true)
 		{
 			g_lastHttpStatus = 0;	// 応答を得られなければ 0 のまま
 			response.clear();
@@ -339,7 +340,8 @@ namespace net
 				req += "Host: " + hostKey + "\r\n";
 				req += "Connection: keep-alive\r\n";
 				// 一度 401 を受けた相手には最初から付ける(毎回2往復にしない)。
-				const std::string auth = httpAuth::authorization(hostKey, method, path);
+				const std::string auth = useAuth ? httpAuth::authorization(hostKey, method, path)
+				                                 : std::string();
 				if (!auth.empty()) { req += "Authorization: " + auth + "\r\n"; }
 				if (extraHeader != nullptr) { req += extraHeader; }	// 例: Range: bytes=0-65535
 				if (hasBody)
@@ -409,6 +411,7 @@ namespace net
 					break;
 				}
 				if (authTry > 0) { break; }
+				if (!useAuth) { break; }	// 挨拶。401 のままでよい(nc に触らない)
 				// 401。チャレンジを覚えて、同じ要求を認証つきで投げ直す。
 				const std::string wa = headerValue(header, "WWW-Authenticate");
 				if (wa.empty() || !httpAuth::learn(hostKey, wa)) { break; }	// 資格情報が無い/尽きた

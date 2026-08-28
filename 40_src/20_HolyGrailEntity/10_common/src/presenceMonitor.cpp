@@ -1,5 +1,6 @@
 ﻿#include "presenceMonitor.h"
 #include "cameraController.h"
+#include "dataManager.h"	// 挨拶を送ったことをログへ(飛んだかどうかを追えるように)
 #include "netThread.h"
 #include "osSystemCall.h"
 #include <json/nlohmann/json.hpp>
@@ -18,7 +19,9 @@ namespace {
 
 	struct pcam { std::string serial; std::string model; std::string assignedName; std::string ip; bool online = false; long long lastSeen = 0;
 	              bool verify = false;		// #1: 次tickで即疎通確認し、失敗ならTTLを待たずオフラインへ
-	              std::string location; };	// SSDP のデバイス記述URL(認証不要)。生死確認はこれを引く
+	              std::string location;	// SSDP のデバイス記述URL(認証不要)。生死確認はこれを引く
+	              std::string access;		// CCAPI の入口(挨拶を送る先)
+	              bool greet = false; };	// ネットワークに入り直したので挨拶を送る
 	std::vector<pcam>       g_map;
 	std::mutex              g_mapMutex;
 	std::function<void()>   g_onChange;
@@ -72,12 +75,17 @@ namespace {
 			{
 				if (c.serial != d.serialno) { continue; }
 				c.model = d.model; c.assignedName = d.assignedName; c.ip = ip; c.location = d.location;
+				c.access = d.urlAccess;
+				// 居なかったものが見えた = ネットワークに入り直した。挨拶を送る(greetLocked を参照)。
+				if (!c.online) { c.greet = true; }
 				c.online = true; c.lastSeen = now; merged = true; break;
 			}
 			if (!merged)
 			{
 				pcam n{ d.serialno, d.model, d.assignedName, ip, true, now };
 				n.location = d.location;
+				n.access = d.urlAccess;
+				n.greet = true;		// 初めて見えた
 				g_map.push_back(n);
 			}
 		}
@@ -115,7 +123,7 @@ namespace {
 			if (c.online || c.location.empty()) { continue; }
 			std::string resp;
 			if (netThread::httpGet(c.location, resp) && !resp.empty())
-			{ c.online = true; c.lastSeen = now; }
+			{ c.online = true; c.lastSeen = now; c.greet = true; }	// 参加し直した
 		}
 	}
 
@@ -128,6 +136,46 @@ namespace {
 
 	bool canScanNow() { return !g_canScan || g_canScan(); }
 	bool inUseNow(const std::string& serial) { return g_inUse && g_inUse(serial); }
+
+	// カメラに「繋がったよ」と知らせる(2026-08-28 ユーザー報告 + 実機で確定)。
+	//
+	// 【なぜ要るか】カメラを Wi-Fi に参加させるとき、カメラは接続先のIPを表示して待ち続ける。
+	//  この状態で電源を切ると Wi-Fi の設定がやり直しになる。**一度きちんと繋がれば覚える。**
+	//
+	// 【何が必要か(実機 EOS R50 V で確定)】
+	//  ・SSDP や UPnP の記述子(:49152)では**足りない**。記述子を出しているのは別のサービス
+	//  ・CCAPI(:8080)へ**届くだけでも足りない**。認証なしで叩いて 401 を貰っても変わらなかった
+	//  ・**200 が返る CCAPI アクセス**で「接続が完了しました」に変わった
+	//  つまりカメラが見ているのは「成功したやり取り」であって、到達ではない。
+	//
+	// 【いつ送るか】所持カメラに載っているかは関係ない。ネットワークに入り直すたびに要る。
+	//  電源の入り切りだけでなく、カメラ側で手動で切断して繋ぎ直したときも同じ。
+	//  なので「見えていなかったものが見えた」瞬間を合図にする(初回・復帰の両方)。
+	//
+	// 【撮影中の個体には送らない】成功させるには認証が要り、認証は nc(ノンスカウンタ)を進める。
+	//  カメラは nc を一本で覚えているので、撮る側は次の要求で 401 を受けて認証をやり直す羽目に
+	//  なる(実測では時刻から種を作り直して回復するが、撮影の最中に往復を増やす意味は無い)。
+	//  撮影中の個体は「ずっと見えている」ので、そもそもこの合図は立たない。念のため明示で弾く。
+	void greetLocked()
+	{
+		for (auto& c : g_map)
+		{
+			if (!c.greet) { continue; }
+			c.greet = false;
+			if (c.access.empty())
+			{	// 入口が分からない。**ここが空だと挨拶は永久に飛ばない**ので残す。
+				dataManager::logEvent("CAMERA", ("greet skipped (no access url): " + c.serial).c_str());
+				continue;
+			}
+			if (inUseNow(c.serial)) { continue; }	// 撮っている個体には触らない
+			// 機器情報を1回読むだけ。軽く、どの機種にもあり、こちらにも有用な内容が返る。
+			std::string resp;
+			const bool ok = netThread::httpGet(c.access + "/ver100/deviceinformation", resp);
+			dataManager::logEvent("CAMERA", (std::string("greet ") + (ok ? "ok " : "failed ")
+			                                 + c.access).c_str(), !ok);
+		}
+	}
+
 
 	// 撮影中の軽い接触。**撮影に使っていない個体だけ**を記述URLで突く。
 	//  目的は在否の更新ではなく、**AP の無通信タイマで追い出されないこと**。
@@ -173,6 +221,7 @@ namespace {
 					recoverOfflineLocked(now);	// M-SEARCHで拾えなかった復帰を記述URLで拾う
 				}
 				else        { refreshLivenessLocked(now); }
+				greetLocked();	// 入り直したカメラへ挨拶(機器情報を1回読む)
 				std::string sig = signatureLocked();
 				if (sig != g_lastSig) { g_lastSig = sig; changed = true; }
 			}
