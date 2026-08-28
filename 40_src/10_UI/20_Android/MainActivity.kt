@@ -5818,8 +5818,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
             // ① エッジ書き戻し: エッジが接続確定したカメラの serial/assignedName を所持カメラへ反映する
             //  (エッジ撮影ではスマホがカメラに接続しないため、この経路が唯一の識別情報伝播)。serial単位で1回だけ適用。
             // 認証で弾かれているなら、その理由を覚えておく(「見つかりません」を言い換えるため)。
+            //  【理由は遅れて届く】×とダイアログは取得に失敗した瞬間に出るが、理由が分かるのは
+            //   その次の周回になる。届いた時点で内容が変わるなら、出 している案内を出し直す。
+            //   そうしないと、多重表示の抑止が働いて古い文言("見つかりません")のまま残る。
             val nt = o.optInt("notice", 0)
+            val prev = planAuthNotice[pid] ?: 0
             if (nt != 0) planAuthNotice[pid] = nt else planAuthNotice.remove(pid)
+            if (nt != prev && nocamDialogShown.contains(pid) && disconnectedPlans.contains(pid))
+            {
+                clearNoCam(pid)            // いま出ている案内を閉じ、抑止も解く
+                showNoCameraDialog(pid)    // 新しい理由で出し直す
+            }
             val cSerial = o.optString("serial")
             if (cSerial.isNotEmpty() && edgeAppliedSerials.add(cSerial)) {
                 val cModel = o.optString("model"); val cAssignedName = o.optString("assignedName")

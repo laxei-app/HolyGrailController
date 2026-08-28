@@ -307,7 +307,12 @@ namespace httpAuth
 	{
 		std::lock_guard<std::mutex> lk(g_mtx);
 		auto it = g_hosts.find(host);
-		if (it != g_hosts.end()) { it->second.proven = true; it->second.unauth = false; }
+		if (it != g_hosts.end())
+		{	// 通ったのなら、締め出しも認証失敗も**もう成立していない**。両方消す。
+			//  【消し忘れていた(2026-08-28)】403 の記録が残り続け、カメラを直したあとも
+			//   「締め出されています」と案内し続けていた。200 が返るのが何よりの証拠。
+			it->second.proven = true; it->second.unauth = false; it->second.refused = false;
+		}
 	}
 
 	hostGuard::hostGuard(const std::string& host)
