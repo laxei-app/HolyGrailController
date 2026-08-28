@@ -11,9 +11,14 @@
 
 置いたあとの push は**しない**。中身を確かめてから、手で push すること。
 
-  python publish_fw.py              # 両機種
+  python publish_fw.py --local      # 実機へ焼く用。**公開リポジトリを触らない**(既定の使い方)
+  python publish_fw.py              # 公開リポジトリへ置く(リリース時だけ)
   python publish_fw.py --only core-s3
   python publish_fw.py --no-build   # 既にあるビルド成果物を使う
+
+【公開リポジトリは指示があるまで更新しない(2026-08-28 ユーザー指示)】
+公開物はその機能の検証時とリリース時にしか使わない。普段の実機書き込みは --local を使い、
+hgc-master には手を触れないこと。--local はビルド成果物の場所に結合イメージを残すだけ。
 """
 import argparse
 import hashlib
@@ -103,11 +108,23 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", help="機種を1つだけ (stick-s3 / core-s3)")
     ap.add_argument("--no-build", action="store_true", help="既にあるビルド成果物を使う")
+    ap.add_argument("--local", action="store_true",
+                    help="公開リポジトリを触らない(実機へ焼くだけ。既定の使い方)")
     args = ap.parse_args()
 
     targets = [m for m in MODELS if not args.only or m["id"] == args.only]
     if not targets:
         raise SystemExit("その機種はありません")
+
+    if args.local:
+        # 公開リポジトリには一切触らない。結合イメージの場所だけ知らせて終わる。
+        for m in targets:
+            print("[%s]" % m["name"])
+            e = build_one(m, not args.no_build)
+            print("  %s" % e["_path"])
+            print("  %d バイト  sha256 %s" % (e["size"], e["sha256"]))
+        print("※ --local なので公開リポジトリは触っていません。")
+        return
 
     dst = os.path.join(OUT_REPO, "firmware")
     if not os.path.isdir(dst):

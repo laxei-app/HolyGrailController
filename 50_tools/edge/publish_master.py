@@ -20,6 +20,11 @@
 
   python publish_master.py            # 版を1つ進めて写す
   python publish_master.py --same-rev # 版はそのまま(書き間違いの直し等)
+
+【公開リポジトリは指示があるまで更新しない(2026-08-28 ユーザー指示)】
+この道具は走らせた時点で hgc-master を書き換える。普段は使わないこと。
+機材マスタを直したいだけなら assets/master/*.json を直せばアプリはそれを使う
+(同梱のほうが版が新しければ取り込む)。公開へ出すのはリリースのときだけ。
 """
 import argparse
 import hashlib
