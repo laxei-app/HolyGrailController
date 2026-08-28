@@ -46,6 +46,7 @@ static volatile bool g_blWake = false;
 #include "batteryGuard.h"	// 限界での自動シャットダウン
 #include "edgeHeap.h"	// 内部RAMの推移(開始/停止で戻らない量を見る)
 #include "edgeApEvents.h"	// SoftAP への参加/離脱(理由コード付き)をログへ
+#include "edgeAlive.h"	// loop() が止まったら証拠を残して再起動する
 #include "edgeApLeases.h"	// 配ったIPを覚えて次回の配布範囲を外す(IP重複の防止)
 #include "osFile.h"
 #include "osClock.h"
@@ -1152,6 +1153,7 @@ void setup(void)
 	// APの参加/離脱/貸出を記録する。**AP起動より前に**登録しないと、最初に配った
 	//  IPのイベントを取り逃がして記録に穴が空く(2026-08-26)。
 	edgeApEvents::start();
+	edgeAlive::start();	// 見張り開始(loop の生存を別タスクが見る)
 	if (g_netMode == "ap") { startApAndEtp(); }
 	// 起動したことと理由を1行残す(2026-08-21)。落ちた原因を後から追えるようにする。
 	//  時計が使えるようになってから呼ぶ(APモードは startApAndEtp が RTC を復元済み)。
@@ -1195,6 +1197,7 @@ static void logBatteryPeriodic(uint32_t nowMs)
 
 void loop(void)
 {
+	edgeAlive::beat();	// 生存の目印(止まったら別タスクが気づく)
 	M5.update();
 	uint32_t now = millis();
 	logBatteryPeriodic(now);	// 残量ログ(60秒ごと)+ レベル更新 + 電源断シーケンスの開始
@@ -1238,7 +1241,7 @@ void loop(void)
 	// 遅延アームのポンプ(§7.4): 予約計画の開始スレッドを期日(窓90秒前)に生成する。毎秒1回で十分。
 	{
 		static uint32_t lastPump = 0;
-		if (now - lastPump >= 1000) { lastPump = now; hge_pump(); edgeHeap::pump((int)g_state); edgeApLeases::pump(); }
+		if (now - lastPump >= 1000) { lastPump = now; hge_pump(); edgeHeap::pump((int)g_state); edgeApLeases::pump(); edgeApEvents::pump(); }
 	}
 
 	// 項目2: 終わった撮影計画をエッジから自動削除する。

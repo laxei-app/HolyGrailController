@@ -34,6 +34,7 @@
 #include "edgeBoot.h"	// 起動マーカー(リセット要因)
 #include "edgeHeap.h"	// 内部RAMの推移(開始/停止で戻らない量を見る)
 #include "edgeApEvents.h"	// SoftAP への参加/離脱(理由コード付き)をログへ
+#include "edgeAlive.h"	// loop() が止まったら証拠を残して再起動する
 #include "edgeApLeases.h"	// 配ったIPを覚えて次回の配布範囲を外す(IP重複の防止)
 #include "edgeBacklight.h"	// バックライト自動消灯(無操作1分。消灯中は電源LEDも消す)
 
@@ -1087,6 +1088,7 @@ void setup(void)
 	// APの参加/離脱/貸出を記録する。**AP起動より前に**登録しないと、最初に配った
 	//  IPのイベントを取り逃がして記録に穴が空く(2026-08-26)。
 	edgeApEvents::start();
+	edgeAlive::start();	// 見張り開始(loop の生存を別タスクが見る)
 	if (g_netMode == "ap") { startApAndEtp(); }	// APモード: この時点でSoftAP+ETP+QRを立ち上げる
 	// 起動したことと理由を1行残す(2026-08-21)。落ちた原因を後から追えるようにする。
 	//  時計が使えるようになってから呼ぶ(APモードは startApAndEtp が RTC を復元済み)。
@@ -1132,6 +1134,7 @@ static void logBatteryPeriodic(void)
 
 void loop(void)
 {
+	edgeAlive::beat();	// 生存の目印(止まったら別タスクが気づく)
 	M5.update();
 	logBatteryPeriodic();	// 残量ログ(60秒ごと)+ レベル更新 + 電源断シーケンスの開始
 	// 電源断: スマホのポーリング1周期ぶん待ってから切る(✖を1回拾わせるため)。
@@ -1173,7 +1176,7 @@ void loop(void)
 	{
 		static uint32_t lastPump = 0;
 		uint32_t nowMs = millis();
-		if (nowMs - lastPump >= 1000) { lastPump = nowMs; hge_pump(); edgeHeap::pump((int)g_state); edgeApLeases::pump(); }
+		if (nowMs - lastPump >= 1000) { lastPump = nowMs; hge_pump(); edgeHeap::pump((int)g_state); edgeApLeases::pump(); edgeApEvents::pump(); }
 	}
 
 	// 項目2: 終わった撮影計画をエッジから自動削除する。

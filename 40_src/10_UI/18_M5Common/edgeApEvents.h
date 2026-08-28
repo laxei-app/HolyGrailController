@@ -16,45 +16,100 @@
 // 置き場所は 18_M5Common。CoreS3 も StickS3 も同じものを使う(機種で分岐しない)。
 #include <WiFi.h>
 #include <cstdio>
+#include <cstring>
+#include <vector>
 #include "dataManager.h"
 #include "edgeApLeases.h"	// 配った IP を覚えて次回の配布範囲を外す(IP重複の防止)
 
 namespace edgeApEvents
 {
+	// 【イベントタスクではファイルを触らないこと(2026-08-28)】
+	//  ここは Arduino のイベントループのタスク(arduino_events)で、Wi-Fi のイベントを
+	//  順番に配る場所である。ここでファイルを書くと、その間ほかのイベントが全部止まる。
+	//  実機のログに、このタスクの追記と loop() 側の追記が**1行に混ざった**跡が残っている:
+	//    14:22:12 camera book received: 1 camera(s)
+	//    14:22:18 camera book recei5:50:1C:FC aid=1
+	//  この直後に端末が停止した(loop() が止まり、画面・時計・シリアル・BLE・ETP が全滅。
+	//  撮影は別タスクなので動き続けた)。因果は確定していないが、イベントタスクで
+	//  ファイルを触るのは元より誤りなので、ここでは RAM に積むだけにして、
+	//  ログ出しは pump()(通常のループ)へ回す。
+	//
+	//  なお edgeApLeases も同じ決まりで作られている(「イベントタスクでは RAM だけ触り、
+	//  書き込みは pump に任せる」)。ここだけが破っていた。
+
+	struct pending { char kind; uint8_t mac[6]; uint16_t aid; uint16_t reason; uint32_t ip; };
+
+	inline std::vector<pending>& queue(void) { static std::vector<pending> v; return v; }
+
+	// 溜めすぎない。イベントが嵐のように来ても RAM を食い潰さないための上限。
+	constexpr size_t kMaxPending = 24;
+
+	inline void push(const pending& p)
+	{
+		if (queue().size() >= kMaxPending) { return; }	// あふれたら捨てる(ログが欠けるだけ)
+		queue().push_back(p);
+	}
+
 	inline void onEvent(arduino_event_id_t id, arduino_event_info_t info)
 	{
-		char d[128];
+		pending p{};
 		if (id == ARDUINO_EVENT_WIFI_AP_STACONNECTED)
 		{
-			const uint8_t* m = info.wifi_ap_staconnected.mac;
-			std::snprintf(d, sizeof(d), "join mac=%02X:%02X:%02X:%02X:%02X:%02X aid=%u",
-			              m[0], m[1], m[2], m[3], m[4], m[5],
-			              (unsigned)info.wifi_ap_staconnected.aid);
-			dataManager::logEvent("APSTA", d);
+			p.kind = 'j';
+			std::memcpy(p.mac, info.wifi_ap_staconnected.mac, 6);
+			p.aid = (uint16_t)info.wifi_ap_staconnected.aid;
+			push(p);
 		}
 		else if (id == ARDUINO_EVENT_WIFI_AP_STADISCONNECTED)
 		{
-			const uint8_t* m = info.wifi_ap_stadisconnected.mac;
-			std::snprintf(d, sizeof(d), "leave mac=%02X:%02X:%02X:%02X:%02X:%02X aid=%u reason=%u",
-			              m[0], m[1], m[2], m[3], m[4], m[5],
-			              (unsigned)info.wifi_ap_stadisconnected.aid,
-			              (unsigned)info.wifi_ap_stadisconnected.reason);
-			dataManager::logEvent("APSTA", d, true);
-			// 撮影ループへ伝える。ここでは MAC を控えるだけにする(RAM のみ)。
-			//  IP へ直すのは pump の側。ここでネットワークAPIを呼ぶと端末ごと固まる
-			//  (edgeApLeases::leftMacs の説明を参照)。
-			edgeApLeases::onLeft(m);
+			p.kind = 'l';
+			std::memcpy(p.mac, info.wifi_ap_stadisconnected.mac, 6);
+			p.aid    = (uint16_t)info.wifi_ap_stadisconnected.aid;
+			p.reason = (uint16_t)info.wifi_ap_stadisconnected.reason;
+			push(p);
+			edgeApLeases::onLeft(p.mac);	// RAM に積むだけ。IP へ直すのは pump
 		}
 		else if (id == ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED)
 		{
 			// このイベントは配った IP と**相手の MAC**の両方をくれる(esp-idf 5 / arduino 3.x)。
 			//  MAC があるので「同じ端末が別の IP をもらった=古い IP は空いた」と判断できる。
-			const uint8_t* m = info.wifi_ap_staipassigned.mac;
-			std::snprintf(d, sizeof(d), "lease ip=%s mac=%02X:%02X:%02X:%02X:%02X:%02X",
-			              IPAddress(info.wifi_ap_staipassigned.ip.addr).toString().c_str(),
-			              m[0], m[1], m[2], m[3], m[4], m[5]);
-			dataManager::logEvent("APSTA", d);
-			edgeApLeases::onAssigned(m, info.wifi_ap_staipassigned.ip.addr);
+			p.kind = 'a';
+			std::memcpy(p.mac, info.wifi_ap_staipassigned.mac, 6);
+			p.ip = info.wifi_ap_staipassigned.ip.addr;
+			push(p);
+			edgeApLeases::onAssigned(p.mac, p.ip);	// RAM のみ(このファイルの決まりどおり)
+		}
+	}
+
+	// 溜まったイベントをログへ出す。**通常のループ(pump)から呼ぶこと。**
+	inline void pump(void)
+	{
+		if (queue().empty()) { return; }
+		std::vector<pending> take;
+		take.swap(queue());
+		char d[128];
+		for (const pending& p : take)
+		{
+			if (p.kind == 'j')
+			{
+				std::snprintf(d, sizeof(d), "join mac=%02X:%02X:%02X:%02X:%02X:%02X aid=%u",
+				              p.mac[0], p.mac[1], p.mac[2], p.mac[3], p.mac[4], p.mac[5], (unsigned)p.aid);
+				dataManager::logEvent("APSTA", d);
+			}
+			else if (p.kind == 'l')
+			{
+				std::snprintf(d, sizeof(d), "leave mac=%02X:%02X:%02X:%02X:%02X:%02X aid=%u reason=%u",
+				              p.mac[0], p.mac[1], p.mac[2], p.mac[3], p.mac[4], p.mac[5],
+				              (unsigned)p.aid, (unsigned)p.reason);
+				dataManager::logEvent("APSTA", d, true);
+			}
+			else if (p.kind == 'a')
+			{
+				std::snprintf(d, sizeof(d), "lease ip=%s mac=%02X:%02X:%02X:%02X:%02X:%02X",
+				              IPAddress(p.ip).toString().c_str(),
+				              p.mac[0], p.mac[1], p.mac[2], p.mac[3], p.mac[4], p.mac[5]);
+				dataManager::logEvent("APSTA", d);
+			}
 		}
 	}
 
