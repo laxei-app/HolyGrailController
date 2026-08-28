@@ -880,27 +880,56 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  ただの HashMap だと取得の順が画面の並びと食い違い、どこまで進んだか読みにくい。
     private val dlogTargets = LinkedHashMap<String, CheckBox>()
     private var dlogShotCb: CheckBox? = null
-    private var dlogBattCb: CheckBox? = null
 
-    // 採る/採らないの設定。**既定は両方とも採らない**(量が多く、肝心の出来事が埋もれるため)。
+
+    // 採る/採らないの設定。**既定はすべて採らない**(量が多く、肝心の出来事が埋もれるため)。
+    //
+    // 【端末ごとに持つ(2026-08-29 UI依頼)】以前は1組の設定を全端末へ配っていた。
+    //  ところが困るのはたいてい1台だけで、全部の端末で記録を増やす理由がない。
+    //  スマホは自分で撮ることもあるので**撮影ログだけ**持つ。電池と STACK/HEAP は
+    //  エッジの話なので、エッジ端末設定の画面で端末ごとに入れてもらう。
     private fun logOptShot() = hgcPrefs().getBoolean("logShot", false)
-    private fun logOptBatt() = hgcPrefs().getBoolean("logBatt", false)
-    private fun setLogOpts(shot: Boolean, batt: Boolean) {
-        hgcPrefs().edit().putBoolean("logShot", shot).putBoolean("logBatt", batt).apply()
+    private fun setLogOptShot(on: Boolean) {
+        hgcPrefs().edit().putBoolean("logShot", on).apply()
         applyLogOptsToSelf()
-        pushLogOptsToEdges()
     }
-    // スマホ自身の記録に効かせる。起動時と変更時に呼ぶ。
+    // スマホ自身の記録に効かせる。起動時と変更時に呼ぶ。効くのは撮影ログだけ。
     private fun applyLogOptsToSelf() {
-        try { HgeNative.nativeSetLogOptions(logOptShot(), logOptBatt()) } catch (_: Exception) {}
+        try { HgeNative.nativeSetLogOptions(logOptShot()) } catch (_: Exception) {}
     }
-    // オンラインのエッジへ送る。エッジは不揮発へ残さないので、スイープでも毎回送る。
-    private fun pushLogOptsToEdges() {
-        val shot = logOptShot(); val batt = logOptBatt()
-        for (ed in edges.toList()) {
-            if (!ed.reachable()) continue
-            Thread { try { HgeNative.nativeEdgeSendLogOpt(ed.addr(), ed.port, shot, batt) } catch (_: Exception) {} }.start()
-        }
+
+    // エッジ1台ぶんのログ設定。prefs の el_<端末名> に {"shot","batt","sys"}。
+    private class EdgeLogOpt(var shot: Boolean = false, var batt: Boolean = false, var sys: Boolean = false)
+
+    private fun edgeLogKey(name: String) = "el_" + name
+
+    private fun loadEdgeLogOpt(name: String): EdgeLogOpt {
+        val c = EdgeLogOpt()
+        if (name.isEmpty()) return c
+        try {
+            val o = JSONObject(hgcPrefs().getString(edgeLogKey(name), "") ?: "")
+            c.shot = o.optBoolean("shot", false)
+            c.batt = o.optBoolean("batt", false)
+            c.sys  = o.optBoolean("sys",  false)
+        } catch (_: Exception) {}
+        return c
+    }
+
+    private fun saveEdgeLogOpt(name: String, c: EdgeLogOpt) {
+        if (name.isEmpty()) return
+        try {
+            val o = JSONObject().put("shot", c.shot).put("batt", c.batt).put("sys", c.sys)
+            hgcPrefs().edit().putString(edgeLogKey(name), o.toString()).apply()
+        } catch (_: Exception) {}
+        sendEdgeLogOpt(name)
+    }
+
+    // その端末へ設定を送る。エッジは不揮発へ残さないので、スイープでも毎回送り直す。
+    private fun sendEdgeLogOpt(name: String) {
+        val ed = edges.firstOrNull { it.name == name } ?: return
+        if (!ed.reachable()) return
+        val c = loadEdgeLogOpt(name)
+        Thread { try { HgeNative.nativeEdgeSendLogOpt(ed.addr(), ed.port, c.shot, c.batt, c.sys) } catch (_: Exception) {} }.start()
     }
 
     private fun openDebugLog() {
@@ -921,31 +950,29 @@ class MainActivity : AppCompatActivity(), HgeListener {
             })
         }
 
-        heading("記録する内容")
+        heading("このスマートフォンの記録")
         box.addView(TextView(this).apply {
-            text = "次の撮影から効きます。量が多いので、普段は切っておくことをおすすめします。"
+            // エッジのぶんはエッジ端末設定にある。ここに全部置くと「どの端末の話か」が
+            //  分からなくなるため、持ち主のところへ置く(2026-08-29 UI依頼)。
+            text = "次の撮影から効きます。エッジ端末のログはエッジ端末設定で端末ごとに指定します。"
             textSize = 12f; setTextColor(Color.GRAY); setPadding(0, 0, 0, dp(4))
         })
         val shotCb = CheckBox(this).apply {
             text = "撮影ログ (1コマごとの露出・測光)"
             isChecked = logOptShot()
-            setOnCheckedChangeListener { _, _ -> setLogOpts(isChecked, dlogBattCb?.isChecked ?: false) }
+            setOnCheckedChangeListener { _, _ -> setLogOptShot(isChecked) }
         }
-        val battCb = CheckBox(this).apply {
-            text = "バッテリログ (電池残量の定期記録)"
-            isChecked = logOptBatt()
-            setOnCheckedChangeListener { _, _ -> setLogOpts(dlogShotCb?.isChecked ?: false, isChecked) }
-        }
-        dlogShotCb = shotCb; dlogBattCb = battCb
-        box.addView(shotCb); box.addView(battCb)
+        dlogShotCb = shotCb
+        box.addView(shotCb)
 
         heading("取得")
         val run = blueButton("ログ取得") { if (dlogBusy) { dlogAbort = true } else { startLogFetch() } }
         box.addView(run); dlogRunBtn = run
-        // 撮影中は取得だけを止める。設定(上のチェック)は触れるままにする。
+        // 撮影中は触らせない(2026-08-29 UI依頼)。設定は次の撮影からしか効かず、取得は重い。
+        //  走行中に触れる意味がないので、まとめて止めて理由を出す。
         if (isCaptureBusy()) {
             box.addView(TextView(this).apply {
-                text = "撮影中です。ログ取得はできません(上の設定は変えられます)。"
+                text = "撮影中です。撮影が終わってから操作してください。"
                 textSize = 12f; setTextColor(Color.GRAY); setPadding(0, dp(2), 0, 0)
             })
         }
@@ -970,20 +997,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
         heading("状況")
         val pg = TextView(this).apply { textSize = 13f; setTextColor(Color.DKGRAY) }
         box.addView(pg); dlogProgress = pg
-        setDlogEnabled(!dlogBusy)
+        setDlogEnabled(!dlogBusy && !isCaptureBusy())
     }
 
     // 取得中は取得ボタン以外を触らせない。押せることと押せないことを見た目で分ける。
     private fun setDlogEnabled(on: Boolean) {
-        dlogShotCb?.isEnabled = on; dlogBattCb?.isEnabled = on
+        dlogShotCb?.isEnabled = on
         for (cb in dlogTargets.values) { cb.isEnabled = on }
         val c = if (on) Color.BLACK else Color.GRAY
-        dlogShotCb?.setTextColor(c); dlogBattCb?.setTextColor(c)
+        dlogShotCb?.setTextColor(c)
         for (cb in dlogTargets.values) { cb.setTextColor(c) }
         dlogRunBtn?.text = if (dlogBusy) "中断" else "ログ取得"
-        // 撮影中は取得できない(押せるように見せない)。中断は押せる必要があるので、
-        //  取得中(dlogBusy)は撮影中でも有効のままにする。
-        dlogRunBtn?.isEnabled = dlogBusy || !isCaptureBusy()
+        // 中断は押せる必要があるので、取得中だけは有効のままにする。
+        dlogRunBtn?.isEnabled = dlogBusy || on
     }
 
     // 選んだ端末からログを集める。進み具合は画面へ書き、終わったら結果を残す。
@@ -5806,9 +5832,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // SSID/password。APモードでは「エッジが立てるAPの資格」、STAでは「参加先の資格」。
         // 2026-08-08 UI依頼: どちらを編集しているのかが分かるようラベルを出し分ける。
         val ssidLabel = label("接続先 SSID")
-        val ssidE = EditText(ctx); box.addView(ssidE)
-        val ssidPickBtn = blueButton("SSIDを選択(周辺のWi-Fiから)") { }   // 押した時の処理は下で入れる
-        box.addView(ssidPickBtn)
+        // SSID 欄と選択ボタンは**同じ行**に置く(2026-08-29 UI依頼)。縦に積むと、
+        //  この画面だけで1画面ぶんの高さを使ってしまい、下のログ設定まで届かない。
+        val ssidE = EditText(ctx)
+        val ssidPickBtn = blueButton("SSID選択") { }   // 押した時の処理は下で入れる
+        ssidPickBtn.layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            setMargins(dp(6), 0, 0, 0)
+        }
+        box.addView(LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(ssidE, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(ssidPickBtn)
+        })
         val passLabel = label("接続先 password")
         // 既定で見えるようにする(2026-08-27 UI依頼)。理由はカメラのパスワード欄と同じ。
         val passE = EditText(ctx).apply {
@@ -5895,8 +5932,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         box.addView(popView); edgePopView = popView
 
-        box.addView(blueButton("エッジのQRをスキャン") { requestEdgeQr() })
-        box.addView(blueButton("設定を送信") { }.apply {
+        // QR と送信は左右に並べる(操作の順が左→右で読める)。
+        val qrBtn   = blueButton("エッジのQRをスキャン") { requestEdgeQr() }
+        val sendBtn = blueButton("設定を送信") { }
+        for (b in listOf(qrBtn, sendBtn)) {
+            b.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                setMargins(dp(2), dp(6), dp(2), 0)
+            }
+        }
+        box.addView(LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(qrBtn); addView(sendBtn)
+        })
+        sendBtn.apply {
             setOnClickListener {
                 // 撮影中は AP/STA を切り替えさせない。切り替えるとエッジとカメラの回線が切れて
                 // 撮影が壊れる(2026-08-14 指示)。エッジ側でも同じ判定で断るが、ここで止めれば
@@ -5913,7 +5961,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     sendEdgeProvision()
                 }
             }
-        })
+        }
 
         // 新規は「登録だけ」もできる(エッジが手元に無くても計画で選べるようにするため)。
         box.addView(blueButton("登録だけする(エッジへ送信しない)") { }.apply {
@@ -5931,6 +5979,56 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 Toast.makeText(ctx, "「" + nm + "」を登録しました", Toast.LENGTH_SHORT).show()
             }
         })
+
+        // ── ログ取得(この端末のぶん) ───────────────────────────────
+        //
+        // 【なぜ端末ごとか(2026-08-29 UI依頼)】困るのはたいてい1台だけで、全部の端末で
+        //  記録を増やす理由がない。しかも StickS3 の保存領域は 1.5MB しかなく、
+        //  撮影ログを入れると一晩(16時間・15秒周期)で約1.5MB、STACK/HEAP だけでも約320KB になる。
+        //  必要な端末にだけ入れられるようにする。
+        if (selectedEdgeName.isNotEmpty()) {
+            box.addView(TextView(ctx).apply {
+                text = "ログ取得"
+                setTypeface(null, Typeface.BOLD); textSize = 15f
+                setPadding(0, dp(16), 0, dp(2))
+            })
+            box.addView(TextView(ctx).apply {
+                text = "次の撮影から効きます。量が多いので、普段は切っておくことをおすすめします。"
+                textSize = 12f; setTextColor(Color.GRAY); setPadding(0, 0, 0, dp(2))
+            })
+            val lo = loadEdgeLogOpt(selectedEdgeName)
+            fun logCb(label: String, on: Boolean, set: (Boolean) -> Unit): CheckBox {
+                val cb = CheckBox(ctx)
+                cb.text = label
+                cb.isChecked = on
+                cb.isEnabled = !isCaptureBusy()      // 撮影中は触らせない
+                if (!cb.isEnabled) { cb.setTextColor(Color.GRAY) }
+                cb.setOnCheckedChangeListener { _, v -> set(v); saveEdgeLogOpt(selectedEdgeName, lo) }
+                box.addView(cb)
+                return cb
+            }
+            logCb("撮影ログ (1コマごとの露出・測光)", lo.shot) { lo.shot = it }
+            logCb("バッテリログ (電池残量の定期記録)", lo.batt) { lo.batt = it }
+            logCb("STACK・HEAP (毎分の診断)",        lo.sys)  { lo.sys  = it }
+        }
+
+        // 【撮影中はこの画面を触らせない(2026-08-29 UI依頼)】ネットワーク設定を変えると
+        //  カメラとの回線が切れて撮影が壊れる。ログの設定も次の撮影からしか効かない。
+        //  以前は送信ボタンを押した後で断っていたが、押す前に分かる方がよい。
+        //  対象は**この端末が撮影中のとき**だけ(他の端末の撮影は関係ない)。
+        if (isEdgeCaptureBusy(selectedEdgeName)) {
+            setViewTreeEnabled(box, false)
+            box.addView(TextView(ctx).apply {
+                text = "「" + selectedEdgeName + "」は撮影中です。撮影が終わってから設定してください。"
+                textSize = 12f; setTextColor(Color.parseColor("#C62828")); setPadding(0, dp(10), 0, 0)
+            })
+        }
+    }
+
+    // 画面の中身をまとめて有効/無効にする(入れ子も辿る)。撮影中の入力禁止に使う。
+    private fun setViewTreeEnabled(v: View, on: Boolean) {
+        v.isEnabled = on
+        if (v is ViewGroup) { for (i in 0 until v.childCount) { setViewTreeEnabled(v.getChildAt(i), on) } }
     }
 
     // BLEでエッジに start を送ってQRを表示させ、続けてカメラでスキャンする。
@@ -6498,8 +6596,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         }
                         // デバッグログの取捨。エッジは不揮発へ残さない(電源を入れ直すと
                         //  既定=採らない に戻る)ので、毎回送って揃え直す。数十バイト。
-                        val ls = logOptShot(); val lb = logOptBatt()
-                        Thread { try { HgeNative.nativeEdgeSendLogOpt(f.edge.addr(), f.edge.port, ls, lb) } catch (_: Exception) {} }.start()
+                        //  設定は**その端末のもの**を送る(端末ごとに違ってよい)。
+                        sendEdgeLogOpt(nm)
                         updateEdgeIp(nm, f.edge.ip, f.edge.port)   // DHCPのIP変動を常時追従
                         if (f.hasSessions) reconcileEdgeSessions(f.edge, f.sessions)
                         if (f.hasHeld) reconcileEdgeRoster(f.edge, f.heldPlans)   // 項目6: エッジ側削除の検知→ロック解除

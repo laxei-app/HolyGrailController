@@ -108,7 +108,7 @@ bool applyLogOpt(const std::string& body)
 {
 	nlohmann::json j = nlohmann::json::parse(body, nullptr, false);
 	if (j.is_discarded() || !j.is_object()) { return false; }
-	dataManager::setLogOptions(j.value("shot", false), j.value("batt", false));
+	dataManager::setLogOptions(j.value("shot", false), j.value("batt", false), j.value("sys", false));
 	return true;
 }
 

@@ -101,7 +101,8 @@ namespace ossc
             std::snprintf(d, sizeof(d), "task end size=%u leftMin=%u used=%u",
                           (unsigned)ctrl->stackBytes, left,
                           (ctrl->stackBytes > left) ? (unsigned)(ctrl->stackBytes - left) : 0u);
-            dataManager::logEvent("STACK", d);
+            // 毎分出る診断。既定では採らない(一晩16時間で約320KB。StickS3は1.5MBしかない)。
+            if (dataManager::logSysEnabled()) { dataManager::logEvent("STACK", d); }
         }
 
         // 終了を通知する。ctrl の解放は threadEnd 側で行う(ここでは触らない)。
@@ -193,7 +194,8 @@ namespace ossc
             std::snprintf(d, sizeof(d), "live size=%u leftMin=%u used=%u pool=%d",
                           (unsigned)c->stackBytes, left,
                           (c->stackBytes > left) ? (unsigned)(c->stackBytes - left) : 0u, c->slot);
-            dataManager::logEvent("STACK", d);
+            // 毎分出る診断。既定では採らない(一晩16時間で約320KB。StickS3は1.5MBしかない)。
+            if (dataManager::logSysEnabled()) { dataManager::logEvent("STACK", d); }
         }
     }
 

@@ -46,7 +46,8 @@ namespace edgeHeap
 		              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
 		              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
 		              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
-		dataManager::logEvent("HEAP", d);
+		// 毎分出る診断。既定では採らない(一晩16時間で約320KB。StickS3は1.5MBしかない)。
+		if (dataManager::logSysEnabled()) { dataManager::logEvent("HEAP", d); }
 	}
 
 	// 毎ループから呼ぶ。状態が変わったときと、60秒ごと、それに

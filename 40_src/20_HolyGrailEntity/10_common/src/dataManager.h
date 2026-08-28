@@ -204,9 +204,12 @@ public:
 	//  書き込み自体が仕事を奪うし、内蔵の保存領域も食う。既定は**採らない**。
 	//  必要なときだけ画面で入れてもらう。
 	// 既定値は「両方とも採らない」。設定はスマホが持ち、エッジへは C_LOG_OPT で送る。
-	static void setLogOptions(bool shot, bool batt);
+	//  sys(STACK/HEAP)は毎分4行で、一晩16時間で約320KBになる。StickS3 の保存領域は
+	//  1.5MB しかないので、これだけで1晩ぶんを食う。撮影とは無関係の診断なので既定は採らない。
+	static void setLogOptions(bool shot, bool batt, bool sys);
 	static bool logShotEnabled(void);
 	static bool logBattEnabled(void);
+	static bool logSysEnabled(void);
 
 	// 1枚撮影(SHOT)を記録する。frame/iso/ss/fn/lum と適用中ccm名。
 	// meteredLinear: 測光したリニア輝度(自動補正時のみ。<0=測光なしで detail に出力しない)。

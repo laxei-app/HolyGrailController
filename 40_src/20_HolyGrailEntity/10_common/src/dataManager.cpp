@@ -1437,11 +1437,13 @@ namespace
 }
 
 // デバッグログの取捨。説明はヘッダ。**既定は両方とも採らない**。
-namespace { bool g_logShot = false; bool g_logBatt = false; }
+namespace { bool g_logShot = false; bool g_logBatt = false; bool g_logSys = false; }
 
-void dataManager::setLogOptions(bool shot, bool batt) { g_logShot = shot; g_logBatt = batt; }
+void dataManager::setLogOptions(bool shot, bool batt, bool sys)
+{ g_logShot = shot; g_logBatt = batt; g_logSys = sys; }
 bool dataManager::logShotEnabled(void) { return g_logShot; }
 bool dataManager::logBattEnabled(void) { return g_logBatt; }
+bool dataManager::logSysEnabled(void)  { return g_logSys; }
 
 void dataManager::setLogOffset(int utcOffsetMin)
 {
