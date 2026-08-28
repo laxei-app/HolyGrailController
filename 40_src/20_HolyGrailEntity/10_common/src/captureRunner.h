@@ -121,7 +121,7 @@ public:
 	errCode ready(const hgc::cs& plan, device* dev,
 	              const hgc::exposureSmoothing& smooth, int utcOffsetMin);
 
-	// パノラマ撮影(2026-08-25)。測光は dev(主)だけで行い、決まった露出を
+	// 同期撮影(2026-08-25)。測光は dev(主)だけで行い、決まった露出を
 	// ここで渡した全台へも配って同じコマでシャッターを切る。
 	//  ※ ready() の後、start()/runInline() の前に呼ぶこと。
 	//  ※ 渡すのはポインタなので、指す実体は撮影中ずっと生きていること。
@@ -148,7 +148,7 @@ public:
 
 	// --- 接続維持・再接続のパラメータ ---
 	static constexpr int  kKeepAliveSec        = 60;	// 撮影窓まで待機中、無害なGETを送る周期[秒]
-	// パノラマ: 確立に失敗した追加カメラを次に試すまでの間隔[ms]。
+	// 同期撮影: 確立に失敗した追加カメラを次に試すまでの間隔[ms]。
 	// 居ない台へ毎コマ startShooting を投げると、その待ちが主カメラの準備を食う。
 	static constexpr long long kSubRetryMs     = 60000;
 	static constexpr int  kWaitMaxFail         = 2;		// 待機中keepAliveがこの回数連続失敗で先回り再接続(健全性チェック)
@@ -355,7 +355,7 @@ private:
 	hgc::cs plan_{};
 	device* dev_ = nullptr;
 
-	// --- パノラマ撮影の追加カメラ(2026-08-25) ---
+	// --- 同期撮影の追加カメラ(2026-08-25) ---
 	// 主カメラと機種が違うと設定できる値の刻みが違うので、台ごとに
 	// 自分のテーブルを持ち、適用時に主の値を最寄りへ丸める。
 	struct subCam

@@ -898,13 +898,13 @@ bool captureRunner::establishSession(void)
 		double fmin = (plan_.lens.fn > 0.0) ? plan_.lens.fn : 1.0;
 		tables_ = expo::standardTables(fmin, 32.0);
 	}
-	// パノラマの追加カメラも同じタイミングで張る(失敗しても撮影は続行する)。
+	// 同期撮影の追加カメラも同じタイミングで張る(失敗しても撮影は続行する)。
 	this->establishSubSessions();
 	ramMark("establish done");
 	return true;
 }
 
-// --- パノラマ撮影(2026-08-25) ---------------------------------------------
+// --- 同期撮影(2026-08-25) ---------------------------------------------
 // 主カメラで測光して決めた露出を追加カメラへも配り、同じコマで全台のシャッターを切る。
 // 測光・露出計算は主カメラの経路のままで、ここは決まった露出を乗せるだけ。
 
@@ -947,7 +947,7 @@ void captureRunner::setSubDevices(const std::vector<device*>& devs)
 
 // 追加カメラのセッションを確立する。
 //  主カメラと違い、ここでこけても撮影自体は続行する(ready=false のまま次回へ回す)。
-//  パノラマの1台が落ちても主カメラのタイムラプスを崩さないことを優先する。
+//  同期撮影の1台が落ちても主カメラのタイムラプスを崩さないことを優先する。
 void captureRunner::establishSubSessions(void)
 {
 	if (subs_.empty()) { return; }
@@ -1271,7 +1271,7 @@ errCode captureRunner::loop(void)
 			shotExp = pending;
 			shutterMs = tool::epochMs();	// シャッター投下直前の壁時計(ms精度)
 			err = this->fireShutter(shotExp, interval, shootFailStreak, cameraOffline);
-			this->fireSubShutters();	// パノラマ: 追加カメラを続けて切る(露出は配布済み)
+			this->fireSubShutters();	// 同期撮影: 追加カメラを続けて切る(露出は配布済み)
 			++frame;
 			this->fillSensorFromShot(frame);	// マスターに無い機種のセンサー諸元を撮影画像から補う
 			this->checkDeviceStatus(frame == 1);	// カード残量/電池/温度(1コマ目は必ず・以降は間隔で)
@@ -1729,7 +1729,7 @@ errCode captureRunner::loop(void)
 			{
 				int t1 = 0;
 				const errCode ae = applyWithRetry(pending, t1, kFirstApplyMaxMs);
-				this->applySubExposure(pending);	// パノラマ: 同じ露出を追加カメラへも配る
+				this->applySubExposure(pending);	// 同期撮影: 同じ露出を追加カメラへも配る
 				// 何回目で乗ったかを残す(SHOTログの fa=)。この事象は放置後の初回にしか出ないので、
 				// 「そもそも失敗しなかった」のか「失敗したが待って乗った」のかを後から区別する。
 				// onError_ は UI へトーストも出すので、情報の記録には使わない。
@@ -1781,7 +1781,7 @@ errCode captureRunner::loop(void)
 		{
 			void* ta = tool::startElapse();
 			applyErr = applyWithRetry(target, applyTry);	// 通るまでリトライ(最大 kApplyMaxMs)
-			// パノラマ: 主に乗ったのと同じ露出を追加カメラへも配る(各台の刻みへ丸める)。
+			// 同期撮影: 主に乗ったのと同じ露出を追加カメラへも配る(各台の刻みへ丸める)。
 			//  ここで台数分の HTTP を投げるが、次コマのシャッターまでには余裕がある区間。
 			this->establishSubSessions();	// 落ちていた台があればここで張り直す
 			this->applySubExposure(target);

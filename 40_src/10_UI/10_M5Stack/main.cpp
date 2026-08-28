@@ -1070,7 +1070,7 @@ void setup(void)
 	renderSplash();		// 項目8: 起動画面を即表示(以降の初期化中も出したまま。終わったら計画一覧へ)
 
 	loadEdgeCreds();	// NVS から SSID/password/端末名(無ければフォールバック。完全未設定=出荷時はAP既定)
-	// パノラマで扱えるカメラ台数はモードで変わる(APは内部RAMの余裕が少ない)。
+	// 同期撮影で扱えるカメラ台数はモードで変わる(APは内部RAMの余裕が少ない)。
 	//  判定は Entity 側で行うので、モードだけ教えておく。
 	hge_setApMode(g_netMode == "ap" ? 1 : 0);
 	Serial.printf("[NET] mode=%s devname=%s\n", g_netMode.c_str(), g_devName.c_str());

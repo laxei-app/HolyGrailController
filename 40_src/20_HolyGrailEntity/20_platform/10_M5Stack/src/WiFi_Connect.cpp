@@ -92,7 +92,7 @@ bool wifiConnect::startAp(const char * ssid, const char * passphrase, int maxCon
         }
         // 接続枠の実効値を残す(2026-08-25)。softAP へは maxConn を渡しているが、
         //  フレームワークのビルド設定(CONFIG_WIFI_AP_MAX_STATIONS)で下げられることがある。
-        //  パノラマ撮影で何台まで AP に入れるかはこの値が決めるので、推測せず実値を見る。
+        //  同期撮影で何台まで AP に入れるかはこの値が決めるので、推測せず実値を見る。
         {
             wifi_config_t cfg{};
             if (esp_wifi_get_config(WIFI_IF_AP, &cfg) == ESP_OK)

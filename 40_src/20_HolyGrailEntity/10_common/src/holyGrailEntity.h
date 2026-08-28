@@ -130,7 +130,7 @@ int32_t hge_renamePlan(const char* id, const char* name);
 // 横向き(ランドスケープ)を設定する。画角が変わるためスケジュールを再生成し通知する。
 int32_t hge_setPlanLandscape(int32_t landscape);
 
-// パノラマ撮影(2026-08-25)。camera で測光した露出を追加カメラへも配り全台で撮る。
+// 同期撮影(2026-08-25)。camera で測光した露出を追加カメラへも配り全台で撮る。
 int32_t hge_setPlanPanorama(int32_t on);
 // 追加カメラを所持カメラの名前配列 ["name",...] で差し替える。
 int32_t hge_setPlanSubCameras(const char* namesJson);
@@ -144,7 +144,7 @@ int32_t hge_setApMode(int32_t ap);
 //  公開リポジトリから新しいものを取り込んだ直後に呼ぶ。次に一覧を求められたときに読み直す。
 int32_t hge_reloadMaster(void);
 
-// この端末がパノラマ撮影で扱えるカメラ台数(主カメラを含む合計)。
+// この端末が同期撮影で扱えるカメラ台数(主カメラを含む合計)。
 int32_t hge_maxPanoramaCameras(void);
 
 // 直前の hge_captureStartPlan が失敗した理由。成功していれば code=0。

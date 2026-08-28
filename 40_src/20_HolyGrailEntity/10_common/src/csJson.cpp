@@ -260,7 +260,7 @@ namespace csjson
 		j["end"]       = dtToJson(plan.end);
 		j["place"]     = placeToJson(plan.place);
 		j["camera"]    = cameraToJson(plan.camera);
-		// パノラマ撮影(2026-08-25)。旧データ互換のため fromJson 側に既定値を置く。
+		// 同期撮影(2026-08-25)。旧データ互換のため fromJson 側に既定値を置く。
 		j["panorama"]  = plan.panorama;
 		{
 			json arr = json::array();

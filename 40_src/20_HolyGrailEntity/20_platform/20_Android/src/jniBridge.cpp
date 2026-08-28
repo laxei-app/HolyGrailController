@@ -117,7 +117,7 @@ Java_app_laxei_holygrail_HgeNative_nativeCaptureStartPlan(JNIEnv* env, jobject /
 	return r;
 }
 
-// 直前の撮影開始が失敗した理由の付随数値(パノラマの上限台数など)。
+// 直前の撮影開始が失敗した理由の付随数値(同期撮影の上限台数など)。
 //  上限は Entity(=撮影する端末)が持つ。UI は数字を持たず、これを埋めるだけ。
 JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeLastStartNoticeN1(JNIEnv*, jobject)
@@ -522,7 +522,7 @@ JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeSetPlanCamera(JNIEnv* env, jobject /*thiz*/, jstring name)
 { return callNameCmd(env, name, hge_setPlanCamera); }
 
-// パノラマ撮影(2026-08-25)
+// 同期撮影(2026-08-25)
 JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeSetPlanPanorama(JNIEnv* /*env*/, jobject /*thiz*/, jint on)
 { return hge_setPlanPanorama(on); }

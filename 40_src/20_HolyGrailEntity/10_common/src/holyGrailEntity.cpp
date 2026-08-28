@@ -57,7 +57,7 @@ namespace
 	// 28KB 残るが、4本だと 5KB しか残らない(薄氷)。増やすなら確立の山を削るのが先。
 	// ※ osSystemCAll.cpp の静的スタック枠数(kPoolSlots)もこの数に合わせること。
 	constexpr size_t MAX_CONCURRENT = 3;
-	// パノラマ撮影で扱えるカメラ台数(主カメラを含む合計。2026-08-26 実測に基づく)。
+	// 同期撮影で扱えるカメラ台数(主カメラを含む合計。2026-08-26 実測に基づく)。
 	//  APモードは SoftAP と DHCP が内部RAMを食い、STAより約31KB空きが少ない。
 	//  実測(CoreS3): AP 4台で水位8,020 / STA 8台で36,924・10台で27,372・12台で19,272。
 	//  上限は**この端末の事情**なので端末側で判定する(スマホに焼き込まない。
@@ -79,7 +79,7 @@ namespace
 		hgc::cs                       plan;
 		std::unique_ptr<captureRunner> runner;
 		class device                  dev;					// このセッション専用のカメラ(アドレス安定。撮影開始の都度ディスカバリで再取得)
-		// パノラマ撮影の追加カメラ(2026-08-25)。dev と同じくセッション専用の実体。
+		// 同期撮影の追加カメラ(2026-08-25)。dev と同じくセッション専用の実体。
 		//  unique_ptr なのは、vector が伸びても runner へ渡したポインタが生き続けるようにするため。
 		std::vector<std::unique_ptr<class device>> subDevs;
 		std::atomic<int>              state{ HGE_ST_IDLE };
@@ -108,19 +108,19 @@ namespace
 
 	// 撮影期間(±マージン)が同時に重なる自撮影セッション数の最大が MAX_CONCURRENT を超えるか。
 	// 既存の全セッション + 新規1件[ns,ne) を掃引して判定する(半開区間=端点接触は重ならない)。
-	//  panoOverlap : 新規計画がパノラマ撮影か。true のときは重なりを1件までに絞る。
+	//  panoOverlap : 新規計画が同期撮影か。true のときは重なりを1件までに絞る。
 	// 半開区間 [a1,a2) と [b1,b2) が重なるか(端点接触は重ならない)。
 	bool rangesOverlap(long long a1, long long a2, long long b1, long long b2)
 	{
 		return a1 < b2 && b1 < a2;
 	}
 
-	// パノラマ撮影は単独実行(2026-08-25 ユーザー指示)。1計画で複数台のカメラを掴むため、
+	// 同期撮影は単独実行(2026-08-25 ユーザー指示)。1計画で複数台のカメラを掴むため、
 	// 他の計画と重ねるとカメラも通信枠もメモリも足りない。**どちらの向きでも**禁じる:
-	//  ・新規がパノラマ    → 時間が重なる撮影が1つでもあれば不可
-	//  ・既存がパノラマ    → それに時間が重なる新規は(通常計画でも)不可
+	//  ・新規が同期撮影    → 時間が重なる撮影が1つでもあれば不可
+	//  ・既存が同期撮影    → それに時間が重なる新規は(通常計画でも)不可
 	// 【重なりを見る理由】時間が離れていれば同時には走らないので許してよい。
-	//  以前は「パノラマが1つでも居れば全体を1件までに絞る」実装で、時間の離れた
+	//  以前は「同期撮影が1つでも居れば全体を1件までに絞る」実装で、時間の離れた
 	//  無関係な通常計画2件まで弾いていた(2026-08-26 修正)。
 	bool panoramaConflicts(long long ns, long long ne, bool newIsPano)
 	{
@@ -145,8 +145,8 @@ namespace
 			long long ss = hgc::toUnixUtc(s->plan.start, g_offMin) - PRE_MARGIN_SEC;
 			long long se = hgc::toUnixUtc(s->plan.end, g_offMin) + (long long)std::llround(s->plan.interval);
 			add(ss, se);
-			// 既に走っている側がパノラマでも同じ(あちらの単独実行を守る)。
-				// (パノラマの単独実行は panoramaConflicts が別に見る)
+			// 既に走っている側が同期撮影でも同じ(あちらの単独実行を守る)。
+				// (同期撮影の単独実行は panoramaConflicts が別に見る)
 		}
 		add(ns, ne);
 		std::sort(ev.begin(), ev.end(), [](const Ev& a, const Ev& b) { return a.t != b.t ? a.t < b.t : a.d < b.d; });
@@ -573,7 +573,7 @@ namespace
 		j += ",\"camera\":\"" + jesc(g_plan.camera.name.empty() ? g_plan.camera.model : g_plan.camera.name) + "\"";
 		// 同じ機種を複数台持つと名称だけでは分からないので、カメラ本体で付けた名前も添える。
 		j += ",\"cameraAssignedName\":\"" + jesc(g_plan.camera.assignedName) + "\"";
-		// パノラマ撮影(2026-08-25)。subCameras は名前と愛称を表示用に並べる。
+		// 同期撮影(2026-08-25)。subCameras は名前と愛称を表示用に並べる。
 		j += ",\"panorama\":" + std::string(g_plan.panorama ? "true" : "false");
 		{
 			std::string a = "[";
@@ -1229,7 +1229,7 @@ namespace
 				bool active = (st == HGE_ST_CAPTURING || st == HGE_ST_SEARCHING || st == HGE_ST_READY || st == HGE_ST_STOPPING || st == HGE_ST_WAITING || st == HGE_ST_NOCAMERA);
 				if (active && s->dev.apiBase && s->dev.serialno == serial) { return true; }
 				if (!active) { continue; }
-				// パノラマの追加カメラも掴んでいる個体なので二重に割り当てない。
+				// 同期撮影の追加カメラも掴んでいる個体なので二重に割り当てない。
 				for (auto& sd : s->subDevs) { if (sd && sd->apiBase && sd->serialno == serial) { return true; } }
 			}
 			return false;
@@ -1359,7 +1359,7 @@ namespace
 			dataManager::logEvent("NET", d.c_str(), true);
 		}
 
-		// --- パノラマ撮影: 追加カメラを確保する(2026-08-25) ---
+		// --- 同期撮影: 追加カメラを確保する(2026-08-25) ---
 		//  探し方は主カメラと**同じ3段**にする: IP直結 → SSDP → サブネット掃引。
 		//  【なぜ3段が要るか(2026-08-25 実機で判明)】当初は SSDP だけで探していたが、
 		//   キヤノン機はスマホ等に一度掴まれると M-SEARCH に答えなくなることがある
@@ -1709,7 +1709,7 @@ namespace
 		hgc::exposureSmoothing smooth = dataManager::currentSmoothing();
 		applyOwnedCameraSettings(S->plan.camera);	// スマホ直結でも所持カメラの測光方式で撮る
 		errCode e = S->runner->ready(S->plan, &S->dev, smooth, g_offMin);
-		{	// パノラマ: 確保できた追加カメラを runner へ渡す(ready の後・撮影開始の前)。
+		{	// 同期撮影: 確保できた追加カメラを runner へ渡す(ready の後・撮影開始の前)。
 			std::vector<class device*> sp;
 			sp.reserve(S->subDevs.size());
 			for (auto& d : S->subDevs) { if (d) { sp.push_back(d.get()); } }
@@ -2136,7 +2136,7 @@ int32_t hge_getPlanJson(char* buf, int32_t* inoutLen)
 // エッジへ送る前に、追加カメラの設定可能値リストを落として計画を小さくする(2026-08-26)。
 //
 // 【なぜ(実機で計測)】エッジは受け取った計画JSONをDOMで解析し、そのまま保存し直す。
-//  この一連で内部RAMの水位が大きく落ちる。パノラマは追加カメラ1台につき isoList/ssList で
+//  この一連で内部RAMの水位が大きく落ちる。同期撮影は追加カメラ1台につき isoList/ssList で
 //  約1.3KB増えるため、台数が増えるほど山が高くなる。実測(Edge00/APモード):
 //    8,271B の計画 -> 水位が 31,692B 低下
 //    4,552B の計画 -> 水位が    184B 低下
@@ -2740,7 +2740,7 @@ int32_t hge_setPlanCamera(const char* name)
 	return saveCurrentPlan();	// 編集を即永続化
 }
 
-// パノラマ撮影の切替(2026-08-25)。
+// 同期撮影の切替(2026-08-25)。
 //  画角・スケジュールには影響しないので buildSchedule は呼ばない。
 int32_t hge_setPlanPanorama(int32_t on)
 {
@@ -2751,7 +2751,7 @@ int32_t hge_setPlanPanorama(int32_t on)
 	return saveCurrentPlan();	// 編集を即永続化
 }
 
-// パノラマの追加カメラを名前の配列でまとめて差し替える(2026-08-25)。
+// 同期撮影の追加カメラを名前の配列でまとめて差し替える(2026-08-25)。
 //  namesJson : ["EOS R10","EOS R100"] の形。測光担当(g_plan.camera)と同名のものと
 //  重複する名前は落とす(同じ個体を二重で握むと認証の nc が逆行し 403 になるため)。
 int32_t hge_setPlanSubCameras(const char* namesJson)
@@ -3176,7 +3176,7 @@ int32_t hge_captureStartPlan(const char* planId_)
 			}
 		}
 	}
-	// パノラマ撮影の台数がこの端末で扱えるか(2026-08-26 ユーザー指示で端末側判定)。
+	// 同期撮影の台数がこの端末で扱えるか(2026-08-26 ユーザー指示で端末側判定)。
 	//  超えていたら理由をお知らせコードで残し、通信路経由でスマホへ返す。
 	g_startNoticeCode = 0; g_startNoticeN1 = 0;
 	{
@@ -3200,7 +3200,7 @@ int32_t hge_captureStartPlan(const char* planId_)
 	{
 		long long ns = hgc::toUnixUtc(sess->plan.start, g_offMin) - PRE_MARGIN_SEC;
 		long long ne = hgc::toUnixUtc(sess->plan.end, g_offMin) + (long long)std::llround(sess->plan.interval);
-		// パノラマ撮影は単独実行(どちらの向きでも)。理由はお知らせコードでUIへ返す。
+		// 同期撮影は単独実行(どちらの向きでも)。理由はお知らせコードでUIへ返す。
 		const bool pano = (sess->plan.panorama && !sess->plan.subCameras.empty());
 		if (panoramaConflicts(ns, ne, pano))
 		{
@@ -3314,7 +3314,7 @@ int32_t hge_setApMode(int32_t ap)
 	return ERR_HGC_OK;
 }
 
-// この端末がパノラマ撮影で扱えるカメラ台数(主カメラを含む合計)。
+// この端末が同期撮影で扱えるカメラ台数(主カメラを含む合計)。
 int32_t hge_maxPanoramaCameras(void)
 {
 	return static_cast<int32_t>(g_apMode ? MAX_PANO_AP : MAX_PANO_STA);
@@ -3340,7 +3340,7 @@ bool hge_isCameraInUse(const char* serial)
 		                     st == HGE_ST_READY || st == HGE_ST_STOPPING);
 		if (active && up->dev.serialno == sn) { return true; }
 		if (!active) { continue; }
-		// パノラマの追加カメラも撮影に使っている(在否監視はこの個体に触ってはいけない)。
+		// 同期撮影の追加カメラも撮影に使っている(在否監視はこの個体に触ってはいけない)。
 		for (auto& sd : up->subDevs) { if (sd && sd->serialno == sn) { return true; } }
 	}
 	return false;

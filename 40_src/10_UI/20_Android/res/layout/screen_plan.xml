@@ -190,16 +190,16 @@
                         android:text="Canon EOS R10" />
                 </LinearLayout>
 
-                <!-- パノラマ撮影。上のカメラで測光して決めた露出を追加カメラへも配り、全台で撮る。 -->
+                <!-- 同期撮影。上のカメラで測光して決めた露出を追加カメラへも配り、全台で撮る。 -->
                 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="12dp" android:orientation="horizontal"
                     android:gravity="center_vertical">
                     <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                        android:text="パノラマ撮影" android:textStyle="bold" android:singleLine="true" />
+                        android:text="同期撮影" android:textStyle="bold" android:singleLine="true" />
                     <Switch android:id="@+id/plan_panorama" android:layout_width="wrap_content"
                         android:layout_height="wrap_content" android:layout_marginStart="12dp" />
                 </LinearLayout>
-                <!-- 追加カメラ。パノラマ撮影がONのときだけ出す。タップで複数選択。 -->
+                <!-- 追加カメラ。同期撮影がONのときだけ出す。タップで複数選択。 -->
                 <LinearLayout android:id="@+id/plan_subCamRow"
                     android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="12dp" android:orientation="horizontal"
