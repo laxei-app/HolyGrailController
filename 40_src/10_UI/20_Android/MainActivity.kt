@@ -872,7 +872,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private var dlogAbort = false           // 中断の要求
     private var dlogRunBtn: Button? = null
     private var dlogProgress: TextView? = null
-    private val dlogTargets = HashMap<String, CheckBox>()   // "" = スマホ、それ以外はエッジ名
+    // "" = スマホ、それ以外はエッジ名。**並び順を保つ**(LinkedHashMap)。
+    //  ただの HashMap だと取得の順が画面の並びと食い違い、どこまで進んだか読みにくい。
+    private val dlogTargets = LinkedHashMap<String, CheckBox>()
     private var dlogShotCb: CheckBox? = null
     private var dlogBattCb: CheckBox? = null
 
