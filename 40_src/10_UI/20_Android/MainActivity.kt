@@ -3200,14 +3200,25 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // Phase3c: カメラ未検出(NOCAMERA)時の「継続/中止」ポップアップ。○○=計画カメラの愛称/名称。
     // 継続=即再探索(スマホ=pokeAcquire / エッジ=C_RESEARCH)、見つからなければ猶予後に再表示。
     // 中止=撮影停止。nocamDialogShown で多重表示を抑止する。UIスレッドから呼ぶこと。
+    // 【選択中かどうかに関係なく名前を出す(2026-08-28 修正)】
+    //  以前は「id == currentPlanId のときだけ」計画を読んでいた。currentPlanId は
+    //  一覧で今選んでいる計画でしかないので、**選んでいない計画がカメラを見失うと
+    //  名前の無い「カメラが見つかりません」になっていた**。2つ動かしていれば必ず
+    //  片方はこれに当たる。計画は id で読めるので(表示中の選択は動かない)、常にそちらを引く。
     private fun planCameraLabel(id: String): String {
+        val js = try {
+            // 表示中の計画は編集途中の内容が正しいので、そのまま使う(ファイルを読まない)。
+            if (id == currentPlanId) HgeNative.nativeGetPlanJson() else HgeNative.nativeGetPlanJsonById(id)
+        } catch (_: Exception) { "" }
         try {
-            if (id == currentPlanId) {
-                val cam = JSONObject(HgeNative.nativeGetPlanJson()).optJSONObject("camera")
-                val label = listOf(cam?.optString("assignedName") ?: "", cam?.optString("name") ?: "", cam?.optString("model") ?: "")
-                    .firstOrNull { it.isNotEmpty() }
-                if (!label.isNullOrEmpty()) return label
-            }
+            val o = JSONObject(js)
+            val cam = o.optJSONObject("camera")
+            val label = listOf(cam?.optString("assignedName") ?: "", cam?.optString("name") ?: "", cam?.optString("model") ?: "")
+                .firstOrNull { it.isNotEmpty() }
+            if (!label.isNullOrEmpty()) return label
+            // カメラ側に名前が1つも無いとき(機種名すら空)は、せめてどの計画かを言う。
+            val pn = o.optString("name")
+            if (pn.isNotEmpty()) return "計画「$pn」のカメラ"
         } catch (_: Exception) {}
         return "カメラ"
     }
