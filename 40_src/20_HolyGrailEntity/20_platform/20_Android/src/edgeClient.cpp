@@ -22,6 +22,7 @@
 #include "etp.h"
 #include <atomic>
 #include "holyGrailEntity.h"
+#include "dataManager.h"
 #include "commonAndroid.h"	// hgeJavaVm(BLE は Kotlin 側にしかないので呼び返す)
 
 // 診断ログ(スマホ→エッジ開始の各段の可視化)。adb logcat -s HGEdgeCli で確認。
@@ -571,6 +572,31 @@ JNIEXPORT jstring JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeCameraBookJson(JNIEnv* env, jobject)
 {
 	return env->NewStringUTF(hge_cameraBookJson());
+}
+
+// デバッグログの取捨をエッジへ送る(C_LOG_OPT)。エッジは不揮発へ残さないので、
+//  スマホは見つけるたびに送り直す(数十バイト)。電源を入れ直せば既定(採らない)へ戻る。
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeEdgeSendLogOpt(JNIEnv* env, jobject, jstring host_, jint port,
+                                                        jboolean shot, jboolean batt)
+{
+	const char* host = env->GetStringUTFChars(host_, nullptr);
+	std::string hostS = host ? host : "";
+	env->ReleaseStringUTFChars(host_, host);
+
+	std::lock_guard<std::mutex> lk(g_connMtx);
+	std::string rd;
+	std::string body = std::string("{\"shot\":") + (shot ? "true" : "false") +
+	                   ",\"batt\":" + (batt ? "true" : "false") + "}";
+	int m = edgeXchg(hostS, port, etp::C_LOG_OPT, etp::M_PUT, body, rd);
+	return (m == etp::M_ACK) ? 0 : -2;
+}
+
+// スマホ自身のログの取捨。撮影1コマごとの記録と電池の定期記録を採るかどうか。
+JNIEXPORT void JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetLogOptions(JNIEnv*, jobject, jboolean shot, jboolean batt)
+{
+	dataManager::setLogOptions(shot == JNI_TRUE, batt == JNI_TRUE);
 }
 
 // エッジ端末へ「継続(カメラ未検出時の即再探索)」を送る。planId 空=全取得フェーズ。

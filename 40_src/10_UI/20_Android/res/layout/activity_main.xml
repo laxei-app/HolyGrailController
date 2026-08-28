@@ -21,4 +21,5 @@
     <include layout="@layout/screen_history" />
     <include layout="@layout/screen_report" />
     <include layout="@layout/screen_edge" />
+    <include layout="@layout/screen_debuglog" />
 </ViewFlipper>

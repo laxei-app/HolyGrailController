@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "etp.h"
+#include "dataManager.h"	// デバッグログの取捨(C_LOG_OPT)
 #include "holyGrailEntity.h"
 #include "hgcCommon.h"
 #include "errorCode.h"
@@ -99,7 +100,19 @@ namespace
 	}
 
 	// time コマンド(RTC/時計同期)を適用する。return: 成功
-	bool applyTime(const std::string& data)
+	// デバッグログの取捨を受け取る(2026-08-29)。data={"shot":真偽,"batt":真偽}。
+//  **不揮発へは残さない。** 電源を入れ直したら既定(採らない)へ戻すのが安全側で、
+//  「入れっぱなしで一晩まわして保存領域を食い潰す」を防げる。要るときはスマホが
+//  見つけるたびに送り直す(数十バイトなのでスイープで毎回送っても負担にならない)。
+bool applyLogOpt(const std::string& body)
+{
+	nlohmann::json j = nlohmann::json::parse(body, nullptr, false);
+	if (j.is_discarded() || !j.is_object()) { return false; }
+	dataManager::setLogOptions(j.value("shot", false), j.value("batt", false));
+	return true;
+}
+
+bool applyTime(const std::string& data)
 	{
 		json j = json::parse(data, nullptr, false);
 		if (j.is_discarded() || !j.is_object()) { return false; }
@@ -275,6 +288,9 @@ namespace
 			break;
 		case etp::C_CAMERA_INFO:	// スマホが発見中のオンラインカメラ情報。既知IPテーブルを更新(発見のIP直結ヒント)
 			if (!pk.data.empty()) { hge_setKnownCameras(pk.data.c_str(), (int32_t)pk.data.size()); }
+			break;
+		case etp::C_LOG_OPT:	// デバッグログの取捨。スマホの設定をそのまま採る
+			if (!applyLogOpt(pk.data)) { rm = etp::M_NAK; }
 			break;
 		case etp::C_CAMERA_BOOK:	// スマホの所持カメラ台帳。丸ごと入れ替える(消したカメラもこれで消える)
 			// 空配列("[]")も正しい台帳(=所持ゼロ)なので、空文字だけを弾く。

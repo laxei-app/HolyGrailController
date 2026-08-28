@@ -336,6 +336,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         buildExposureEditors()
         loadRegisteredEdges()   // 設定で登録したエッジ端末(オフラインでも選択可)
         loadEdgeHeld()          // エッジが持っている計画(=編集ロック)。アプリを終了しても保つ
+        applyLogOptsToSelf()    // デバッグログの取捨(既定は採らない)を自分の記録へ効かせる
         refreshEdgeSpinner()
 
         wireListeners()
@@ -511,6 +512,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
             12 -> { flipper.displayedChild = 4; buildGearMenu() }        // カメラ予約表 → メニュー
             13 -> { flipper.displayedChild = 4; buildGearMenu() }        // 操作履歴 → メニュー
             15 -> { flipper.displayedChild = 4; buildGearMenu() }        // エッジ端末設定 → メニュー
+            // デバッグログ。取得中は戻らせない(途中で画面を捨てると、どこまで取れたか
+            //  分からなくなる)。中断してから戻ってもらう。
+            16 -> { if (dlogBusy) Toast.makeText(this, "取得中です。中断してから戻ってください", Toast.LENGTH_SHORT).show()
+                    else { flipper.displayedChild = 4; buildGearMenu() } }
             else -> { flipper.displayedChild = 0 }
         }
         return true
@@ -610,6 +615,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         setupDivider(R.id.report_divider, R.id.report_listScroll)
         // 8.2 エッジ端末設定(2026-08-08 UI依頼で画面化)
         findViewById<ImageView>(R.id.edge_back).setOnClickListener { stashEdgeForm(); flipper.displayedChild = 4; buildGearMenu() }
+        findViewById<ImageView>(R.id.dlog_back).setOnClickListener {
+            // 取得中は戻らせない(端末の戻るキーと同じ扱い)。
+            if (dlogBusy) Toast.makeText(this, "取得中です。中断してから戻ってください", Toast.LENGTH_SHORT).show()
+            else { flipper.displayedChild = 4; buildGearMenu() }
+        }
         setupDivider(R.id.edge_divider, R.id.edge_listScroll)
         findViewById<Button>(R.id.history_clear).setOnClickListener {
             AlertDialog.Builder(this)
@@ -817,7 +827,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         gearSwitchItem(box, "エッジ端末とBLEで通信する", edgeUseBle()) { on -> setEdgeUseBle(on) }
         gearBand(box, "ログ")
         // 撮影中/開始要求中はグレー表示で不可(コピー処理が撮影と競合しないように)。
-        gearItem(box, "ログ取得", enabled = !isCaptureBusy()) { retrieveLogs() }
+        gearItem(box, "デバッグログ", enabled = !isCaptureBusy()) { openDebugLog() }
         // この2つは「撮影計画」ではなく「記録を見る」側なのでログの下へ置く(2026-08-23 UI依頼)。
         gearItem(box, "操作履歴") { openHistory() }            // 項目9
         gearItem(box, "撮影レポート") { openReportList() }     // 670: 撮影1回ぶんの結果と所見
@@ -851,12 +861,118 @@ class MainActivity : AppCompatActivity(), HgeListener {
         return (capturingPlans + waitingPlans + disconnectedPlans).any { planEdgeName(it) == edgeName }
     }
 
-    // ログ取得: スマホ自身のログ + オンラインの各エッジのログを、ユーザーが見える場所へコピーする。
-    // 保存先: スマホ = Download/hgclog/、エッジ = Download/hgclog-<端末名>/(何のフォルダか分かるように)。
-    // 同名ファイルは上書き(内容は同じはずなので日時フォルダで増やさない)。
-    // コピー中はキャンセル不可のダイアログで他操作を抑止する(§ログ取得。仕様書外の追加機能)。
-    private fun retrieveLogs() {
-        if (isCaptureBusy()) { Toast.makeText(this, "撮影中/開始要求中はログ取得できません", Toast.LENGTH_SHORT).show(); return }
+    // ---------- デバッグログ(2026-08-29 UI依頼。旧「ログ取得」をダイアログから画面へ) ----------
+    //
+    // 【なぜ画面にしたか】ダイアログでは、取る対象を選べず、進み具合も1行しか出せなかった。
+    //  端末が増えると「どれを取っているのか」「どこで失敗したのか」が分からない。
+    //  ・何を採るか(撮影ログ/バッテリログ)は**次の撮影に効く設定**なので、取得とは別物として置く
+    //  ・どの端末から採るかを選べるようにする(既定は全部)
+    //  ・取得中は中断できるようにする。エッジが増えると数分かかることがある
+    private var dlogBusy = false            // 取得中(この間は他の操作を止める)
+    private var dlogAbort = false           // 中断の要求
+    private var dlogRunBtn: Button? = null
+    private var dlogProgress: TextView? = null
+    private val dlogTargets = HashMap<String, CheckBox>()   // "" = スマホ、それ以外はエッジ名
+    private var dlogShotCb: CheckBox? = null
+    private var dlogBattCb: CheckBox? = null
+
+    // 採る/採らないの設定。**既定は両方とも採らない**(量が多く、肝心の出来事が埋もれるため)。
+    private fun logOptShot() = hgcPrefs().getBoolean("logShot", false)
+    private fun logOptBatt() = hgcPrefs().getBoolean("logBatt", false)
+    private fun setLogOpts(shot: Boolean, batt: Boolean) {
+        hgcPrefs().edit().putBoolean("logShot", shot).putBoolean("logBatt", batt).apply()
+        applyLogOptsToSelf()
+        pushLogOptsToEdges()
+    }
+    // スマホ自身の記録に効かせる。起動時と変更時に呼ぶ。
+    private fun applyLogOptsToSelf() {
+        try { HgeNative.nativeSetLogOptions(logOptShot(), logOptBatt()) } catch (_: Exception) {}
+    }
+    // オンラインのエッジへ送る。エッジは不揮発へ残さないので、スイープでも毎回送る。
+    private fun pushLogOptsToEdges() {
+        val shot = logOptShot(); val batt = logOptBatt()
+        for (ed in edges.toList()) {
+            if (!ed.reachable()) continue
+            Thread { try { HgeNative.nativeEdgeSendLogOpt(ed.addr(), ed.port, shot, batt) } catch (_: Exception) {} }.start()
+        }
+    }
+
+    private fun openDebugLog() {
+        dlogBusy = false; dlogAbort = false
+        buildDebugLogScreen()
+        flipper.displayedChild = 16
+    }
+
+    private fun buildDebugLogScreen() {
+        val box = findViewById<LinearLayout>(R.id.dlog_container)
+        box.removeAllViews()
+        dlogTargets.clear()
+
+        fun heading(t: String) {
+            box.addView(TextView(this).apply {
+                text = t; setTypeface(null, Typeface.BOLD); textSize = 15f
+                setPadding(0, dp(10), 0, dp(4))
+            })
+        }
+
+        heading("記録する内容")
+        box.addView(TextView(this).apply {
+            text = "次の撮影から効きます。量が多いので、普段は切っておくことをおすすめします。"
+            textSize = 12f; setTextColor(Color.GRAY); setPadding(0, 0, 0, dp(4))
+        })
+        val shotCb = CheckBox(this).apply {
+            text = "撮影ログ (1コマごとの露出・測光)"
+            isChecked = logOptShot()
+            setOnCheckedChangeListener { _, _ -> setLogOpts(isChecked, dlogBattCb?.isChecked ?: false) }
+        }
+        val battCb = CheckBox(this).apply {
+            text = "バッテリログ (電池残量の定期記録)"
+            isChecked = logOptBatt()
+            setOnCheckedChangeListener { _, _ -> setLogOpts(dlogShotCb?.isChecked ?: false, isChecked) }
+        }
+        dlogShotCb = shotCb; dlogBattCb = battCb
+        box.addView(shotCb); box.addView(battCb)
+
+        heading("取得")
+        val run = blueButton("ログ取得") { if (dlogBusy) { dlogAbort = true } else { startLogFetch() } }
+        box.addView(run); dlogRunBtn = run
+
+        heading("取得する端末")
+        // スマホは常に対象にできる。エッジは**いまオンラインのものだけ**(届かない相手を
+        //  選ばせても失敗するだけで、原因が分からなくなる)。既定はすべてチェック。
+        val phoneCb = CheckBox(this).apply { text = "スマートフォン"; isChecked = true }
+        box.addView(phoneCb); dlogTargets[""] = phoneCb
+        val online = edges.sortedBy { it.name.lowercase() }.filter { edgeOnline[it.name] == true }
+        for (e in online) {
+            val cb = CheckBox(this).apply { text = e.name; isChecked = true }
+            box.addView(cb); dlogTargets[e.name] = cb
+        }
+        if (online.isEmpty()) {
+            box.addView(TextView(this).apply {
+                text = "(オンラインのエッジ端末はありません)"
+                textSize = 12f; setTextColor(Color.GRAY); setPadding(dp(8), 0, 0, 0)
+            })
+        }
+
+        heading("状況")
+        val pg = TextView(this).apply { textSize = 13f; setTextColor(Color.DKGRAY) }
+        box.addView(pg); dlogProgress = pg
+        setDlogEnabled(!dlogBusy)
+    }
+
+    // 取得中は取得ボタン以外を触らせない。押せることと押せないことを見た目で分ける。
+    private fun setDlogEnabled(on: Boolean) {
+        dlogShotCb?.isEnabled = on; dlogBattCb?.isEnabled = on
+        for (cb in dlogTargets.values) { cb.isEnabled = on }
+        val c = if (on) Color.BLACK else Color.GRAY
+        dlogShotCb?.setTextColor(c); dlogBattCb?.setTextColor(c)
+        for (cb in dlogTargets.values) { cb.setTextColor(c) }
+        dlogRunBtn?.text = if (dlogBusy) "中断" else "ログ取得"
+    }
+
+    // 選んだ端末からログを集める。進み具合は画面へ書き、終わったら結果を残す。
+    private fun startLogFetch() {
+        if (dlogBusy) return
         // API28以下は公開Downloadsへ直接書くため書込み権限が要る(29+はMediaStoreで不要)。
         if (Build.VERSION.SDK_INT < 29 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
@@ -864,54 +980,65 @@ class MainActivity : AppCompatActivity(), HgeListener {
             Toast.makeText(this, "ストレージ権限を許可してからもう一度お試しください", Toast.LENGTH_LONG).show()
             return
         }
-        val dlg = AlertDialog.Builder(this).setTitle("ログ取得中").setMessage("準備中...").setCancelable(false).create()
-        dlg.setCanceledOnTouchOutside(false); dlg.show()
-        fun setMsg(m: String) = runOnUiThread { dlg.setMessage(m) }
+        val wantPhone = dlogTargets[""]?.isChecked ?: false
+        val wantEdges = dlogTargets.filter { it.key.isNotEmpty() && it.value.isChecked }.keys.toList()
+        if (!wantPhone && wantEdges.isEmpty()) {
+            Toast.makeText(this, "取得する端末を選んでください", Toast.LENGTH_SHORT).show(); return
+        }
+        dlogBusy = true; dlogAbort = false
+        setDlogEnabled(false)
+        val lines = StringBuilder()
+        fun say(m: String) = runOnUiThread {
+            lines.append(m).append('\n'); dlogProgress?.text = lines.toString()
+        }
         Thread {
             var copied = 0
             val errors = StringBuilder()
             try {
-                // 1) スマホ自身のログ(getExternalFilesDir/log/hg_*.log)→ Download/hgclog/
-                setMsg("スマホのログをコピー中...")
-                val logDir = java.io.File(getExternalFilesDir(null), "log")
-                val phoneLogs = logDir.listFiles { f -> f.isFile && f.name.endsWith(".log") } ?: emptyArray()
-                for (f in phoneLogs) {
-                    try { saveToDownloads("hgclog", f.name, f.readBytes()); copied++ }
-                    catch (e: Exception) { errors.append("phone/${f.name} ") }
+                if (wantPhone && !dlogAbort) {
+                    say("スマートフォン: コピー中…")
+                    val logDir = java.io.File(getExternalFilesDir(null), "log")
+                    val phoneLogs = logDir.listFiles { f -> f.isFile && f.name.endsWith(".log") } ?: emptyArray()
+                    for (f in phoneLogs) {
+                        if (dlogAbort) break
+                        try { saveToDownloads("hgclog", f.name, f.readBytes()); copied++ }
+                        catch (e: Exception) { errors.append("phone/${f.name} ") }
+                    }
+                    say("スマートフォン: ${phoneLogs.size} 件")
                 }
-                // 2) オンラインのエッジ端末のログ(エッジ名のサブフォルダへ)
-                setMsg("エッジ端末を検索中...")
-                val edgesJson = try { JSONArray(HgeNative.nativeEdgeSearch(2500)) } catch (e: Exception) { JSONArray() }
-                for (i in 0 until edgesJson.length()) {
-                    val o = edgesJson.optJSONObject(i) ?: continue
-                    val ip = o.optString("ip"); val port = o.optInt("port", 50506)
-                    val nm = o.optString("name")
-                    // ネイティブへ渡す相手の指定は Wi-Fi なら IP、BLE なら端末名(Edge.addr() と同じ規則)。
-                    //  ここが IP 固定だったため、BLE ではログ取得だけが相手を見つけられなかった。
-                    val target = if (edgeUseBle()) nm else ip
-                    if (target.isEmpty()) continue
-                    val ename = nm.ifEmpty { "edge_$ip" }
-                    setMsg("エッジ「$ename」のログ一覧を取得中...")
-                    val listJson = try { JSONArray(HgeNative.nativeEdgeLogList(target, port)) } catch (e: Exception) { JSONArray() }
+                for (nm in wantEdges) {
+                    if (dlogAbort) break
+                    val ed = edges.firstOrNull { it.name == nm } ?: continue
+                    val target = ed.addr()
+                    if (target.isEmpty()) { say("$nm: 宛先が分かりません"); continue }
+                    say("$nm: 一覧を取得中…")
+                    val listJson = try { JSONArray(HgeNative.nativeEdgeLogList(target, ed.port)) } catch (e: Exception) { JSONArray() }
+                    var n = 0
                     for (k in 0 until listJson.length()) {
+                        if (dlogAbort) break
                         val logName = listJson.optString(k); if (logName.isEmpty()) continue
-                        setMsg("エッジ「$ename」: $logName")
-                        val bytes = fetchEdgeLog(target, port, logName)
+                        say("$nm: $logName")
+                        val bytes = fetchEdgeLog(target, ed.port, logName)
                         if (bytes.isNotEmpty()) {
-                            try { saveToDownloads("hgclog-" + sanitizeFolder(ename), logName, bytes); copied++ }
-                            catch (e: Exception) { errors.append("$ename/$logName ") }
+                            try { saveToDownloads("hgclog-" + sanitizeFolder(nm), logName, bytes); copied++; n++ }
+                            catch (e: Exception) { errors.append("$nm/$logName ") }
                         }
                     }
+                    say("$nm: $n 件")
                 }
             } catch (e: Exception) { errors.append("(${e.message}) ") }
             val n = copied
+            val stopped = dlogAbort
             runOnUiThread {
-                dlg.dismiss()
-                val msg = if (errors.isEmpty()) "ログ $n 件を\nDownload/hgclog(スマホ)・hgclog-<端末名>(エッジ)\nに保存しました" else "ログ $n 件を保存(一部失敗: $errors)"
-                AlertDialog.Builder(this).setTitle("ログ取得").setMessage(msg).setPositiveButton("OK", null).show()
+                dlogBusy = false; dlogAbort = false
+                setDlogEnabled(true)
+                val head = if (stopped) "中断しました。" else "完了しました。"
+                val tail = if (errors.isEmpty()) "" else "\n取れなかったもの: $errors"
+                say(head + "$n 件を Download/hgclog(スマホ)・hgclog-<端末名>(エッジ) へ保存しました。" + tail)
             }
         }.start()
     }
+
 
     // エッジのログ name を分割取得して全バイトを返す(4KBチャンクで offset を進める)。
     private fun fetchEdgeLog(target: String, port: Int, name: String): ByteArray {
@@ -6348,6 +6475,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         if (edgeBookSent[nm] != bookNow || (appeared && bookAge > kEdgeBookRefreshMs)) {
                             sendEdgeCameraBook(f.edge)
                         }
+                        // デバッグログの取捨。エッジは不揮発へ残さない(電源を入れ直すと
+                        //  既定=採らない に戻る)ので、毎回送って揃え直す。数十バイト。
+                        val ls = logOptShot(); val lb = logOptBatt()
+                        Thread { try { HgeNative.nativeEdgeSendLogOpt(f.edge.addr(), f.edge.port, ls, lb) } catch (_: Exception) {} }.start()
                         updateEdgeIp(nm, f.edge.ip, f.edge.port)   // DHCPのIP変動を常時追従
                         if (f.hasSessions) reconcileEdgeSessions(f.edge, f.sessions)
                         if (f.hasHeld) reconcileEdgeRoster(f.edge, f.heldPlans)   // 項目6: エッジ側削除の検知→ロック解除

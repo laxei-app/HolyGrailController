@@ -197,6 +197,17 @@ public:
 	// event: §8.3 のイベント種別(6文字以内)。detail: 補足(55文字以内)。
 	static void logEvent(const char* event, const char* detail, bool error = false);
 
+	// --- デバッグログの取捨(2026-08-29 UI依頼) ---
+	//
+	// 【なぜ要るか】撮影1コマごとの SHOT/LVHIST と、電池の定期記録は量が多い。
+	//  一晩で数千行になり、後から読むときに肝心の出来事が埋もれる。エッジでは
+	//  書き込み自体が仕事を奪うし、内蔵の保存領域も食う。既定は**採らない**。
+	//  必要なときだけ画面で入れてもらう。
+	// 既定値は「両方とも採らない」。設定はスマホが持ち、エッジへは C_LOG_OPT で送る。
+	static void setLogOptions(bool shot, bool batt);
+	static bool logShotEnabled(void);
+	static bool logBattEnabled(void);
+
 	// 1枚撮影(SHOT)を記録する。frame/iso/ss/fn/lum と適用中ccm名。
 	// meteredLinear: 測光したリニア輝度(自動補正時のみ。<0=測光なしで detail に出力しない)。
 	// rdyMeteringMs/rdyShutterMs: 測光/露出設定の実測ms(>=0で detail 末尾に rdy=/set= を付与。計測用)。

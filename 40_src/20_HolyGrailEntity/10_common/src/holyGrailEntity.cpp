@@ -1514,7 +1514,8 @@ namespace
 						c.lateMs, c.prepMs,
 						c.meterWaitMs, c.meterFetchMs, c.meterDecodeMs, c.meterFetchTries, c.asIsLinear,
 						c.lvMeanLin, c.lvP75, c.lvP90, c.lvSat);
-					dataManager::logEvent("LVHIST", d);
+					// LVHIST も1コマ1行。SHOT と同じ設定で採る/採らないを決める。
+					if (dataManager::logShotEnabled()) { dataManager::logEvent("LVHIST", d); }
 				}
 				// 撮影結果レポートの積算(1コマ=1回)。撮影終了時にまとめてファイルへ出す。
 				{

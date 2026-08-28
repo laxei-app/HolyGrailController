@@ -1183,7 +1183,8 @@ static void logBatteryPeriodic(uint32_t nowMs)
 	char d[96];
 	std::snprintf(d, sizeof(d), "pct=%d volt=%dmV chg=%d up=%lus",
 	              pct, volt, (int)M5.Power.isCharging(), (unsigned long)(nowMs / 1000));
-	dataManager::logEvent("BATT", d);
+	// 電池の定期記録は量が多い。採るかどうかは設定で決める(既定は採らない)。
+	if (dataManager::logBattEnabled()) { dataManager::logEvent("BATT", d); }
 
 	// 残量レベルの更新(ヒステリシス付き)。変化したら再描画する。
 	const batt::level prev = g_batt.lv;

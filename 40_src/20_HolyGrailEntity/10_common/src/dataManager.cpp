@@ -1436,6 +1436,13 @@ namespace
 
 }
 
+// デバッグログの取捨。説明はヘッダ。**既定は両方とも採らない**。
+namespace { bool g_logShot = false; bool g_logBatt = false; }
+
+void dataManager::setLogOptions(bool shot, bool batt) { g_logShot = shot; g_logBatt = batt; }
+bool dataManager::logShotEnabled(void) { return g_logShot; }
+bool dataManager::logBattEnabled(void) { return g_logBatt; }
+
 void dataManager::setLogOffset(int utcOffsetMin)
 {
 	g_logOff = utcOffsetMin;
@@ -1638,6 +1645,7 @@ void dataManager::logShot(int frame, const hgc::exposure& e, double lumStops, co
                           uint32_t histSum, uint64_t lvTimeMs, int staleSkip, uint64_t shutterEpochMs,
                           int busyMs, int firstApplyTries)
 {
+	if (!g_logShot) { return; }	// 採らない設定(既定)。整形も文字列化もしない
 	char lumStr[12];
 	std::snprintf(lumStr, sizeof(lumStr), "%+.3f", lumStops);
 	// detail = ccm名 + 測光輝度(自動補正時のみ)。Y=リニア輝度, ev=中庸グレー(0.18)基準の段差。

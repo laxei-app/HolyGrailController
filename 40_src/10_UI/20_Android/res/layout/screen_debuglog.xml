@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- デバッグログ画面(2026-08-29 UI依頼)。
+     ・上に題と戻るボタン(他の画面と同じ並び。右側は幅だけ残して釣り合わせる)
+     ・何を採るか(撮影ログ/バッテリログ)のチェック
+     ・「ログ取得」ボタン。取得中は「中断」に変わる
+     ・どの端末から採るか(スマホ+オンラインのエッジ)のチェック
+     ・その下の余白に進捗と結果を出す -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent" android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:orientation="horizontal" android:background="#1565C0"
+        android:gravity="center_vertical" android:padding="8dp">
+        <ImageView android:id="@+id/dlog_back" android:layout_width="32dp" android:layout_height="32dp"
+            android:clickable="true" android:focusable="true" android:src="@drawable/ic_back_r" />
+        <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+            android:gravity="center" android:text="デバッグログ" android:textColor="#FFFFFF"
+            android:textSize="20sp" android:textStyle="bold" />
+        <View android:layout_width="32dp" android:layout_height="32dp" />
+    </LinearLayout>
+
+    <ScrollView android:layout_width="match_parent" android:layout_height="match_parent">
+        <LinearLayout android:id="@+id/dlog_container"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:padding="12dp" />
+    </ScrollView>
+</LinearLayout>

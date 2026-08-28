@@ -182,6 +182,11 @@ object HgeNative {
     external fun nativeEdgeSendCameraBook(host: String, port: Int, book: String): Int
     // 送る台帳の中身。パスワードは暗号文。中身が変わったかの判定にもこの文字列を使う。
     external fun nativeCameraBookJson(): String
+    // デバッグログの取捨。撮影1コマごとの記録(SHOT/LVHIST)と電池の定期記録を採るかどうか。
+    //  既定は両方とも採らない(量が多く、肝心の出来事が埋もれるため)。
+    external fun nativeSetLogOptions(shot: Boolean, batt: Boolean)
+    // 同じ設定をエッジへ送る。エッジは不揮発へ残さないので見つけるたびに送り直す。
+    external fun nativeEdgeSendLogOpt(host: String, port: Int, shot: Boolean, batt: Boolean): Int
     external fun nativeEdgeResearch(host: String, port: Int, planId: String): Int // 継続: エッジへ即再探索を送る
     // 【2026-08-06 送信廃止】カメラIPのエッジへの通知はやめた(エッジが自分で見つける。複数AP構成では
     //  別の場所のカメラのIPを配ることになり有害)。ETPのコマンドとエッジ側の受信処理は互換のため残す。
