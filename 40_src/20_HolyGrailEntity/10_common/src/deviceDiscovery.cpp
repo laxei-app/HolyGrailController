@@ -41,8 +41,15 @@ int deviceDiscovery::search(std::vector<device>& deviceList, const std::vector<d
             while(tool::getElapse(startTime) < kWindowMs)
             {
                 auto result = netThread::ssdpRead(handle, deviceInfo);
-                if (result == false)            { continue; }   // 失敗
-                if (deviceInfo.length() == 0)   {continue; }    // 取得できていない
+                // 【必ず眠ること(2026-08-28 実機でリセット)】ssdpRead は届いていなければ
+                //  すぐ false で戻る(parsePacket が 0)。眠らずに回すと、この 1.1 秒が
+                //  まるごと空回りになり、CPU を明け渡さないので IDLE タスクが走れず
+                //  task_wdt でリセットする。カメラが1台も居ないとき(APモードで
+                //  カメラが別のAPに居る等)は応答が皆無なので、必ずこの経路になる。
+                //  M-SEARCH は MX:1 なので応答は1秒かけて散らばって届く。5ミリ秒刻みで
+                //  十分に拾える(1窓あたり220回。空回りは数万回だった)。
+                if (result == false)            { tool::sleep(5); continue; }   // 失敗
+                if (deviceInfo.length() == 0)   { tool::sleep(5); continue; }   // 取得できていない
                 DBGLN(col::GRN, "netThread::ssdpRead(%4ums,%u))",tool::getElapse(itvl), deviceInfo.length());
                 itvl = tool::startElapse();
                 class device deviceTmp;
