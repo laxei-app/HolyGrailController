@@ -8,6 +8,7 @@
 #include <mutex>
 #include <atomic>
 #include <string>
+#include <cstdio>
 #include <ctime>
 #include <thread>
 #include <chrono>
@@ -21,7 +22,9 @@ namespace {
 	              bool verify = false;		// #1: 次tickで即疎通確認し、失敗ならTTLを待たずオフラインへ
 	              std::string location;	// SSDP のデバイス記述URL(認証不要)。生死確認はこれを引く
 	              std::string access;		// CCAPI の入口(挨拶を送る先)
-	              bool greet = false; };	// ネットワークに入り直したので挨拶を送る
+	              int  greetLeft = 0;		// 挨拶の残り試行回数(0=済み/不要)。失敗しても捨てない
+	              long long greetAt = 0;	// 直近に挨拶を試した時刻(間隔をあけるため)
+	              bool missed = false; };	// 直近の生死確認で返事が無かった(短い離脱の検知)
 	std::vector<pcam>       g_map;
 	std::mutex              g_mapMutex;
 	std::function<void()>   g_onChange;
@@ -37,6 +40,8 @@ namespace {
 	constexpr int  kFullEverySec = 60;			// フル M-SEARCH の間隔(オンライン検知/取りこぼし保険)
 	constexpr int  kTickSec      = 6;			// ループ周期(この単位で疎通確認・wake確認)
 	constexpr long kTtlSec       = 150;			// この秒数見えないオンライン個体はオフライン扱い
+	constexpr int  kGreetTries   = 8;			// 挨拶をあきらめるまでの回数(理由は greetLocked を参照)
+	constexpr long kGreetGapSec  = 10;			// 挨拶を試す間隔[秒]
 
 	std::string hostOf(const std::string& url)
 	{
@@ -46,6 +51,9 @@ namespace {
 		while (e < url.size() && url[e] != ':' && url[e] != '/') { ++e; }
 		return url.substr(s, e - s);
 	}
+
+	// 挨拶を仕掛ける。1回で終わりにしない理由は greetLocked の説明を参照。
+	void armGreet(struct pcam& c) { c.greetLeft = kGreetTries; c.greetAt = 0; }
 
 	std::string signatureLocked()
 	{
@@ -77,7 +85,12 @@ namespace {
 				c.model = d.model; c.assignedName = d.assignedName; c.ip = ip; c.location = d.location;
 				c.access = d.urlAccess;
 				// 居なかったものが見えた = ネットワークに入り直した。挨拶を送る(greetLocked を参照)。
-				if (!c.online) { c.greet = true; }
+				//  【TTL を待たない】オフライン確定には kTtlSec(150秒)かかる。カメラ側で手動で
+				//   切って繋ぎ直す操作はそれより短いことが多く、online のままなので以前は
+				//   挨拶が立たなかった(2026-08-28 実機で発生)。生死確認を一度でも落として
+				//   いれば「入り直した」とみなす。
+				if (!c.online || c.missed) { armGreet(c); }
+				c.missed = false;
 				c.online = true; c.lastSeen = now; merged = true; break;
 			}
 			if (!merged)
@@ -85,7 +98,7 @@ namespace {
 				pcam n{ d.serialno, d.model, d.assignedName, ip, true, now };
 				n.location = d.location;
 				n.access = d.urlAccess;
-				n.greet = true;		// 初めて見えた
+				armGreet(n);		// 初めて見えた
 				g_map.push_back(n);
 			}
 		}
@@ -102,9 +115,18 @@ namespace {
 			if (c.location.empty()) { c.verify = false; continue; }	// 記述URL未取得=判定しない(TTLに委ねる)
 			std::string resp;
 			const bool alive = netThread::httpGet(c.location, resp) && !resp.empty();
-			if (alive) { c.lastSeen = now; c.verify = false; }
-			else if (c.verify)  { c.online = false; c.verify = false; }	// #1: 即確認の要求 → TTLを待たずオフライン
-			else if (now - c.lastSeen > kTtlSec) { c.online = false; }
+			if (alive)
+			{
+				// 返事が無かった後に戻ってきた = 入り直した。TTL に達していなくても挨拶する。
+				if (c.missed) { armGreet(c); c.missed = false; }
+				c.lastSeen = now; c.verify = false;
+			}
+			else if (c.verify)  { c.missed = true; c.online = false; c.verify = false; }	// #1: 即確認の要求 → TTLを待たずオフライン
+			else
+			{
+				c.missed = true;
+				if (now - c.lastSeen > kTtlSec) { c.online = false; }
+			}
 		}
 	}
 
@@ -123,7 +145,7 @@ namespace {
 			if (c.online || c.location.empty()) { continue; }
 			std::string resp;
 			if (netThread::httpGet(c.location, resp) && !resp.empty())
-			{ c.online = true; c.lastSeen = now; c.greet = true; }	// 参加し直した
+			{ c.online = true; c.lastSeen = now; c.missed = false; armGreet(c); }	// 参加し直した
 		}
 	}
 
@@ -152,27 +174,52 @@ namespace {
 	//  電源の入り切りだけでなく、カメラ側で手動で切断して繋ぎ直したときも同じ。
 	//  なので「見えていなかったものが見えた」瞬間を合図にする(初回・復帰の両方)。
 	//
+	// 【1回で終わりにしない(2026-08-28 実機のログで判明)】
+	//  以前は合図が立った1回だけ投げ、失敗したらそれきりだった。実機ではこれが効かず、
+	//  カメラが2分以上「接続してください」のまま止まった(Edge00 のログに greet failed が
+	//  1行だけ残り、以後は何も起きない)。うまくいかない理由が2つあり、どちらも
+	//  「もう一度投げれば直る」種類のものだった。
+	//   (a) 見つけた直後はカメラ側の CCAPI がまだ応じないことがある
+	//   (b) ダイジェスト認証の nc が前回の続きに追いつくのに2往復要る。net の GET は
+	//       401 を受けて認証を付け直すのを**1度しかやらない**ので、1回の呼び出しでは
+	//       nc を大きく飛ばす手当て(httpAuth::learn の bump)まで届かない
+	//  そこで成功するまで間隔をあけて投げ直す。ただし回数は必ず区切る。資格情報が違う
+	//  相手へ延々と失敗を投げると、カメラが 403 で締め出して本体設定を入れ直すまで
+	//  戻らなくなる(EOS R50 V 実測)。
+	//
 	// 【撮影中の個体には送らない】成功させるには認証が要り、認証は nc(ノンスカウンタ)を進める。
 	//  カメラは nc を一本で覚えているので、撮る側は次の要求で 401 を受けて認証をやり直す羽目に
 	//  なる(実測では時刻から種を作り直して回復するが、撮影の最中に往復を増やす意味は無い)。
 	//  撮影中の個体は「ずっと見えている」ので、そもそもこの合図は立たない。念のため明示で弾く。
-	void greetLocked()
+	void greetLocked(long long now)
 	{
 		for (auto& c : g_map)
 		{
-			if (!c.greet) { continue; }
-			c.greet = false;
+			if (c.greetLeft <= 0) { continue; }
+			if (!c.online)        { continue; }	// 見えていないなら投げない(見えたときに再開する)
+			if (inUseNow(c.serial)) { c.greetLeft = 0; continue; }	// 撮っている個体には触らない
 			if (c.access.empty())
 			{	// 入口が分からない。**ここが空だと挨拶は永久に飛ばない**ので残す。
+				c.greetLeft = 0;
 				dataManager::logEvent("CAMERA", ("greet skipped (no access url): " + c.serial).c_str());
 				continue;
 			}
-			if (inUseNow(c.serial)) { continue; }	// 撮っている個体には触らない
+			if (c.greetAt != 0 && now - c.greetAt < kGreetGapSec) { continue; }	// 間をあける
+			c.greetAt = now;
+			--c.greetLeft;
 			// 機器情報を1回読むだけ。軽く、どの機種にもあり、こちらにも有用な内容が返る。
 			std::string resp;
 			const bool ok = netThread::httpGet(c.access + "/ver100/deviceinformation", resp);
-			dataManager::logEvent("CAMERA", (std::string("greet ") + (ok ? "ok " : "failed ")
-			                                 + c.access).c_str(), !ok);
+			if (ok) { c.greetLeft = 0; dataManager::logEvent("CAMERA", ("greet ok " + c.access).c_str()); }
+			else
+			{	// 何で断られたかを残す。401 なら資格情報か nc、0 なら届いていない。
+				int st = 0; std::string body;
+				netThread::lastHttpFailure(st, body);
+				char b[160];
+				std::snprintf(b, sizeof(b), "greet failed http=%d left=%d %s",
+				              st, c.greetLeft, c.access.c_str());
+				dataManager::logEvent("CAMERA", b, c.greetLeft == 0);	// 打ち止めのときだけ ERR
+			}
 		}
 	}
 
@@ -221,7 +268,7 @@ namespace {
 					recoverOfflineLocked(now);	// M-SEARCHで拾えなかった復帰を記述URLで拾う
 				}
 				else        { refreshLivenessLocked(now); }
-				greetLocked();	// 入り直したカメラへ挨拶(機器情報を1回読む)
+				greetLocked(now);	// 入り直したカメラへ挨拶(成功するまで数回投げる)
 				std::string sig = signatureLocked();
 				if (sig != g_lastSig) { g_lastSig = sig; changed = true; }
 			}
