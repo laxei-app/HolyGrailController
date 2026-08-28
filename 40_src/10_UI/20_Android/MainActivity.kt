@@ -612,7 +612,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<ImageView>(R.id.report_menu).setOnClickListener { flipper.displayedChild = 4; buildGearMenu() }
         setupDivider(R.id.report_divider, R.id.report_listScroll)
         // 8.2 エッジ端末設定(2026-08-08 UI依頼で画面化)
-        findViewById<ImageView>(R.id.edge_back).setOnClickListener { flipper.displayedChild = 4; buildGearMenu() }
+        findViewById<ImageView>(R.id.edge_back).setOnClickListener { stashEdgeForm(); flipper.displayedChild = 4; buildGearMenu() }
         findViewById<ImageView>(R.id.edge_menu).setOnClickListener { flipper.displayedChild = 4; buildGearMenu() }
         setupDivider(R.id.edge_divider, R.id.edge_listScroll)
         findViewById<Button>(R.id.history_clear).setOnClickListener {
@@ -5343,6 +5343,68 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // --- エッジ端末の登録(prefsに永続化。設定で追加・検索で自動登録。オフラインでも選択可) ---
     private fun hgcPrefs() = getSharedPreferences("hgc", MODE_PRIVATE)
+
+    // ── エッジのネットワーク設定を覚えておく(2026-08-29 UI依頼) ──────────────
+    //
+    // 【なぜ要るか】以前は画面を離れると入力が消え、エッジを選び直すたびに SSID と
+    //  パスワードを打ち直していた。しかも AP と STA でこの2欄の意味が違う
+    //  (AP=エッジが立てる側の資格 / STA=参加先の資格)ので、**モードを切り替えると
+    //  前のモードで入れた値が上書きされて失われる**。STA→AP→STA と戻ったときに
+    //  元の設定へ戻れるよう、**モードごとに別々に**覚える。
+    //
+    // 置き場: prefs の "ec_<端末名>" に {"ap":真偽,"sta":{ssid,pass},"apCfg":{ssid,pass}}。
+    //  端末名がキーなので、改名したら付け替えが要る(renameRegisteredEdge から呼ぶ)。
+    private class EdgeCfg(var ap: Boolean = false,
+                          var staSsid: String = "", var staPass: String = "",
+                          var apSsid: String = "",  var apPass: String = "")
+
+    private fun edgeCfgKey(name: String) = "ec_" + name
+
+    private fun loadEdgeCfg(name: String): EdgeCfg {
+        val c = EdgeCfg()
+        if (name.isEmpty()) return c
+        try {
+            val o = JSONObject(hgcPrefs().getString(edgeCfgKey(name), "") ?: "")
+            c.ap = o.optBoolean("ap", false)
+            o.optJSONObject("sta")?.let { c.staSsid = it.optString("ssid"); c.staPass = it.optString("pass") }
+            o.optJSONObject("apCfg")?.let { c.apSsid = it.optString("ssid"); c.apPass = it.optString("pass") }
+        } catch (_: Exception) {}
+        return c
+    }
+
+    private fun saveEdgeCfg(name: String, c: EdgeCfg) {
+        if (name.isEmpty()) return
+        try {
+            val o = JSONObject()
+            o.put("ap", c.ap)
+            o.put("sta", JSONObject().put("ssid", c.staSsid).put("pass", c.staPass))
+            o.put("apCfg", JSONObject().put("ssid", c.apSsid).put("pass", c.apPass))
+            hgcPrefs().edit().putString(edgeCfgKey(name), o.toString()).apply()
+        } catch (_: Exception) {}
+    }
+
+    // ── 一度つないだ SSID のパスワード(端末ごとではなく全体で1つ) ────────────
+    //
+    // 【なぜ端末ごとにしないか】同じ家/現場の Wi-Fi へ何台も参加させるのが普通で、
+    //  同じパスワードを台数ぶん打ち直すのは無駄。SSID が同じならパスワードも同じ、
+    //  という前提はこの用途では妥当。**SSID を選んだ/入れたときに自動で埋める**。
+    //  違っていればユーザーが上書きすればよく、そのとき覚え直す。
+    private fun knownWifiPass(ssid: String): String {
+        if (ssid.isEmpty()) return ""
+        return try { JSONObject(hgcPrefs().getString("wifiPass", "{}") ?: "{}").optString(ssid, "") }
+               catch (_: Exception) { "" }
+    }
+
+    private fun rememberWifiPass(ssid: String, pass: String) {
+        if (ssid.isEmpty() || pass.isEmpty()) return
+        try {
+            val o = JSONObject(hgcPrefs().getString("wifiPass", "{}") ?: "{}")
+            if (o.optString(ssid, "") == pass) return       // 変化なしは書かない
+            o.put(ssid, pass)
+            hgcPrefs().edit().putString("wifiPass", o.toString()).apply()
+        } catch (_: Exception) {}
+    }
+
     private fun loadRegisteredEdges() {
         edges.clear()
         try {
@@ -5364,6 +5426,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (edges.any { it.name == newName }) edges.removeAt(idx)          // 新名が既にある → 重複を残さない
         else edges[idx] = Edge(newName, edges[idx].ip, edges[idx].port)
         saveRegisteredEdges()
+        // ネットワーク設定(ec_<名前>)も付け替える。置いていくと、次に同じ名前を作ったときに
+        //  前の持ち主の設定が出てくるうえ、本人の設定は迷子になる。新名が既に自分の設定を
+        //  持っているなら、そちらを正として古い方を捨てるだけにする。
+        if (hgcPrefs().getString(edgeCfgKey(newName), "").isNullOrEmpty())
+        { saveEdgeCfg(newName, loadEdgeCfg(oldName)) }
+        hgcPrefs().edit().remove(edgeCfgKey(oldName)).apply()
         // 計画の割り当てを付け替える(prefs の pe_<planId> に端末名で入っている)。
         val pf = hgcPrefs()
         val ed = pf.edit()
@@ -5420,11 +5488,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         edges.toList().forEach { e ->
             val sel = e.name == selectedEdgeName
-            val sub = if (e.ip.isNotEmpty()) "IP: " + e.ip else "IP: 未取得"
+            // 副行は**いま届いているか**。IP は普段読んでも何もできないのでやめた
+            //  (2026-08-29 UI依頼)。押す前に「送っても無駄」と分かるのが要点。
+            val sub = when (edgeOnline[e.name]) {
+                true  -> "オンライン"
+                false -> "オフライン"
+                else  -> "確認中"        // 起動直後、まだ一度もスイープしていない
+            }
             box.addView(listRow(e.name, sub, sel,
                 onSelect = {
+                    // 今見ている端末の入力を控えてから切り替える(打った内容を捨てない)。
+                    stashEdgeForm()
                     selectedEdgeName = e.name
                     scannedPop = ""; scannedName = ""
+                    edgeApMode = loadEdgeCfg(e.name).ap      // その端末を最後に設定したモードで開く
                     buildEdgeList(); buildEdgeForm()
                 },
                 menuItems = listOf(
@@ -5435,6 +5512,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         // 新規は一番下(所持カメラ/レンズと同じ)。色は linkText が持つ青。
         box.addView(linkText("＋ 新規エッジ端末") {
+            stashEdgeForm()                       // 打った内容を捨てない
             selectedEdgeName = ""; scannedPop = ""; scannedName = ""
             buildEdgeList(); buildEdgeForm()
         })
@@ -5450,6 +5528,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 // 【逃げ道】この端末が持っていた計画の縛りも一緒に解く。壊れた/失くした
                 //  端末の分がいつまでも残ると、そのカメラを永久に変更も削除もできなくなる。
                 edgeHeldByEdge.remove(e.name); saveEdgeHeld()
+                hgcPrefs().edit().remove(edgeCfgKey(e.name)).apply()   // その端末のネットワーク設定も捨てる
                 if (selectedEdgeName == e.name) selectedEdgeName = ""
                 buildEdgeList(); buildEdgeForm(); refreshPlanList(); updateReadOnly()
             }
@@ -5466,13 +5545,32 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .setPositiveButton("すべて削除") { _, _ ->
                 val names = edges.map { it.name }
                 edges.clear(); saveRegisteredEdges(); refreshEdgeSpinner()
-                for (n in names) { edgeHeldByEdge.remove(n) }
+                val ed = hgcPrefs().edit()
+                for (n in names) { edgeHeldByEdge.remove(n); ed.remove(edgeCfgKey(n)) }
+                ed.apply()
                 saveEdgeHeld()
                 selectedEdgeName = ""
                 buildEdgeList(); buildEdgeForm(); refreshPlanList(); updateReadOnly()
             }
             .setNegativeButton("やめる", null)
             .show()
+    }
+
+    // いま画面に出ている入力を、その端末の設定として残す。
+    //  端末を切り替える・画面を離れる・送信する、のいずれでも呼ぶ。呼び忘れると
+    //  「打ったのに次に開いたら消えている」になる。新規(名前が未定)のときは残さない。
+    private fun stashEdgeForm() {
+        val name = selectedEdgeName
+        if (name.isEmpty()) return
+        val sid = edgeSsidEt?.text?.toString() ?: return
+        val pw  = edgePassEt?.text?.toString() ?: ""
+        val c = loadEdgeCfg(name)
+        c.ap = edgeApMode
+        if (edgeApMode) { c.apSsid = sid; c.apPass = pw } else { c.staSsid = sid; c.staPass = pw }
+        saveEdgeCfg(name, c)
+        // STA のときだけ、SSID とパスワードの対応を全体の控えにも残す。
+        //  AP のときの資格は「エッジが立てる側」のものなので、参加先の控えに混ぜてはいけない。
+        if (!edgeApMode) { rememberWifiPass(sid, pw) }
     }
 
     private fun buildEdgeForm() {
@@ -5534,6 +5632,22 @@ class MainActivity : AppCompatActivity(), HgeListener {
         })
         edgeSsidEt = ssidE; edgePassEt = passE; edgeSsidLabel = ssidLabel; edgePassLabel = passLabel
 
+        // 【モードごとに別々に覚える】この2欄は AP と STA で意味が違う
+        //  (AP=エッジが立てる側の資格 / STA=参加先の資格)。1組しか持たないと、
+        //  モードを切り替えた瞬間に前のモードの値が消える。STA→AP→STA と戻ったとき
+        //  元の設定が出るように、両方を保持して切り替えのたびに入れ替える。
+        val cfg = loadEdgeCfg(selectedEdgeName)
+        fun fillFor(ap: Boolean) {
+            ssidE.setText(if (ap) cfg.apSsid else cfg.staSsid)
+            passE.setText(if (ap) cfg.apPass else cfg.staPass)
+        }
+        // いま見えている入力を、いまのモードの側へ控える(切り替えの直前に呼ぶ)。
+        fun keepCurrent(ap: Boolean) {
+            val sid = ssidE.text.toString(); val pw = passE.text.toString()
+            if (ap) { cfg.apSsid = sid; cfg.apPass = pw } else { cfg.staSsid = sid; cfg.staPass = pw }
+        }
+        fillFor(edgeApMode)
+
         fun applyModeLabels(ap: Boolean) {
             ssidLabel.text = if (ap) "AP SSID (空ならエッジの既定値)" else "接続先 SSID"
             passLabel.text = if (ap) "AP password (空ならエッジの既定値)" else "接続先 password"
@@ -5543,9 +5657,34 @@ class MainActivity : AppCompatActivity(), HgeListener {
             ssidPickBtn.isEnabled = !ap
         }
         applyModeLabels(edgeApMode)
-        apSwitch.setOnCheckedChangeListener { _, ap -> edgeApMode = ap; applyModeLabels(ap) }
+        apSwitch.setOnCheckedChangeListener { _, ap ->
+            keepCurrent(!ap)          // 切り替える前のモードの側へ控える
+            edgeApMode = ap
+            applyModeLabels(ap)
+            fillFor(ap)               // 新しいモードで覚えている値を出す
+        }
         edgeApSwitch = apSwitch
-        ssidPickBtn.setOnClickListener { pickWifiSsid { sid -> ssidE.setText(sid) } }
+        // SSID を選んだら、一度つないだことのある先ならパスワードも入れる(全体で覚えている)。
+        //  同じ Wi-Fi へ何台も参加させるので、台数ぶん打ち直すのは無駄。違えば上書きすればよい。
+        ssidPickBtn.setOnClickListener {
+            pickWifiSsid { sid ->
+                ssidE.setText(sid)
+                if (passE.text.toString().isEmpty()) {
+                    val known = knownWifiPass(sid)
+                    if (known.isNotEmpty()) {
+                        passE.setText(known)
+                        Toast.makeText(ctx, "以前に使ったパスワードを入れました", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
+        // 手で SSID を打った場合も、入力を離れた時点で同じ手当てをする。
+        ssidE.setOnFocusChangeListener { _, has ->
+            if (!has && !edgeApMode && passE.text.toString().isEmpty()) {
+                val known = knownWifiPass(ssidE.text.toString())
+                if (known.isNotEmpty()) passE.setText(known)
+            }
+        }
 
         val popView = TextView(ctx).apply {
             setPadding(0, (12 * d).toInt(), 0, 0)
@@ -5567,6 +5706,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     Toast.makeText(ctx, "「" + target + "」は撮影中です。ネットワーク設定を変えるとカメラとの回線が切れます。撮影を止めてから行ってください",
                                    Toast.LENGTH_LONG).show()
                 } else {
+                    stashEdgeForm()   // 送った内容をその端末の設定として残す
                     sendEdgeProvision()
                 }
             }
@@ -5579,6 +5719,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 if (nm.isEmpty()) { Toast.makeText(ctx, "端末識別名を入力してください", Toast.LENGTH_SHORT).show(); return@setOnClickListener }
                 if (!isAsciiEdgeName(nm)) { Toast.makeText(ctx, "端末識別名は半角英数字で入力してください", Toast.LENGTH_LONG).show(); return@setOnClickListener }
                 if (edges.none { it.name == nm }) edges.add(Edge(nm, "", 50506))
+                selectedEdgeName = nm; stashEdgeForm()   // 入れた SSID/password をこの端末の設定として残す
                 saveRegisteredEdges(); refreshEdgeSpinner()
                 selectedEdgeName = nm
                 buildEdgeList(); buildEdgeForm()
