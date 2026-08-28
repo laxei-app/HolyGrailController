@@ -5863,6 +5863,27 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // edgePoll(10秒・計画別C_PROGRESS)が担い、スイープは「集合の同期と発見」を担当する役割分担。
     // UDPは混雑WiFiで取りこぼすため、連続2回無応答の登録エッジはlast-seen IPへTCP生存確認してから
     // オフライン判定する(1回の取りこぼしで表示を揺らさない)。
+    // エッジごとに最後に時刻を送った時点。スイープのたびに送ると TCP の張り直しが増えるので、
+    //  「見つかった瞬間」と「しばらく経ったとき」だけにする(エッジ側も差が小さければ何もしない)。
+    private val edgeTimeSentAt = HashMap<String, Long>()
+    private val kEdgeTimeRefreshMs = 30L * 60L * 1000L   // 30分
+
+    // 見つけたエッジへ現在時刻とタイムゾーンを送る。
+    //
+    // 【なぜスイープで送るか(2026-08-28)】従来は撮影計画を送るときと、選択中のエッジへだけ
+    //  送っていた。そのため電源を入れただけのエッジは時計を持たないままになる。時計が無いと
+    //   ・撮影窓の判定ができない
+    //   ・カメラ認証の nc の種が 0 になり、他の端末が一度触ると追いつけなくなる(実測)
+    //  スイープは登録済みエッジを常時見つけているので、そこに乗せるのが素直。
+    private fun sendEdgeTime(ed: Edge) {
+        if (ed.ip.isEmpty()) return
+        val now = Calendar.getInstance()
+        val s = fmtIso.format(now.time)
+        val off = TimeZone.getDefault().getOffset(now.timeInMillis) / 60000
+        edgeTimeSentAt[ed.name] = System.currentTimeMillis()
+        Thread { try { HgeNative.nativeEdgeSyncTime(ed.addr(), ed.port, s, off) } catch (_: Exception) {} }.start()
+    }
+
     private val edgeSweep = object : Runnable {
         override fun run() {
             updateEdgeApBinding()   // エッジSoftAP接続中はそのNICへバインド維持(Androidの自動離脱を防ぐ)
@@ -5913,7 +5934,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     var uiDirty = false
                     for ((nm, f) in found) {
                         edgeMiss[nm] = 0
+                        // 居なかったものが見えた瞬間に時刻を送る(電源を入れた直後がこれ)。
+                        //  以後は間を空けて送り直すだけ。ずれていなければエッジ側が何もしない。
+                        val appeared = edgeOnline[nm] != true
                         if (edgeOnline[nm] != true) { edgeOnline[nm] = true; uiDirty = true }
+                        val lastSent = edgeTimeSentAt[nm] ?: 0L
+                        if (appeared || System.currentTimeMillis() - lastSent > kEdgeTimeRefreshMs) {
+                            sendEdgeTime(f.edge)
+                        }
                         updateEdgeIp(nm, f.edge.ip, f.edge.port)   // DHCPのIP変動を常時追従
                         if (f.hasSessions) reconcileEdgeSessions(f.edge, f.sessions)
                         if (f.hasHeld) reconcileEdgeRoster(f.edge, f.heldPlans)   // 項目6: エッジ側削除の検知→ロック解除

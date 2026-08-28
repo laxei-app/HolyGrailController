@@ -113,10 +113,28 @@ namespace
 			return false;
 		}
 		long long utc = hgc::toUnixUtc(d, off);	// ローカル+オフセット → UTC
-		setSystemClock(utc);
-		setRtcFromUtc(utc);
+
+		// タイムゾーンは常に採る。値が変わったときだけ NVS へ書かれるので摩耗しない。
 		hge_setUtcOffset(off);
-		DBGLN(col::GRN, "etpEdge: time set off=%d", off);
+
+		// 【時計は選り好みして合わせる(2026-08-28)】スマホは見つけたエッジへ定期的に時刻を送る。
+		//  毎回そのまま入れると、次の2つで実害が出る。
+		//   ・撮影中に時計が飛ぶ … 周期も窓の判定も std::time を見ているので、コマが飛んだり
+		//     窓が終わったと誤認したりする
+		//   ・時計が戻る … カメラ認証の nc の種は時刻から作る。戻るとカメラが覚えている値を
+		//     下回り、401 が続いて撮れなくなる(2026-08-28 実測)
+		//  そこで「未設定なら無条件」「入っていて差が小さければ触らない」「大きくても撮影中は待つ」。
+		const long long now   = static_cast<long long>(std::time(nullptr));
+		const bool      unset = (now < 1577836800LL);	// 2020-01-01 より前 = 未設定
+		const long long diff  = (now > utc) ? (now - utc) : (utc - now);
+		const bool      busy  = (hge_getState() != HGE_ST_IDLE);
+		if (unset || (diff > 3 && !busy))
+		{
+			setSystemClock(utc);
+			setRtcFromUtc(utc);
+			DBGLN(col::GRN, "etpEdge: clock set off=%d diff=%lld%s", off, diff, unset ? " (was unset)" : "");
+		}
+
 		return true;
 	}
 
