@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 丸みのある青ボタン(2026-08-29 UI依頼)。画面ごとに Button の既定見た目が違って
+     見えるのを避けるため、押せるボタンはこの背景に揃える。⋮ の緑ピルと同じ作り。 -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_enabled="false">
+        <shape android:shape="rectangle">
+            <solid android:color="#BBDEFB" />
+            <corners android:radius="18dp" />
+        </shape>
+    </item>
+    <item android:state_pressed="true">
+        <shape android:shape="rectangle">
+            <solid android:color="#0D47A1" />
+            <corners android:radius="18dp" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#1565C0" />
+            <corners android:radius="18dp" />
+        </shape>
+    </item>
+</selector>

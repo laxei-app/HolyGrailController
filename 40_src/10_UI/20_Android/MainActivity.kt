@@ -1387,6 +1387,24 @@ class MainActivity : AppCompatActivity(), HgeListener {
         return tv
     }
 
+    // 押せるボタンの見た目を1つに揃える(2026-08-29 UI依頼)。
+    //  画面ごとに素の Button を使っていて、端末の既定テーマ次第で角も色もばらついていた。
+    //  ここを通せば全部そろう。文字は白、背景は丸い青(btn_blue_round)。
+    private fun blueButton(label: String, onClick: () -> Unit): Button {
+        val b = Button(this)
+        b.text = label
+        b.isAllCaps = false                     // 既定で大文字化する端末があるため止める
+        b.setTextColor(Color.WHITE)
+        b.setBackgroundResource(R.drawable.btn_blue_round)
+        b.stateListAnimator = null              // 影が付くと角の丸みが目立たなくなる
+        b.setPadding(dp(16), dp(8), dp(16), dp(8))
+        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        lp.setMargins(0, dp(6), 0, 0)
+        b.layoutParams = lp
+        b.setOnClickListener { onClick() }
+        return b
+    }
+
     private fun thinDivider(): View {
         val v = View(this)
         v.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1)
@@ -5381,65 +5399,78 @@ class MainActivity : AppCompatActivity(), HgeListener {
         flipper.displayedChild = 15
     }
 
-    // 上段: 登録済み一覧。先頭は新規追加行。タップで設定対象を切り替える。
+    // 上段: 登録済み一覧。**他の一覧画面(所持カメラ/レンズ)と同じ作りに揃える**(2026-08-29 UI依頼)。
+    //  ・行は共通の listRow。右端は「削除」ボタンではなく **⋮ のコンテキストメニュー**
+    //  ・「削除」「すべて削除」はそのメニューの項目
+    //  ・「＋ 新規エッジ端末」は**一覧の一番下**(所持カメラの「＋ 新規カメラ追加」と同じ位置)
+    //  以前はここだけ独自の行を組み立てていて、右端に素の Button が出ていた。
     private fun buildEdgeList() {
         val box = findViewById<LinearLayout>(R.id.edge_container)
         box.removeAllViews()
-        val d = resources.displayMetrics.density
-        fun row(label: String, sel: Boolean, bold: Boolean, onTap: () -> Unit, onDelete: (() -> Unit)?) {
-            val r = LinearLayout(this); r.orientation = LinearLayout.HORIZONTAL
-            r.gravity = Gravity.CENTER_VERTICAL
-            if (sel) r.setBackgroundColor(0xFFE3F2FD.toInt())
-            val tv = TextView(this).apply {
-                text = label
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                setPadding((8 * d).toInt(), (10 * d).toInt(), (8 * d).toInt(), (10 * d).toInt())
-                if (bold) setTypeface(null, Typeface.BOLD)
-            }
-            tv.setOnClickListener { onTap() }
-            r.addView(tv)
-            if (onDelete != null) {
-                r.addView(Button(this).apply { text = "削除"; setOnClickListener { onDelete() } })
-            }
-            box.addView(r)
-        }
-        // 新規追加(常に先頭。撮影計画の「新規撮影計画」行と同じ位置づけ)
-        row("＋ 新規エッジ端末", selectedEdgeName.isEmpty(), true, {
-            selectedEdgeName = ""; scannedPop = ""; scannedName = ""
-            buildEdgeList(); buildEdgeForm()
-        }, null)
         if (edges.isEmpty()) {
             box.addView(TextView(this).apply {
-                text = "(登録なし。上の「＋ 新規エッジ端末」から追加)"
-                setPadding((8 * d).toInt(), (6 * d).toInt(), 0, 0)
+                text = "(登録なし。下の「＋ 新規エッジ端末」から追加)"
+                setPadding(dp(8), dp(6), 0, dp(6))
+                setTextColor(Color.GRAY)
             })
-            return
         }
         edges.toList().forEach { e ->
             val sel = e.name == selectedEdgeName
-            row((if (sel) "● " else "○ ") + e.name, sel, sel, {
-                selectedEdgeName = e.name
-                scannedPop = ""; scannedName = ""
-                buildEdgeList(); buildEdgeForm()
-            }, {
-                AlertDialog.Builder(this)
-                    .setTitle("エッジ端末の削除")
-                    .setMessage("「" + e.name + "」を登録から削除しますか？(エッジ本体の設定は変わりません)")
-                    .setPositiveButton("削除する") { _, _ ->
-                        edges.remove(e); saveRegisteredEdges(); refreshEdgeSpinner()
-                        // 【逃げ道】この端末が持っていた計画の縛りも一緒に解く。壊れた/失くした
-                        //  端末の分がいつまでも残ると、そのカメラを永久に変更も削除もできなくなる。
-                        edgeHeldByEdge.remove(e.name); saveEdgeHeld()
-                        if (selectedEdgeName == e.name) selectedEdgeName = ""
-                        buildEdgeList(); buildEdgeForm(); refreshPlanList(); updateReadOnly()
-                    }
-                    .setNegativeButton("やめる", null)
-                    .show()
-            })
+            val sub = if (e.ip.isNotEmpty()) "IP: " + e.ip else "IP: 未取得"
+            box.addView(listRow(e.name, sub, sel,
+                onSelect = {
+                    selectedEdgeName = e.name
+                    scannedPop = ""; scannedName = ""
+                    buildEdgeList(); buildEdgeForm()
+                },
+                menuItems = listOf(
+                    "削除" to { confirmRemoveEdge(e) },
+                    "すべて削除" to { confirmRemoveAllEdges() }
+                )))
+            box.addView(thinDivider())
         }
+        // 新規は一番下(所持カメラ/レンズと同じ)。色は linkText が持つ青。
+        box.addView(linkText("＋ 新規エッジ端末") {
+            selectedEdgeName = ""; scannedPop = ""; scannedName = ""
+            buildEdgeList(); buildEdgeForm()
+        })
     }
 
-    // 下段: 選択した端末(または新規)の設定フォーム。
+    // 登録から1台外す。**エッジ本体の設定は変えない**(こちらの台帳から消すだけ)。
+    private fun confirmRemoveEdge(e: Edge) {
+        AlertDialog.Builder(this)
+            .setTitle("エッジ端末の削除")
+            .setMessage("「" + e.name + "」を登録から削除しますか？(エッジ本体の設定は変わりません)")
+            .setPositiveButton("削除する") { _, _ ->
+                edges.remove(e); saveRegisteredEdges(); refreshEdgeSpinner()
+                // 【逃げ道】この端末が持っていた計画の縛りも一緒に解く。壊れた/失くした
+                //  端末の分がいつまでも残ると、そのカメラを永久に変更も削除もできなくなる。
+                edgeHeldByEdge.remove(e.name); saveEdgeHeld()
+                if (selectedEdgeName == e.name) selectedEdgeName = ""
+                buildEdgeList(); buildEdgeForm(); refreshPlanList(); updateReadOnly()
+            }
+            .setNegativeButton("やめる", null)
+            .show()
+    }
+
+    // 登録を全部外す。台数を出してから訊く(誤爆の重さが分かるように)。
+    private fun confirmRemoveAllEdges() {
+        if (edges.isEmpty()) return
+        AlertDialog.Builder(this)
+            .setTitle("すべて削除")
+            .setMessage("登録している" + edges.size + "台をすべて削除しますか？(エッジ本体の設定は変わりません)")
+            .setPositiveButton("すべて削除") { _, _ ->
+                val names = edges.map { it.name }
+                edges.clear(); saveRegisteredEdges(); refreshEdgeSpinner()
+                for (n in names) { edgeHeldByEdge.remove(n) }
+                saveEdgeHeld()
+                selectedEdgeName = ""
+                buildEdgeList(); buildEdgeForm(); refreshPlanList(); updateReadOnly()
+            }
+            .setNegativeButton("やめる", null)
+            .show()
+    }
+
     private fun buildEdgeForm() {
         val ctx = this
         val d = resources.displayMetrics.density
@@ -5474,7 +5505,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 2026-08-08 UI依頼: どちらを編集しているのかが分かるようラベルを出し分ける。
         val ssidLabel = label("接続先 SSID")
         val ssidE = EditText(ctx); box.addView(ssidE)
-        val ssidPickBtn = Button(ctx).apply { text = "SSIDを選択(周辺のWi-Fiから)" }
+        val ssidPickBtn = blueButton("SSIDを選択(周辺のWi-Fiから)") { }   // 押した時の処理は下で入れる
         box.addView(ssidPickBtn)
         val passLabel = label("接続先 password")
         // 既定で見えるようにする(2026-08-27 UI依頼)。理由はカメラのパスワード欄と同じ。
@@ -5517,12 +5548,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         box.addView(popView); edgePopView = popView
 
-        box.addView(Button(ctx).apply {
-            text = "エッジのQRをスキャン"
-            setOnClickListener { requestEdgeQr() }
-        })
-        box.addView(Button(ctx).apply {
-            text = "設定を送信"
+        box.addView(blueButton("エッジのQRをスキャン") { requestEdgeQr() })
+        box.addView(blueButton("設定を送信") { }.apply {
             setOnClickListener {
                 // 撮影中は AP/STA を切り替えさせない。切り替えるとエッジとカメラの回線が切れて
                 // 撮影が壊れる(2026-08-14 指示)。エッジ側でも同じ判定で断るが、ここで止めれば
@@ -5541,8 +5568,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         })
 
         // 新規は「登録だけ」もできる(エッジが手元に無くても計画で選べるようにするため)。
-        box.addView(Button(ctx).apply {
-            text = "登録だけする(エッジへ送信しない)"
+        box.addView(blueButton("登録だけする(エッジへ送信しない)") { }.apply {
             setOnClickListener {
                 val nm = nameE.text.toString().trim()
                 if (nm.isEmpty()) { Toast.makeText(ctx, "端末識別名を入力してください", Toast.LENGTH_SHORT).show(); return@setOnClickListener }
