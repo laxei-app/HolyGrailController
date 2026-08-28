@@ -23,7 +23,15 @@ namespace
 	//  あった接続だけで撮影は続くので「撮影しているのに死んでいる」ように見える)。
 	//  入口をこの錠で1本化する。**新しく入口を足したらここも通すこと。**
 	//  logDir()/writable() は中で dir() を呼ぶので**再入可能**な錠にすること。
+	//  HGC_FS_NOLOCK を定義すると錠を外す。**検証専用**(直る前の姿を実機で再現するため)。
+#ifdef HGC_FS_NOLOCK
+	struct fakeLock { void lock(){} void unlock(){} };
+	fakeLock& fsMutex(void) { static fakeLock m; return m; }
+	#define HGC_FS_LOCK_T fakeLock
+#else
 	std::recursive_mutex& fsMutex(void) { static std::recursive_mutex m; return m; }
+	#define HGC_FS_LOCK_T std::recursive_mutex
+#endif
 
 	fs::FS*     g_fs = nullptr;	// 採用したファイルシステム(&SD or &LittleFS)
 	bool        g_inited = false;
@@ -77,7 +85,7 @@ namespace osfile
 
 	std::string dir(const std::string& name)
 	{
-		std::lock_guard<std::recursive_mutex> lk(fsMutex());
+		std::lock_guard<HGC_FS_LOCK_T> lk(fsMutex());
 		ensureInit();
 		if (g_fs == nullptr) { return ""; }
 		std::string p = "/" + name;
@@ -89,7 +97,7 @@ namespace osfile
 	//  カードが無い/書けない状態では mkdir が失敗し、以後の保存がすべて失敗する。
 	bool writable(void)
 	{
-		std::lock_guard<std::recursive_mutex> lk(fsMutex());
+		std::lock_guard<HGC_FS_LOCK_T> lk(fsMutex());
 		ensureInit();
 		if (g_fs == nullptr) { return false; }
 		std::string p = dir("plan");
@@ -99,13 +107,13 @@ namespace osfile
 
 	std::string logDir(void)
 	{
-		std::lock_guard<std::recursive_mutex> lk(fsMutex());
+		std::lock_guard<HGC_FS_LOCK_T> lk(fsMutex());
 		return dir("log");
 	}
 
 	bool writeAll(const std::string& path, const char* data, size_t len)
 	{
-		std::lock_guard<std::recursive_mutex> lk(fsMutex());
+		std::lock_guard<HGC_FS_LOCK_T> lk(fsMutex());
 		ensureInit();
 		if (g_fs == nullptr) { return false; }
 		std::string tmp = path + ".tmp";
@@ -121,7 +129,7 @@ namespace osfile
 
 	bool append(const std::string& path, const char* data, size_t len)
 	{
-		std::lock_guard<std::recursive_mutex> lk(fsMutex());
+		std::lock_guard<HGC_FS_LOCK_T> lk(fsMutex());
 		ensureInit();
 		if (g_fs == nullptr) { return false; }
 		File f = g_fs->open(path.c_str(), FILE_APPEND);
@@ -134,7 +142,7 @@ namespace osfile
 
 	bool readAll(const std::string& path, std::string& out)
 	{
-		std::lock_guard<std::recursive_mutex> lk(fsMutex());
+		std::lock_guard<HGC_FS_LOCK_T> lk(fsMutex());
 		ensureInit();
 		out.clear();
 		if (g_fs == nullptr) { return false; }
@@ -148,7 +156,7 @@ namespace osfile
 	// offset バイト目から最大 maxLen バイトを読む(大きなログの分割転送。RAM節約)。
 	bool readRange(const std::string& path, size_t offset, size_t maxLen, std::string& out)
 	{
-		std::lock_guard<std::recursive_mutex> lk(fsMutex());
+		std::lock_guard<HGC_FS_LOCK_T> lk(fsMutex());
 		ensureInit();
 		out.clear();
 		if (g_fs == nullptr) { return false; }
@@ -167,7 +175,7 @@ namespace osfile
 	// (default_8MB.csv で 0x180000 = 1536KB)しかない。この差を実測で返す。
 	bool spaceInfo(unsigned long long& totalBytes, unsigned long long& usedBytes)
 	{
-		std::lock_guard<std::recursive_mutex> lk(fsMutex());
+		std::lock_guard<HGC_FS_LOCK_T> lk(fsMutex());
 		ensureInit();
 		if (g_fs == &SD)
 		{	totalBytes = static_cast<unsigned long long>(SD.totalBytes());
@@ -218,7 +226,7 @@ namespace osfile
 
 	bool removeFile(const std::string& subdir, const std::string& name)
 	{
-		std::lock_guard<std::recursive_mutex> lk(fsMutex());
+		std::lock_guard<HGC_FS_LOCK_T> lk(fsMutex());
 		ensureInit();
 		if (g_fs == nullptr) { return false; }
 		std::string p = "/" + subdir + "/" + name;
@@ -247,7 +255,7 @@ namespace osfile
 
 	bool removeLog(const std::string& name)
 	{
-		std::lock_guard<std::recursive_mutex> lk(fsMutex());
+		std::lock_guard<HGC_FS_LOCK_T> lk(fsMutex());
 		ensureInit();
 		if (g_fs == nullptr) { return false; }
 		std::string p = "/log/" + name;
@@ -256,7 +264,7 @@ namespace osfile
 
 	int removeInternalLogs(void)
 	{
-		std::lock_guard<std::recursive_mutex> lk(fsMutex());
+		std::lock_guard<HGC_FS_LOCK_T> lk(fsMutex());
 		// 内蔵フラッシュ(LittleFS)を明示的に開き /log のファイルを全削除する。
 		// SD 採用中でも内蔵側ログを消したいので g_fs ではなく LittleFS を直接使う。
 		if (!LittleFS.begin(true)) { return -1; }
