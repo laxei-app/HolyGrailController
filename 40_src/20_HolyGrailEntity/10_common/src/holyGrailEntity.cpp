@@ -1070,6 +1070,29 @@ namespace
 		}
 		return names;
 	}
+	// 保存済みの計画を一度だけ読み、ダイジェスト認証の資格情報を候補へ入れる。
+	//
+	// 【なぜ要るか(2026-08-28 実機で判明)】計画は必要になったときに読む作りで、起動しただけでは
+	//  どの計画も読まれない。資格情報は計画JSONを読む副作用(csJson::cameraFromJson)でしか
+	//  候補に入らないので、**起動直後のエッジは資格情報を1つも持っていない**。
+	//  そのためカメラへの挨拶が Authorization を付けられず、素の 401 のまま何度投げても通らなかった
+	//  (Edge00 のログに creds=0 known=0 が残っている)。所持カメラ台帳を持つスマホ役では
+	//  preloadOwned が同じ役目を果たすので、この穴はエッジ役だけに開いていた。
+	//
+	// 読んだ計画そのものは捨ててよい。欲しいのは候補への登録という副作用だけ。計画は1台につき
+	//  数本しか置かないので(内部RAMの制約)、1本ずつ読んで捨てれば山は作らない。
+	void preloadPlanCredentials(void)
+	{
+		if (hge::role::ownedCamerasAuthoritative()) { return; }	// スマホ役は preloadOwned で足りる
+		for (const std::string& id : dataManager::listPlanIds())
+		{
+			std::string saved;
+			if (!dataManager::loadPlanFile(id, saved)) { continue; }
+			hgc::cs cs;
+			(void)csjson::fromJson(saved, cs);	// 副作用(httpAuth::addCandidate)だけが目的
+		}
+	}
+
 	void notifyStateP(const std::string& planId, int s)
 	{
 		std::string j = "{\"planId\":\"" + jesc(planId) + "\",\"state\":" + std::to_string(s) + "}";
@@ -1722,6 +1745,7 @@ int32_t hge_init(void)
 	// カメラを探し始める前に所持カメラを読んでおく。読み込みでダイジェスト認証の資格情報が
 	//  候補に入る(エッジ役は所持を持たないが、撮影計画の受信/読み込みで同じ入口を通る)。
 	dataManager::preloadOwned();
+	preloadPlanCredentials();	// エッジ役はここが唯一の入口(下の説明を参照)
 	g_inited = true;
 	setState(HGE_ST_IDLE);
 	return ERR_HGC_OK;

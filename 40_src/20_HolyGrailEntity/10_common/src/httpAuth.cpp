@@ -246,6 +246,26 @@ namespace httpAuth
 		return h;
 	}
 
+	std::string diagnose(const std::string& host)
+	{
+		std::lock_guard<std::mutex> lk(g_mtx);
+		char b[192];
+		auto it = g_hosts.find(host);
+		if (it == g_hosts.end())
+		{
+			std::snprintf(b, sizeof(b), "creds=%d known=0", static_cast<int>(g_creds.size()));
+			return std::string(b);
+		}
+		const hostState& st = it->second;
+		// nonce は先頭8文字だけ。毎回作り直されているかが分かればよい。
+		std::string head = st.nonce.substr(0, 8);
+		std::snprintf(b, sizeof(b), "creds=%d idx=%d known=%d exhausted=%d bumped=%d proven=%d nc=%08x nonce=%s",
+		              static_cast<int>(g_creds.size()), static_cast<int>(st.credIdx),
+		              st.known ? 1 : 0, st.exhausted ? 1 : 0, st.bumped ? 1 : 0, st.proven ? 1 : 0,
+		              static_cast<unsigned>(st.nc), head.c_str());
+		return std::string(b);
+	}
+
 	void noteSuccess(const std::string& host)
 	{
 		std::lock_guard<std::mutex> lk(g_mtx);

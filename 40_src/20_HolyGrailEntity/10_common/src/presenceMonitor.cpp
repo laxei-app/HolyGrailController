@@ -1,6 +1,7 @@
 ﻿#include "presenceMonitor.h"
 #include "cameraController.h"
 #include "dataManager.h"	// 挨拶を送ったことをログへ(飛んだかどうかを追えるように)
+#include "httpAuth.h"		// 401 の内訳をログへ(資格情報が無いのか nc なのか)
 #include "netThread.h"
 #include "osSystemCall.h"
 #include <json/nlohmann/json.hpp>
@@ -50,6 +51,16 @@ namespace {
 		size_t s = p + 3, e = s;
 		while (e < url.size() && url[e] != ':' && url[e] != '/') { ++e; }
 		return url.substr(s, e - s);
+	}
+
+	// httpAuth が host を覚えるときの鍵と同じ形("http://ip:port")。
+	//  net.cpp の endpointOf と揃えること。ここがずれると診断が always known=0 になる。
+	std::string endpointOf(const std::string& url)
+	{
+		const size_t p = url.find("://");
+		if (p == std::string::npos) { return url; }
+		const size_t s = url.find('/', p + 3);
+		return url.substr(0, (s == std::string::npos) ? url.size() : s);
 	}
 
 	// 挨拶を仕掛ける。1回で終わりにしない理由は greetLocked の説明を参照。
@@ -204,6 +215,17 @@ namespace {
 				dataManager::logEvent("CAMERA", ("greet skipped (no access url): " + c.serial).c_str());
 				continue;
 			}
+			// 【資格情報が無いなら投げない(2026-08-28 実機で痛い目を見た)】
+			//  挨拶を成立させるには 200 が要り、認証付きでないと 200 は返らない。候補が1つも
+			//  無い状態で投げても素の 401 にしかならず、それを繰り返すとカメラが 403 で
+			//  締め出す(実際に EOS R50 V をこの手順で締め出した)。届かないと分かっている物は
+			//  投げない。資格情報が入れば(計画の受信など)次に見つけたときに投げる。
+			if (!httpAuth::hasCandidates())
+			{
+				c.greetLeft = 0;
+				dataManager::logEvent("CAMERA", ("greet skipped (no credentials): " + c.access).c_str());
+				continue;
+			}
 			if (c.greetAt != 0 && now - c.greetAt < kGreetGapSec) { continue; }	// 間をあける
 			c.greetAt = now;
 			--c.greetLeft;
@@ -213,11 +235,17 @@ namespace {
 			if (ok) { c.greetLeft = 0; dataManager::logEvent("CAMERA", ("greet ok " + c.access).c_str()); }
 			else
 			{	// 何で断られたかを残す。401 なら資格情報か nc、0 なら届いていない。
+				//  401 は外から見ると全部同じ顔をしているので、認証側の内訳も添える
+				//  (資格情報が無い/打ち止め/nonce を毎回作り直されている、の区別)。
 				int st = 0; std::string body;
 				netThread::lastHttpFailure(st, body);
-				char b[160];
-				std::snprintf(b, sizeof(b), "greet failed http=%d left=%d %s",
-				              st, c.greetLeft, c.access.c_str());
+				// 403 = カメラが締め出した。投げ直すほど悪くなるので即やめる。
+				//  戻すにはカメラ本体の接続設定を入れ直すしかない(EOS R50 V 実測)。
+				if (st == 403) { c.greetLeft = 0; }
+				char b[256];
+				std::snprintf(b, sizeof(b), "greet failed http=%d left=%d %s [%s]",
+				              st, c.greetLeft, c.access.c_str(),
+				              httpAuth::diagnose(endpointOf(c.access)).c_str());
 				dataManager::logEvent("CAMERA", b, c.greetLeft == 0);	// 打ち止めのときだけ ERR
 			}
 		}

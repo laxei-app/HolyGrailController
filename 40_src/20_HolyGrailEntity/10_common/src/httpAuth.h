@@ -56,6 +56,12 @@ namespace httpAuth
 	// 候補が1つでも登録されているか(0なら 401 が来ても打つ手が無い)。
 	bool hasCandidates(void);
 
+	// 認証が通らないときに、何が起きているかをログへ出すための覗き窓(診断専用)。
+	//  「資格情報が無い」のか「打ち止めになった」のか「nonce を毎回作り直されている」のかは
+	//  外から見るとどれも 401 で、区別がつかない。パスワードそのものは絶対に出さない。
+	//  戻り: 例 "creds=2 idx=0 known=1 exhausted=0 bumped=0 nc=64285d0e nonce=7a1f..."
+	std::string diagnose(const std::string& host);
+
 	// 401 の WWW-Authenticate を覚える。true=この host へ再送する価値がある。
 	//  同じ nonce で再び 401 が来たときの扱いが要点:
 	//   ・stale=true、または**一度でも通ったことがある資格情報**なら nc/順序の問題とみなし、
