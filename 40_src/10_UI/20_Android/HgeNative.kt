@@ -182,6 +182,8 @@ object HgeNative {
     external fun nativeEdgeSendCameraBook(host: String, port: Int, book: String): Int
     // 送る台帳の中身。パスワードは暗号文。中身が変わったかの判定にもこの文字列を使う。
     external fun nativeCameraBookJson(): String
+    // 台帳の中身の指紋。変化の判定はこちら(JSON そのものは暗号文の nonce で毎回変わる)。
+    external fun nativeCameraBookSig(): String
     // デバッグログの取捨。撮影1コマごとの記録(SHOT/LVHIST)と電池の定期記録を採るかどうか。
     //  既定は両方とも採らない(量が多く、肝心の出来事が埋もれるため)。
     external fun nativeSetLogOptions(shot: Boolean, batt: Boolean)

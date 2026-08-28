@@ -567,11 +567,20 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeSendCameraBook(JNIEnv* env, jobject
 	return (m == etp::M_ACK) ? 0 : -2;
 }
 
-// 所持カメラから台帳 JSON を作って返す(送る中身。変化の判定にも使う)。
+// 所持カメラから台帳 JSON を作って返す(送る中身)。
 JNIEXPORT jstring JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeCameraBookJson(JNIEnv* env, jobject)
 {
 	return env->NewStringUTF(hge_cameraBookJson());
+}
+
+// 台帳の**中身**の指紋。変化の判定はこちらを使う。
+//  台帳 JSON そのものは毎回変わる(暗号文の nonce が毎回ちがうため)ので、
+//  それで比べると「毎回変わった」と誤解して 30 秒ごとに送り直してしまう。
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeCameraBookSig(JNIEnv* env, jobject)
+{
+	return env->NewStringUTF(hge_cameraBookSig());
 }
 
 // デバッグログの取捨をエッジへ送る(C_LOG_OPT)。エッジは不揮発へ残さないので、

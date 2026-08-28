@@ -76,7 +76,13 @@ int32_t hge_setKnownCameras(const char* json, int32_t len);
 
 // スマホ役: いま所持しているカメラから台帳 JSON を作る。パスワードは暗号文で入る。
 //  エッジ役では空配列。内容が変わったかどうかの判定にもこの文字列を使ってよい。
-const char* hge_cameraBookJson(void);
+const char* hge_cameraBookJson(void);
+
+// 台帳の**中身の指紋**。暗号化する前の値から作るので、同じ内容なら必ず同じになる。
+//  【なぜ要るか(2026-08-29 実機で判明)】secret::encrypt は毎回ちがう nonce を使うため、
+//   同じパスワードでも暗号文が変わる。台帳 JSON をそのまま比べると毎回「変わった」と
+//   見えてしまい、30秒ごとに送信・保存・候補の作り直しが走っていた。比べるのはここ。
+const char* hge_cameraBookSig(void);
 
 // エッジ役: 台帳を受け取り、保存して認証候補を入れ替える。json = 台帳 JSON。
 //  台帳から消えたカメラの資格情報は落とすが、手元にまだ計画が残っている分は足し直す

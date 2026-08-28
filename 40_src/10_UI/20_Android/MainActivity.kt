@@ -6393,7 +6393,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         Thread {
             try {
                 if (HgeNative.nativeEdgeSendCameraBook(ed.addr(), ed.port, book) == 0) {
-                    edgeBookSent[ed.name] = book.hashCode()
+                    // 覚えるのは**中身**の指紋。台帳 JSON は暗号文の nonce で毎回変わるので、
+                    //  それを覚えると「毎回変わった」ことになり 30 秒ごとに送り直してしまう。
+                    edgeBookSent[ed.name] = (try { HgeNative.nativeCameraBookSig() } catch (_: Exception) { "" }).hashCode()
                     edgeBookAt[ed.name]   = System.currentTimeMillis()
                 }
             } catch (_: Exception) {}
@@ -6470,7 +6472,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         //   オンライン判定が毎回立ち直るため、実質**スイープのたび(30秒おき)**に
                         //   送っていた。受け取る側は計画を読み直すので内部ヒープを食い潰す。
                         //   見えた瞬間の再送は残すが、同じ内容なら間隔をあける。
-                        val bookNow = try { HgeNative.nativeCameraBookJson().hashCode() } catch (_: Exception) { 0 }
+                        val bookNow = try { HgeNative.nativeCameraBookSig().hashCode() } catch (_: Exception) { 0 }
                         val bookAge = System.currentTimeMillis() - (edgeBookAt[nm] ?: 0L)
                         if (edgeBookSent[nm] != bookNow || (appeared && bookAge > kEdgeBookRefreshMs)) {
                             sendEdgeCameraBook(f.edge)

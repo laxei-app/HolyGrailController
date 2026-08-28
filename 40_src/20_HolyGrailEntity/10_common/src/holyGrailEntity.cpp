@@ -1127,7 +1127,25 @@ namespace
 	//  捨てると内部ヒープが持たない。実測で最低残量が 288 バイトまで落ち、確保に失敗して
 	//  リセットしていた(リセット直前の行が毎回 "camera book received" だった)。
 	//  中身が変わっていなければ、書き込みも読み直しもログも要らない。
-	std::string g_cameraBook;
+	std::string g_cameraBookSig;	// 直近に採り込んだ台帳の**中身**の指紋(暗号文ではない)
+
+	// 台帳の中身から指紋を作る。パスワードは復号してから混ぜる(暗号文は毎回変わるため)。
+	std::string cameraBookSig(const nlohmann::json& j)
+	{
+		std::string sig;
+		if (!j.is_array()) { return sig; }
+		for (const auto& e : j)
+		{
+			if (!e.is_object()) { continue; }
+			sig += e.value("serial", std::string());       sig += '';
+			sig += e.value("model", std::string());        sig += '';
+			sig += e.value("name", std::string());         sig += '';
+			sig += e.value("assignedName", std::string()); sig += '';
+			sig += e.value("authUser", std::string());     sig += '';
+			sig += secret::decrypt(e.value("authPass", std::string())); sig += '';
+		}
+		return sig;
+	}
 
 	// 起動時に台帳を読む。無ければ何もしない(まだ一度もスマホと会っていない)。
 	void loadCameraBook(void)
@@ -1136,7 +1154,8 @@ namespace
 		const std::string path = cameraBookPath();
 		std::string body;
 		if (path.empty() || !osfile::readAll(path, body) || body.empty()) { return; }
-		g_cameraBook = body;
+		nlohmann::json jb = nlohmann::json::parse(body, nullptr, false);
+		if (!jb.is_discarded()) { g_cameraBookSig = cameraBookSig(jb); }
 		applyCameraBook(body);
 	}
 
@@ -1892,6 +1911,27 @@ const char* hge_cameraBookJson(void)
 	return s_book.c_str();
 }
 
+// 台帳の中身の指紋(説明はヘッダ)。**暗号化しない**値から作る。
+const char* hge_cameraBookSig(void)
+{
+	static std::string s_sig;
+	s_sig.clear();
+	if (!hge::role::ownedCamerasAuthoritative()) { return s_sig.c_str(); }
+	std::vector<hgc::ownedCamera> owned;
+	if (!csjson::ownedCamerasFromJson(dataManager::ownedCamerasJson(), owned)) { return s_sig.c_str(); }
+	for (const auto& oc : owned)
+	{
+		const hgc::camera& c = oc.cam;
+		s_sig += c.serial; s_sig += '';
+		s_sig += c.model;  s_sig += '';
+		s_sig += c.name;   s_sig += '';
+		s_sig += c.assignedName; s_sig += '';
+		s_sig += c.authUser;     s_sig += '';
+		s_sig += c.authPass;     s_sig += '';	// 平文。外へは出さない(比較にしか使わない)
+	}
+	return s_sig.c_str();
+}
+
 // エッジ役: 台帳を受け取って保存し、認証候補を入れ替える(説明はヘッダ)。
 int32_t hge_setCameraBook(const char* json, int32_t len)
 {
@@ -1902,12 +1942,15 @@ int32_t hge_setCameraBook(const char* json, int32_t len)
 	if (j.is_discarded() || !j.is_array()) { return ERR_HGC_INVALID_ARG; }
 
 	// 同じ物なら何もしない。スマホは見つけるたびに送ってくるので、ここを素通しにすると
-	//  計画の読み直しを30秒おきに繰り返してヒープを食い潰す(g_cameraBook の説明を参照)。
-	if (body == g_cameraBook) { return ERR_HGC_OK; }
+	//  30秒ごとに保存と候補の作り直しが走る(g_cameraBook の説明を参照)。
+	//  【バイト列で比べてはいけない(2026-08-29 実機で判明)】secret::encrypt は毎回
+	//   ちがう nonce を使うので、同じ内容でも暗号文が変わる。**復号した中身**で比べる。
+	const std::string sig = cameraBookSig(j);
+	if (sig == g_cameraBookSig) { return ERR_HGC_OK; }
 
 	const std::string path = cameraBookPath();
 	if (!path.empty()) { osfile::writeAll(path, body.data(), body.size()); }
-	g_cameraBook = body;
+	g_cameraBookSig = sig;
 	applyCameraBook(body);
 	dataManager::logEvent("CAMERA", ("camera book updated: " + std::to_string(j.size()) + " camera(s)").c_str());
 	return ERR_HGC_OK;
