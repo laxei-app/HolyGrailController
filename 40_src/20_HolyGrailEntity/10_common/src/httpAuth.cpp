@@ -65,15 +65,19 @@ namespace
 		return v == "true";
 	}
 
+	const long long kEpoch2020 = 1577836800LL;	// 2020-01-01T00:00:00Z
+
+	// 時計が入っているか。未設定のうちは nc を時刻から作れない。
+	bool clockReady(void) { return static_cast<long long>(std::time(nullptr)) > kEpoch2020; }
+
 	// nc の初期値を時刻から作る。理由はヘッダの説明を参照。
 	//  2020-01-01 からの秒 × 8。×8 は「毎秒8リクエストまでなら、次に起動したときの種のほうが
 	//  前回の最後の nc より必ず大きい」ための余裕(実際の撮影は毎秒1リクエストにも満たない)。
 	//  32bit(nc は16進8桁)に収まり、2037年ごろまで持つ。
 	uint32_t nowSeed(void)
 	{
-		const long long kEpoch2020 = 1577836800LL;		// 2020-01-01T00:00:00Z
 		const long long now = static_cast<long long>(std::time(nullptr));
-		if (now <= kEpoch2020) { return 0; }				// 時計が未設定。0から数える
+		if (!clockReady()) { return 0; }				// 時計が未設定(呼ぶ側で弾く)
 		const long long v = (now - kEpoch2020) * 8;
 		if (v > 0x7fffffffLL) { return 0x7fffffffu; }		// 念のため上限で止める
 		return static_cast<uint32_t>(v);
@@ -194,6 +198,16 @@ namespace httpAuth
 
 	std::string authorization(const std::string& host, const std::string& method, const std::string& uri)
 	{
+		// 【時計が未設定のうちは認証付きで触らない(2026-08-28 実測に基づく)】
+		//  カメラは nc(ノンスカウンタ)を **nonce をまたいで一本で** 覚えており、前回受け入れた
+		//  値より大きくないと通さない(実機 EOS R50 V で確認)。端末の区別はしていない。
+		//  こちらは nc の種を時刻から作ることで「後から来た方が必ず大きい」を成立させ、
+		//  スマホとエッジのどちらからでも順番に使えるようにしている。
+		//  ところが時計が未設定だと種が 0 になり、他の端末が一度触った後は**何度やっても
+		//  追いつけない**。しかも端末側からは「認証が通らない」としか見えず追いにくい。
+		//  送らなければ nc に触らないので、カメラの状態を汚さずに済む。時刻が入れば通る。
+		if (!clockReady()) { return std::string(); }
+
 		std::lock_guard<std::mutex> lk(g_mtx);
 		auto it = g_hosts.find(host);
 		if (it == g_hosts.end() || !it->second.known || g_creds.empty()) { return std::string(); }
