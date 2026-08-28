@@ -6,10 +6,22 @@
 #include "astroSched.h"		// ② 太陽高度(sunHoriz)から ev0 中心bmを算出
 #include "netThread.h"		// 失敗した HTTP のステータス/応答をログへ添えるため
 #include "dataManager.h"		// 初期収束の診断ログ(CONV)を残すため
+#include "linkDown.h"		// APから抜けた相手を待たない(タイムアウト待ちの短縮)
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <ctime>
+
+// URL からホスト(IP)だけを取り出す。"http://192.168.4.4:8080/ccapi" -> "192.168.4.4"。
+//  失敗時は空。空なら AP の離脱判定は働かない(何もしないだけで害は無い)。
+static std::string hostOfUrl(const std::string& url)
+{
+	const size_t p = url.find("://");
+	if (p == std::string::npos) { return std::string(); }
+	size_t b = p + 3, e = b;
+	while (e < url.size() && url[e] != ':' && url[e] != '/') { ++e; }
+	return url.substr(b, e - b);
+}
 
 namespace
 {
@@ -1045,6 +1057,15 @@ errCode captureRunner::loop(void)
 
 	// 撮影失敗の連続回数(rdyShutter/actShutter が失敗するとカウント、成功でリセット)。
 	int  shootFailStreak = 0;
+	// 【APから抜けたら待たない(2026-08-28)】エッジがSoftAPのとき、カメラの電源を切ると
+	//  離脱イベントがその瞬間に届く。以前はそれを使わず、返事が返らないのをタイムアウトで
+	//  待っていた。実測(Stick01)で1コマ36秒(シャッター12秒+測光24秒)を3コマ、そのあと
+	//  再探索まで回してから ✖ が出るので、電源断から2分25秒かかっていた。
+	//  居ないと分かっている相手にシャッターを投げても意味が無いので、そのコマは撮らずに
+	//  再接続へ回す。STAモードでは誰も note を呼ばないので、この判定は常に偽になる。
+	std::string camIp   = hostOfUrl(dev_ ? dev_->urlAccess : std::string());
+	unsigned    linkGen = linkDown::generation(camIp);
+	bool        linkDead = false;
 	// 撮影窓まで待機中の接続維持GETの最終送出時刻。
 	long long lastKeepAlive = static_cast<long long>(std::time(nullptr));
 	int  waitFailStreak = 0;	// 待機中の keepAlive 連続失敗数(健全性チェック=先回り再接続の判定用)
@@ -1137,6 +1158,37 @@ errCode captureRunner::loop(void)
 	{
 		long long now = static_cast<long long>(std::time(nullptr));
 		if (now >= endSec) { break; }				// 計画終了
+
+		// APから抜けた相手には投げない(上の宣言の説明を参照)。
+		if (!camIp.empty() && linkDown::generation(camIp) != linkGen)
+		{
+			linkGen  = linkDown::generation(camIp);
+			linkDead = true;
+		}
+		if (linkDead)
+		{
+			if (!cameraOffline)
+			{	// 判定は既に付いている。待たずに提示する。
+				cameraOffline = true;
+				if (onState_)  { onState_(ST_NOCAMERA); }
+				if (onNotice_) { onNotice_(static_cast<int>(hgc::notice::captureLinkLost), 0); }
+				dataManager::logEvent("NET", ("camera left the AP: " + camIp).c_str(), true);
+			}
+			// 戻ってくるまで再接続を試し続ける(従来の接続断と同じ扱い・同じ間隔)。
+			if (onReconnect_ && onReconnect_() && establishSession())
+			{
+				linkDead      = false;
+				cameraOffline = false;
+				camIp         = hostOfUrl(dev_ ? dev_->urlAccess : std::string());	// IPが変わっていることがある
+				linkGen       = linkDown::generation(camIp);
+				shootFailStreak = 0;
+				noRecordStreak  = 0;
+				if (onState_)  { onState_(ST_CAPTURING); }
+				if (onNotice_) { onNotice_(static_cast<int>(hgc::notice::captureRecovered), 0); }
+			}
+			else { this->interruptibleSleep(kReconnectWaitMs); }
+			continue;					// このコマは撮らない
+		}
 
 		// ①④ 相対アンカー: 各コマは[A](このコマのシャッター起点)から周期後を狙う。撮ったコマの露出=shotExp。
 		hgc::exposure shotExp{};				// このコマで撮った露出(=前コマで適用済みの pending)。ログ用
@@ -1816,6 +1868,20 @@ errCode captureRunner::loop(void)
 		if (lostLink || noRecord)
 		{
 			if (noRecord) { noRecordStreak = 0; ++noRecordRounds; }
+			// 【✖は再探索の前に出す(2026-08-28)】以前は3段階の再探索(前回IP直結→M-SEARCH→
+			//  サブネット総当たり)を全部やり切ってから✖を出していた。その間ユーザーには何も
+			//  見えず、カメラの電源を切ってから✖まで2分半かかった(実機報告)。
+			//  lostLink は「3コマ続けて**応答が一切無い**」(fireShutter が status<=0 のときだけ
+			//  数える)という強い根拠なので、ここで提示してよい。探索は今までどおり続け、
+			//  1コマでも撮れたら上の復帰処理が✖を消す。
+			//  noRecord(応答はあるのに撮れていない)はここに含めない。カード起因かどうかを
+			//  下で見分けてから言う必要があり、先走ると的外れな案内になる。
+			if (lostLink && !mediaBlocked_ && !cameraOffline)
+			{
+				cameraOffline = true;
+				if (onState_)  { onState_(ST_NOCAMERA); }
+				if (onNotice_) { onNotice_(static_cast<int>(hgc::notice::captureLinkLost), 0); }
+			}
 			// セッションは毎回張り直しておく(電源を入れ直された後はこれが唯一の戻り道)。
 			//  ただしカード起因と分かっているなら張り直さない(2026-08-19)。接続は生きていて
 			//  原因はカメラの中にあるので、張り直しても何も変わらない。認証を使う機体では

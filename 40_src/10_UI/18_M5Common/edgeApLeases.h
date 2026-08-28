@@ -171,6 +171,23 @@ namespace edgeApLeases
 	// ── 記録の更新 ──────────────────────────────────────────
 	// DHCP が配った瞬間に呼ぶ。**同じ MAC の行を書き換える**のが肝で、これで古い IP が空く。
 	//  ここは Arduino のイベントタスク上なので RAM だけ触り、書き込みは pump に任せる。
+	// その MAC へ配った IP を文字列で返す(記録に無ければ空)。
+	//  離脱イベントは MAC しかくれないので、撮影ループへ「どの相手が居なくなったか」を
+	//  伝えるにはここを引く必要がある。前半3オクテットは AP 自身のものを使う。
+	inline std::string ipOfMac(const uint8_t* mac)
+	{
+		for (const row& r : rows())
+		{
+			if (!sameMac(r.mac, mac)) { continue; }
+			const IPAddress ap = WiFi.softAPIP();
+			char b[16];
+			std::snprintf(b, sizeof(b), "%u.%u.%u.%u",
+			              (unsigned)ap[0], (unsigned)ap[1], (unsigned)ap[2], (unsigned)r.oct);
+			return std::string(b);
+		}
+		return std::string();
+	}
+
 	inline void onAssigned(const uint8_t* mac, uint32_t ipAddr)
 	{
 		const uint8_t oct = (uint8_t)((ipAddr >> 24) & 0xFF);	// IPAddress と同じ並び(先頭が下位)

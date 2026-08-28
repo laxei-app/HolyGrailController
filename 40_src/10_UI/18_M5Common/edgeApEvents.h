@@ -18,6 +18,7 @@
 #include <cstdio>
 #include "dataManager.h"
 #include "edgeApLeases.h"	// 配った IP を覚えて次回の配布範囲を外す(IP重複の防止)
+#include "linkDown.h"	// 離脱を撮影ループへ即伝える(タイムアウトを待たない)
 
 namespace edgeApEvents
 {
@@ -40,6 +41,9 @@ namespace edgeApEvents
 			              (unsigned)info.wifi_ap_stadisconnected.aid,
 			              (unsigned)info.wifi_ap_stadisconnected.reason);
 			dataManager::logEvent("APSTA", d, true);
+			// 撮影ループへ即座に伝える。これが無いと、返事が返らないのを
+			//  タイムアウトで待つことになり ✖ まで2分以上かかる(linkDown.h の実測を参照)。
+			linkDown::note(edgeApLeases::ipOfMac(m));
 		}
 		else if (id == ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED)
 		{
