@@ -5486,7 +5486,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 setTextColor(Color.GRAY)
             })
         }
-        edges.toList().forEach { e ->
+        // 並びはアルファベット順(大文字小文字を区別しない)。登録した順だと、増えたときに
+        //  どこにあるか分からなくなる。**表示の並びだけ**で、保存の順は変えない。
+        edges.sortedBy { it.name.lowercase() }.forEach { e ->
             val sel = e.name == selectedEdgeName
             // 副行は**いま届いているか**。IP は普段読んでも何もできないのでやめた
             //  (2026-08-29 UI依頼)。押す前に「送っても無駄」と分かるのが要点。
@@ -5507,7 +5509,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 menuItems = listOf(
                     "削除" to { confirmRemoveEdge(e) },
                     "すべて削除" to { confirmRemoveAllEdges() }
-                )))
+                ),
+                // 名前は**この行で直接**直す(所持カメラ/レンズと同じ)。以前は下の設定欄に
+                //  「端末識別名」があり、一覧と入力欄の2か所に名前があって分かりにくかった。
+                //  選択中の行だけ編集できる(listRow の決まり)。
+                onRename = { newName -> commitEdgeRename(e.name, newName) }))
             box.addView(thinDivider())
         }
         // 新規は一番下(所持カメラ/レンズと同じ)。色は linkText が持つ青。
@@ -5516,6 +5522,23 @@ class MainActivity : AppCompatActivity(), HgeListener {
             selectedEdgeName = ""; scannedPop = ""; scannedName = ""
             buildEdgeList(); buildEdgeForm()
         })
+    }
+
+    // 一覧での名称インライン編集の確定。
+    //  エッジの名前は**エッジのLCDにも出る**ので半角英数字だけ(日本語は表示できない)。
+    //  ここで弾かないと、送信の段になって初めて叱られることになる。
+    private fun commitEdgeRename(orig: String, newName: String) {
+        val nm = newName.trim()
+        if (nm.isEmpty() || nm == orig) { buildEdgeList(); return }
+        if (!isAsciiEdgeName(nm)) {
+            Toast.makeText(this, "端末識別名は半角英数字で入力してください(エッジ端末で日本語は表示できません)", Toast.LENGTH_LONG).show()
+            buildEdgeList(); return
+        }
+        if (edges.any { it.name == nm }) { showNameInUse(nm); buildEdgeList(); return }
+        stashEdgeForm()                    // 旧名のまま入力を残してから付け替える
+        renameRegisteredEdge(orig, nm)     // 登録・計画の割り当て・ネットワーク設定を移す
+        if (selectedEdgeName == orig) selectedEdgeName = nm
+        buildEdgeList(); buildEdgeForm(); refreshEdgeSpinner()
     }
 
     // 登録から1台外す。**エッジ本体の設定は変えない**(こちらの台帳から消すだけ)。
@@ -5590,10 +5613,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
             textSize = 16f
         })
 
-        label("端末識別名 (半角英数字。エッジのLCDに表示)")
+        // 【名前は一覧で直す(2026-08-29 UI依頼)】登録済みの端末では、ここに入力欄を置かない。
+        //  一覧の行を直接編集する(所持カメラ/レンズと同じ)。同じ名前が2か所にあると
+        //  どちらが本物か分からなくなるため。**新規登録のときだけ**打つ場所が要る。
         val nameE = EditText(ctx); applyEdgeNameInput(nameE)
-        nameE.setText(if (selectedEdgeName.isNotEmpty()) selectedEdgeName else scannedName)
-        box.addView(nameE); edgeNameEt = nameE
+        if (selectedEdgeName.isEmpty()) {
+            label("端末識別名 (半角英数字。エッジのLCDに表示)")
+            nameE.setText(scannedName)
+            box.addView(nameE)
+        } else {
+            nameE.setText(selectedEdgeName)   // 画面には出さないが、送信処理はここから名前を読む
+        }
+        edgeNameEt = nameE
 
         // ネットワークモード。ONでエッジ自身がAP(屋外・ルーター無し)、OFFで既存ネットへ参加。
         val apSwitch = android.widget.Switch(ctx).apply {
