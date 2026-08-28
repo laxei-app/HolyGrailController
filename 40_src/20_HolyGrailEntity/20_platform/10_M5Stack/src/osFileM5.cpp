@@ -8,10 +8,23 @@
 #include <SPI.h>
 #include <LittleFS.h>
 #include <vector>
+#include <mutex>
 #include "debugOut.h"
 
 namespace
 {
+	// 【ファイルは1本ずつ触ること(2026-08-28 実機で端末が固まった)】
+	//  ログの追記・設定の保存・台帳の書き出しは、撮影スレッド・ETP/BLEタスク・Wi-Fiの
+	//  イベントタスクから**同時に**来る。LittleFS/SD の口はそれを想定していないので、
+	//  重なると書きかけが混ざり、最悪その場で止まる。実機のログに証拠が残った:
+	//    14:22:12 camera book received: 1 camera(s)
+	//    14:22:18 camera book recei5:50:1C:FC aid=1   ← 2行が1行に混ざっている
+	//  この直後に端末ごと停止した(画面も時計も止まり、UDP も ETP も無応答。既に張って
+	//  あった接続だけで撮影は続くので「撮影しているのに死んでいる」ように見える)。
+	//  入口をこの錠で1本化する。**新しく入口を足したらここも通すこと。**
+	//  logDir()/writable() は中で dir() を呼ぶので**再入可能**な錠にすること。
+	std::recursive_mutex& fsMutex(void) { static std::recursive_mutex m; return m; }
+
 	fs::FS*     g_fs = nullptr;	// 採用したファイルシステム(&SD or &LittleFS)
 	bool        g_inited = false;
 
@@ -64,6 +77,7 @@ namespace osfile
 
 	std::string dir(const std::string& name)
 	{
+		std::lock_guard<std::recursive_mutex> lk(fsMutex());
 		ensureInit();
 		if (g_fs == nullptr) { return ""; }
 		std::string p = "/" + name;
@@ -75,6 +89,7 @@ namespace osfile
 	//  カードが無い/書けない状態では mkdir が失敗し、以後の保存がすべて失敗する。
 	bool writable(void)
 	{
+		std::lock_guard<std::recursive_mutex> lk(fsMutex());
 		ensureInit();
 		if (g_fs == nullptr) { return false; }
 		std::string p = dir("plan");
@@ -84,11 +99,13 @@ namespace osfile
 
 	std::string logDir(void)
 	{
+		std::lock_guard<std::recursive_mutex> lk(fsMutex());
 		return dir("log");
 	}
 
 	bool writeAll(const std::string& path, const char* data, size_t len)
 	{
+		std::lock_guard<std::recursive_mutex> lk(fsMutex());
 		ensureInit();
 		if (g_fs == nullptr) { return false; }
 		std::string tmp = path + ".tmp";
@@ -104,6 +121,7 @@ namespace osfile
 
 	bool append(const std::string& path, const char* data, size_t len)
 	{
+		std::lock_guard<std::recursive_mutex> lk(fsMutex());
 		ensureInit();
 		if (g_fs == nullptr) { return false; }
 		File f = g_fs->open(path.c_str(), FILE_APPEND);
@@ -116,6 +134,7 @@ namespace osfile
 
 	bool readAll(const std::string& path, std::string& out)
 	{
+		std::lock_guard<std::recursive_mutex> lk(fsMutex());
 		ensureInit();
 		out.clear();
 		if (g_fs == nullptr) { return false; }
@@ -129,6 +148,7 @@ namespace osfile
 	// offset バイト目から最大 maxLen バイトを読む(大きなログの分割転送。RAM節約)。
 	bool readRange(const std::string& path, size_t offset, size_t maxLen, std::string& out)
 	{
+		std::lock_guard<std::recursive_mutex> lk(fsMutex());
 		ensureInit();
 		out.clear();
 		if (g_fs == nullptr) { return false; }
@@ -147,6 +167,7 @@ namespace osfile
 	// (default_8MB.csv で 0x180000 = 1536KB)しかない。この差を実測で返す。
 	bool spaceInfo(unsigned long long& totalBytes, unsigned long long& usedBytes)
 	{
+		std::lock_guard<std::recursive_mutex> lk(fsMutex());
 		ensureInit();
 		if (g_fs == &SD)
 		{	totalBytes = static_cast<unsigned long long>(SD.totalBytes());
@@ -197,6 +218,7 @@ namespace osfile
 
 	bool removeFile(const std::string& subdir, const std::string& name)
 	{
+		std::lock_guard<std::recursive_mutex> lk(fsMutex());
 		ensureInit();
 		if (g_fs == nullptr) { return false; }
 		std::string p = "/" + subdir + "/" + name;
@@ -225,6 +247,7 @@ namespace osfile
 
 	bool removeLog(const std::string& name)
 	{
+		std::lock_guard<std::recursive_mutex> lk(fsMutex());
 		ensureInit();
 		if (g_fs == nullptr) { return false; }
 		std::string p = "/log/" + name;
@@ -233,6 +256,7 @@ namespace osfile
 
 	int removeInternalLogs(void)
 	{
+		std::lock_guard<std::recursive_mutex> lk(fsMutex());
 		// 内蔵フラッシュ(LittleFS)を明示的に開き /log のファイルを全削除する。
 		// SD 採用中でも内蔵側ログを消したいので g_fs ではなく LittleFS を直接使う。
 		if (!LittleFS.begin(true)) { return -1; }

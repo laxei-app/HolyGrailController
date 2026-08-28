@@ -53,6 +53,8 @@
 
 #include "dataManager.h"
 #include "osFile.h"
+#include "linkDown.h"	// 抜けた端末を撮影ループへ知らせる
+#include <array>
 
 namespace edgeApLeases
 {
@@ -171,21 +173,29 @@ namespace edgeApLeases
 	// ── 記録の更新 ──────────────────────────────────────────
 	// DHCP が配った瞬間に呼ぶ。**同じ MAC の行を書き換える**のが肝で、これで古い IP が空く。
 	//  ここは Arduino のイベントタスク上なので RAM だけ触り、書き込みは pump に任せる。
-	// その MAC へ配った IP を文字列で返す(記録に無ければ空)。
-	//  離脱イベントは MAC しかくれないので、撮影ループへ「どの相手が居なくなったか」を
-	//  伝えるにはここを引く必要がある。前半3オクテットは AP 自身のものを使う。
-	inline std::string ipOfMac(const uint8_t* mac)
+	// 抜けていった MAC を溜める置き場。
+	//
+	// 【イベントタスクからネットワークAPIを呼ばないこと(2026-08-28 実機で端末が固まった)】
+	//  最初は離脱イベントの中で MAC から IP を組み立てていた。前半3オクテットを得るのに
+	//  WiFi.softAPIP() を呼んだのが誤り。これは esp_netif の API で、イベントループの
+	//  タスクから呼ぶと自分の応答を自分で待つ形になり、そこで止まる。実機では画面も時計も
+	//  止まり、UDP も ETP も応答しなくなった(撮影スレッドは既に張った接続で動き続けるので
+	//  「撮影はしているのに端末が死んでいる」という分かりにくい姿になる)。
+	//  このファイルの頭にも「イベントタスクでは RAM だけ触り、あとは pump に任せる」と
+	//  書いてある。ここもその決まりに従い、MAC を控えるだけにして解決は pump でやる。
+	inline std::vector<std::array<uint8_t, 6>>& leftMacs(void)
 	{
-		for (const row& r : rows())
-		{
-			if (!sameMac(r.mac, mac)) { continue; }
-			const IPAddress ap = WiFi.softAPIP();
-			char b[16];
-			std::snprintf(b, sizeof(b), "%u.%u.%u.%u",
-			              (unsigned)ap[0], (unsigned)ap[1], (unsigned)ap[2], (unsigned)r.oct);
-			return std::string(b);
-		}
-		return std::string();
+		static std::vector<std::array<uint8_t, 6>> v;
+		return v;
+	}
+
+	// 離脱イベントから呼ぶ。RAM に積むだけ。
+	inline void onLeft(const uint8_t* mac)
+	{
+		if (leftMacs().size() >= kMaxRows) { return; }	// 溜まりすぎたら捨てる(次の掃除で拾う)
+		std::array<uint8_t, 6> m{};
+		std::memcpy(m.data(), mac, 6);
+		leftMacs().push_back(m);
 	}
 
 	inline void onAssigned(const uint8_t* mac, uint32_t ipAddr)
@@ -222,8 +232,29 @@ namespace edgeApLeases
 	}
 
 	// 定期の見直し。loop から毎秒呼ぶ(中で間引く)。
+	// 抜けた MAC を IP へ直して撮影ループへ渡す(pump から呼ぶ=通常のタスク文脈)。
+	inline void drainLeft(void)
+	{
+		if (leftMacs().empty()) { return; }
+		const IPAddress ap = WiFi.softAPIP();	// ここは通常のタスクなので呼んでよい
+		for (const auto& m : leftMacs())
+		{
+			for (const row& r : rows())
+			{
+				if (!sameMac(r.mac, m.data())) { continue; }
+				char b[16];
+				std::snprintf(b, sizeof(b), "%u.%u.%u.%u",
+				              (unsigned)ap[0], (unsigned)ap[1], (unsigned)ap[2], (unsigned)r.oct);
+				linkDown::note(std::string(b));
+				break;
+			}
+		}
+		leftMacs().clear();
+	}
+
 	inline void pump(void)
 	{
+		drainLeft();		// 抜けた端末を撮影ループへ知らせる(タイムアウトを待たせない)
 		const uint32_t ms = millis();
 		// 行が増えた/IPが変わった なら、次の電源断に間に合うようすぐ書く。
 		if (urgent()) { save(); }
