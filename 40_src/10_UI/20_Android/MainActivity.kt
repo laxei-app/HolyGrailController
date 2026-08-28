@@ -5465,7 +5465,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private var edgeApSwitch: CompoundButton? = null
 
     private fun openEdgeSettings() {
-        selectedEdgeName = ""
+        // 【開いたときは先頭の端末を選んでおく(2026-08-29 UI依頼)】以前は必ず新規追加の
+        //  状態で開いていた。ふだんは既にある端末を見に来るので、毎回1タップ余分だった。
+        //  並びは一覧と同じアルファベット順。**1件も無いときだけ**新規で開く。
+        selectedEdgeName = edges.sortedBy { it.name.lowercase() }.firstOrNull()?.name ?: ""
+        edgeApMode = loadEdgeCfg(selectedEdgeName).ap   // その端末を最後に設定したモードで開く
+        newEdgeName = ""
         scannedPop = ""; scannedName = ""
         buildEdgeList(); buildEdgeForm()
         setInitialSplit(R.id.edge_listScroll, R.id.edge_container)
