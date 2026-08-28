@@ -1394,7 +1394,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val b = Button(this)
         b.text = label
         b.isAllCaps = false                     // 既定で大文字化する端末があるため止める
-        b.setTextColor(Color.WHITE)
+        // 文字色は状態で変える。無効のとき白のままだと薄い背景に乗って読めない。
+        //  無効時の値はテーマ既定(ファーム書き込み画面の素の Button)と同じ(colors.xml 参照)。
+        b.setTextColor(android.content.res.ColorStateList(
+            arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf()),
+            intArrayOf(androidx.core.content.ContextCompat.getColor(this, R.color.btn_disabled_text), Color.WHITE)))
         b.setBackgroundResource(R.drawable.btn_blue_round)
         b.stateListAnimator = null              // 影が付くと角の丸みが目立たなくなる
         b.setPadding(dp(16), dp(8), dp(16), dp(8))
@@ -5534,8 +5538,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
             ssidLabel.text = if (ap) "AP SSID (空ならエッジの既定値)" else "接続先 SSID"
             passLabel.text = if (ap) "AP password (空ならエッジの既定値)" else "接続先 password"
             // APモードでは周辺Wi-Fiから選ぶ意味が無い(自分で立てる側なので)。
+            // 無効の見た目は背景と文字色(btn_blue_round / colors.xml)が受け持つ。
+            //  ここで alpha を掛けると二重に薄くなり、書き込み画面のボタンと色が揃わない。
             ssidPickBtn.isEnabled = !ap
-            ssidPickBtn.alpha = if (ap) 0.4f else 1f
         }
         applyModeLabels(edgeApMode)
         apSwitch.setOnCheckedChangeListener { _, ap -> edgeApMode = ap; applyModeLabels(ap) }

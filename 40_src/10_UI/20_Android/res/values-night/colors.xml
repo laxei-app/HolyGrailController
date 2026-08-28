@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 暗いテーマ用。colorOnSurface = #E6E1E5 (M3 の既定パレット)。説明は values/colors.xml。 -->
+<resources>
+    <color name="btn_disabled_bg">#1FE6E1E5</color>
+    <color name="btn_disabled_text">#61E6E1E5</color>
+</resources>

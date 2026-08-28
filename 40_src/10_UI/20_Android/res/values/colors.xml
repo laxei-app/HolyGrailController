@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 押せないボタンの色(2026-08-29 UI依頼)。
+     ファーム書き込み画面のボタンは素の Button で、テーマ(Theme.Material3.DayNight)の
+     既定そのままで描かれている。Material3 の無効状態は
+       背景 = colorOnSurface の 12%(=0x1F) / 文字 = colorOnSurface の 38%(=0x61)
+     で決まる。丸い青ボタン(btn_blue_round)は背景を自前で持つため既定に乗れないので、
+     **同じ計算結果をここに置いて合わせる**。値を変えるときは両方(明/暗)そろえること。
+     明るいテーマの colorOnSurface = #1C1B1F (M3 の既定パレット) -->
+<resources>
+    <color name="btn_disabled_bg">#1F1C1B1F</color>
+    <color name="btn_disabled_text">#611C1B1F</color>
+</resources>
