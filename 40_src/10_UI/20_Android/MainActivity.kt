@@ -163,10 +163,26 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  ロック判定はこれ(=エッジが持っている)＋開始操作の過渡(下 isPlanOnEdge)で行う。エッジ選択(スピナー=
     //  pe_ 割り当て)だけでは「保有」にはならないので、選んだだけの未開始計画はロックしない。
     private val edgeHeldByEdge = HashMap<String, MutableSet<String>>()
+    // 【ロックの解除は遅らせる(2026-08-28 仕様確定)】
+    //  エッジへ送った計画で使っているカメラは、スマホ側で変更も削除もできない。エッジは
+    //  受け取った計画をそのまま使い続け、**スマホ抜きでも単独で開始できる**ので、手元だけ
+    //  書き換えると「画面の値」と「実際に撮る値」が食い違う。
+    //  解除の道は3本。**いずれも早すぎてはいけない**(早いと、まだエッジが持っているのに
+    //  変更できてしまう)。安全側は必ず「遅らせる」方。
+    //   1. エッジが「もう持っていない」と言った  … reconcileEdgeRoster。これが一番確か
+    //   2. 窓の終了から十分に経った            … エッジが見えないとき用の保険。下の猶予
+    //   3. エッジ登録そのものを消した          … 壊れた/失くした端末で詰まないための逃げ道
+    //  また、この台帳は**アプリを終了しても消してはいけない**。消えるとロックが外れ、
+    //  次のスイープまで無防備になる。prefs へ残す。
+    //
+    //  エッジ側の掃除(pruneFinishedPlans)は窓の終了後すぐ走る。こちらはそれより十分に
+    //  遅らせる。1時間は「エッジが見えていれば 1 で先に解除されている」ので実害が無く、
+    //  見えていないときだけ効く長さとして選んだ。
+    private val kLockGraceMs = 60L * 60L * 1000L
     // この計画は「エッジに送信済み(=どこかのエッジが保有)」か。ロック(編集/削除不可)の判定に使う。
     //  開始操作の過渡(startingPlans)や実行中集合も、ロスター反映前の一瞬をロックするため含める。
     private fun isPlanOnEdge(id: String): Boolean =
-        edgeHeldByEdge.values.any { it.contains(id) } || isPlanUsingCamera(id)
+        (edgeHeldByEdge.values.any { it.contains(id) } && planLockActive(id)) || isPlanUsingCamera(id)
     // 項目3: この計画は「今カメラを実際に使っている」か(開始要求中/待機/撮影中/未検出)。
     //  エッジが保有しているだけ(中止後も常駐=項目4)はカメラを使っていないので含めない。
     //  編集ロック(isPlanOnEdge)とは別物。予約重複の開始可否はこちらで判定する
@@ -316,6 +332,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         loadExpoValues()
         buildExposureEditors()
         loadRegisteredEdges()   // 設定で登録したエッジ端末(オフラインでも選択可)
+        loadEdgeHeld()          // エッジが持っている計画(=編集ロック)。アプリを終了しても保つ
         refreshEdgeSpinner()
 
         wireListeners()
@@ -1298,6 +1315,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private var camAutoInsert: CheckBox? = null
     private var camMeterLv: CheckBox? = null       // ライブビューで測光する(機体ごと)
     private var camAuthBaseline = ""              // 詳細を開いた時点の認証欄(変更検知用)
+    private var camEditBaseline = ""              // 詳細を開いた時点の編集欄すべて(ロック判定用)
     private val camLensNames = ArrayList<String>()       // 組み合わせるレンズ(順序=先頭が初期値)
     private var camLensContainer: LinearLayout? = null   // 組み合わせレンズの並べ替えコンテナ
     private val lensRowViews = mutableListOf<View>()
@@ -1480,13 +1498,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 onSelect = { selectCamera(name) },
                 menuItems = listOf(
                     "削除" to {
-                        Thread { HgeNative.nativeRemoveOwnedCamera(name)
-                            runOnUiThread { if (selCamera == name) selCamera = null; buildCameraList(); buildCameraDetail()
-                                            pushCameraBookToEdges() } }.start()
+                        // エッジが計画を持っているカメラは消せない(消すと台帳から資格情報が落ち、
+                        //  その計画が単独復帰したときに認証できなくなる)。
+                        if (!blockedByEdge(name, "削除")) {
+                            Thread { HgeNative.nativeRemoveOwnedCamera(name)
+                                runOnUiThread { if (selCamera == name) selCamera = null; buildCameraList(); buildCameraDetail()
+                                                pushCameraBookToEdges() } }.start()
+                        }
                     },
                     "接続カメラ検索" to { searchAndAddCameras() }
                 ),
-                onRename = { newName -> commitCameraRename(name, newName) }))
+                onRename = { newName -> if (!blockedByEdge(name, "変更")) commitCameraRename(name, newName) }))
             box.addView(thinDivider())
         }
         box.addView(linkText("＋ 新規カメラ追加") { openCameraAdd() })
@@ -1604,6 +1626,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // パスワードは JSON では暗号文なので、平文はネイティブから別途もらう。
         box.addView(editRowPass("パスワード", "authPass", HgeNative.nativeOwnedCameraAuthPass(sel)))
         camAuthBaseline = camAuthSig()      // ここからの変化だけを「変更」とみなす
+        camEditBaseline = camEditSig()      // ロック中に「本当に変えたか」を見るため
 
         // 組み合わせるレンズ(先頭=初期値)。並べ替えはハンドルをドラッグ(ss/iso/fnと同じ)。
         box.addView(thinDivider())
@@ -1729,6 +1752,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun persistCameraDetail(rebuild: Boolean, origName: String? = null) {
         val orig = origName ?: selCamera ?: return
         if (camFields.isEmpty()) return
+        // エッジが計画を持っているカメラは変更できない。ただし**中身が変わっていなければ素通し**
+        //  にする(この関数はレンズ変更や画面離脱でも走るため、無条件に止めると画面から出られない)。
+        if (camEditSig() != camEditBaseline && blockedByEdge(orig, "変更")) {
+            buildCameraDetail()          // 画面を保存済みの値へ戻す
+            return
+        }
         val o = JSONObject()
         for ((k, et) in camFields) {
             when (k) {
@@ -1759,14 +1788,31 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (authChanged) { noticeAuthChangedIfHeld(selCamera ?: orig) }
     }
 
+    // 所持カメラ詳細で**ユーザーが触れる欄**すべての内容。ロック中に「本当に変えたか」を見る。
+    //  保存はレンズ変更や画面離脱でも走るので、中身が同じなら黙って通す(素通しでも何も変わらない)。
+    //  変わっているときだけ止める。こうしないと、ロック中は画面から出ることもできなくなる。
+    private fun camEditSig(): String {
+        val sb = StringBuilder()
+        for (k in camFields.keys.sorted()) { sb.append(k).append('=').append(camFields[k]?.text?.toString() ?: "").append('	') }
+        sb.append("autoInsert=").append(camAutoInsert?.isChecked ?: false).append('	')
+        sb.append("meterLv=").append(camMeterLv?.isChecked ?: false).append('	')
+        sb.append("lens=").append(camLensNames.joinToString(","))
+        return sb.toString()
+    }
+
     // 所持カメラ詳細の認証欄の内容(変更検知用)。
     private fun camAuthSig(): String =
         (camFields["authUser"]?.text?.toString() ?: "") + "\t" + (camFields["authPass"]?.text?.toString() ?: "")
 
-    // そのカメラを使う撮影計画を保有しているエッジ端末の名前。
-    //  エッジは開始のたびに計画を丸ごと受け取り直すので、送信済みのものを追いかけて更新する必要はない。
-    //  ただし今エッジのディスクにあるのは古い値なので、単独復帰(停電など、スマホ抜きの再開)では
-    //  古い資格情報が使われる。禁止も自動更新もせず、その事実だけ伝える。
+    // そのカメラを使う撮影計画を保有しているエッジ端末の名前(=このカメラは変更/削除できない)。
+    //
+    //  【なぜ禁止するのか(2026-08-28 仕様確定)】エッジは受け取った計画をそのまま持ち続け、
+    //   **スマホ抜きでも単独で開始できる**。手元のカメラだけ書き換えると、画面の値と実際に
+    //   撮る値が食い違う。以前は警告を出すだけだったが、単独開始がある以上「次の開始で
+    //   反映される」は当てにできないので、変更そのものを止める。
+    //  【解除は遅らせる】planLockActive を参照。早すぎる解除は無防備になる。
+    //  【自動の識別確定は止めない】シリアルや愛称がカメラ接続で自動的に入るのは従来どおり。
+    //   止めているのは**ユーザーの編集と削除**だけ。
     private fun edgesHoldingCamera(camName: String): List<String> {
         if (camName.isEmpty()) return emptyList()
         val ids = HashSet<String>()
@@ -1774,13 +1820,31 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val pa = JSONArray(HgeNative.nativeListPlans())
             for (k in 0 until pa.length()) {
                 val po = pa.optJSONObject(k) ?: continue
-                if (po.optString("camName") == camName) ids.add(po.optString("id"))
+                val id = po.optString("id")
+                if (po.optString("camName") == camName && planLockActive(id)) ids.add(id)
             }
         } catch (_: Exception) { return emptyList() }
         if (ids.isEmpty()) return emptyList()
         return edgeHeldByEdge.entries
             .filter { e -> e.value.any { ids.contains(it) } }
             .map { it.key }.distinct()
+    }
+
+    // 変更/削除を止めて理由を告げる。止めたときだけ true。
+    private fun blockedByEdge(camName: String, what: String): Boolean {
+        val edges = edgesHoldingCamera(camName)
+        if (edges.isEmpty()) return false
+        AlertDialog.Builder(this)
+            .setTitle("${what}できません")
+            .setMessage("このカメラを使用する撮影計画が、すでにエッジ端末「" +
+                        edges.joinToString("」「") + "」に送られています。\n\n" +
+                        "エッジ端末は受け取った計画をそのまま使うため、ここで${what}すると" +
+                        "実際に撮影される内容と食い違います。\n\n" +
+                        "先に計画一覧からその計画をエッジ端末から削除してください。" +
+                        "撮影が終われば自動的に解除されます。")
+            .setPositiveButton("OK", null)
+            .show()
+        return true
     }
 
     private fun noticeAuthChangedIfHeld(camName: String) {
@@ -3937,6 +4001,26 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private val planDtFmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.JAPAN)
 
     // 項目8: 計画の撮影窓開始時刻(ms)。無ければ0。ダイアログ抑止判定に使う。
+    // 計画の終了時刻[ms]。分からなければ 0。
+    private fun planEndMillis(id: String): Long {
+        return try {
+            val arr = JSONArray(HgeNative.nativeListPlans())
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                if (o.optString("id") == id) return planDtFmt.parse(o.optString("end"))?.time ?: 0L
+            }
+            0L
+        } catch (_: Exception) { 0L }
+    }
+
+    // その計画のロックがまだ効いているか。窓の終了から猶予を過ぎたものは、エッジから
+    //  何も聞けていなくても解除する(エッジが壊れた/持ち出したまま等で詰まないため)。
+    private fun planLockActive(id: String): Boolean {
+        val e = planEndMillis(id)
+        if (e <= 0L) return true                     // 期限が読めないなら安全側=ロック継続
+        return System.currentTimeMillis() < e + kLockGraceMs
+    }
+
     private fun planStartMillis(id: String): Long {
         return try {
             val arr = JSONArray(HgeNative.nativeListPlans())
@@ -5330,8 +5414,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     .setMessage("「" + e.name + "」を登録から削除しますか？(エッジ本体の設定は変わりません)")
                     .setPositiveButton("削除する") { _, _ ->
                         edges.remove(e); saveRegisteredEdges(); refreshEdgeSpinner()
+                        // 【逃げ道】この端末が持っていた計画の縛りも一緒に解く。壊れた/失くした
+                        //  端末の分がいつまでも残ると、そのカメラを永久に変更も削除もできなくなる。
+                        edgeHeldByEdge.remove(e.name); saveEdgeHeld()
                         if (selectedEdgeName == e.name) selectedEdgeName = ""
-                        buildEdgeList(); buildEdgeForm()
+                        buildEdgeList(); buildEdgeForm(); refreshPlanList(); updateReadOnly()
                     }
                     .setNegativeButton("やめる", null)
                     .show()
@@ -6021,6 +6108,29 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  ・エッジ側で計画を削除すると次スイープのロスターから消える→保有集合から外れ→自動でロック解除。
     //  ・応答したエッジの分だけ更新(オフライン/未応答のエッジ分は前回値を保持=取りこぼしでロックを揺らさない)。
     //  ・スマホのローカルに無い計画id(=孤児)は保有集合に入れない(表示できないため)。
+    // 保有台帳を prefs へ残す/読み戻す。アプリを終了してもロックを維持するため。
+    private fun saveEdgeHeld() {
+        try {
+            val o = JSONObject()
+            for ((k, v) in edgeHeldByEdge) { o.put(k, JSONArray(v.toList())) }
+            getSharedPreferences("hgc", MODE_PRIVATE).edit().putString("edgeHeld", o.toString()).apply()
+        } catch (_: Exception) {}
+    }
+
+    private fun loadEdgeHeld() {
+        try {
+            val t = getSharedPreferences("hgc", MODE_PRIVATE).getString("edgeHeld", "") ?: ""
+            if (t.isEmpty()) return
+            val o = JSONObject(t)
+            for (k in o.keys()) {
+                val a = o.optJSONArray(k) ?: continue
+                val set = HashSet<String>()
+                for (i in 0 until a.length()) a.optString(i).takeIf { it.isNotEmpty() }?.let { set.add(it) }
+                if (set.isNotEmpty()) edgeHeldByEdge[k] = set
+            }
+        } catch (_: Exception) {}
+    }
+
     private fun reconcileEdgeRoster(ed: Edge, heldPlans: Set<String>) {
         val localIds = try {
             val pa = JSONArray(HgeNative.nativeListPlans())
@@ -6029,6 +6139,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val newHeld = heldPlans.filterTo(HashSet()) { localIds.contains(it) }
         if (edgeHeldByEdge[ed.name] != newHeld) {
             edgeHeldByEdge[ed.name] = newHeld
+            saveEdgeHeld()                        // アプリを終了してもロックを保つ
             refreshPlanList(); updateReadOnly()   // 保有の増減(=ロック状態)を表示へ反映
         }
     }

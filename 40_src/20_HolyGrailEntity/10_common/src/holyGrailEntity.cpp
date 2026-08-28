@@ -1073,28 +1073,17 @@ namespace
 		}
 		return names;
 	}
-	// 保存済みの計画を一度だけ読み、ダイジェスト認証の資格情報を候補へ入れる。
+	// 【計画からは資格情報を拾わない(2026-08-28 仕様確定)】
+	//  以前は起動時に保存済みの計画を全部読んで資格情報を拾っていた。重いうえに、
+	//  台帳を受け取るたびにも読み直しており、StickS3 の内部ヒープが枯れてリセットした。
 	//
-	// 【なぜ要るか(2026-08-28 実機で判明)】計画は必要になったときに読む作りで、起動しただけでは
-	//  どの計画も読まれない。資格情報は計画JSONを読む副作用(csJson::cameraFromJson)でしか
-	//  候補に入らないので、**起動直後のエッジは資格情報を1つも持っていない**。
-	//  そのためカメラへの挨拶が Authorization を付けられず、素の 401 のまま何度投げても通らなかった
-	//  (Edge00 のログに creds=0 known=0 が残っている)。所持カメラ台帳を持つスマホ役では
-	//  preloadOwned が同じ役目を果たすので、この穴はエッジ役だけに開いていた。
-	//
-	// 読んだ計画そのものは捨ててよい。欲しいのは候補への登録という副作用だけ。計画は1台につき
-	//  数本しか置かないので(内部RAMの制約)、1本ずつ読んで捨てれば山は作らない。
-	void preloadPlanCredentials(void)
-	{
-		if (hge::role::ownedCamerasAuthoritative()) { return; }	// スマホ役は preloadOwned で足りる
-		for (const std::string& id : dataManager::listPlanIds())
-		{
-			std::string saved;
-			if (!dataManager::loadPlanFile(id, saved)) { continue; }
-			hgc::cs cs;
-			(void)csjson::fromJson(saved, cs);	// 副作用(httpAuth::addCandidate)だけが目的
-		}
-	}
+	//  やめられる理由は「エッジへ送った計画で使っているカメラは、スマホ側で変更も削除も
+	//  できない」と決めたため。台帳と計画のカメラは必ず同じ物になる。よって
+	//   ・挨拶(Wi-Fi参加時) … 台帳が候補を作る。計画は読まない
+	//   ・撮影            … 計画を受け取った時点で csJson::cameraFromJson が候補へ入れる
+	//                        (解く副作用。追加のコードは要らない)
+	//   ・再起動後        … 台帳はファイルに残っているので起動時に読み込まれる
+	//  で足りる。**削除禁止のガードとセットの設計**である。片方だけ外してはいけない。
 
 	// スマホから預かったカメラ台帳の置き場。
 	//  計画と違って「撮る予定」とは無関係に持つ。挨拶は計画を作る前に要るため。
@@ -1124,8 +1113,8 @@ namespace
 				creds.emplace_back(u, p);
 			}
 		}
-		httpAuth::setCandidates(creds);	// 置き換え。消えたカメラの資格情報はここで落ちる
-		preloadPlanCredentials();		// 手元に残っている計画の分は足し直す
+		// 台帳がそのまま候補になる。計画から足し戻す必要は無い(上の説明を参照)。
+		httpAuth::setCandidates(creds);	// 置き換え。台帳からも計画からも消えた分はここで落ちる
 	}
 
 	// 直近に採り込んだ台帳。**同じ物が来たら何もしない**ための控え。
@@ -1801,8 +1790,7 @@ int32_t hge_init(void)
 	// カメラを探し始める前に所持カメラを読んでおく。読み込みでダイジェスト認証の資格情報が
 	//  候補に入る(エッジ役は所持を持たないが、撮影計画の受信/読み込みで同じ入口を通る)。
 	dataManager::preloadOwned();
-	preloadPlanCredentials();	// エッジ役はここが唯一の入口(下の説明を参照)
-	loadCameraBook();			// スマホから預かった台帳(計画がまだ無くても挨拶できるように)
+	loadCameraBook();			// エッジ役の資格情報はここが唯一の入口(上の説明を参照)
 	g_inited = true;
 	setState(HGE_ST_IDLE);
 	return ERR_HGC_OK;
