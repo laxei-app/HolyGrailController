@@ -546,6 +546,33 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeSyncTime(JNIEnv* env, jobject, jstr
 	return (m == etp::M_ACK) ? 0 : -2;
 }
 
+// スマホの所持カメラ台帳をエッジへ渡す(C_CAMERA_BOOK)。
+//  エッジは受け取った配列でそっくり入れ替えるので、追加も変更も削除もこの1本で伝わる。
+//  台帳が無いとエッジはカメラへ挨拶できず(認証が要る)、初回のWi-Fi参加が成立しない。
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeEdgeSendCameraBook(JNIEnv* env, jobject, jstring host_, jint port, jstring book_)
+{
+	const char* host = env->GetStringUTFChars(host_, nullptr);
+	const char* bk   = book_ ? env->GetStringUTFChars(book_, nullptr) : nullptr;
+	std::string hostS = host ? host : "";
+	std::string bookS = bk ? bk : "";
+	env->ReleaseStringUTFChars(host_, host);
+	if (bk) { env->ReleaseStringUTFChars(book_, bk); }
+	if (bookS.empty()) { return -1; }
+
+	std::lock_guard<std::mutex> lk(g_connMtx);
+	std::string rd;
+	int m = edgeXchg(hostS, port, etp::C_CAMERA_BOOK, etp::M_PUT, bookS, rd);
+	return (m == etp::M_ACK) ? 0 : -2;
+}
+
+// 所持カメラから台帳 JSON を作って返す(送る中身。変化の判定にも使う)。
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeCameraBookJson(JNIEnv* env, jobject)
+{
+	return env->NewStringUTF(hge_cameraBookJson());
+}
+
 // エッジ端末へ「継続(カメラ未検出時の即再探索)」を送る。planId 空=全取得フェーズ。
 JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeEdgeResearch(JNIEnv* env, jobject, jstring host_, jint port, jstring planId_)

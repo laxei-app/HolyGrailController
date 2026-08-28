@@ -40,7 +40,14 @@ namespace etp
 		// (次のスイープで再取得する)。1件は約1KBなので、定常の通信量には実質影響しない。
 		C_REPORT_LIST = 14,	// レポート一覧の取得。応答 data=JSON配列(reportListJson と同じ形)。スマホ→エッジ(M_GET)
 		C_REPORT_READ = 15,	// レポート1件の取得。data=ファイル名。応答 data=そのJSON本文。スマホ→エッジ(M_GET)
-		C_REPORT_DELETE = 16	// 受領済みレポートの削除。data=ファイル名。スマホ→エッジ(M_DELETE)
+		C_REPORT_DELETE = 16,	// 受領済みレポートの削除。data=ファイル名。スマホ→エッジ(M_DELETE)
+		C_CAMERA_BOOK = 17	// スマホの所持カメラ台帳(識別+認証)。data=JSON配列。スマホ→エッジ(M_PUT)
+		//  [{"serial","model","name","assignedName","authUser","authPass"}]。authPass は暗号文。
+		//  【送った内容がその時点の全量】エッジは受け取った配列でそっくり置き換える。
+		//   追加・変更・削除がこの1本で片付き、消すためのコマンドを別に持たなくてよい。
+		//  【なぜ要るか】エッジは撮影計画を受け取るまでカメラの資格情報を1つも持てなかった。
+		//   ところがカメラへの挨拶(初回Wi-Fi参加を成立させる200)は計画を作る**前**に要る。
+		//   isoList/ssList は挨拶に不要なので載せない(4台で3.5KB→571B。BLEでも一瞬で済む)。
 	};
 
 	// 解釈結果

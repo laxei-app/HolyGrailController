@@ -9,6 +9,9 @@
 #include "notice.h"	// ユーザーへのお知らせはコードで持つ(文言はUI側)
 #include "roleDiscovery.h"	// 役割別の発見(エッジ=IP直結ヒント / スマホ=スタブ)。30_role
 #include "csJson.h"
+#include "osFile.h"		// カメラ台帳の置き場(/asset/camBook.json)
+#include "secret.h"		// 台帳のパスワードは暗号文で運ぶ
+#include "httpAuth.h"	// 台帳をダイジェスト認証の候補へ入れる
 #include "netThread.h"
 #include "osSystemCall.h"
 #include "cs.h"
@@ -1093,6 +1096,48 @@ namespace
 		}
 	}
 
+	// スマホから預かったカメラ台帳の置き場。
+	//  計画と違って「撮る予定」とは無関係に持つ。挨拶は計画を作る前に要るため。
+	const char* kCameraBookFile = "/camBook.json";
+
+	std::string cameraBookPath(void)
+	{
+		const std::string d = osfile::dir("asset");
+		return d.empty() ? std::string() : (d + kCameraBookFile);
+	}
+
+	// 台帳の JSON を認証候補へ入れる。台帳に載っていないものは落とす(古い情報の掃除)。
+	//  そのあと保存済み計画の分を足し直す。台帳から消えたカメラでも、まだ計画が残っている
+	//  なら撮影中に認証できなくなっては困るため。
+	void applyCameraBook(const std::string& json)
+	{
+		std::vector<std::pair<std::string, std::string>> creds;
+		nlohmann::json j = nlohmann::json::parse(json, nullptr, false);
+		if (!j.is_discarded() && j.is_array())
+		{
+			for (const auto& e : j)
+			{
+				if (!e.is_object()) { continue; }
+				const std::string u = e.value("authUser", std::string());
+				const std::string p = secret::decrypt(e.value("authPass", std::string()));
+				if (u.empty() && p.empty()) { continue; }
+				creds.emplace_back(u, p);
+			}
+		}
+		httpAuth::setCandidates(creds);	// 置き換え。消えたカメラの資格情報はここで落ちる
+		preloadPlanCredentials();		// 手元に残っている計画の分は足し直す
+	}
+
+	// 起動時に台帳を読む。無ければ何もしない(まだ一度もスマホと会っていない)。
+	void loadCameraBook(void)
+	{
+		if (hge::role::ownedCamerasAuthoritative()) { return; }	// スマホ役は自分の台帳が本体
+		const std::string path = cameraBookPath();
+		std::string body;
+		if (path.empty() || !osfile::readAll(path, body) || body.empty()) { return; }
+		applyCameraBook(body);
+	}
+
 	void notifyStateP(const std::string& planId, int s)
 	{
 		std::string j = "{\"planId\":\"" + jesc(planId) + "\",\"state\":" + std::to_string(s) + "}";
@@ -1746,6 +1791,7 @@ int32_t hge_init(void)
 	//  候補に入る(エッジ役は所持を持たないが、撮影計画の受信/読み込みで同じ入口を通る)。
 	dataManager::preloadOwned();
 	preloadPlanCredentials();	// エッジ役はここが唯一の入口(下の説明を参照)
+	loadCameraBook();			// スマホから預かった台帳(計画がまだ無くても挨拶できるように)
 	g_inited = true;
 	setState(HGE_ST_IDLE);
 	return ERR_HGC_OK;
@@ -1805,6 +1851,47 @@ int32_t hge_connectManual(const char* host)
 int32_t hge_setKnownCameras(const char* json, int32_t len)
 {
 	return static_cast<int32_t>(hge::role::setKnownCameras(json, static_cast<int>(len)));
+}
+
+// スマホ役: 所持カメラから台帳 JSON を作る(説明はヘッダ)。
+//  isoList/ssList は載せない。挨拶に要らないうえ、これが大半の容量を占める
+//  (実データ4台で 3,549 バイト → 571 バイト。BLE でも一瞬で送れる大きさに収まる)。
+const char* hge_cameraBookJson(void)
+{
+	static std::string s_book;	// 呼び出し元へ渡すので寿命を持たせる
+	s_book = "[]";
+	if (!hge::role::ownedCamerasAuthoritative()) { return s_book.c_str(); }
+
+	std::vector<hgc::ownedCamera> owned;
+	if (!csjson::ownedCamerasFromJson(dataManager::ownedCamerasJson(), owned)) { return s_book.c_str(); }
+
+	nlohmann::json arr = nlohmann::json::array();
+	for (const auto& oc : owned)
+	{
+		const hgc::camera& c = oc.cam;
+		// パスワードは平文で持っているので、載せるときに暗号化する(計画と同じ扱い)。
+		arr.push_back({ {"serial", c.serial}, {"model", c.model}, {"name", c.name},
+		                {"assignedName", c.assignedName}, {"authUser", c.authUser},
+		                {"authPass", secret::encrypt(c.authPass)} });
+	}
+	s_book = arr.dump();
+	return s_book.c_str();
+}
+
+// エッジ役: 台帳を受け取って保存し、認証候補を入れ替える(説明はヘッダ)。
+int32_t hge_setCameraBook(const char* json, int32_t len)
+{
+	if (json == nullptr || len <= 0) { return ERR_HGC_INVALID_ARG; }
+	const std::string body(json, static_cast<size_t>(len));
+	// 形がおかしいものは保存しない。壊れた台帳で上書きすると、次の起動で候補が空になる。
+	nlohmann::json j = nlohmann::json::parse(body, nullptr, false);
+	if (j.is_discarded() || !j.is_array()) { return ERR_HGC_INVALID_ARG; }
+
+	const std::string path = cameraBookPath();
+	if (!path.empty()) { osfile::writeAll(path, body.data(), body.size()); }
+	applyCameraBook(body);
+	dataManager::logEvent("CAMERA", ("camera book received: " + std::to_string(j.size()) + " camera(s)").c_str());
+	return ERR_HGC_OK;
 }
 
 // スマホ常駐プレゼンスマップ(§3.2/§5.4)。マップ変化のたび HGE_EV_PRESENCE を通知する。

@@ -1481,7 +1481,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 menuItems = listOf(
                     "削除" to {
                         Thread { HgeNative.nativeRemoveOwnedCamera(name)
-                            runOnUiThread { if (selCamera == name) selCamera = null; buildCameraList(); buildCameraDetail() } }.start()
+                            runOnUiThread { if (selCamera == name) selCamera = null; buildCameraList(); buildCameraDetail()
+                                            pushCameraBookToEdges() } }.start()
                     },
                     "接続カメラ検索" to { searchAndAddCameras() }
                 ),
@@ -1749,10 +1750,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (rebuild) {
             Thread {
                 HgeNative.nativeSetOwnedCameraDetail(orig, js)
-                runOnUiThread { buildCameraList(); buildCameraDetail() }
+                runOnUiThread { buildCameraList(); buildCameraDetail(); pushCameraBookToEdges() }
             }.start()
         } else {
-            Thread { HgeNative.nativeSetOwnedCameraDetail(orig, js) }.start()
+            Thread { HgeNative.nativeSetOwnedCameraDetail(orig, js)
+                     runOnUiThread { pushCameraBookToEdges() } }.start()
         }
         if (authChanged) { noticeAuthChangedIfHeld(selCamera ?: orig) }
     }
@@ -1822,6 +1824,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             var ok = 0; val failed = ArrayList<String>()
             sel.forEach { if (HgeNative.nativeAddOwnedCamera(it) == 0) ok++ else failed.add(it) }
             runOnUiThread {
+                if (ok > 0) pushCameraBookToEdges()
                 val msg = when {
                     failed.isEmpty() -> "${ok}台を追加しました"
                     ok == 0 -> "追加できません: 同機種で未識別のカメラが既にあります。先に愛称かシリアルを設定してください"
@@ -5884,6 +5887,33 @@ class MainActivity : AppCompatActivity(), HgeListener {
         Thread { try { HgeNative.nativeEdgeSyncTime(ed.addr(), ed.port, s, off) } catch (_: Exception) {} }.start()
     }
 
+    // エッジへ渡した台帳の指紋(エッジ名 → 中身のハッシュ)。同じ物を送り直さないため。
+    private val edgeBookSent = HashMap<String, Int>()
+
+    // 所持カメラ台帳をエッジへ渡す。
+    //  【なぜ計画と別に要るか】エッジは撮影計画を受け取るまでカメラの資格情報を持てないが、
+    //   カメラへの挨拶(初回Wi-Fi参加を成立させる200)は計画を作る前に要る。
+    //  【全量で置き換わる】送った内容がその時点の全量なので、カメラを消した・作り直した・
+    //   パスワードを変えた、がこの1本で伝わる。消すための操作は別に要らない。
+    private fun sendEdgeCameraBook(ed: Edge) {
+        if (ed.ip.isEmpty()) return
+        val book = try { HgeNative.nativeCameraBookJson() } catch (_: Exception) { return }
+        if (book.isEmpty()) return
+        Thread {
+            try {
+                if (HgeNative.nativeEdgeSendCameraBook(ed.addr(), ed.port, book) == 0) {
+                    edgeBookSent[ed.name] = book.hashCode()
+                }
+            } catch (_: Exception) {}
+        }.start()
+    }
+
+    // 所持カメラをいじったら、知っているエッジ全部へ渡し直す(追加・変更・削除のいずれでも)。
+    //  次のスイープでも指紋が変わっていれば送るので、ここで届かなくても取り返せる。
+    private fun pushCameraBookToEdges() {
+        for (ed in edges) { if (ed.ip.isNotEmpty()) sendEdgeCameraBook(ed) }
+    }
+
     private val edgeSweep = object : Runnable {
         override fun run() {
             updateEdgeApBinding()   // エッジSoftAP接続中はそのNICへバインド維持(Androidの自動離脱を防ぐ)
@@ -5942,6 +5972,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         if (appeared || System.currentTimeMillis() - lastSent > kEdgeTimeRefreshMs) {
                             sendEdgeTime(f.edge)
                         }
+                        // 台帳は中身が変わったときだけ送る(4台で571バイト・1往復0.1秒)。
+                        //  見えた瞬間は指紋に関わらず送る。エッジを入れ替えた/初期化した場合に届く。
+                        val bookNow = try { HgeNative.nativeCameraBookJson().hashCode() } catch (_: Exception) { 0 }
+                        if (appeared || edgeBookSent[nm] != bookNow) { sendEdgeCameraBook(f.edge) }
                         updateEdgeIp(nm, f.edge.ip, f.edge.port)   // DHCPのIP変動を常時追従
                         if (f.hasSessions) reconcileEdgeSessions(f.edge, f.sessions)
                         if (f.hasHeld) reconcileEdgeRoster(f.edge, f.heldPlans)   // 項目6: エッジ側削除の検知→ロック解除

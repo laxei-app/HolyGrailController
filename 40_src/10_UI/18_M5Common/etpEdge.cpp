@@ -276,6 +276,11 @@ namespace
 		case etp::C_CAMERA_INFO:	// スマホが発見中のオンラインカメラ情報。既知IPテーブルを更新(発見のIP直結ヒント)
 			if (!pk.data.empty()) { hge_setKnownCameras(pk.data.c_str(), (int32_t)pk.data.size()); }
 			break;
+		case etp::C_CAMERA_BOOK:	// スマホの所持カメラ台帳。丸ごと入れ替える(消したカメラもこれで消える)
+			// 空配列("[]")も正しい台帳(=所持ゼロ)なので、空文字だけを弾く。
+			if (pk.data.empty() ||
+			    hge_setCameraBook(pk.data.c_str(), (int32_t)pk.data.size()) != ERR_HGC_OK) { rm = etp::M_NAK; }
+			break;
 		case etp::C_PROGRESS:
 		{
 			// data=planId なら計画別の状態/進捗を返す(1エッジ複数カメラで誤NOCAMERAポップを防ぐ)。

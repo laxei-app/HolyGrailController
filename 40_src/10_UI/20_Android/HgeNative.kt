@@ -177,6 +177,11 @@ object HgeNative {
     external fun nativeEdgeStop(host: String, port: Int, planId: String): Int
     external fun nativeEdgeDeletePlan(host: String, port: Int, planId: String): Int   // 項目6: エッジから計画を削除(撮影中は停止してから)
     external fun nativeEdgeSyncTime(host: String, port: Int, datetime: String, offMin: Int): Int // 能動的な時刻同期(C_TIMEのみ)
+    // 所持カメラ台帳をエッジへ渡す(C_CAMERA_BOOK)。送った内容がその時点の全量で、
+    //  エッジは持っている台帳を捨てて入れ替える(追加/変更/削除がこれ1本で伝わる)。
+    external fun nativeEdgeSendCameraBook(host: String, port: Int, book: String): Int
+    // 送る台帳の中身。パスワードは暗号文。中身が変わったかの判定にもこの文字列を使う。
+    external fun nativeCameraBookJson(): String
     external fun nativeEdgeResearch(host: String, port: Int, planId: String): Int // 継続: エッジへ即再探索を送る
     // 【2026-08-06 送信廃止】カメラIPのエッジへの通知はやめた(エッジが自分で見つける。複数AP構成では
     //  別の場所のカメラのIPを配ることになり有害)。ETPのコマンドとエッジ側の受信処理は互換のため残す。
