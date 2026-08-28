@@ -5664,26 +5664,29 @@ class MainActivity : AppCompatActivity(), HgeListener {
             fillFor(ap)               // 新しいモードで覚えている値を出す
         }
         edgeApSwitch = apSwitch
-        // SSID を選んだら、一度つないだことのある先ならパスワードも入れる(全体で覚えている)。
-        //  同じ Wi-Fi へ何台も参加させるので、台数ぶん打ち直すのは無駄。違えば上書きすればよい。
-        ssidPickBtn.setOnClickListener {
-            pickWifiSsid { sid ->
-                ssidE.setText(sid)
-                if (passE.text.toString().isEmpty()) {
-                    val known = knownWifiPass(sid)
-                    if (known.isNotEmpty()) {
-                        passE.setText(known)
-                        Toast.makeText(ctx, "以前に使ったパスワードを入れました", Toast.LENGTH_SHORT).show()
-                    }
-                }
+        // 接続先が変わったら、パスワードはその SSID のものに入れ替える。
+        //
+        // 【必ず入れ替えること(2026-08-29 実機報告)】以前は「空のときだけ入れる」に
+        //  していたため、AP→STA と戻して別の SSID を選ぶと**前の接続先のパスワードが
+        //  そのまま残り**、気づかないまま送ってしまう。覚えていれば入れる、覚えて
+        //  いなければ**空にする**。中途半端に残さないのが安全。
+        fun applySsid(sid: String) {
+            ssidE.setText(sid)
+            val known = knownWifiPass(sid)
+            passE.setText(known)          // 知らない先なら空になる
+            if (known.isNotEmpty()) {
+                Toast.makeText(ctx, "以前に使ったパスワードを入れました", Toast.LENGTH_SHORT).show()
             }
         }
-        // 手で SSID を打った場合も、入力を離れた時点で同じ手当てをする。
+        ssidPickBtn.setOnClickListener { pickWifiSsid { sid -> applySsid(sid) } }
+        // 手で打った場合も同じ。ただし**打ち替えたときだけ**にする。触っていないのに
+        //  入力を離れただけでパスワードが消えると、打ち直しを強いることになる。
+        var ssidOnFocus = ""
         ssidE.setOnFocusChangeListener { _, has ->
-            if (!has && !edgeApMode && passE.text.toString().isEmpty()) {
-                val known = knownWifiPass(ssidE.text.toString())
-                if (known.isNotEmpty()) passE.setText(known)
-            }
+            if (has) { ssidOnFocus = ssidE.text.toString(); return@setOnFocusChangeListener }
+            if (edgeApMode) { return@setOnFocusChangeListener }      // AP の SSID は自分で決める側
+            val now = ssidE.text.toString()
+            if (now != ssidOnFocus) { passE.setText(knownWifiPass(now)) }
         }
 
         val popView = TextView(ctx).apply {
