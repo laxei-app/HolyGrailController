@@ -827,7 +827,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         gearSwitchItem(box, "エッジ端末とBLEで通信する", edgeUseBle()) { on -> setEdgeUseBle(on) }
         gearBand(box, "ログ")
         // 撮影中/開始要求中はグレー表示で不可(コピー処理が撮影と競合しないように)。
-        gearItem(box, "デバッグログ", enabled = !isCaptureBusy()) { openDebugLog() }
+        // 【撮影中でも開ける(2026-08-29 実機で気づいた)】この画面には性質の違う2つが同居する。
+        //  記録する内容 = 次の撮影に効く設定。**撮影の様子がおかしいときこそ入れたい**
+        //  ログ取得     = 重いコピー。撮影中は走らせたくない
+        //  画面ごと塞ぐと前者ができなくなるので、塞ぐのは取得ボタンだけにする。
+        gearItem(box, "デバッグログ") { openDebugLog() }
         // この2つは「撮影計画」ではなく「記録を見る」側なのでログの下へ置く(2026-08-23 UI依頼)。
         gearItem(box, "操作履歴") { openHistory() }            // 項目9
         gearItem(box, "撮影レポート") { openReportList() }     // 670: 撮影1回ぶんの結果と所見
@@ -938,6 +942,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         heading("取得")
         val run = blueButton("ログ取得") { if (dlogBusy) { dlogAbort = true } else { startLogFetch() } }
         box.addView(run); dlogRunBtn = run
+        // 撮影中は取得だけを止める。設定(上のチェック)は触れるままにする。
+        if (isCaptureBusy()) {
+            box.addView(TextView(this).apply {
+                text = "撮影中です。ログ取得はできません(上の設定は変えられます)。"
+                textSize = 12f; setTextColor(Color.GRAY); setPadding(0, dp(2), 0, 0)
+            })
+        }
 
         heading("取得する端末")
         // スマホは常に対象にできる。エッジは**いまオンラインのものだけ**(届かない相手を
@@ -970,11 +981,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
         dlogShotCb?.setTextColor(c); dlogBattCb?.setTextColor(c)
         for (cb in dlogTargets.values) { cb.setTextColor(c) }
         dlogRunBtn?.text = if (dlogBusy) "中断" else "ログ取得"
+        // 撮影中は取得できない(押せるように見せない)。中断は押せる必要があるので、
+        //  取得中(dlogBusy)は撮影中でも有効のままにする。
+        dlogRunBtn?.isEnabled = dlogBusy || !isCaptureBusy()
     }
 
     // 選んだ端末からログを集める。進み具合は画面へ書き、終わったら結果を残す。
     private fun startLogFetch() {
         if (dlogBusy) return
+        if (isCaptureBusy()) {
+            Toast.makeText(this, "撮影中/開始要求中はログ取得できません", Toast.LENGTH_SHORT).show(); return
+        }
         // API28以下は公開Downloadsへ直接書くため書込み権限が要る(29+はMediaStoreで不要)。
         if (Build.VERSION.SDK_INT < 29 &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
