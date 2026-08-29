@@ -1,4 +1,4 @@
-#include "exposureMath.h"
+﻿#include "exposureMath.h"
 #include <algorithm>
 #include <cstdlib>
 
@@ -280,6 +280,20 @@ namespace expo
 		}
 	}
 
+	bool exposureCtl::stepAxis(hgc::exposureType axis, bool bright)
+	{
+		bool moved = false;
+		switch (axis)
+		{
+		case hgc::exposureType::iso: moved = stepIso(bright); break;
+		case hgc::exposureType::ss:  moved = stepSs(bright);  break;
+		case hgc::exposureType::fn:  moved = stepFn(bright);  break;
+		default: return false;
+		}
+		if (moved) { rebuildCurrent(); }
+		return moved;
+	}
+
 	bool exposureCtl::stepIso(bool bright)
 	{
 		if (iso_.e.empty()) { return false; }
@@ -390,4 +404,54 @@ namespace expo
 		for (int i = 0; i < n; ++i) { if (!stepOne(bright)) { break; } }
 		return cur_;
 	}
+
+	// 窓の境目の配分寄せ(宣言のコメント参照)。
+	bool migrateToward(exposureCtl& ctl,
+	                   const expoTables& tables,
+	                   const hgc::exposure& initial,
+	                   const hgc::exposure& limitBright,
+	                   const hgc::exposure& limitDark,
+	                   const hgc::exposureType priority[hgc::exposureTypeNum],
+	                   double maxSsSec)
+	{
+		// いまの明るさに対して、この撮影制御方法なら選ぶ組み合わせ(=寄せ先)。
+		//  基準(initial)から出発し、同じ明るさへ優先度・限界に従って寄せる。境目で一気に
+		//  やっていた計算そのもの。違うのは、結果へ飛ばずに1目盛りずつ近づける点だけ。
+		exposureCtl want;
+		want.init(tables, limitBright, limitDark, priority);
+		want.capLongestSs(maxSsSec);	// 寄せ先も同じ ss 上限で作る(届かない先を指さない)
+		want.setCurrent(initial);
+		const double nowB = brightnessStops(ctl.current(), tables);
+		want.applyStops(nowB - brightnessStops(want.current(), tables));
+		const hgc::exposure dest = want.current();
+		const hgc::exposure cur  = ctl.current();
+
+		// 軸ごとに「明るくしたい/暗くしたい/そのまま」を出す。iso/ss は実数が大きいほど
+		//  明るく、fn は小さいほど明るい。
+		auto cmp = [](double a, double b) -> int { return (a > b + 1e-9) ? 1 : ((a < b - 1e-9) ? -1 : 0); };
+		const int wantBright[3] = {
+			 cmp(parseValue(dest.iso, expoKind::iso), parseValue(cur.iso, expoKind::iso)),
+			 cmp(parseValue(dest.ss,  expoKind::ss ), parseValue(cur.ss,  expoKind::ss )),
+			-cmp(parseValue(dest.fn,  expoKind::fn ), parseValue(cur.fn,  expoKind::fn )) };
+		const hgc::exposureType axis[3] = { hgc::exposureType::iso, hgc::exposureType::ss, hgc::exposureType::fn };
+
+		// 明るい向きへ動かす軸を1つ、暗い向きへ動かす軸を1つ、同時に1目盛りずつ。
+		//  こうすると明るさは動かない(打ち消し合う)ので、自動露出の1歩と同じコマに乗せられる。
+		//  片側しか動けないなら見送る(明るさがずれ、自動露出の枠を食うため)。
+		//  寄せ先は限界の内側なので本来どの組でも通るが、表の端で弾かれても止まらないよう
+		//  組は総当たりする。
+		for (int u = 0; u < 3; ++u)
+		{
+			if (wantBright[u] <= 0) { continue; }
+			if (!ctl.stepAxis(axis[u], true)) { continue; }
+			for (int d = 0; d < 3; ++d)
+			{
+				if (d == u || wantBright[d] >= 0) { continue; }
+				if (ctl.stepAxis(axis[d], false)) { return true; }
+			}
+			ctl.stepAxis(axis[u], false);	// 相手が見つからなかったので明るさを戻す
+		}
+		return false;
+	}
+
 }

@@ -995,6 +995,64 @@ int main()
 		}
 	}
 
+
+	// --- 窓の境目の配分寄せ(2026-08-29 仕様) ---
+	// 夕日→朝日のように優先度・限界・基準が変わる境目で、以前は1コマで新しい基準へ飛んで
+	// いた(明るさは繋がるが iso/ss/fn の配分が入れ替わり画質が段差になる)。いまは飛ばさず、
+	// 新しい窓へ入ってから毎コマ1目盛りずつ寄せる。
+	{
+		expo::expoTables tb = expo::standardTables(1.4, 16.0);
+		const hgc::exposureType prio[hgc::exposureTypeNum] = {
+			hgc::exposureType::iso, hgc::exposureType::ss, hgc::exposureType::fn };
+
+		// 朝日の設定: 光条を出したいので f11 より明るい側へは行かせない。
+		hgc::exposure initial;   initial.iso   = "100"; initial.ss   = "1/125"; initial.fn  = "11";
+		hgc::exposure limBright; limBright.iso = "";    limBright.ss = "";      limBright.fn = "11";
+		hgc::exposure limDark;   limDark.iso   = "";    limDark.ss   = "";      limDark.fn  = "16";
+
+		// 前の窓(夕日)から持ち越した露出。f1.4 は新しい窓の限界の外側。
+		hgc::exposure carry; carry.iso = "1600"; carry.ss = "1/125"; carry.fn = "1.4";
+
+		expo::exposureCtl ctl;
+		ctl.init(tb, limBright, limDark, prio);
+		ctl.setCurrent(carry);
+		const double b0 = expo::brightnessStops(ctl.current(), tb);
+
+		// 一気に飛ぶ従来方式なら、どこへ行き着くか(=寄せ先)
+		expo::exposureCtl want;
+		want.init(tb, limBright, limDark, prio);
+		want.setCurrent(initial);
+		want.applyStops(b0 - expo::brightnessStops(want.current(), tb));
+		const hgc::exposure dest = want.current();
+		check(dest.fn == "11", "寄せ先は新しい制御方法の f値になる",
+		      ("(dest=" + dest.iso + " " + dest.ss + " f" + dest.fn + ")").c_str());
+
+		// 毎コマ1目盛りずつ。明るさは動かないこと・限界の外へ深追いしないことを見る。
+		int frames = 0;
+		bool brightKept = true, neverOutward = true;
+		double prevFn = expo::parseValue(ctl.current().fn, expo::expoKind::fn);
+		while (frames < 200)
+		{
+			if (!expo::migrateToward(ctl, tb, initial, limBright, limDark, prio)) { break; }
+			++frames;
+			if (std::fabs(expo::brightnessStops(ctl.current(), tb) - b0) > 1e-6) { brightKept = false; }
+			const double nowFn = expo::parseValue(ctl.current().fn, expo::expoKind::fn);
+			if (nowFn < prevFn - 1e-9) { neverOutward = false; }	// f値が小さくなる=限界の外へ
+			prevFn = nowFn;
+		}
+		char dm[160];
+		std::snprintf(dm, sizeof(dm), "(%d コマで %s %s f%s)", frames,
+		              ctl.current().iso.c_str(), ctl.current().ss.c_str(), ctl.current().fn.c_str());
+		check(brightKept, "寄せている間、明るさは1度も動かない", dm);
+		check(neverOutward, "限界の外側(f1.4側)へさらに深く行かない", dm);
+		check(ctl.current().fn == dest.fn && ctl.current().iso == dest.iso && ctl.current().ss == dest.ss,
+		      "最後は一気に飛んだ場合と同じ配分に落ち着く", dm);
+		// f1.4→f11 は 6段。1コマ1目盛り(1/3段)なので18コマ。15秒周期なら約4分半。
+		check(frames == 18, "6段の組み替えに18コマかかる(1コマ1目盛り)", dm);
+		check(expo::migrateToward(ctl, tb, initial, limBright, limDark, prio) == false,
+		      "合っていれば何も動かさない(自動露出の邪魔をしない)");
+	}
+
 	std::printf("\n%s (fail=%d)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail);
 	return g_fail == 0 ? 0 : 1;
 }

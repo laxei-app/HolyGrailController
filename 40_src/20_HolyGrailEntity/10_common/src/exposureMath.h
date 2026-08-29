@@ -176,6 +176,13 @@ namespace expo
 		// bright=戻る向き(home が現在より明るければ true)。
 		bool stepHome(bool bright, const hgc::exposure& home);
 
+		// 軸を指名して1目盛りだけ動かす(bright=明るい向き)。優先度は見ない。
+		//  窓の境目で配分だけを組み替えるのに使う(明るい向きと暗い向きを1つずつ動かすと
+		//  明るさが変わらない)。限界の判定は他の経路と同じで、**移動先が限界の外なら動かない**。
+		//  したがって「限界の外からさらに外へ」は起きず、「外から内へ」は通る。
+		//  戻り: 動いたら true。
+		bool stepAxis(hgc::exposureType axis, bool bright);
+
 		// evStops 段ぶん露出を変更する(正=明るく)。1/3段刻みで反映。
 		// 戻り値: 反映後の露出設定。
 		hgc::exposure applyStops(double evStops);
@@ -195,6 +202,18 @@ namespace expo
 		bool stepFn(bool bright);
 		bool stepOne(bool bright, bool reverse = false);
 	};
+
+	// 【窓の境目の配分寄せ 仕様 2026-08-29】いまの明るさを変えずに、iso/ss/fn の配分だけを
+	//  「この撮影制御方法なら選ぶ組み合わせ」へ1目盛り近づける。明るい向きの軸と暗い向きの
+	//  軸を1つずつ同時に動かすので明るさは変わらず、自動露出の1歩とは別枠で使える。
+	//  もう合っている / 動かせる組が無い ときは false(何も変えない)。
+	bool migrateToward(exposureCtl& ctl,
+	                   const expoTables& tables,
+	                   const hgc::exposure& initial,
+	                   const hgc::exposure& limitBright,
+	                   const hgc::exposure& limitDark,
+	                   const hgc::exposureType priority[hgc::exposureTypeNum],
+	                   double maxSsSec = 0.0);
 }
 
 #endif // _EXPOSURE_MATH_H_

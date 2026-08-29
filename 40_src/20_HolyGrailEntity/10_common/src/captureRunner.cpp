@@ -406,6 +406,16 @@ errCode captureRunner::fireShutter(const hgc::exposure& shotExp, double interval
 	return err;
 }
 
+// 窓の境目の配分を、いまの撮影制御方法の答えへ1目盛りずつ寄せる(説明はヘッダ)。
+bool captureRunner::migrateTowardCcm(expo::exposureCtl& ctl, const hgc::ccmBase* ccm, double maxSsSec)
+{
+	if (ccm == nullptr || !validExposure(ccm->initial)) { return false; }
+	// 夜間は固定露出。組み替える自由度が無いので触らない(既存の移行に任せる)。
+	if (ccm->type == hgc::ccmType::night) { return false; }
+	return expo::migrateToward(ctl, tables_, ccm->initial,
+	                           ccm->limitBright, ccm->limitDark, ccm->priority, maxSsSec);
+}
+
 // 測光失敗のログ文を作る。原因を後から特定できるよう、どこでつまずいたかまで残す。
 //  stage/step の番号の意味はカメラ実装が決める(apiBase::meterResult のコメントに一覧がある)。
 //  http 0=応答なし(届いていない) 正数=カメラが断った(その番号) -1=応答の中身が想定外 -2=JSONとして壊れている
@@ -1607,13 +1617,14 @@ errCode captureRunner::loop(void)
 				if (!(validExposure(lastShotExp) && prevAuto)) { curEvT = evTraw; }
 				if (validExposure(lastShotExp))
 				{
-					// 自動露出の開始(仕様 4.8): 撮影継続中の撮影制御方法切替では不連続を避け、
-					// 基準(iso/ss/fn)の構成から始めて直前の「撮影」露出の APEX(明るさ)へ合わせて開始する。
-					if (validExposure(ccm->initial)) { autoCtl.setCurrent(ccm->initial); }
-					else                    { autoCtl.setCurrent(lastShotExp); }
-					double prevB = expo::brightnessStops(lastShotExp, tables_);
-					double curB  = expo::brightnessStops(autoCtl.current(), tables_);
-					autoCtl.applyStops(prevB - curB);
+					// 自動露出の開始(仕様 4.8): 撮影継続中の撮影制御方法切替では不連続を避ける。
+					//
+					// 【配分は飛ばさない(2026-08-29 仕様変更)】以前はここで新しい基準へ飛び、
+					//  同じ明るさへ優先度どおりに戻していた。明るさは繋がるが **iso/ss/fn の
+					//  配分が1コマで入れ替わる**ため、画質(ノイズ・被写界深度・ブレ)がそこで
+					//  段差になった。直前の撮影露出のまま新しい窓へ入り、以降 migrateTowardCcm が
+					//  毎コマ1目盛りずつ寄せる。限界の外から入ることになるが、それは許す仕様。
+					autoCtl.setCurrent(lastShotExp);
 				}
 				else
 				{
@@ -1703,6 +1714,10 @@ errCode captureRunner::loop(void)
 					}
 					++meterFailStreak;
 				}
+				// 窓の境目で持ち越した配分を、いまの制御方法の答えへ1目盛りだけ寄せる。
+				//  明るい向きと暗い向きを1つずつ動かすので明るさは変わらない(上の自動露出の
+				//  1歩とは別枠)。合っていれば何もしない。
+				this->migrateTowardCcm(autoCtl, ccm, maxSsCap);
 				target = autoCtl.current();
 			}
 		}
