@@ -406,20 +406,12 @@ namespace expo
 	}
 
 	// 窓の境目の配分寄せ(宣言のコメント参照)。
-	bool migrateToward(exposureCtl& ctl,
-	                   const expoTables& tables,
-	                   const hgc::exposure& initial,
-	                   const hgc::exposure& limitBright,
-	                   const hgc::exposure& limitDark,
-	                   const hgc::exposureType priority[hgc::exposureTypeNum],
-	                   double maxSsSec)
+	bool migrateToward(exposureCtl& ctl, exposureCtl& want,
+	                   const expoTables& tables, const hgc::exposure& initial)
 	{
 		// いまの明るさに対して、この撮影制御方法なら選ぶ組み合わせ(=寄せ先)。
 		//  基準(initial)から出発し、同じ明るさへ優先度・限界に従って寄せる。境目で一気に
 		//  やっていた計算そのもの。違うのは、結果へ飛ばずに1目盛りずつ近づける点だけ。
-		exposureCtl want;
-		want.init(tables, limitBright, limitDark, priority);
-		want.capLongestSs(maxSsSec);	// 寄せ先も同じ ss 上限で作る(届かない先を指さない)
 		want.setCurrent(initial);
 		const double nowB = brightnessStops(ctl.current(), tables);
 		want.applyStops(nowB - brightnessStops(want.current(), tables));

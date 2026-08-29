@@ -207,13 +207,13 @@ namespace expo
 	//  「この撮影制御方法なら選ぶ組み合わせ」へ1目盛り近づける。明るい向きの軸と暗い向きの
 	//  軸を1つずつ同時に動かすので明るさは変わらず、自動露出の1歩とは別枠で使える。
 	//  もう合っている / 動かせる組が無い ときは false(何も変えない)。
+	//  want は寄せ先を計算するための作業用の器。**呼ぶ側が窓ごとに1回だけ** ctl と同じ
+	//  限界・優先度・ss上限で init しておくこと(init はテーブルを複製するので毎コマ作ると
+	//  内部RAMを削る)。中身は毎回上書きするので値の引き継ぎは不要。
 	bool migrateToward(exposureCtl& ctl,
+	                   exposureCtl& want,
 	                   const expoTables& tables,
-	                   const hgc::exposure& initial,
-	                   const hgc::exposure& limitBright,
-	                   const hgc::exposure& limitDark,
-	                   const hgc::exposureType priority[hgc::exposureTypeNum],
-	                   double maxSsSec = 0.0);
+	                   const hgc::exposure& initial);
 }
 
 #endif // _EXPOSURE_MATH_H_

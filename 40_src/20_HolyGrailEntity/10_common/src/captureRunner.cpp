@@ -407,13 +407,12 @@ errCode captureRunner::fireShutter(const hgc::exposure& shotExp, double interval
 }
 
 // 窓の境目の配分を、いまの撮影制御方法の答えへ1目盛りずつ寄せる(説明はヘッダ)。
-bool captureRunner::migrateTowardCcm(expo::exposureCtl& ctl, const hgc::ccmBase* ccm, double maxSsSec)
+bool captureRunner::migrateTowardCcm(expo::exposureCtl& ctl, expo::exposureCtl& want, const hgc::ccmBase* ccm)
 {
 	if (ccm == nullptr || !validExposure(ccm->initial)) { return false; }
 	// 夜間は固定露出。組み替える自由度が無いので触らない(既存の移行に任せる)。
 	if (ccm->type == hgc::ccmType::night) { return false; }
-	return expo::migrateToward(ctl, tables_, ccm->initial,
-	                           ccm->limitBright, ccm->limitDark, ccm->priority, maxSsSec);
+	return expo::migrateToward(ctl, want, tables_, ccm->initial);
 }
 
 // 測光失敗のログ文を作る。原因を後から特定できるよう、どこでつまずいたかまで残す。
@@ -1097,6 +1096,7 @@ errCode captureRunner::loop(void)
 
 	const hgc::ccmWindow* curWin = nullptr;
 	expo::exposureCtl autoCtl;		// 自動露出用
+	expo::exposureCtl migCtl;		// 窓の境目の配分寄せ: 寄せ先を計算する器(窓ごとに init)
 	expo::exposureCtl preCtl;		// 夜間前移行用(自動露出→夜間)
 	expo::exposureCtl postCtl;		// 夜間後移行用(夜間→次の自動露出)
 	std::vector<double> avgBuf;		// リニア輝度の移動平均バッファ
@@ -1611,6 +1611,10 @@ errCode captureRunner::loop(void)
 			{
 				autoCtl.init(tables_, ccm->limitBright, ccm->limitDark, ccm->priority);
 				autoCtl.capLongestSs(maxSsCap);	// ss は夜間ss/周期-2秒を超えない(指示3)
+				// 配分寄せの「寄せ先」を計算する器。窓ごとに1回だけ作る(init はテーブルを
+				//  複製するので毎コマ作ると内部RAMを削る)。中身は毎コマ上書きされる。
+				migCtl.init(tables_, ccm->limitBright, ccm->limitDark, ccm->priority);
+				migCtl.capLongestSs(maxSsCap);
 				avgBuf.clear(); this->resetStepLock();
 				// 項目8: 自動露出→自動露出の切替で目標evが急変するとオーバーシュートするため、
 				// 実効目標evは前窓の値を保持して以降 1/3 段/枚で寄せる。不連続(開始/非自動から)は即適用。
@@ -1717,7 +1721,7 @@ errCode captureRunner::loop(void)
 				// 窓の境目で持ち越した配分を、いまの制御方法の答えへ1目盛りだけ寄せる。
 				//  明るい向きと暗い向きを1つずつ動かすので明るさは変わらない(上の自動露出の
 				//  1歩とは別枠)。合っていれば何もしない。
-				this->migrateTowardCcm(autoCtl, ccm, maxSsCap);
+				this->migrateTowardCcm(autoCtl, migCtl, ccm);
 				target = autoCtl.current();
 			}
 		}

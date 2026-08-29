@@ -272,7 +272,7 @@ public:
 	// 夜間は固定露出(limitBright==limitDark)なので対象外。既存の preNightConverge に任せる。
 	//
 	// 戻り: 組み替えを行ったら true。
-	bool migrateTowardCcm(expo::exposureCtl& ctl, const hgc::ccmBase* ccm, double maxSsSec);
+	bool migrateTowardCcm(expo::exposureCtl& ctl, expo::exposureCtl& want, const hgc::ccmBase* ccm);
 	// ヒステリシス帯の下限[段]。刻み q・測光の応答 γ のループは、デッドバンドが γ×q 以上で
 	// ないと静止点を持たない(1歩動かすと需要が再び帯を超えて必ず引き返す)。
 	//   動き出すしきい値 = max(帯/2, 1歩 - 帯/2)  ← 帯=1歩 がちょうど最小=最も緩い点

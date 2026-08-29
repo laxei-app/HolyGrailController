@@ -1033,7 +1033,7 @@ int main()
 		double prevFn = expo::parseValue(ctl.current().fn, expo::expoKind::fn);
 		while (frames < 200)
 		{
-			if (!expo::migrateToward(ctl, tb, initial, limBright, limDark, prio)) { break; }
+			if (!expo::migrateToward(ctl, want, tb, initial)) { break; }
 			++frames;
 			if (std::fabs(expo::brightnessStops(ctl.current(), tb) - b0) > 1e-6) { brightKept = false; }
 			const double nowFn = expo::parseValue(ctl.current().fn, expo::expoKind::fn);
@@ -1049,7 +1049,7 @@ int main()
 		      "最後は一気に飛んだ場合と同じ配分に落ち着く", dm);
 		// f1.4→f11 は 6段。1コマ1目盛り(1/3段)なので18コマ。15秒周期なら約4分半。
 		check(frames == 18, "6段の組み替えに18コマかかる(1コマ1目盛り)", dm);
-		check(expo::migrateToward(ctl, tb, initial, limBright, limDark, prio) == false,
+		check(expo::migrateToward(ctl, want, tb, initial) == false,
 		      "合っていれば何も動かさない(自動露出の邪魔をしない)");
 	}
 
