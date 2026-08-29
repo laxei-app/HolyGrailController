@@ -261,7 +261,7 @@ namespace csjson
 		j["place"]     = placeToJson(plan.place);
 		j["camera"]    = cameraToJson(plan.camera);
 		// 同期撮影(2026-08-25)。旧データ互換のため fromJson 側に既定値を置く。
-		j["panorama"]  = plan.panorama;
+		j["syncShot"]  = plan.syncShot;
 		{
 			json arr = json::array();
 			for (const auto& c : plan.subCameras) { arr.push_back(cameraToJson(c)); }
@@ -334,7 +334,7 @@ namespace csjson
 		if (j.contains("end"))   { plan.end   = dtFromJson(j["end"]); }
 		if (j.contains("place"))  { plan.place  = placeFromJson(j["place"]); }
 		if (j.contains("camera")) { plan.camera = cameraFromJson(j["camera"]); }
-		plan.panorama = j.value("panorama", false);
+		plan.syncShot = j.value("syncShot", false);
 		plan.subCameras.clear();
 		if (j.contains("subCameras") && j["subCameras"].is_array())
 		{

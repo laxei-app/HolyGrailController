@@ -962,7 +962,7 @@ void captureRunner::establishSubSessions(void)
 		errCode err = cameraController::startShooting(*sc.dev);
 		if (err != ERR_HGC_OK)
 		{
-			if (onError_ && sc.failStreak == 0) { onError_(err, "panorama startShooting"); }
+			if (onError_ && sc.failStreak == 0) { onError_(err, "syncShot startShooting"); }
 			++sc.failStreak;
 			sc.nextTryMs = now + kSubRetryMs;	// 居ない台に毎コマ粘ると主カメラの準備を食う
 			continue;
@@ -1014,7 +1014,7 @@ void captureRunner::fireSubShutters(void)
 		if (!sc.ready || sc.dev == nullptr || sc.dev->apiBase == nullptr) { continue; }
 		const errCode err = cameraController::actShutter(*sc.dev);
 		if (err == ERR_HGC_OK) { sc.failStreak = 0; continue; }
-		if (onError_ && sc.failStreak == 0) { onError_(err, "panorama actShutter"); }
+		if (onError_ && sc.failStreak == 0) { onError_(err, "syncShot actShutter"); }
 		// 続けて落ちるならセッションが切れている。張り直させる(次の establish で拾う)。
 		if (++sc.failStreak >= 5) { sc.ready = false; sc.failStreak = 0; }
 	}

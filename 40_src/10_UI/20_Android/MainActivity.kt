@@ -80,11 +80,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private lateinit var npfText: TextView
     private lateinit var landscapeCheck: android.widget.Switch	// スライドSW(2026-08-24 UI依頼でチェックボックスから変更)
     // 同期撮影(2026-08-25)。主カメラで測光した露出を追加カメラへも配って全台で撮る。
-    private lateinit var panoramaCheck: android.widget.Switch
+    private lateinit var syncShotCheck: android.widget.Switch
     private lateinit var subCamRow: android.view.View
     private lateinit var subCamText: TextView
     // 表示更新でのプログラム的セットが native を呼び返すのを防ぐ(landscape と同じ理由)。
-    private var suppressPanorama = false
+    private var suppressSyncShot = false
     // 現在の追加カメラの名前(選択ダイアログの初期チェック状態に使う)。
     private var planSubCamNames: MutableList<String> = mutableListOf()
     private var suppressLandscape = false   // updatePlanDisplay でのチェック設定が native を呼ばないように
@@ -464,7 +464,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         intervalText = findViewById(R.id.plan_intervalText)
         npfText = findViewById(R.id.plan_npfText)
         landscapeCheck = findViewById(R.id.plan_landscape)
-        panoramaCheck  = findViewById(R.id.plan_panorama)
+        syncShotCheck  = findViewById(R.id.plan_syncShot)
         subCamRow      = findViewById(R.id.plan_subCamRow)
         subCamText     = findViewById(R.id.plan_subCamText)
         planOverview = findViewById(R.id.plan_overviewContainer)
@@ -588,11 +588,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
             planExec.execute { HgeNative.nativeSetPlanLandscape(if (checked) 1 else 0) }
         }
         // 同期撮影(2026-08-25)。ONで追加カメラの行を出す。
-        panoramaCheck.setOnCheckedChangeListener { _, checked ->
-            if (suppressPanorama) return@setOnCheckedChangeListener
+        syncShotCheck.setOnCheckedChangeListener { _, checked ->
+            if (suppressSyncShot) return@setOnCheckedChangeListener
             subCamRow.visibility = if (checked) View.VISIBLE else View.GONE
             planExec.execute {
-                HgeNative.nativeSetPlanPanorama(if (checked) 1 else 0)
+                HgeNative.nativeSetPlanSyncShot(if (checked) 1 else 0)
                 val sched = HgeNative.nativeScheduleJson()
                 runOnUiThread { latestSchedule = sched; updatePlanDisplay(sched) }
             }
@@ -3408,7 +3408,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         HgeNative.ERR_QUEUE_FULL   -> { waitingPlans.remove(id); Toast.makeText(this, "撮影開始要求が上限(100件)に達しました", Toast.LENGTH_LONG).show() }
                         // 同期撮影の台数超過。上限は Entity(=撮影する端末)が持つので、
                         // ここは理由コードと台数を受け取って文章にするだけ。
-                        HgeNative.ERR_PANORAMA_LIMIT -> {
+                        HgeNative.ERR_SYNC_SHOT_LIMIT -> {
                             waitingPlans.remove(id)
                             val nn = try { HgeNative.nativeLastStartNoticeN1() } catch (_: Exception) { 0 }
                             Toast.makeText(this, noticeText(61, nn.toLong()), Toast.LENGTH_LONG).show()
@@ -3982,10 +3982,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
             landscapeCheck.isChecked = o.optBoolean("landscape")
             suppressLandscape = false
             // 同期撮影と追加カメラ(2026-08-25)。
-            val pano = o.optBoolean("panorama")
-            suppressPanorama = true
-            panoramaCheck.isChecked = pano
-            suppressPanorama = false
+            val pano = o.optBoolean("syncShot")
+            suppressSyncShot = true
+            syncShotCheck.isChecked = pano
+            suppressSyncShot = false
             subCamRow.visibility = if (pano) View.VISIBLE else View.GONE
             run {
                 val arr = o.optJSONArray("subCameras")
@@ -5445,7 +5445,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             R.id.searchButton, R.id.connectButton)
             .forEach { findViewById<View>(it).isEnabled = ed }
         intervalText.isEnabled = ed; landscapeCheck.isEnabled = ed
-        panoramaCheck.isEnabled = ed; subCamText.isEnabled = ed	// 同期撮影も撮影中は編集不可
+        syncShotCheck.isEnabled = ed; subCamText.isEnabled = ed	// 同期撮影も撮影中は編集不可
         cameraText.isEnabled = ed; lensText.isEnabled = ed; edgeSpinner.isEnabled = ed
         schedulePages.forEach { it.isEnabled = ed }   // 項目11: compass/elevationView は廃止
         findViewById<LinearLayout>(R.id.plan_ccmButtons).let { for (i in 0 until it.childCount) it.getChildAt(i).isEnabled = ed }

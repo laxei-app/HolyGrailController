@@ -122,14 +122,14 @@ namespace
 	// 【重なりを見る理由】時間が離れていれば同時には走らないので許してよい。
 	//  以前は「同期撮影が1つでも居れば全体を1件までに絞る」実装で、時間の離れた
 	//  無関係な通常計画2件まで弾いていた(2026-08-26 修正)。
-	bool panoramaConflicts(long long ns, long long ne, bool newIsPano)
+	bool syncShotConflicts(long long ns, long long ne, bool newIsPano)
 	{
 		for (auto& s : g_sessions)
 		{
 			const long long ss = hgc::toUnixUtc(s->plan.start, g_offMin) - PRE_MARGIN_SEC;
 			const long long se = hgc::toUnixUtc(s->plan.end, g_offMin) + (long long)std::llround(s->plan.interval);
 			if (!rangesOverlap(ns, ne, ss, se)) { continue; }
-			const bool otherIsPano = (s->plan.panorama && !s->plan.subCameras.empty());
+			const bool otherIsPano = (s->plan.syncShot && !s->plan.subCameras.empty());
 			if (newIsPano || otherIsPano) { return true; }
 		}
 		return false;
@@ -146,7 +146,7 @@ namespace
 			long long se = hgc::toUnixUtc(s->plan.end, g_offMin) + (long long)std::llround(s->plan.interval);
 			add(ss, se);
 			// 既に走っている側が同期撮影でも同じ(あちらの単独実行を守る)。
-				// (同期撮影の単独実行は panoramaConflicts が別に見る)
+				// (同期撮影の単独実行は syncShotConflicts が別に見る)
 		}
 		add(ns, ne);
 		std::sort(ev.begin(), ev.end(), [](const Ev& a, const Ev& b) { return a.t != b.t ? a.t < b.t : a.d < b.d; });
@@ -574,7 +574,7 @@ namespace
 		// 同じ機種を複数台持つと名称だけでは分からないので、カメラ本体で付けた名前も添える。
 		j += ",\"cameraAssignedName\":\"" + jesc(g_plan.camera.assignedName) + "\"";
 		// 同期撮影(2026-08-25)。subCameras は名前と愛称を表示用に並べる。
-		j += ",\"panorama\":" + std::string(g_plan.panorama ? "true" : "false");
+		j += ",\"syncShot\":" + std::string(g_plan.syncShot ? "true" : "false");
 		{
 			std::string a = "[";
 			for (size_t i = 0; i < g_plan.subCameras.size(); ++i)
@@ -1369,7 +1369,7 @@ namespace
 		//   再接続のたびにDHCPが新しいIPを配るため、最後はIPが重複して収拾がつかなくなる。
 		//  見つからない台はこのセッションでは諦める(主カメラのタイムラプスを止めないことを優先)。
 		S->subDevs.clear();
-		if (S->plan.panorama && !S->plan.subCameras.empty())
+		if (S->plan.syncShot && !S->plan.subCameras.empty())
 		{
 			for (auto& sc : S->plan.subCameras)
 			{
@@ -1427,7 +1427,7 @@ namespace
 					S->subDevs.push_back(std::unique_ptr<class device>(new class device(*sh)));
 					dataManager::recordConnectedCamera(*sh);
 					hge::role::noteConnected(sh->serialno, sh->model, hostFromDevice(*sh));
-					dataManager::logEvent("NET", (std::string("panorama camera added: ")
+					dataManager::logEvent("NET", (std::string("syncShot camera added: ")
 						+ (sh->model.empty() ? sh->assignedName : sh->model)
 						+ "/" + (sh->serialno.empty() ? "?" : sh->serialno)).c_str());
 				}
@@ -1436,7 +1436,7 @@ namespace
 					// 【欲しかった個体を必ず書く(2026-08-25)】名前だけだと、同機種の別ボディが
 					//  繋がっているのか、そもそも居ないのかが区別できない。実機で「EOS R50 V が
 					//  見つからない」と出ていたが、実際は別ボディ(501CFC)が繋がっていただけだった。
-					dataManager::logEvent("NET", (std::string("panorama camera not found: ")
+					dataManager::logEvent("NET", (std::string("syncShot camera not found: ")
 						+ (sc.name.empty() ? sc.model : sc.name)
 						+ " serial=" + (sw.empty() ? std::string("?") : sw)
 						+ " name=" + (sc.assignedName.empty() ? std::string("?") : sc.assignedName)).c_str(), true);
@@ -2742,10 +2742,10 @@ int32_t hge_setPlanCamera(const char* name)
 
 // 同期撮影の切替(2026-08-25)。
 //  画角・スケジュールには影響しないので buildSchedule は呼ばない。
-int32_t hge_setPlanPanorama(int32_t on)
+int32_t hge_setPlanSyncShot(int32_t on)
 {
 	if (!g_planReady) { errCode e = loadFixedPlanImpl(); if (e != ERR_HGC_OK) { return e; } }
-	g_plan.panorama = (on != 0);
+	g_plan.syncShot = (on != 0);
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
 	return saveCurrentPlan();	// 編集を即永続化
@@ -3180,18 +3180,18 @@ int32_t hge_captureStartPlan(const char* planId_)
 	//  超えていたら理由をお知らせコードで残し、通信路経由でスマホへ返す。
 	g_startNoticeCode = 0; g_startNoticeN1 = 0;
 	{
-		const size_t total = 1 + (sess->plan.panorama ? sess->plan.subCameras.size() : 0);
-		const size_t lim   = static_cast<size_t>(hge_maxPanoramaCameras());
+		const size_t total = 1 + (sess->plan.syncShot ? sess->plan.subCameras.size() : 0);
+		const size_t lim   = static_cast<size_t>(hge_maxSyncShotCameras());
 		if (total > lim)
 		{
 			char lb[140];
 			std::snprintf(lb, sizeof(lb),
-			              "capture request rejected: panorama %u cameras > limit %u (%s)",
+			              "capture request rejected: syncShot %u cameras > limit %u (%s)",
 			              (unsigned)total, (unsigned)lim, g_apMode ? "ap" : "sta");
 			dataManager::logEvent("INFO", lb, true);
-			g_startNoticeCode = static_cast<int>(hgc::notice::panoramaTooMany);
+			g_startNoticeCode = static_cast<int>(hgc::notice::syncShotTooMany);
 			g_startNoticeN1   = static_cast<int>(lim);
-			return ERR_HGC_PANORAMA_LIMIT;
+			return ERR_HGC_SYNC_SHOT_LIMIT;
 		}
 	}
 
@@ -3201,13 +3201,13 @@ int32_t hge_captureStartPlan(const char* planId_)
 		long long ns = hgc::toUnixUtc(sess->plan.start, g_offMin) - PRE_MARGIN_SEC;
 		long long ne = hgc::toUnixUtc(sess->plan.end, g_offMin) + (long long)std::llround(sess->plan.interval);
 		// 同期撮影は単独実行(どちらの向きでも)。理由はお知らせコードでUIへ返す。
-		const bool pano = (sess->plan.panorama && !sess->plan.subCameras.empty());
-		if (panoramaConflicts(ns, ne, pano))
+		const bool pano = (sess->plan.syncShot && !sess->plan.subCameras.empty());
+		if (syncShotConflicts(ns, ne, pano))
 		{
 			dataManager::logEvent("INFO", pano
-				? "capture request rejected: panorama runs alone (another capture overlaps)"
-				: "capture request rejected: a panorama capture overlaps", true);
-			g_startNoticeCode = static_cast<int>(hgc::notice::panoramaRunsAlone);
+				? "capture request rejected: syncShot runs alone (another capture overlaps)"
+				: "capture request rejected: a syncShot capture overlaps", true);
+			g_startNoticeCode = static_cast<int>(hgc::notice::syncShotRunsAlone);
 			g_startNoticeN1   = 0;
 			return ERR_HGC_OVERLAP_LIMIT;
 		}
@@ -3315,7 +3315,7 @@ int32_t hge_setApMode(int32_t ap)
 }
 
 // この端末が同期撮影で扱えるカメラ台数(主カメラを含む合計)。
-int32_t hge_maxPanoramaCameras(void)
+int32_t hge_maxSyncShotCameras(void)
 {
 	return static_cast<int32_t>(g_apMode ? MAX_PANO_AP : MAX_PANO_STA);
 }

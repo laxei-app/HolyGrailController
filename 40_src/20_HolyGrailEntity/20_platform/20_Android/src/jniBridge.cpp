@@ -524,8 +524,8 @@ Java_app_laxei_holygrail_HgeNative_nativeSetPlanCamera(JNIEnv* env, jobject /*th
 
 // 同期撮影(2026-08-25)
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetPlanPanorama(JNIEnv* /*env*/, jobject /*thiz*/, jint on)
-{ return hge_setPlanPanorama(on); }
+Java_app_laxei_holygrail_HgeNative_nativeSetPlanSyncShot(JNIEnv* /*env*/, jobject /*thiz*/, jint on)
+{ return hge_setPlanSyncShot(on); }
 
 // 追加カメラを名前の JSON 配列 ["name",...] で差し替える
 JNIEXPORT jint JNICALL
