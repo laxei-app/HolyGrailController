@@ -173,15 +173,23 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  解除の道は3本。**いずれも早すぎてはいけない**(早いと、まだエッジが持っているのに
     //  変更できてしまう)。安全側は必ず「遅らせる」方。
     //   1. エッジが「もう持っていない」と言った  … reconcileEdgeRoster。これが一番確か
-    //   2. 窓の終了から十分に経った            … エッジが見えないとき用の保険。下の猶予
+    //   2. 窓の終了から猶予を過ぎた            … エッジが見えないとき用の保険。下の猶予
     //   3. エッジ登録そのものを消した          … 壊れた/失くした端末で詰まないための逃げ道
     //  また、この台帳は**アプリを終了しても消してはいけない**。消えるとロックが外れ、
     //  次のスイープまで無防備になる。prefs へ残す。
     //
-    //  エッジ側の掃除(pruneFinishedPlans)は窓の終了後すぐ走る。こちらはそれより十分に
-    //  遅らせる。1時間は「エッジが見えていれば 1 で先に解除されている」ので実害が無く、
-    //  見えていないときだけ効く長さとして選んだ。
-    private val kLockGraceMs = 60L * 60L * 1000L
+    //  猶予は「計画の終了時刻」から数える。**撮影中は猶予に関係なくロックされる**
+    //  (撮っている間は必ず 今<終了時刻 なので下の判定が true)。猶予が効くのは
+    //  「終了時刻を過ぎた後、エッジが見えない間」だけで、その時点でエッジが持っている
+    //  複製は窓が過去=二度と走らないので、守る相手が既に無害になっている。
+    //  よって長く取る意味は無く、次の計画として直したいときに邪魔になるだけ
+    //  (2026-08-29 に1時間から短縮)。
+    //
+    //  長さは**その計画の撮影周期の2倍**。エッジ側の撮影期間はそもそも「窓の終了 + 1フレーム」
+    //  まで伸びる(holyGrailEntity.cpp の PRE_MARGIN_SEC のコメント参照)ので、最低でも周期1本は
+    //  必要で、残り1本をスマホ/エッジの時計ずれと後片付けの余白に充てる。固定の分数にすると
+    //  周期を長くしたときに足りなくなる。下の値は**周期が読めなかったときだけ**使う既定値。
+    private val kLockGraceFallbackMs = 60L * 1000L
     // この計画は「エッジに送信済み(=どこかのエッジが保有)」か。ロック(編集/削除不可)の判定に使う。
     //  開始操作の過渡(startingPlans)や実行中集合も、ロスター反映前の一瞬をロックするため含める。
     private fun isPlanOnEdge(id: String): Boolean =
@@ -4199,24 +4207,48 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private val planDtFmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.JAPAN)
 
     // 項目8: 計画の撮影窓開始時刻(ms)。無ければ0。ダイアログ抑止判定に使う。
-    // 計画の終了時刻[ms]。分からなければ 0。
-    private fun planEndMillis(id: String): Long {
-        return try {
-            val arr = JSONArray(HgeNative.nativeListPlans())
-            for (i in 0 until arr.length()) {
-                val o = arr.optJSONObject(i) ?: continue
-                if (o.optString("id") == id) return planDtFmt.parse(o.optString("end"))?.time ?: 0L
-            }
-            0L
-        } catch (_: Exception) { 0L }
+
+    // ロック判定に使う計画の JSON。**編集中の計画はファイルが古い**ので、そのときだけ
+    //  メモリ上の編集内容を使う(周期や終了時刻を変えた直後に古い値で判定しないため)。
+    //  planCameraLabel と同じ使い分け。
+    private fun planJsonForLock(id: String): String =
+        try {
+            if (id.isNotEmpty() && id == currentPlanId) HgeNative.nativeGetPlanJson()
+            else HgeNative.nativeGetPlanJsonById(id)
+        } catch (_: Exception) { "" }
+
+    // 計画JSONの日時({"year":…,"month":…,…}。Entity の dtToJson 形式)を ms へ。
+    //  一覧JSONの "yyyy-MM-ddTHH:mm:ss" とは別形式なので planDtFmt は使えない。
+    //  端末のタイムゾーンで解釈する(計画の日時は現地時刻。仕様どおり Android は端末TZ)。
+    //  1つでも欠けている/おかしい値があれば 0 を返し、呼ぶ側は安全側へ倒す。
+    private fun planDtMillis(o: JSONObject?): Long {
+        if (o == null) return 0L
+        val y  = o.optInt("year", 0)
+        val mo = o.optInt("month", 0)
+        val d  = o.optInt("day", 0)
+        val h  = o.optInt("hour", -1)
+        val mi = o.optInt("min", -1)
+        val se = o.optInt("sec", -1)
+        if (y < 1970 || mo !in 1..12 || d !in 1..31) return 0L
+        if (h !in 0..23 || mi !in 0..59 || se !in 0..60) return 0L
+        val c = Calendar.getInstance()
+        c.clear()
+        c.set(y, mo - 1, d, h, mi, se)
+        return c.timeInMillis
     }
 
     // その計画のロックがまだ効いているか。窓の終了から猶予を過ぎたものは、エッジから
     //  何も聞けていなくても解除する(エッジが壊れた/持ち出したまま等で詰まないため)。
+    //  終了時刻も撮影周期も**計画そのもの**から読む(同じ値を一覧JSONへ複製しない)。
     private fun planLockActive(id: String): Boolean {
-        val e = planEndMillis(id)
-        if (e <= 0L) return true                     // 期限が読めないなら安全側=ロック継続
-        return System.currentTimeMillis() < e + kLockGraceMs
+        val o = try { JSONObject(planJsonForLock(id)) } catch (_: Exception) { null }
+            ?: return true                           // 計画が読めないなら安全側=ロック継続
+        val end = planDtMillis(o.optJSONObject("end"))
+        if (end <= 0L) return true                   // 期限が読めないなら安全側=ロック継続
+        val iv = o.optDouble("interval", 0.0)
+        val grace = if (iv.isFinite() && iv > 0.0) (iv * 2.0 * 1000.0).toLong()
+                    else kLockGraceFallbackMs        // 周期が読めないときだけ既定値
+        return System.currentTimeMillis() < end + grace
     }
 
     private fun planStartMillis(id: String): Long {
