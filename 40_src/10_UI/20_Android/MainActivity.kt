@@ -3198,10 +3198,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     v.parent?.requestDisallowInterceptTouchEvent(true)   // ScrollView のスクロールを抑止
-                    dragFrom = index; highlightGap(ev.rawY); true
+                    dragFrom = index; highlightGap(ev.rawY); showMoveLine(ev.rawY); true
                 }
-                MotionEvent.ACTION_MOVE -> { highlightGap(ev.rawY); true }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { dropAt(ev.rawY); true }
+                MotionEvent.ACTION_MOVE -> { highlightGap(ev.rawY); showMoveLine(ev.rawY); true }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { hideMoveLine(); dropAt(ev.rawY); true }
                 else -> false
             }
         }
@@ -3214,20 +3214,30 @@ class MainActivity : AppCompatActivity(), HgeListener {
             for (c in cards) { if (c.top + c.height / 2f < y) g++ }
             return g.coerceIn(0, order.size)
         }
-        // ドラッグ中の見え方(2026-08-30 UI依頼)。
-        //  ・移動先 … 青。指を離すとここへ入る
-        //  ・移動中 … 橙。いま動かしている項目が元あった場所。どれを動かしているかが分かる
-        //  同じ場所を指しているときは移動先(青)を優先する(そこへ離しても動かない、の意味)。
         private fun highlightGap(rawY: Float) {
             val g = gapFor(rawY)
             for (k in dividers.indices) {
-                val col = when {
-                    k == g                          -> 0xFF1565C0.toInt()   // 移動先
-                    dragFrom >= 0 && k == dragFrom  -> 0xFFEF6C00.toInt()   // 移動中(元の位置)
-                    else                            -> 0x00000000
-                }
-                dividers[k].setBackgroundColor(col)
+                dividers[k].setBackgroundColor(if (k == g) 0xFF1565C0.toInt() else 0x00000000)   // 移動先(青)
             }
+        }
+
+        // 移動中の線(2026-08-30 UI依頼)。**指のいる場所**に出し、指について動く。
+        //  移動先(青・入る場所)とは役割が違うので色を変える(橙)。
+        //  行の間に挟むと並びが動いてしまうので、レイアウトに関わらない overlay へ置く。
+        private val moveLine = android.graphics.drawable.ColorDrawable(0xFFEF6C00.toInt())
+        private var moveLineShown = false
+
+        private fun showMoveLine(rawY: Float) {
+            val loc = IntArray(2); container.getLocationOnScreen(loc)
+            val y = (rawY - loc[1]).toInt().coerceIn(0, container.height)
+            val h = dp(3)
+            moveLine.setBounds(0, y - h / 2, container.width, y + h / 2)
+            if (!moveLineShown) { container.overlay.add(moveLine); moveLineShown = true }
+            container.invalidate()
+        }
+        private fun hideMoveLine() {
+            if (moveLineShown) { container.overlay.remove(moveLine); moveLineShown = false }
+            container.invalidate()
         }
         private fun dropAt(rawY: Float) {
             val g = gapFor(rawY)
