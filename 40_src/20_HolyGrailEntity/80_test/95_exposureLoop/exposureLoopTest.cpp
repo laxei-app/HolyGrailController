@@ -1053,6 +1053,57 @@ int main()
 		      "合っていれば何も動かさない(自動露出の邪魔をしない)");
 	}
 
+
+	// --- ev0 の下限(linearLo) 2026-08-30 の通しで 0.025 -> 0.06 ---
+	// 【出典】Edge01 + EOS R50 V、2026-08-30 02:00〜06:51、曇天、15秒周期、1168コマ。
+	//  実写(CR3の埋め込みJPEG)の中央値をリニアへ戻し、そのコマの露出から環境光 Bv を逆算した値。
+	//  太陽高度は緯度36.0514/経度139.4268で算出(アプリが出した窓の境目 -12.0°/0.0°/+3.0° と
+	//  0.5°以内で一致することを確認済み)。
+	//
+	//  症状: postNight(高度 -12°〜0°、04:11〜05:13)の前半45分がずっと下限に貼り付き、
+	//        残り15分で 0.18 まで駆け上がる。区間内で 2.83段 振れるので「前半だけ暗い」と見える。
+	{
+		struct anchor { const char* at; double altDeg; double bv; double ceilLinear; };
+		// ceilLinear = そのコマの空を「夜間の固定露出(ISO1600/8秒/f1.4)」まで開けたときの明るさ。
+		//  postNight の露出上限はこの夜間露出なので、これより明るい目標を置いても物理的に届かない。
+		const anchor A[] = {
+			{ "04:16", -11.69, -7.28,   0.0740 },
+			{ "04:36",  -7.87, -5.78,   0.2102 },
+			{ "04:51",  -4.96, -2.17,   2.5588 },
+			{ "04:56",  -3.98, -0.18,  10.1616 },
+			{ "05:11",  -1.03, +4.69, 297.6914 },
+		};
+		expo::ev0Sigmoid cfg;	// 既定値=実機と同じ
+		checkNear(cfg.linearLo, 0.06, 1e-9, "ev0の下限は 0.06");
+
+		// bm は太陽高度から。高度 -6°より下は薄明クランプ(+3.0)に張り付く。
+		checkNear(expo::ev0BmFromAltitude(-11.69, cfg), 3.0,  1e-9, "高度-11.7°: bmは薄明クランプ+3.0");
+		checkNear(expo::ev0BmFromAltitude( -6.00, cfg), 3.0,  1e-9, "高度-6.0°: ちょうどクランプの境");
+		checkNear(expo::ev0BmFromAltitude( -3.98, cfg), 1.99, 1e-9, "高度-4.0°: クランプを離れて下がる");
+
+		double first = 0.0, last = 0.0;
+		for (size_t i = 0; i < sizeof(A) / sizeof(A[0]); ++i)
+		{
+			const double bm = expo::ev0BmFromAltitude(A[i].altDeg, cfg);
+			const double v  = expo::ev0LinearFromBv(A[i].bv, bm ? (cfg.bm = bm, cfg) : cfg);
+			if (i == 0) { first = v; }
+			last = v;
+			// 目標が露出上限を超えると、序盤が夜間露出に張り付いたままになる(=シグモイド以前へ逆戻り)。
+			char d[160];
+			std::snprintf(d, sizeof(d), "(%s 目標%.4f 上限%.4f)", A[i].at, v, A[i].ceilLinear);
+			check(v <= A[i].ceilLinear, "目標は夜間露出の上限に収まる(頭打ちしない)", d);
+		}
+		char d[160];
+		const double span = std::log2(last / first);
+		std::snprintf(d, sizeof(d), "(04:16 %.4f -> 05:11 %.4f = %.2f段。旧0.025では2.83段)", first, last, span);
+		checkNear(first, 0.0600, 0.0005, "薄明の底は下限そのもの");
+		check(span < 1.70 && span > 1.45, "postNight区間の振れ幅が約1.6段に縮む(旧2.83段)", d);
+
+		// 明るい側は変えていない。日中の目標は 18% のまま。
+		cfg.bm = 0.0;
+		checkNear(expo::ev0LinearFromBv(20.0, cfg), 0.18, 0.0005, "明るい側の目標は18%のまま(日中に影響なし)");
+	}
+
 	std::printf("\n%s (fail=%d)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail);
 	return g_fail == 0 ? 0 : 1;
 }
