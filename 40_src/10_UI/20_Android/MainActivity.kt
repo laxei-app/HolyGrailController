@@ -91,6 +91,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 項目11: 計画1ページ目の撮影方向/仰角ウィジェット(compass/elevationView/dirText)は廃止。
     // 方向・仰角は撮影シミュレーション画面で設定する(cs の azimuth/elevation は保持)。
     private lateinit var planOverview: LinearLayout      // 概要スケジュール(先頭ページ・表示専用)
+    // 概要スケジュールの字下げ(dp)。screen_plan.xml の見出し TextView の幅と合わせると
+    //  内容の左端が撮影場所/エッジ端末/カメラ…と揃う。
+    private val OVERVIEW_INDENT_DP = 96
     private lateinit var planPager: PlanPager            // 横スライドのページャ(先頭+薄明ページ)
     private lateinit var planFormScroll: ScrollView      // 先頭ページのフォーム縦スクロール
     private lateinit var planListScroll: ScrollView      // 先頭ページの計画リスト(分割バー上)
@@ -5192,7 +5195,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun equalizeTwilightBoxes(twoCol: Boolean) {
         val boxes = twilightBoxViews
         if (boxes.isEmpty()) return
-        val avail = resources.displayMetrics.widthPixels - dp(24)     // フォーム左右パディング分
+        val avail = resources.displayMetrics.widthPixels - dp(24) - dp(OVERVIEW_INDENT_DP)   // フォーム左右パディング + 概要の字下げ
         val cap = if (twoCol) (avail - dp(8)) / 2 else avail          // 2列なら列幅、1列なら全幅
         var maxLine = 0
         for (b in boxes) {
@@ -5230,14 +5233,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun makeEventRow(time: String, label: String): View {
         val tv = TextView(this)
         tv.text = "$time   $label"; tv.textSize = 13f
-        tv.setPadding(dp(12), dp(5), dp(8), dp(5))
+        // 左パディングは持たせない。時刻の左端を撮影場所/カメラ…の内容と厳密に揃えるため、
+        //  字下げは planOverview 側(OVERVIEW_INDENT_DP)だけで付ける(2026-08-30 UI依頼)。
+        tv.setPadding(0, dp(5), dp(8), dp(5))
         return tv
     }
 
     // 先頭ページ: 概要スケジュール(表示専用)。時刻とイベント(Start/End/日の出/日の入/月の出/月の入)を
     // 日付ごとに時系列表示し、各薄明ページへ移動できるボックスを差し込む。
-    // 薄明が2つ以上なら縦2列に分割(日付境で分割。同一日付の朝夕のみのときは昼間=日の入で分割)。1つなら1列。
+    // 列の分け方は薄明の数で決める: 1つ=1列 / 2つ=左右に1つずつ / 3つ以上=日付で分ける。
+    // 内容の左端は他の項目(見出し96dp + 内容)と揃える。
     private fun renderOverview(o: JSONObject) {
+        // 内容の左端を他の項目(見出し96dp + 内容)と揃える(2026-08-30 UI依頼)。
+        //  見出し「概要スケジュール」は他の見出しと同じ左端のまま、中身だけ字下げする。
+        planOverview.setPaddingRelative(dp(OVERVIEW_INDENT_DP), 0, 0, 0)
         planOverview.removeAllViews()
         twilightBoxViews.clear()
         val want = mapOf(1 to "Start", 12 to "End", 9 to "日の出", 2 to "日の入", 10 to "月の出", 11 to "月の入")
@@ -5296,16 +5305,36 @@ class MainActivity : AppCompatActivity(), HgeListener {
             }
         }
 
-        // 縦2列にする分割位置 k(events[k] 以降が右列)。薄明が2つ以上のときだけ2列。
-        var k = 0
-        if (navs.size >= 2) {
-            val dateSplit = evs.indexOfFirst { it.md != evs.first().md }  // 日付が変わる位置
-            k = when {
-                dateSplit > 0 -> dateSplit                                // 日付境で分割
-                else -> evs.indexOfFirst { it.code == 2 }                 // 同一日付 → 昼間(日の入)で分割
-            }
+        // 表示物を1本の並びにする(日付バッジは描画時に差し込む)。列の切れ目は薄明ボックスの
+        //  前後にも置きたいので、イベント番号ではなくこの並びの番号で決める。
+        class Node(val ev: Ev?, val nav: Nav?)
+        val nodes = ArrayList<Node>()
+        for ((idx, ev) in evs.withIndex()) {
+            before[idx]?.forEach { nodes.add(Node(null, it)) }
+            nodes.add(Node(ev, null))
+            after[idx]?.forEach { nodes.add(Node(null, it)) }
         }
-        val twoCol = k in 1 until evs.size
+
+        // 縦2列にする分割位置 k(nodes[k] 以降が右列)。薄明の数で分け方を変える(2026-08-30 UI依頼)。
+        //  薄明1つ   … 1列のまま。
+        //  薄明2つ   … 左右に1つずつ。2つ目の薄明ボックスから右列にする(日付では分けない)。
+        //  薄明3つ以上 … 1列に2つ入ってしまうので日付で分ける。
+        var k = 0
+        if (navs.size == 2) {
+            var seen = 0
+            for ((i, n) in nodes.withIndex()) {
+                if (n.nav != null) { seen++; if (seen == 2) { k = i; break } }
+            }
+        } else if (navs.size >= 3) {
+            val d0 = evs.first().md
+            var s = nodes.indexOfFirst { it.ev != null && it.ev.md != d0 }
+            // 朝の薄明ボックスは「その次のイベントの前」に置かれる。日付の変わり目の直前に
+            //  ぶら下がっている朝のボックスは、そのイベントと一緒に右列へ送る。
+            while (s > 0 && nodes[s - 1].nav?.morning == true) { s-- }
+            if (s <= 0) { s = nodes.indexOfFirst { it.ev != null && it.ev.code == 2 } }  // 日付が変わらない → 昼間(日の入)で分ける
+            k = s
+        }
+        val twoCol = k in 1 until nodes.size
 
         val col1: LinearLayout
         val col2: LinearLayout
@@ -5319,15 +5348,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         } else { col1 = planOverview; col2 = planOverview }
 
-        var cd1 = ""; var cd2 = ""
-        for ((idx, ev) in evs.withIndex()) {
-            val right = twoCol && idx >= k
-            val col = if (right) col2 else col1
-            if (right) { if (ev.md != cd2) { cd2 = ev.md; col.addView(makeDateBadge(ev.md)) } }
-            else { if (ev.md != cd1) { cd1 = ev.md; col.addView(makeDateBadge(ev.md)) } }
-            before[idx]?.forEach { col.addView(makeTwilightBox(it.page, it.morning)) }
-            col.addView(makeEventRow(ev.time, ev.label))
-            after[idx]?.forEach { col.addView(makeTwilightBox(it.page, it.morning)) }
+        // 日付バッジは「読む順(左列を上から、続けて右列を上から)で日付が変わったところ」に1つだけ置く。
+        //  右列の先頭が左列の続きと同じ日付なら右列の頭には出さず、変わる位置=イベントの途中に入る
+        //  (2026-08-30 UI依頼)。日付で分けたときは切れ目がそのまま変わり目なので頭に出る。
+        var curDate = ""
+        for ((idx, n) in nodes.withIndex()) {
+            val col = if (twoCol && idx >= k) col2 else col1
+            val ev = n.ev
+            if (ev != null) {
+                if (ev.md != curDate) { curDate = ev.md; col.addView(makeDateBadge(ev.md)) }
+                col.addView(makeEventRow(ev.time, ev.label))
+            } else {
+                val nv = n.nav!!
+                col.addView(makeTwilightBox(nv.page, nv.morning))
+            }
         }
         equalizeTwilightBoxes(twoCol)   // 全ボックスの幅・高さを揃える(言語非依存)
     }
