@@ -93,11 +93,50 @@ class ScheduleView(context: Context) : View(context) {
     private fun ccmX0() = axisLabelW + bandW + markW
     private fun usedX1() = ccmX0() + (width - ccmX0()) * 0.6f
 
+    // ── 横向き(2026-08-30 UI依頼) ──────────────────────────────
+    // 高度軸を左→右へ寝かせる。上から順に [度目盛り][薄明の帯][時刻][使用する][使用しない]。
+    // 縦向きとは x と y の役割が入れ替わるだけだが、文字の向き・詰め方・当たり判定が
+    // まるごと変わるので、縦向きの処理には手を入れず別の関数に分けてある。
+    private val land get() = width > height
+    private val laneLabelW get() = dp(52f)      // 左の見出し「使用する/使用しない」
+    private val degHL get() = sp(12f) + dp(3f)  // 度目盛り
+    private val bandHL get() = dp(30f)          // 薄明の帯
+    private val markHL get() = dp(76f)          // 時刻(縦書き)
+    private val rightPadL get() = dp(16f)       // 右端の度目盛りが切れないための余白
+
+    private fun xOfL(bi: Int, alt: Double): Float {
+        val b = blocks[bi]
+        val f = if (b.axisDown) (TOP - alt) / RANGE else (alt - BOT) / RANGE
+        return laneLabelW + (f * (width - laneLabelW - rightPadL)).toFloat()
+    }
+    private fun altOfXL(bi: Int, x: Float): Double {
+        val b = blocks[bi]
+        val f = ((x - laneLabelW) / (width - laneLabelW - rightPadL)).toDouble().coerceIn(0.0, 1.0)
+        return if (b.axisDown) TOP - f * RANGE else BOT + f * RANGE
+    }
+    private fun bandTopL(bi: Int) = bodyTop(bi) + degHL
+    private fun markTopL(bi: Int) = bandTopL(bi) + bandHL
+    private fun usedTopL(bi: Int) = markTopL(bi) + markHL
+    private fun laneHL(bi: Int) = (bodyTop(bi) + blockH - usedTopL(bi)).coerceAtLeast(dp(60f))
+    private fun usedBotL(bi: Int) = usedTopL(bi) + laneHL(bi) * 0.6f
+    private fun unusedBotL(bi: Int) = usedTopL(bi) + laneHL(bi)
+
     private val previewPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = dp(2f); color = 0xFFD32F2F.toInt() }
 
     override fun onDraw(c: Canvas) {
         super.onDraw(c)
         if (blocks.isEmpty() || width == 0) return
+        if (land) {
+            for (bi in blocks.indices) drawBlockLand(c, bi)
+            if (previewX >= 0f) {
+                val bi = if (targetBi >= 0) targetBi else 0
+                c.drawLine(previewX, bandTopL(bi), previewX, unusedBotL(bi), previewPaint)
+                markTxt.color = 0xFFD32F2F.toInt()
+                c.drawText("%.1f°".format(altOfXL(bi, previewX)), previewX + dp(3f), bandTopL(bi) - dp(3f), markTxt)
+                markTxt.color = 0xFF263238.toInt()
+            }
+            return
+        }
         for (bi in blocks.indices) drawBlock(c, bi)
         if (previewY >= 0f) {
             c.drawLine(axisLabelW + bandW, previewY, width.toFloat(), previewY, previewPaint)
@@ -167,11 +206,106 @@ class ScheduleView(context: Context) : View(context) {
         }
     }
 
+    // 横向きの1ブロック。中身は縦向きと同じで、置き方だけ90度違う。
+    private fun drawBlockLand(c: Canvas, bi: Int) {
+        val blk = blocks[bi]
+        val hTop = blockTop(bi)
+        c.drawText(blk.title, dp(2f), hTop + sp(14f), titleTxt)
+        if (blk.date.isNotEmpty()) {
+            val tw = badgeTxt.measureText(blk.date)
+            val cx = dp(2f) + titleTxt.measureText(blk.title) + dp(16f) + tw / 2
+            val r = RectF(cx - tw / 2 - dp(8f), hTop + dp(3f), cx + tw / 2 + dp(8f), hTop + dp(21f))
+            c.drawRoundRect(r, dp(9f), dp(9f), badgeFill)
+            c.drawText(blk.date, cx, hTop + dp(16f), badgeTxt)
+        }
+
+        // 左の見出し(行の意味)。縦向きでは上の列見出しだったもの。
+        colHdr.textAlign = Paint.Align.LEFT
+        c.drawText("使用する", dp(2f), (usedTopL(bi) + usedBotL(bi)) / 2f + sp(4f), colHdr)
+        c.drawText("使用しない", dp(2f), (usedBotL(bi) + unusedBotL(bi)) / 2f + sp(4f), colHdr)
+        colHdr.textAlign = Paint.Align.CENTER
+
+        // 度目盛り(帯の上)。
+        degTxt.textAlign = Paint.Align.CENTER
+        for (deg in listOf(6, 0, -6, -12, -18, -24)) {
+            val x = xOfL(bi, deg.toDouble())
+            c.drawText(if (deg >= 0) "+$deg°" else "$deg°", x, bandTopL(bi) - dp(2f), degTxt)
+        }
+        degTxt.textAlign = Paint.Align.RIGHT
+
+        // 薄明の帯。
+        val bt = bandTopL(bi); val bb = bt + bandHL
+        for (z in zones) {
+            val xa = xOfL(bi, z.top); val xb = xOfL(bi, z.bottom)
+            val x0 = minOf(xa, xb); val x1 = maxOf(xa, xb)
+            zoneFill.color = z.color
+            c.drawRect(x0, bt, x1, bb, zoneFill)
+            if (x1 - x0 >= zoneTxt.measureText(z.label) + dp(4f)) {
+                zoneTxt.color = if (z.color and 0xFF < 0x60) 0xFFFFFFFF.toInt() else 0xFF263238.toInt()
+                c.drawText(z.label, (x0 + x1) / 2f, (bt + bb) / 2f + sp(3f), zoneTxt)
+            }
+        }
+
+        // 撮影制御方法の帯(上=使用する / 下=使用しない)。
+        for (sg in blk.segs) {
+            val xa = xOfL(bi, sg.altTop); val xb = xOfL(bi, sg.altBottom)
+            val x0 = minOf(xa, xb); val x1 = maxOf(xa, xb)
+            if (x1 - x0 <= 0f) continue
+            val y0 = if (sg.used) usedTopL(bi) else usedBotL(bi)
+            val y1 = if (sg.used) usedBotL(bi) else unusedBotL(bi)
+            if (sg.color != 0) { segFill.color = sg.color; c.drawRect(x0, y0, x1, y1, segFill) }
+            val nm = sg.name
+            if (nm != null && x1 - x0 >= nameTxt.measureText(nm) + dp(4f)) {
+                nameTxt.color = sg.textColor
+                c.drawText(nm, (x0 + x1) / 2f, (y0 + y1) / 2f - (nameTxt.descent() + nameTxt.ascent()) / 2f, nameTxt)
+            }
+        }
+
+        // 時刻(日の出・月の出など)。横向きは高度が近いと文字が重なるので縦書きにする。
+        val mt = markTopL(bi)
+        val baseY = mt + markHL - dp(2f)
+        for (m in blk.marks) {
+            val inRange = m.alt <= TOP + 0.01 && m.alt >= BOT - 0.01
+            val label = if (m.label.isNotEmpty()) m.label else "%.1f°".format(m.alt)
+            val txt = "${m.time}  $label"
+            val x = if (inRange) xOfL(bi, m.alt)
+                    else if (xOfL(bi, m.alt) < laneLabelW) laneLabelW + dp(2f) else width - dp(2f)
+            if (inRange) c.drawLine(x, bt, x, unusedBotL(bi), line)
+            c.save(); c.rotate(-90f, x, baseY)
+            c.drawText(txt, x + dp(3f), baseY + sp(4f), markTxt)
+            c.restore()
+        }
+    }
+
+    // 横向きの当たり判定。
+    private fun segAtXYL(bi: Int, x: Float, y: Float): Int {
+        val b = blocks[bi]
+        for (i in b.segs.indices) {
+            val sg = b.segs[i]
+            val xa = xOfL(bi, sg.altTop); val xb = xOfL(bi, sg.altBottom)
+            val x0 = minOf(xa, xb); val x1 = maxOf(xa, xb)
+            if (x1 - x0 <= 0f) continue
+            val y0 = if (sg.used) usedTopL(bi) else usedBotL(bi)
+            val y1 = if (sg.used) usedBotL(bi) else unusedBotL(bi)
+            if (x >= x0 && x < x1 && y >= y0 && y < y1) return i
+        }
+        return -1
+    }
+    // 最寄りの境目(downX から dp22 以内)。無ければ -1。
+    private fun nearestBoundaryL(bi: Int, x: Float): Int {
+        var best = -1; var bestD = dp(22f); val bs = boundaries()
+        for (idx in bs.indices) {
+            if (bs[idx].bi == bi) { val d = abs(xOfL(bi, bs[idx].alt) - x); if (d < bestD) { bestD = d; best = idx } }
+        }
+        return best
+    }
+
     // ── タッチ(すべて1本指。境目=縦 / 朝夕帯=横 / それ以外の横=ページ移動へ委譲) ──
     private var axisLocked = false
     private var mode = 0            // 0=未確定/無効, 1=境目移動(縦), 2=挿入排除(横), 3=ページ委譲(横)
     private var downX = 0f; private var downY = 0f
     private var previewY = -1f
+    private var previewX = -1f     // 横向きの境目プレビュー(縦向きの previewY と同じ役割)
     private var targetBi = -1; private var targetBoundary = -1; private var targetSeg = -1
 
     private data class Bnd(val bi: Int, val before: Int, val after: Int, val occ: Int, val alt: Double, val y: Float)
@@ -232,7 +366,7 @@ class ScheduleView(context: Context) : View(context) {
         if (!isEnabled) return false   // 撮影中(読取専用)は編集不可→ページャの横スワイプに委ねる
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                downX = e.x; downY = e.y; axisLocked = false; mode = 0; previewY = -1f
+                downX = e.x; downY = e.y; axisLocked = false; mode = 0; previewY = -1f; previewX = -1f
                 targetBi = blockAt(e.y); targetBoundary = -1; targetSeg = -1
                 parent?.requestDisallowInterceptTouchEvent(true)   // まず掴む(1本指の意図が定まるまで)
                 return true
@@ -242,7 +376,19 @@ class ScheduleView(context: Context) : View(context) {
                 if (!axisLocked) {
                     if (abs(dx) < dragSlop && abs(dy) < dragSlop) return true
                     axisLocked = true
-                    if (abs(dy) >= abs(dx)) {
+                    if (land) {
+                        // 横向きは高度軸が左右。境目=左右 / 出し入れ=上下 / 余白の左右=ページ移動。
+                        if (abs(dx) >= abs(dy)) {
+                            mode = 1
+                            targetBoundary = if (targetBi >= 0) nearestBoundaryL(targetBi, downX) else -1
+                            // 境目から離れた所の左右は「余白の左右スクロール」= ページ移動。
+                            if (targetBoundary < 0) { mode = 3; parent?.requestDisallowInterceptTouchEvent(false) }
+                        } else {
+                            val si = if (targetBi >= 0) segAtXYL(targetBi, downX, downY) else -1
+                            val ty = if (si >= 0) blocks[targetBi].segs[si].type else 0
+                            if (si >= 0 && (ty == 2 || ty == 3 || ty == 4)) { mode = 2; targetSeg = si } else mode = 0
+                        }
+                    } else if (abs(dy) >= abs(dx)) {
                         // 縦=境目移動。最寄り境目を掴む。無ければ無効(ページ移動もしない)。
                         mode = 1
                         targetBoundary = if (targetBi >= 0) nearestBoundary(targetBi, downY) else -1
@@ -260,8 +406,9 @@ class ScheduleView(context: Context) : View(context) {
                     val bnd = boundaries().getOrNull(targetBoundary)
                     if (bnd != null) {
                         val (lo, hi) = clampRange(bnd.before, bnd.after)
-                        val a = altOfY(bnd.bi, e.y).coerceIn(lo, hi)
-                        previewY = yOf(bnd.bi, a); invalidate()
+                        if (land) { val a = altOfXL(bnd.bi, e.x).coerceIn(lo, hi); previewX = xOfL(bnd.bi, a) }
+                        else { val a = altOfY(bnd.bi, e.y).coerceIn(lo, hi); previewY = yOf(bnd.bi, a) }
+                        invalidate()
                     }
                 }
                 return true
@@ -270,29 +417,32 @@ class ScheduleView(context: Context) : View(context) {
                 if (e.actionMasked == MotionEvent.ACTION_UP && !axisLocked) {
                     // タップ=撮影制御方法の編集(色付き箱の中のみ)。
                     val bi = blockAt(e.y)
-                    if (bi >= 0) { val si = segAtXY(bi, e.x, e.y); if (si >= 0) onTapType?.invoke(blocks[bi].segs[si].type) }
+                    if (bi >= 0) {
+                        val si = if (land) segAtXYL(bi, e.x, e.y) else segAtXY(bi, e.x, e.y)
+                        if (si >= 0) onTapType?.invoke(blocks[bi].segs[si].type)
+                    }
                 } else if (e.actionMasked == MotionEvent.ACTION_UP && mode == 1 && targetBoundary >= 0) {
                     val bnd = boundaries().getOrNull(targetBoundary)
                     if (bnd != null) {
                         val (lo, hi) = clampRange(bnd.before, bnd.after)
-                        val a = altOfY(bnd.bi, e.y).coerceIn(lo, hi)
+                        val a = (if (land) altOfXL(bnd.bi, e.x) else altOfY(bnd.bi, e.y)).coerceIn(lo, hi)
                         val rising = if (blocks[bnd.bi].axisDown) 0 else 1
                         onMoveBoundary?.invoke(bnd.before, bnd.after, bnd.occ, a, rising)
                     }
                 } else if (e.actionMasked == MotionEvent.ACTION_UP && mode == 2 && targetSeg >= 0) {
                     val s = blocks[targetBi].segs.getOrNull(targetSeg)
-                    val dx = e.x - downX
-                    if (s != null && abs(dx) > slop) {
+                    // 縦向き=左右へ、横向き=上下へ。どちらも「使用しない」側へ動かせば排除、戻せば挿入。
+                    val d = if (land) e.y - downY else e.x - downX
+                    if (s != null && abs(d) > slop) {
                         val rising = !blocks[targetBi].axisDown
-                        val right = dx > 0
-                        // 朝日/夕日の帯: 右へ=「使用しない」へ(排除) / 左へ=「使用する」へ(挿入・戻す)。
-                        // 排除した帯(使用しない列の箱)を左へドラッグすればスケジュールへ戻せる。
-                        if (s.type == 2 || s.type == 3) onSetBand?.invoke(rising, !right)
-                        // 日中の帯を左へドラッグでも朝日/夕日を挿入(戻す)できる。
-                        else if (s.type == 4 && !right) onSetBand?.invoke(rising, true)
+                        val away = d > 0   // 縦向き=右へ / 横向き=下へ =「使用しない」side
+                        // 朝日/夕日の帯: 使用しない側へ=排除 / 使用する側へ=挿入(戻す)。
+                        if (s.type == 2 || s.type == 3) onSetBand?.invoke(rising, !away)
+                        // 日中の帯を使用する側へドラッグでも朝日/夕日を挿入(戻す)できる。
+                        else if (s.type == 4 && !away) onSetBand?.invoke(rising, true)
                     }
                 }
-                mode = 0; previewY = -1f; targetBoundary = -1; targetSeg = -1; axisLocked = false; invalidate()
+                mode = 0; previewY = -1f; previewX = -1f; targetBoundary = -1; targetSeg = -1; axisLocked = false; invalidate()
                 return true
             }
         }
