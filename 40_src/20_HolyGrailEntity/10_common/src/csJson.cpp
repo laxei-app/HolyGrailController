@@ -75,7 +75,8 @@ namespace csjson
 		{
 			return json{ {"maker", c.maker}, {"model", c.model}, {"name", c.name},
 			             {"serial", c.serial}, {"assignedName", c.assignedName},
-			             {"sensorSize", c.sensorSize}, {"sensorSizeV", c.sensorSizeV}, {"sensorPixel", c.sensorPixel},
+			             {"sensorSize", c.sensorSize}, {"sensorSizeV", c.sensorSizeV},
+			             {"sensorPixel", c.sensorPixel}, {"sensorPixelV", c.sensorPixelV},
 			             {"isoList", c.isoList}, {"ssList", c.ssList},
 			             {"meterLv", c.meterLv},
 			             {"authUser", c.authUser},
@@ -94,6 +95,7 @@ namespace csjson
 			c.sensorSize  = j.value("sensorSize", 0.0);
 			c.sensorSizeV = j.value("sensorSizeV", 0.0);
 			c.sensorPixel = j.value("sensorPixel", 0u);
+			c.sensorPixelV = j.value("sensorPixelV", 0u);
 			if (j.contains("isoList")) { c.isoList = j["isoList"].get<std::vector<std::string>>(); }
 			if (j.contains("ssList"))  { c.ssList  = j["ssList"].get<std::vector<std::string>>(); }
 			c.meterLv     = j.value("meterLv", false);	// 無い=サムネイルだけ(既定)
@@ -517,6 +519,7 @@ namespace csjson
 			c.sensorSize  = m.value("sensor_w", 0.0);	// 横[mm]
 			c.sensorSizeV = m.value("sensor_h", 0.0);	// 縦[mm]
 			c.sensorPixel = m.value("pixel_w", 0u);		// 横[pixel]
+			c.sensorPixelV = m.value("pixel_h", 0u);	// 縦[pixel]
 			c.meterLv     = m.value("meter_lv", false);	// 測光方式(無い=サムネイルだけ)
 			if (m.contains("iso") && m["iso"].is_array())
 			{

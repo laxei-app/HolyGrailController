@@ -1936,7 +1936,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         fun blankIfZeroI(v: Int)   = if (v > 0) v.toString() else ""
         box.addView(editRow2("センサーサイズ", "sensorSize", blankIfZero(cam.optDouble("sensorSize", 0.0)),
             "sensorSizeV", blankIfZero(cam.optDouble("sensorSizeV", 0.0)), "×", "mm", true))
-        box.addView(editRow("センサーpixel(横)", "sensorPixel", blankIfZeroI(cam.optInt("sensorPixel", 0)), true))
+        box.addView(editRow2("センサーpixel", "sensorPixel", blankIfZeroI(cam.optInt("sensorPixel", 0)),
+            "sensorPixelV", blankIfZeroI(cam.optInt("sensorPixelV", 0)), "×", "px", true))
         val iso = arrMinMax(cam.optJSONArray("isoList"))
         box.addView(editRow2("ISO感度", "isoMin", iso.first, "isoMax", iso.second, "〜", "", false))
         val ss = arrMinMax(cam.optJSONArray("ssList"))
@@ -2092,7 +2093,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         for ((k, et) in camFields) {
             when (k) {
                 "sensorSize", "sensorSizeV" -> o.put(k, et.text.toString().toDoubleOrNull() ?: 0.0)
-                "sensorPixel" -> o.put(k, et.text.toString().toIntOrNull() ?: 0)
+                "sensorPixel", "sensorPixelV" -> o.put(k, et.text.toString().toIntOrNull() ?: 0)
                 else -> o.put(k, et.text.toString())
             }
         }

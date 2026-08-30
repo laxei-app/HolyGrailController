@@ -256,6 +256,7 @@ static void factoryCamera(hgc::camera& c)
 	c.sensorSize  = 22.3;	// センサー横[mm]
 	c.sensorSizeV = 15.0;	// センサー縦[mm]
 	c.sensorPixel = 6000;
+	c.sensorPixelV = 4000;
 	c.meterLv     = true;	// ライブビュー主体で測る機種か
 	c.isoList = {
 		"100", "125", "160", "200", "250", "320", "400", "500",
@@ -362,6 +363,10 @@ namespace
 		return d.empty() ? std::string() : (d + "/ownedLenses.json");
 	}
 
+	// 下で定義する。ensureOwned から使うので前に宣言だけ置く。
+	const hgc::camera* findMasterCamera(const std::string& name);
+	bool saveOwnedCameras(void);
+
 	void ensureOwned(void)
 	{
 		if (g_ownedLoaded) { return; }
@@ -372,6 +377,19 @@ namespace
 		body.clear();
 		std::string pl = ownedLensPath();
 		if (!pl.empty() && osfile::readAll(pl, body)) { csjson::ownedLensesFromJson(body, g_ownedLenses); }
+
+		// センサー縦[pixel]は後から足した項目なので、それ以前に登録したカメラには入っていない。
+		//  機材マスタに同じ型番があれば埋める(横[pixel]やセンサー寸法と同じ扱い)。1回埋めたら保存する。
+		//  findMasterCamera がマスタを読み込むので、ここで呼んでよい。
+		bool filled = false;
+		for (auto& oc : g_ownedCameras)
+		{
+			if (oc.cam.sensorPixelV != 0) { continue; }
+			const hgc::camera* m = findMasterCamera(oc.cam.model.empty() ? oc.cam.name : oc.cam.model);
+			if (m == nullptr) { m = findMasterCamera(oc.cam.name); }
+			if (m != nullptr && m->sensorPixelV != 0) { oc.cam.sensorPixelV = m->sensorPixelV; filled = true; }
+		}
+		if (filled) { saveOwnedCameras(); }
 	}
 
 	bool saveOwnedCameras(void)
@@ -825,6 +843,7 @@ bool dataManager::setOwnedCameraDetailJson(const std::string& origName, const st
 	cam.sensorSize  = j.value("sensorSize", cam.sensorSize);
 	cam.sensorSizeV = j.value("sensorSizeV", cam.sensorSizeV);
 	cam.sensorPixel = j.value("sensorPixel", cam.sensorPixel);
+	cam.sensorPixelV = j.value("sensorPixelV", cam.sensorPixelV);
 	cam.meterLv     = j.value("meterLv", cam.meterLv);	// ライブビューで測光する(機体ごとの上書き)
 	cam.authUser    = j.value("authUser", cam.authUser);	// ダイジェスト認証(空=認証なしの機体)
 	// UI からは平文で届く。空文字なら「変更なし」ではなく「消した」なので、キーの有無で見る。
@@ -1310,6 +1329,7 @@ int dataManager::recordConnectedCameraStatus(const device& dev, bool allowAdd)
 		oc.cam.sensorSize  = 0.0;	// 未登録(マスタに無い)
 		oc.cam.sensorSizeV = 0.0;
 		oc.cam.sensorPixel = 0;
+		oc.cam.sensorPixelV = 0;
 		const bool got = fillListsFromCamera(dev, oc.cam);
 		logEvent("GEAR", (key + " not in gear master: sensor size unknown, iso/ss " +
 		                  (got ? "from camera" : "unavailable")).c_str());

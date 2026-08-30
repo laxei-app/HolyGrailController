@@ -69,6 +69,7 @@ namespace hgc
 		double   sensorSize  = 0.0;		// センサー横[mm]
 		double   sensorSizeV = 0.0;		// センサー縦[mm]
 		uint32_t sensorPixel = 0;		// センサー横[pixel]
+		uint32_t sensorPixelV = 0;		// センサー縦[pixel]
 		std::vector<std::string> isoList;	// 設定可能iso感度(カメラ設定値の文字列)
 		std::vector<std::string> ssList;	// 設定可能シャッター速度(カメラ設定値の文字列)
 		// 測光にライブビューを主体で使う機種か。既定(false)は「サムネイルだけ」。
