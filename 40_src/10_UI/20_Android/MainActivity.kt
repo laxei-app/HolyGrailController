@@ -365,6 +365,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         restorePlan()    // 保存済み計画があれば復元、無ければ出荷時計画を表示(再生成しない)
         refreshPlanList()   // 複数計画リスト(分割バー上)を構築
         applyWideLayout()   // 横向きで一覧が間延びしないよう幅と高さを整える
+        applyAllMasterDetail()   // 横向きなら一覧のある画面を左右2分割にする
         restoreEdgeState()  // 再起動時: エッジが撮影中なら状態を復元(item9)
         resumePhoneCapture()  // 再起動時: スマホ直結で撮影中だった計画を再開(item2)
         Thread { try { HgeNative.nativePresenceStart() } catch (_: Exception) {} }.start()  // P4: 常駐プレゼンスマップ開始
@@ -394,9 +395,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val page = if (::planPager.isInitialized) planPager.current else 0
         if (latestSchedule.isNotEmpty()) { updatePlanDisplay(latestSchedule) }
         applyWideLayout()
-        // 一覧型の画面(いまは所持カメラだけ。よければ他へも広げる)。
-        applyMasterDetail(R.id.cameralist_listScroll, R.id.cameralist_divider)
-        setInitialSplit(R.id.cameralist_listScroll, R.id.cameralist_container)
+        applyAllMasterDetail()
         // 色の設定は縦横で並びが変わるので組み直す。編集途中の色は引き継ぐ(作り直すと保存色に戻るため)。
         if (::flipper.isInitialized && flipper.displayedChild == 9) {
             val keepText = colorTextPicker?.color; val keepBg = colorBgPicker?.color
@@ -1552,7 +1551,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun openCameraList() {
         buildCameraList(); buildCameraDetail()
-        applyMasterDetail(R.id.cameralist_listScroll, R.id.cameralist_divider)
         setInitialSplit(R.id.cameralist_listScroll, R.id.cameralist_container)
         flipper.displayedChild = 5
     }
@@ -1574,7 +1572,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun applyMasterDetail(listId: Int, dividerId: Int) {
         val list = findViewById<View>(listId) ?: return
         val divider = findViewById<View>(dividerId) ?: return
-        val land = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        // 一覧が隠れている画面(撮影制御方法の編集で、計画固有のときはプリセット一覧を出さない)は
+        //  分割すると左が空になるので縦積みのままにする。
+        val land = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE &&
+                   list.visibility == View.VISIBLE
         val box = mdBoxes[listId]
         val mp = ViewGroup.LayoutParams.MATCH_PARENT
         if (land && box == null) {
@@ -1595,6 +1596,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
             root.addView(h, li, LinearLayout.LayoutParams(mp, 0, 1f))
             divider.visibility = View.GONE
             mdBoxes[listId] = h
+        } else if (land && box != null) {
+            // すでに分割済み。一覧の出し入れなどで分割バーが表示に戻されることがあるので隠し直す
+            //  (撮影制御方法の編集で、初期値編集に切り替えたときに画面下へ帯が残っていた)。
+            divider.visibility = View.GONE
         } else if (!land && box != null) {
             val root = box.parent as? LinearLayout ?: return
             val bi = root.indexOfChild(box)
@@ -1605,6 +1610,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
             divider.visibility = View.VISIBLE
             mdBoxes.remove(listId)
         }
+    }
+
+    // 一覧のある画面をまとめて向きに合わせる。画面はすべて起動時に組み立て済み(ViewFlipper)なので、
+    //  表示中かどうかに関わらず全部まとめて掛けてよい。
+    //  撮影計画は1列のままにする(一覧の下がフォームで、左右に割ると項目を目で追いにくいため)。
+    private fun applyAllMasterDetail() {
+        applyMasterDetail(R.id.cameralist_listScroll, R.id.cameralist_divider)
+        applyMasterDetail(R.id.lenslist_listScroll,   R.id.lenslist_divider)
+        applyMasterDetail(R.id.edge_listScroll,       R.id.edge_divider)
+        applyMasterDetail(R.id.report_listScroll,     R.id.report_divider)
+        applyMasterDetail(R.id.places_listScroll,     R.id.places_divider)
+        applyMasterDetail(R.id.edit_presetScroll,     R.id.edit_presetDivider)
     }
 
     private fun setInitialSplit(listId: Int, containerId: Int) {
@@ -2681,6 +2698,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val showPreset = !editingPlanCcm   // 初期値編集時のみプリセット一覧を出す
         findViewById<View>(R.id.edit_presetScroll).visibility = if (showPreset) View.VISIBLE else View.GONE
         findViewById<View>(R.id.edit_presetDivider).visibility = if (showPreset) View.VISIBLE else View.GONE
+        // 一覧を出す/隠すで左右2分割の可否が変わるので掛け直す(横向きのときだけ効く)。
+        applyMasterDetail(R.id.edit_presetScroll, R.id.edit_presetDivider)
 
         val hasAlt = false   // 開始/終了(太陽高度)はスケジュール画面の境界で設定するため ccm からは撤去
         val hasEv = key != "night"
