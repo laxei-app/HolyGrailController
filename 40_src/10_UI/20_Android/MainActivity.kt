@@ -395,6 +395,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val page = if (::planPager.isInitialized) planPager.current else 0
         if (latestSchedule.isNotEmpty()) { updatePlanDisplay(latestSchedule) }
         applyWideLayout()
+        // 色の設定は縦横で並びが変わるので組み直す。編集途中の色は引き継ぐ(作り直すと保存色に戻るため)。
+        if (::flipper.isInitialized && flipper.displayedChild == 9) {
+            val keepText = colorTextPicker?.color; val keepBg = colorBgPicker?.color
+            buildColorScreen()
+            keepText?.let { colorTextPicker?.setColor(it, true) }
+            keepBg?.let { colorBgPicker?.setColor(it, true) }
+        }
         if (::planPager.isInitialized) { planPager.post { planPager.setCurrent(page, false) } }
     }
 
@@ -1172,18 +1179,35 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<TextView>(R.id.color_title).text = colorTypeName(colorType) + "の色"
         applyHeaderColor(R.id.color_header, R.id.color_title, t)
         val box = findViewById<LinearLayout>(R.id.color_container); box.removeAllViews()
-        val lab1 = TextView(this); lab1.text = "文字の色"; lab1.textSize = 14f; box.addView(lab1)
+        // 横向きは縦に2分割して 左=文字の色 / 右=背景の色 に並べる(2026-08-30 UI依頼)。
+        //  縦向きは従来どおり上下に積む。
+        val land = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        val lab1 = TextView(this); lab1.text = "文字の色"; lab1.textSize = 14f
         val p1 = com.jaredrummler.android.colorpicker.ColorPickerView(this)
         p1.setAlphaSliderVisible(true); p1.setColor(ccmTextColor(t), true)
         // ピッカー変更で即タイトル文字色に反映(その場で見た目確認)。
         p1.setOnColorChangedListener { c -> findViewById<TextView>(R.id.color_title).setTextColor(0xFF000000.toInt() or (c and 0xFFFFFF)) }
-        box.addView(p1); colorTextPicker = p1
-        val lab2 = TextView(this); lab2.text = "背景の色"; lab2.textSize = 14f; lab2.setPadding(0, dp(16), 0, 0); box.addView(lab2)
+        colorTextPicker = p1
+        val lab2 = TextView(this); lab2.text = "背景の色"; lab2.textSize = 14f
+        if (!land) lab2.setPadding(0, dp(16), 0, 0)
         val p2 = com.jaredrummler.android.colorpicker.ColorPickerView(this)
         p2.setAlphaSliderVisible(true); p2.setColor(ccmColor(t), true)
         // ピッカー変更で即タイトル背景色に反映。
         p2.setOnColorChangedListener { c -> findViewById<View>(R.id.color_header).setBackgroundColor(0xFF000000.toInt() or (c and 0xFFFFFF)) }
-        box.addView(p2); colorBgPicker = p2
+        colorBgPicker = p2
+        if (land) {
+            val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL
+            val c1 = LinearLayout(this); c1.orientation = LinearLayout.VERTICAL
+            val c2 = LinearLayout(this); c2.orientation = LinearLayout.VERTICAL
+            c1.addView(lab1); c1.addView(p1)
+            c2.addView(lab2); c2.addView(p2)
+            row.addView(c1, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(c2, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(dp(12), 0, 0, 0) })
+            box.addView(row, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        } else {
+            box.addView(lab1); box.addView(p1); box.addView(lab2); box.addView(p2)
+        }
         // 項目2: 色の設定にも「変更の取り消し」ボタンを新設(dirty 連動。取消=保存色から作り直し)。
         val colorCancel = addCancelButton(box, atTop = true) { buildColorScreen() }
         startDirtyWatch(colorCancel) { "${colorTextPicker?.color ?: 0},${colorBgPicker?.color ?: 0}" }
