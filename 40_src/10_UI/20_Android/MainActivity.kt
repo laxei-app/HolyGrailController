@@ -110,6 +110,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
             }
         }
     private var planBaseline = ""           // 変更の取り消し用: 計画/画面に入った時点の cs JSON(nativeGetPlanJson)
+    // 変更あり/なしを見るための「比べる用」の形。カメラのパスワードは暗号化されて載っており、
+    //  **同じ内容でも呼ぶたびに違う暗号文**になる(毎回ちがう乱数を混ぜるため)。そのまま比べると
+    //  何も触っていなくても常に「変更あり」になり、取り消しボタンが最初から赤いままになる
+    //  (2026-08-30 実機で確認。他の画面は入力欄の値で見ているのでこの問題は出ない)。
+    //  比較のときだけ伏せる。取り消しで書き戻すのは生の planBaseline なので中身は変わらない。
+    private fun planSig(j: String) = j.replace(Regex("\"authPass\":\"[^\"]*\""), "\"authPass\":\"\"")
     // 撮影計画画面の「変更の取り消し」ボタンの dirty 連動(現在の計画 != ベースライン なら有効)。
     // 計画画面表示中のみ、planExec 上で現在値を取り比較する(編集と直列化して安全)。
     private val planDirtyWatch = object : Runnable {
@@ -119,7 +125,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     val cur = try { HgeNative.nativeGetPlanJson() } catch (e: Exception) { "" }
                     runOnUiThread {
                         if (flipper.displayedChild == 0)
-                            setCancelEnabled(resetButton, !planReadOnly && planBaseline.isNotEmpty() && cur != planBaseline)
+                            setCancelEnabled(resetButton, !planReadOnly && planBaseline.isNotEmpty() &&
+                                             planSig(cur) != planSig(planBaseline))
                     }
                 }
             }
