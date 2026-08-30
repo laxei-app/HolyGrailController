@@ -1505,6 +1505,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun setInitialSplit(listId: Int, containerId: Int) {
         val v = findViewById<View>(listId)
         val c = findViewById<View>(containerId)
+        // 横向きの左右2分割では、リストは列の高さいっぱい(match_parent / weight)にしてある。
+        //  そこへ縦向け用の「画面の1/4」を入れるとリストが縮んで下が空くので、何もしない。
+        //  縦向きは固定 dp(120dp など)なので height > 0 で見分けられる。撮影計画は横向きでも
+        //  左列を上下に分けるため縦向きと同じ固定 dp のままで、ここを通る。
+        if (v.layoutParams.height <= 0) { return }
         v.post {
             val quarter = resources.displayMetrics.heightPixels / 4
             val content = c.height
@@ -1517,6 +1522,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun setupDivider(dividerId: Int, listId: Int) {
         val divider = findViewById<View>(dividerId)
         val list = findViewById<View>(listId)
+        if (list.layoutParams.height <= 0) { return }   // 横向きの左右2分割では上下比率を使わない(上の説明を参照)
         var startY = 0f; var startH = 0
         divider.setOnTouchListener { _, ev ->
             when (ev.action) {

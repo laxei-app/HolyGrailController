@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 670.撮影レポート の【横向き】(2026-08-30 UI依頼)。縦向きは ../layout/screen_report.xml。
+     縦に2分割し、左=一覧 / 右=選択した内容。上下の分割バーは横向きでは使わないが、
+     MainActivity が findViewById で引くので消さずに隠してある(消すと起動時に落ちる)。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="#1565C0"
+        android:gravity="center_vertical"
+        android:padding="8dp">
+        <ImageView android:id="@+id/report_back" android:layout_width="32dp" android:layout_height="32dp"
+            android:clickable="true" android:focusable="true" android:src="@drawable/ic_back_r" />
+        <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+            android:gravity="center" android:text="撮影レポート" android:textColor="#FFFFFF"
+            android:textSize="20sp" android:textStyle="bold" />
+        <!-- 右上のメニューは廃止(2026-08-29 UI依頼)。題が中央に見えるよう幅だけ残す -->
+        <View android:layout_width="32dp" android:layout_height="32dp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:orientation="horizontal">
+
+    <!-- 上: 一覧(高さは Kotlin で初期設定。分割バーで可変) -->
+    <ScrollView android:id="@+id/report_listScroll"
+        android:layout_width="0dp" android:layout_weight="1" android:layout_height="match_parent">
+        <LinearLayout android:id="@+id/report_container"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:padding="8dp" />
+    </ScrollView>
+
+    <!-- 分割バー(ドラッグで上下比率を変更) -->
+    <FrameLayout android:id="@+id/report_divider"
+        android:layout_width="0dp" android:layout_height="0dp" android:visibility="gone"
+        android:background="#ECEFF1" android:clickable="true" android:focusable="true">
+        <View android:layout_width="48dp" android:layout_height="5dp" android:layout_gravity="center"
+            android:background="@drawable/divider_handle" />
+    </FrameLayout>
+
+    <!-- 下: 選択したレポートの内容(残り全部) -->
+    <ScrollView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1">
+        <LinearLayout android:id="@+id/report_detail"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:padding="12dp" />
+    </ScrollView>
+
+    </LinearLayout>
+</LinearLayout>
