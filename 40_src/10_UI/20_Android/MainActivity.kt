@@ -988,6 +988,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         .apply { setMargins(dp(12), 0, 0, 0) })
             box.addView(row, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            // この画面は縦スクロールの中身なので、放っておくと高さが内容の分しかなく、
+            //  区切りの線が途中で切れる。fillViewport で中身をスクロール枠の高さまで
+            //  引き伸ばし、線を画面の下まで届かせる(内容が長いときは内容に合わせて伸びる)。
+            (box.parent as? ScrollView)?.isFillViewport = true
         } else { ops = box; st = box }
 
         fun heading(t: String, target: LinearLayout = ops) {
