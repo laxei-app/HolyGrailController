@@ -28,7 +28,7 @@ import java.util.Locale
 //  自己更新も「今動いているファームが受け取って書く」仕組みなので、最初の1回には使えない。
 //
 // 【手順】
-//  1. USB でつなぐ(Pixel なら普通の USB-C ケーブルでよい。OTG 用の特別な線は要らない)
+//  1. USB でつなぐ(端子が同じならケーブル1本。合わないときだけ変換が要る)
 //  2. 「調べる」… 1バイトも書かずに MAC と容量を読む。容量で機種が決まる
 //  3. 「書き込む」… 公開リポジトリから落として照合し、焼いて、起動させる
 //
@@ -166,7 +166,8 @@ class EdgeFlashActivity : AppCompatActivity() {
         val dev = EspUsb.findDevice(this)
         stateView.text = if (dev == null) {
             "USB ケーブルでエッジ端末をつないでください。\n" +
-            "(Pixel なら普通の USB-C ケーブルで大丈夫です)"
+            "エッジ端末側は USB-C です。スマートフォンの端子が違うときは変換ケーブル\n" +
+            "(または OTG アダプタ)を使ってください。充電専用のケーブルでは通信できません。"
         } else {
             "つながっています: %s\n%s".format(dev.deviceName, EspUsb.describe(dev))
         }

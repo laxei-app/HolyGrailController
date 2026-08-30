@@ -16,6 +16,7 @@
 #include <string>
 #include <map>
 #include <mutex>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <cstdio>
@@ -67,6 +68,30 @@ namespace {
 			else { nx = (theta * (xc / s)) / (fovW / 2.0); ny = (theta * (yc / s)) / (fovH / 2.0); }
 		}
 		return (std::fabs(nx) <= 1.0 && std::fabs(ny) <= 1.0);
+	}
+
+	// 画角の外でも座標が欲しいとき用(地平線を端まで引くため)。
+	//  戻り値=その向きがレンズに写る側にあるか。写るなら nx,ny に座標が入る(範囲外の値もそのまま)。
+	bool projectRaw(double objAz, double objAlt, double camAz, double camEl,
+	                double fovW, double fovH, bool fisheye, double& nx, double& ny, double* zOut = nullptr) {
+		Vec3 d = dirFromAzAlt(objAz, objAlt);
+		Vec3 b = dirFromAzAlt(camAz, camEl);
+		Vec3 r = { std::cos(camAz * RAD), -std::sin(camAz * RAD), 0.0 };
+		Vec3 u = cross(r, b);
+		double xc = dot(d, r), yc = dot(d, u), zc = dot(d, b);
+		if (zOut != nullptr) { *zOut = zc; }
+		if (!fisheye) {
+			if (zc <= 0.02) { return false; }			// 背後/真横は平面レンズでは写らない
+			nx = (xc / zc) / std::tan(fovW / 2.0);
+			ny = (yc / zc) / std::tan(fovH / 2.0);
+		} else {
+			double cz = zc; if (cz > 1.0) { cz = 1.0; } if (cz < -1.0) { cz = -1.0; }
+			double theta = std::acos(cz);
+			double sn = std::sqrt(xc * xc + yc * yc);
+			if (sn < 1e-9) { nx = 0.0; ny = 0.0; }
+			else { nx = (theta * (xc / sn)) / (fovW / 2.0); ny = (theta * (yc / sn)) / (fovH / 2.0); }
+		}
+		return true;
 	}
 
 	// ローカル日時 → Astronomy Engine の時刻(真のUTC瞬時)
@@ -232,7 +257,40 @@ int32_t hge_simulateSky(const char* paramsJson, char* buf, int32_t* inoutLen) {
 			}
 		}
 
+		// 地平線(高度0°)。レンズの投影をそのまま通すので、平面レンズなら直線、
+		//  魚眼なら弧になる(2026-08-30 UI依頼)。x の小さい順に並べて返す。
+		//  画面の外まで少し出した点も入れておく(端まで線を引くため)。
+		json horizon = json::array();
+		{
+			// 方位を一周ぶん刻んで投影し、**つながっている一続きの区間**のうち最も長いものを採る。
+			//  x で並べ替えてはいけない。魚眼だと「カメラの後ろ側の地平線」も画面内に落ちてきて、
+			//  並べ替えると2本の弧を交互に結んでしまい、塗りがジグザグの縞になる(2026-08-30 実機で確認)。
+			//  光軸の前側(zc >= 0)だけを使うのも同じ理由。
+			std::vector<std::vector<std::pair<double, double>>> runs;
+			std::vector<std::pair<double, double>> cur;
+			for (int i = 0; i <= 1440; ++i) {
+				double azh = camAz - 180.0 + (360.0 * i) / 1440.0;
+				double hx, hy, zc = 0.0;
+				bool ok = projectRaw(azh, 0.0, camAz, camEl, fovW, fovH, fisheye, hx, hy, &zc);
+				if (ok && zc >= 0.0 && hx >= -1.25 && hx <= 1.25) {
+					if (hy < -6.0) { hy = -6.0; } if (hy > 6.0) { hy = 6.0; }
+					cur.push_back({ hx, hy });
+				} else if (!cur.empty()) { runs.push_back(cur); cur.clear(); }
+			}
+			if (!cur.empty()) { runs.push_back(cur); }
+			size_t best = 0;
+			for (size_t i = 1; i < runs.size(); ++i) { if (runs[i].size() > runs[best].size()) { best = i; } }
+			if (!runs.empty()) {
+				std::vector<std::pair<double, double>>& arc = runs[best];
+				if (arc.size() >= 2 && arc.front().first > arc.back().first) {
+					std::reverse(arc.begin(), arc.end());		// 左→右の向きにそろえる
+				}
+				for (const auto& p : arc) { horizon.push_back({ {"x", p.first}, {"y", p.second} }); }
+			}
+		}
+
 		json out;
+		out["horizon"]   = horizon;
 		out["objects"]   = objs;
 		out["aspect"]    = fw / (fh > 0.0 ? fh : 1.0);
 		out["landscape"] = landscape ? 1 : 0;

@@ -526,7 +526,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 項目I: 現在の画面に応じて「戻る」を実行する。各画面の戻るボタンと同じ動作にする。
     //  戻り先があれば true、先頭ページ(=これ以上戻れない)なら false を返す。
     //  ViewFlipper index: 0 撮影計画 / 1 撮影中 / 2 ccmメニュー(未使用) / 3 ccm編集 /
-    //   4 メニュー / 5 カメラリスト / 6 カメラ追加 / 7 レンズリスト / 8 レンズ追加 / 9 色 /
+    //   4 メニュー / 5 所持カメラ / 6 カメラ追加 / 7 所持レンズ / 8 レンズ追加 / 9 色 /
     //   10 露出平滑化 / 11 撮影場所 / 12 カメラ予約表 / 13 操作履歴 / 14 撮影レポート / 15 エッジ端末設定
     private fun goBackOneScreen(): Boolean {
         if (!::flipper.isInitialized) return false
@@ -837,8 +837,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         gearBand(box, "自動露出")
         gearItem(box, "露出平滑化") { openSmoothingScreen() }
         gearBand(box, "所持機材")
-        gearItem(box, "カメラリスト") { openCameraList() }
-        gearItem(box, "レンズリスト") { openLensList() }
+        gearItem(box, "所持カメラ") { openCameraList() }
+        gearItem(box, "所持レンズ") { openLensList() }
         gearBand(box, "エッジ端末")
         // 2026-08-08 UI依頼: 「登録」と「設定」を1画面へ統合した(登録は画面内の
         // 「＋ 新規エッジ端末」から行う)。
@@ -846,7 +846,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 買ってきたばかりの端末には自分たちのファームが入っていない。OTA も STA での自己更新も
         //  「今動いているファームが受け取って書く」仕組みなので最初の1回には使えず、
         //  USB で焼くここだけが「開封した端末を使える状態にする」道になる(2026-08-26)。
-        gearItem(box, "ファーム書き込み(USB)") {
+        gearItem(box, "エッジ端末書き込み(USB)") {
             startActivity(Intent(this, EdgeFlashActivity::class.java))
         }
         // 通信路の切替。エッジは常に Wi-Fi と BLE の両方で待ち受けているので、
@@ -1924,10 +1924,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.addView(editRow("メーカー", "maker", cam.optString("maker")))
         box.addView(editRow("モデル", "model", cam.optString("model")))
         // 名称はリストの行でインライン編集する(分割バー画面共通の動作)。詳細からは除外。
-        // 項目D: 愛称(assignedName=カメラ本体で付けたニックネーム)とシリアルNo.は、カメラがオンラインになりSSDPで取得できてから
-        //  自動で入る。手入力はしない(勝手に入れない)。未取得のうちは「未定義」と表示する。
+        // 項目D: 愛称(assignedName=カメラ本体で付けたニックネーム)は、カメラがオンラインになりSSDPで
+        //  取得できてから自動で入る。手入力はしない。未取得のうちは「未定義」と表示する。
         box.addView(displayRow("愛称", cam.optString("assignedName").ifEmpty { "未定義" }))
-        box.addView(displayRow("シリアルNo.", cam.optString("serial").ifEmpty { "未定義" }))
+        // シリアルNo. は手で入れられる(2026-08-30 UI依頼)。同じ機種を複数台そろえるとき、
+        //  つなぐ前に区別を付けておきたいため。つないだら従来どおり実値で上書きされる。
+        box.addView(editRow("シリアルNo.", "serial", cam.optString("serial")))
         // 未登録(0)は空欄で出す。0.0 と書くと「0という値が入っている」ように見えるため(2026-08-19)。
         // センサー寸法と画素数は機材マスターにある機種しか埋まらない。無い機種はここに手で入れる。
         fun blankIfZero(v: Double) = if (v > 0.0) v.toString() else ""

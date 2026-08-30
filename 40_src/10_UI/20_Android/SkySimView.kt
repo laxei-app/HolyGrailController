@@ -44,6 +44,9 @@ class SkyRenderView(context: Context) : View(context) {
     private var sunAlt = -90.0f        // 太陽高度[°](空/地面の色に使う)
     private var camEl = 10.0f          // 撮影仰角[°]
     private var fovV = 50.0f           // 縦画角[°]
+    // 地平線(高度0°)をレンズの投影どおりに引くための点列。x昇順・[-1,1]の正規化座標。
+    //  平面レンズなら直線に、魚眼なら弧になる(2026-08-30 UI依頼)。空なら従来の直線で描く。
+    private var horizon: List<Pair<Float, Float>> = emptyList()
     private val magLimit = 6.5f
 
     private val sky = Paint()
@@ -60,8 +63,10 @@ class SkyRenderView(context: Context) : View(context) {
     private fun dp(v: Float) = v * resources.displayMetrics.density
     private fun sp(v: Float) = v * resources.displayMetrics.scaledDensity
 
-    internal fun setData(list: List<SkyObj>, asp: Float, sunAltDeg: Float, elDeg: Float, fovVDeg: Float) {
+    internal fun setData(list: List<SkyObj>, asp: Float, sunAltDeg: Float, elDeg: Float, fovVDeg: Float,
+                         hz: List<Pair<Float, Float>> = emptyList()) {
         objs = list
+        horizon = hz
         var flipped = false
         if (asp > 0f) {
             val wasLandscape = aspect >= 1f
@@ -135,13 +140,27 @@ class SkyRenderView(context: Context) : View(context) {
                     else          lerp(0xFF6E7FA8.toInt(), 0xFF6FB3E8.toInt(), (d - 0.5f) / 0.5f)  // → 青空
         c.drawRect(r, sky)
 
-        // 地面(草原): 夜=黒 → 明るくなると緑。地平線(高度0°)の画面内の位置を仰角と縦画角から求める。
-        val halfV = if (fovV > 1f) fovV / 2f else 25f
-        val horizonNorm = -camEl / halfV
-        if (horizonNorm > -1f) {                              // 地平線が画角内(または上方)なら地面が見える
-            val hy = r.top + (1f - (horizonNorm.coerceIn(-1f, 1f) + 1f) / 2f) * r.height()
-            ground.color = lerp(0xFF000000.toInt(), 0xFF3E7B3A.toInt(), d)   // 黒 → 草原の緑
-            c.drawRect(r.left, max(hy, r.top), r.right, r.bottom, ground)
+        // 地面(草原): 夜=黒 → 明るくなると緑。
+        ground.color = lerp(0xFF000000.toInt(), 0xFF3E7B3A.toInt(), d)   // 黒 → 草原の緑
+        if (horizon.size >= 2) {
+            // 地平線の点列(ネイティブがレンズの投影で出したもの)に沿って塗る。
+            //  平面レンズなら直線、魚眼なら弧になる。線より下(=地面側)を埋める。
+            fun sx(nx: Float) = r.left + (nx + 1f) / 2f * r.width()
+            fun sy(ny: Float) = r.top + (1f - (ny + 1f) / 2f) * r.height()
+            val p = android.graphics.Path()
+            p.moveTo(r.left, sy(horizon.first().second))          // 左端は端の高さで水平に伸ばす
+            for (q in horizon) p.lineTo(sx(q.first), sy(q.second))
+            p.lineTo(r.right, sy(horizon.last().second))          // 右端も同様
+            p.lineTo(r.right, r.bottom); p.lineTo(r.left, r.bottom); p.close()
+            c.save(); c.clipRect(r); c.drawPath(p, ground); c.restore()
+        } else {
+            // 地平線が画角に入らない(真上/真下を向いている等)。仰角だけで塗り分ける。
+            val halfV = if (fovV > 1f) fovV / 2f else 25f
+            val horizonNorm = -camEl / halfV
+            if (horizonNorm > -1f) {
+                val hy = r.top + (1f - (horizonNorm.coerceIn(-1f, 1f) + 1f) / 2f) * r.height()
+                c.drawRect(r.left, max(hy, r.top), r.right, r.bottom, ground)
+            }
         }
         c.drawRect(r, frame)
 
@@ -536,6 +555,7 @@ class SimPage(
         exec.execute {
             val res = try { HgeNative.nativeSimulateSky(s) } catch (_: Exception) { "{\"objects\":[]}" }
             val list = ArrayList<SkyObj>()
+            val hz = ArrayList<Pair<Float, Float>>()
             var asp = 1.5f
             var sunAlt = -90f; var elDeg = elNow.toFloat(); var fovVDeg = 50f
             try {
@@ -544,6 +564,12 @@ class SimPage(
                 sunAlt = o.optDouble("sunAlt", -90.0).toFloat()      // 空/地面の色に使う
                 elDeg = o.optDouble("camEl", elNow).toFloat()
                 fovVDeg = o.optDouble("fovV", 50.0).toFloat()
+                o.optJSONArray("horizon")?.let { ha ->
+                    for (i in 0 until ha.length()) {
+                        val e = ha.optJSONObject(i) ?: continue
+                        hz.add(Pair(e.optDouble("x", 0.0).toFloat(), e.optDouble("y", 0.0).toFloat()))
+                    }
+                }
                 val arr = o.optJSONArray("objects")
                 if (arr != null) for (i in 0 until arr.length()) {
                     val e = arr.getJSONObject(i)
@@ -553,7 +579,7 @@ class SimPage(
                 }
             } catch (_: Exception) {}
             post {
-                render.setData(list, asp, sunAlt, elDeg, fovVDeg)
+                render.setData(list, asp, sunAlt, elDeg, fovVDeg, hz)
                 simBusy = false
                 if (simDirty) kickSim()   // 実行中に変更あり → 最新パラメータだけを1回再計算
             }
