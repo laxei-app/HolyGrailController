@@ -374,8 +374,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  「名前は左端・⋮は右端」で目が左右に振られて読みにくい(2026-08-30 UI依頼)。
     //  行の幅を縦向きくらいに抑える。左端は下のフォームと揃えたいので余りは右へ逃がす
     //  (中央寄せにするとフォームと左端がずれる)。一覧の高さも新しい画面の高さで取り直す。
-    //  ※所持カメラ/所持レンズ/エッジ端末設定/撮影レポートは横向きだけ左右2分割にして
-    //    あるので(res/layout-land/)、ここでは触らない。
+    //  ※一覧型の画面(所持カメラなど)は applyMasterDetail が左右2分割にするので触らない。
     private val CONTENT_MAX_DP = 480
 
     private fun applyWideLayout() {
@@ -395,6 +394,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val page = if (::planPager.isInitialized) planPager.current else 0
         if (latestSchedule.isNotEmpty()) { updatePlanDisplay(latestSchedule) }
         applyWideLayout()
+        // 一覧型の画面(いまは所持カメラだけ。よければ他へも広げる)。
+        applyMasterDetail(R.id.cameralist_listScroll, R.id.cameralist_divider)
+        setInitialSplit(R.id.cameralist_listScroll, R.id.cameralist_container)
         // 色の設定は縦横で並びが変わるので組み直す。編集途中の色は引き継ぐ(作り直すと保存色に戻るため)。
         if (::flipper.isInitialized && flipper.displayedChild == 9) {
             val keepText = colorTextPicker?.color; val keepBg = colorBgPicker?.color
@@ -1548,18 +1550,67 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun camArray(json: String): JSONArray = try { JSONArray(json) } catch (e: Exception) { JSONArray() }
 
-    private fun openCameraList() { buildCameraList(); buildCameraDetail(); setInitialSplit(R.id.cameralist_listScroll, R.id.cameralist_container); flipper.displayedChild = 5 }
+    private fun openCameraList() {
+        buildCameraList(); buildCameraDetail()
+        applyMasterDetail(R.id.cameralist_listScroll, R.id.cameralist_divider)
+        setInitialSplit(R.id.cameralist_listScroll, R.id.cameralist_container)
+        flipper.displayedChild = 5
+    }
     private fun openCameraAdd()  { checkedCamAdd.clear(); buildCameraAdd(); flipper.displayedChild = 6 }
     private fun openLensList()   { buildLensList(); buildLensDetail(); setInitialSplit(R.id.lenslist_listScroll, R.id.lenslist_container); flipper.displayedChild = 7 }
     private fun openLensAdd()    { checkedLensAdd.clear(); expandedMakers.clear(); buildLensAdd(); flipper.displayedChild = 8 }
 
     // 分割バーの初期高さ(上=リスト)。リストが短ければ内容ぴったりまで上に詰め、
     // 多い場合(内容が画面の1/4超)は1/4で止める。ほとんどは1件なので上寄せになる。
+    // 一覧型の画面(上=一覧 / 分割バー / 下=内容)を、端末の向きに合わせて組み替える。
+    //  縦向き … XML のまま。ヘッダ / 一覧 / 分割バー / 内容 を上下に積む(従来と同じ)。
+    //  横向き … ヘッダ / [一覧 │ 内容]。間に縦線を入れ、上下の分割バーは隠す。
+    // 【なぜコードでやるか】回転は configChanges で受けていて画面を作り直さない。
+    //  そのため res/layout-land/ に分けると、一度横向きで開いた形が縦へ戻しても残ってしまう
+    //  (2026-08-30 に実際に起きた)。作り直さずに付け替えるこの方法なら向きに必ず追従する。
+    private val mdBoxes = HashMap<Int, LinearLayout>()   // listId -> 横向きの横並び箱
+    private val mdListH = HashMap<Int, Int>()            // listId -> 縦向きに戻すときの一覧の高さ
+
+    private fun applyMasterDetail(listId: Int, dividerId: Int) {
+        val list = findViewById<View>(listId) ?: return
+        val divider = findViewById<View>(dividerId) ?: return
+        val land = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        val box = mdBoxes[listId]
+        val mp = ViewGroup.LayoutParams.MATCH_PARENT
+        if (land && box == null) {
+            val root = divider.parent as? LinearLayout ?: return
+            val li = root.indexOfChild(list)
+            val di = root.indexOfChild(divider)
+            val detail = root.getChildAt(di + 1) ?: return
+            if (li < 0 || di < 0) return
+            mdListH[listId] = list.layoutParams.height
+            root.removeView(detail); root.removeView(list)      // 後ろから外す(番号がずれないように)
+            val h = LinearLayout(this)
+            h.orientation = LinearLayout.HORIZONTAL
+            h.addView(list, LinearLayout.LayoutParams(0, mp, 1f))
+            val bar = View(this)
+            bar.setBackgroundColor(0xFF000000.toInt())          // 左右の境目(縦の黒い線)
+            h.addView(bar, LinearLayout.LayoutParams(dp(1), mp))
+            h.addView(detail, LinearLayout.LayoutParams(0, mp, 1f))
+            root.addView(h, li, LinearLayout.LayoutParams(mp, 0, 1f))
+            divider.visibility = View.GONE
+            mdBoxes[listId] = h
+        } else if (!land && box != null) {
+            val root = box.parent as? LinearLayout ?: return
+            val bi = root.indexOfChild(box)
+            val detail = box.getChildAt(2) ?: return
+            box.removeAllViews(); root.removeView(box)
+            root.addView(list, bi, LinearLayout.LayoutParams(mp, mdListH[listId] ?: dp(120)))
+            root.addView(detail, bi + 2, LinearLayout.LayoutParams(mp, 0, 1f))   // 分割バーの次へ戻す
+            divider.visibility = View.VISIBLE
+            mdBoxes.remove(listId)
+        }
+    }
+
     private fun setInitialSplit(listId: Int, containerId: Int) {
         val v = findViewById<View>(listId)
         val c = findViewById<View>(containerId)
-        // 横向きで左右2分割にした画面(所持カメラ/所持レンズ/エッジ端末設定/撮影レポート)は、
-        //  一覧が列の高さいっぱい(match_parent や weight)なので上下比率を使わない。
+        // 横向きで左右2分割にした画面は一覧が列の高さいっぱい(match_parent)なので上下比率を使わない。
         //  縦向きは固定 dp(120dp など)なので height > 0 で見分けられる。
         if (v.layoutParams.height <= 0) { return }
         v.post {
@@ -1574,7 +1625,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun setupDivider(dividerId: Int, listId: Int) {
         val divider = findViewById<View>(dividerId)
         val list = findViewById<View>(listId)
-        if (list.layoutParams.height <= 0) { return }   // 左右2分割の画面では上下比率を使わない(上の説明を参照)
+        if (list.layoutParams.height <= 0) { return }   // 左右2分割中は上下比率を使わない(上の説明を参照)
         var startY = 0f; var startH = 0
         divider.setOnTouchListener { _, ev ->
             when (ev.action) {
