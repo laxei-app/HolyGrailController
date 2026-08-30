@@ -364,24 +364,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
         restorePlan()    // 保存済み計画があれば復元、無ければ出荷時計画を表示(再生成しない)
         refreshPlanList()   // 複数計画リスト(分割バー上)を構築
-        applyWideLayout()   // 横向きで一覧が間延びしないよう幅と高さを整える
         applyAllMasterDetail()   // 横向きなら一覧のある画面を左右2分割にする
         restoreEdgeState()  // 再起動時: エッジが撮影中なら状態を復元(item9)
         resumePhoneCapture()  // 再起動時: スマホ直結で撮影中だった計画を再開(item2)
         Thread { try { HgeNative.nativePresenceStart() } catch (_: Exception) {} }.start()  // P4: 常駐プレゼンスマップ開始
-    }
-
-    // 横向きは幅が縦向きの2倍以上になる。撮影計画の一覧はそのまま引き伸ばされると
-    //  「名前は左端・⋮は右端」で目が左右に振られて読みにくい(2026-08-30 UI依頼)。
-    //  行の幅を縦向きくらいに抑える。左端は下のフォームと揃えたいので余りは右へ逃がす
-    //  (中央寄せにするとフォームと左端がずれる)。一覧の高さも新しい画面の高さで取り直す。
-    //  ※一覧型の画面(所持カメラなど)は applyMasterDetail が左右2分割にするので触らない。
-    private val CONTENT_MAX_DP = 480
-
-    private fun applyWideLayout() {
-        val extra = (resources.displayMetrics.widthPixels - dp(CONTENT_MAX_DP)).coerceAtLeast(0)
-        findViewById<View>(R.id.plan_listContainer)?.setPadding(dp(4), dp(4), dp(4) + extra, dp(4))
-        setInitialSplit(R.id.plan_listScroll, R.id.plan_listContainer)
     }
 
     // 回転(縦⇄横)。AndroidManifest で configChanges を宣言してあるので、ここへ来るだけで
@@ -394,7 +380,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         super.onConfigurationChanged(newConfig)
         val page = if (::planPager.isInitialized) planPager.current else 0
         if (latestSchedule.isNotEmpty()) { updatePlanDisplay(latestSchedule) }
-        applyWideLayout()
         applyAllMasterDetail()
         // 色の設定は縦横で並びが変わるので組み直す。編集途中の色は引き継ぐ(作り直すと保存色に戻るため)。
         if (::flipper.isInitialized && flipper.displayedChild == 9) {
@@ -1614,8 +1599,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // 一覧のある画面をまとめて向きに合わせる。画面はすべて起動時に組み立て済み(ViewFlipper)なので、
     //  表示中かどうかに関わらず全部まとめて掛けてよい。
-    //  撮影計画は1列のままにする(一覧の下がフォームで、左右に割ると項目を目で追いにくいため)。
     private fun applyAllMasterDetail() {
+        applyMasterDetail(R.id.plan_listScroll,       R.id.plan_listDivider)
         applyMasterDetail(R.id.cameralist_listScroll, R.id.cameralist_divider)
         applyMasterDetail(R.id.lenslist_listScroll,   R.id.lenslist_divider)
         applyMasterDetail(R.id.edge_listScroll,       R.id.edge_divider)
@@ -5323,7 +5308,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun equalizeTwilightBoxes(twoCol: Boolean) {
         val boxes = twilightBoxViews
         if (boxes.isEmpty()) return
-        val avail = resources.displayMetrics.widthPixels - dp(24) - dp(OVERVIEW_INDENT_DP)   // フォーム左右パディング + 概要の字下げ
+        // 実際に置かれている欄の幅で決める。横向きで左右2分割にすると画面幅の半分になるため、
+        //  画面幅で計算すると箱が欄からはみ出す。まだ配置前(幅0)のときだけ画面幅で見積もる。
+        val hostW = if (planOverview.width > 0) planOverview.width else resources.displayMetrics.widthPixels
+        val avail = hostW - dp(24) - dp(OVERVIEW_INDENT_DP)   // フォーム左右パディング + 概要の字下げ
         val cap = if (twoCol) (avail - dp(8)) / 2 else avail          // 2列なら列幅、1列なら全幅
         var maxLine = 0
         for (b in boxes) {
