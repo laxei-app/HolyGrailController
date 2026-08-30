@@ -120,6 +120,7 @@
                         <Button android:id="@+id/plan_startDate" style="?android:attr/buttonBarButtonStyle"
                             android:layout_width="wrap_content" android:layout_height="wrap_content"
                             android:minWidth="0dp" android:paddingStart="0dp" android:paddingEnd="8dp"
+                            android:layout_marginStart="0dp"
                             android:drawableStart="@drawable/ic_calendar" android:text="2026-06-11" />
                         <Button android:id="@+id/plan_startTime" style="?android:attr/buttonBarButtonStyle"
                             android:layout_width="wrap_content" android:layout_height="wrap_content"
@@ -140,6 +141,7 @@
                         <Button android:id="@+id/plan_endDate" style="?android:attr/buttonBarButtonStyle"
                             android:layout_width="wrap_content" android:layout_height="wrap_content"
                             android:minWidth="0dp" android:paddingStart="0dp" android:paddingEnd="8dp"
+                            android:layout_marginStart="0dp"
                             android:drawableStart="@drawable/ic_calendar" android:text="2026-06-11" />
                         <Button android:id="@+id/plan_endTime" style="?android:attr/buttonBarButtonStyle"
                             android:layout_width="wrap_content" android:layout_height="wrap_content"
