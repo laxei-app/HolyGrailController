@@ -85,8 +85,6 @@ object HgeNative {
     external fun nativeGetExpoValues(): String
     external fun nativeSunAltitudeTimes(altitudeDeg: Int): String   // {"start":"MM/dd HH:mm","end":...}
     external fun nativeSetListener(listener: HgeListener?)
-    external fun nativeSearchDevices(): Int
-    external fun nativeConnectManual(host: String): Int
 
     // --- 機材マスタ・所持機材(データ構造仕様書43 §5.5〜5.9 / §7.6) ---
     external fun nativeGetMasterCameras(): String   // [{"camera":{...}},...]

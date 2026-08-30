@@ -164,22 +164,6 @@ Java_app_laxei_holygrail_HgeNative_nativePokeAcquire(JNIEnv* env, jobject /*thiz
 	return r;
 }
 
-JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSearchDevices(JNIEnv* /*env*/, jobject /*thiz*/)
-{
-	return hge_searchDevices();
-}
-
-JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeConnectManual(JNIEnv* env, jobject /*thiz*/, jstring host)
-{
-	if (host == nullptr) { return -1; }
-	const char* h = env->GetStringUTFChars(host, nullptr);
-	jint r = hge_connectManual(h);
-	env->ReleaseStringUTFChars(host, h);
-	return r;
-}
-
 JNIEXPORT jstring JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeScheduleJson(JNIEnv* env, jobject /*thiz*/)
 {

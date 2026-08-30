@@ -45,7 +45,6 @@ namespace
 	// 計画固有の撮影制御方法(初期値ccmとは別管理)。計画作成時に初期値をコピーし、以後独立に編集する。
 
 	std::vector<device>   g_devices;
-	void*                 g_searchThread = nullptr;	// カメラ自動検索ワーカー
 	bool                  g_inited = false;
 
 	// --- 並行撮影セッション(Phase3。計画ごとに1セッション=1ランナー+1カメラ) ---
@@ -839,32 +838,6 @@ namespace
 		g_editId = makePlanId();
 		dataManager::savePlanFile(g_editId, wrapCurrentPlan());
 		g_planReady = true;
-		return ERR_HGC_OK;
-	}
-
-	// カメラを SSDP で検索する(ワーカースレッドで実行)。
-	// 成功で g_devices に格納し HGE_EV_DEVICE を通知、状態 READY。
-	errCode searchSequence(void)
-	{
-		if (!g_sessions.empty())	// 撮影中は手動再検索で表示用デバイス一覧を作り直さない(一覧の安定のため。各撮影は自分専用の device で動作)
-		{
-			notify(HGE_EV_DEVICE, devicesJson());
-			setState(HGE_ST_READY);
-			return ERR_HGC_OK;
-		}
-		g_devices.clear();
-		size_t n = cameraController::detectTarget(g_devices);
-		if (n == 0 || g_devices.empty() || g_devices[0].apiBase == nullptr)
-		{
-			notifyError(ERR_HGC_NOT_FOUND, "no camera found");
-			setState(HGE_ST_IDLE);	// 再検索できるよう IDLE に戻す
-			return ERR_HGC_NOT_FOUND;
-		}
-		notify(HGE_EV_DEVICE, devicesJson());
-		logCameraNet();
-		// 接続時にシリアル/設定名を所持カメラへ自動保存(無ければ自動作成。§5.2拡張)。
-		dataManager::recordConnectedCamera(g_devices[0]);
-		setState(HGE_ST_READY);
 		return ERR_HGC_OK;
 	}
 
@@ -1834,7 +1807,6 @@ int32_t hge_term(void)
 {
 	while (!g_sessions.empty()) { stopSessionAt(g_sessions.size() - 1, "shutdown"); }	// 全セッション停止(最後の1つで待ち受けも停止)
 	cameraController::watchStop(); g_watching = false;	// 3b: 念のためSSDP待ち受けを確実に停止
-	if (g_searchThread) { ossc::threadEnd(g_searchThread); g_searchThread = nullptr; }
 	if (g_inited) { netThread::deInit(); g_inited = false; }
 	setState(HGE_ST_IDLE);
 	return ERR_HGC_OK;
@@ -1849,33 +1821,6 @@ int32_t hge_setNotify(hgeNotifyCb cb, void* user)
 {
 	std::lock_guard<std::mutex> lk(g_mutex);
 	g_cb = cb; g_user = user;
-	return ERR_HGC_OK;
-}
-
-int32_t hge_searchDevices(void)
-{
-	if (!g_sessions.empty()) { return ERR_HGC_INVALID_STATE; }	// 撮影中は検索しない
-	if (g_searchThread) { ossc::threadEnd(g_searchThread); g_searchThread = nullptr; }
-	setState(HGE_ST_SEARCHING);
-	ossc::THREAD_FUNC fn = [](void*) -> errCode { return searchSequence(); };
-	g_searchThread = ossc::threadNet(fn, nullptr);
-	return ERR_HGC_OK;
-}
-
-int32_t hge_connectManual(const char* host)
-{
-	if (host == nullptr || host[0] == '\0') { return ERR_HGC_INVALID_ARG; }
-	size_t n = cameraController::connectManual(g_devices, std::string(host));
-	if (n == 0 || g_devices.empty() || g_devices[0].apiBase == nullptr)
-	{
-		notifyError(ERR_HGC_NOT_FOUND, "manual connect failed");
-		return ERR_HGC_NOT_FOUND;
-	}
-	notify(HGE_EV_DEVICE, devicesJson());
-	logCameraNet();
-	// 接続時にシリアル/設定名を所持カメラへ自動保存(無ければ自動作成。§5.2拡張)。
-	dataManager::recordConnectedCamera(g_devices[0]);
-	setState(HGE_ST_READY);
 	return ERR_HGC_OK;
 }
 

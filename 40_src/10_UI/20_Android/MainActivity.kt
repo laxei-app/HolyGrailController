@@ -212,9 +212,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private var planReadOnly = false                 // 撮影中の計画を表示中=編集不可(item7)
     private var blinkOn = true              // 撮影中カメラアイコンの点滅状態
     private lateinit var edgeSpinner: Spinner
-    private lateinit var searchButton: Button
-    private lateinit var ipInput: EditText
-    private lateinit var connectButton: Button
 
     // 撮影制御方法初期値: メニュー + 方法別エディタ
     private lateinit var planMenu: ImageView
@@ -483,9 +480,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         planListContainer = findViewById(R.id.plan_listContainer)
         captureStatus = findViewById(R.id.plan_captureStatus)
         edgeSpinner = findViewById(R.id.plan_edgeSpinner)
-        searchButton = findViewById(R.id.searchButton)
-        ipInput = findViewById(R.id.ipInput)
-        connectButton = findViewById(R.id.connectButton)
         capName = findViewById(R.id.cap_nameText)
         capGear = findViewById(R.id.cap_gearText)
         capDir = findViewById(R.id.cap_dirText)
@@ -580,11 +574,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 showStoredEdgeOnSpinner(target, nm)
             }
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
-        }
-        searchButton.setOnClickListener { HgeNative.nativeSearchDevices() }
-        connectButton.setOnClickListener {
-            val host = ipInput.text.toString().trim()
-            Thread { HgeNative.nativeConnectManual(host) }.start()
         }
         // 撮影計画リスト(分割バー上)の分割バー。
         setupDivider(R.id.plan_listDivider, R.id.plan_listScroll)
@@ -5473,8 +5462,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val ed = !planReadOnly
         // plan_resetButton(=変更の取り消し)は planDirtyWatch が有効/無効を管理(撮影中は自動で無効)。
         // plan_endDate は自動決定で常時グレー・タップ不可のため対象外(2026-08-08 UI依頼)。
-        intArrayOf(R.id.plan_startDate, R.id.plan_startTime, R.id.plan_endTime,
-            R.id.searchButton, R.id.connectButton)
+        intArrayOf(R.id.plan_startDate, R.id.plan_startTime, R.id.plan_endTime)
             .forEach { findViewById<View>(it).isEnabled = ed }
         intervalText.isEnabled = ed; landscapeCheck.isEnabled = ed
         syncShotCheck.isEnabled = ed; subCamText.isEnabled = ed	// 同期撮影も撮影中は編集不可

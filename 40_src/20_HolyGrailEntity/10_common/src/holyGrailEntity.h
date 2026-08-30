@@ -50,16 +50,6 @@ const char* hge_version(void);		// バージョン文字列
 int32_t hge_setNotify(hgeNotifyCb cb, void* user);
 
 // --- デバイス接続 ---
-// カメラを自動検索する(SSDP。非同期)。結果は HGE_EV_DEVICE で通知し、
-// 見つかれば状態は READY になる。以降の hge_captureStart は検索を省略してこのカメラを使う。
-// 実機ではこちらが既定。見つからなければ HGE_EV_ERROR を通知し IDLE に戻る。
-int32_t hge_searchDevices(void);
-
-// IP直指定でカメラに接続する(SSDP不使用。エミュレータ等での手動接続用)。
-// 成功すると以降の hge_captureStart は検索を省略してこのカメラを使う。
-// host : カメラのIPアドレス(例 "192.168.1.4")。
-int32_t hge_connectManual(const char* host);
-
 // スマホから発見中のオンラインカメラ一覧(§6 cameraInfo)を受け取り、既知カメラテーブルを更新する。
 // json = [{"serial","model","ip","online"}]。エッジ役の発見が IP直結の最優先ヒントに使う。
 int32_t hge_setKnownCameras(const char* json, int32_t len);
