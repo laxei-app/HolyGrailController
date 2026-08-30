@@ -3214,10 +3214,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
             for (c in cards) { if (c.top + c.height / 2f < y) g++ }
             return g.coerceIn(0, order.size)
         }
+        // ドラッグ中の見え方(2026-08-30 UI依頼)。
+        //  ・移動先 … 青。指を離すとここへ入る
+        //  ・移動中 … 橙。いま動かしている項目が元あった場所。どれを動かしているかが分かる
+        //  同じ場所を指しているときは移動先(青)を優先する(そこへ離しても動かない、の意味)。
         private fun highlightGap(rawY: Float) {
             val g = gapFor(rawY)
             for (k in dividers.indices) {
-                dividers[k].setBackgroundColor(if (k == g) 0xFF1565C0.toInt() else 0x00000000)
+                val col = when {
+                    k == g                          -> 0xFF1565C0.toInt()   // 移動先
+                    dragFrom >= 0 && k == dragFrom  -> 0xFFEF6C00.toInt()   // 移動中(元の位置)
+                    else                            -> 0x00000000
+                }
+                dividers[k].setBackgroundColor(col)
             }
         }
         private fun dropAt(rawY: Float) {
