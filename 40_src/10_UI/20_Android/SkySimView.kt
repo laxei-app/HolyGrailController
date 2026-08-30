@@ -95,10 +95,20 @@ class SkyRenderView(context: Context) : View(context) {
     override fun onMeasure(widthSpec: Int, heightSpec: Int) {
         val w = MeasureSpec.getSize(widthSpec)
         val pad = dp(6f) * 2
-        val availW = (w - pad).coerceAtLeast(1f)
+        var availW = (w - pad).coerceAtLeast(1f)
         val a = if (aspect > 0.01f) aspect else 1.5f
         val la = max(a, 1f / a)                               // 横向き時の横比(≧1、例1.5)
-        val frameH = if (a >= 1f) availW / la else availW    // 横向き=幅/横比 / 縦向き=幅(長辺を縦に)
+        var frameH = if (a >= 1f) availW / la else availW    // 横向き=幅/横比 / 縦向き=幅(長辺を縦に)
+        // 高さに上限があるとき(端末が横向きで画面の左半分に置くときなど)は、はみ出さないよう
+        //  幅の方を詰める。縦向きは高さが wrap_content なのでここは通らない(2026-08-30)。
+        val hMode = MeasureSpec.getMode(heightSpec)
+        val hSize = MeasureSpec.getSize(heightSpec)
+        if (hMode != MeasureSpec.UNSPECIFIED && frameH + pad > hSize && hSize > pad) {
+            frameH = (hSize - pad).coerceAtLeast(1f)
+            availW = if (a >= 1f) frameH * la else frameH
+            setMeasuredDimension((availW + pad).toInt().coerceAtLeast(1), hSize)
+            return
+        }
         setMeasuredDimension(w, (frameH + pad).toInt().coerceAtLeast(1))
     }
 
@@ -215,6 +225,14 @@ class SimPage(
     private val noSensorView = TextView(context)
     // 項目G: 日時は画像内でなく欄外の下に出す(年なし)。
     private val dateLabel = TextView(context)
+    // 縦向き/横向きで並べ替えるための入れ物(2026-08-30 UI依頼)。
+    //  縦向き = bodyBox に縦一列 / 横向き = 左に景色イメージ・右に操作。
+    private val bodyBox = LinearLayout(context)
+    private val leftBox = LinearLayout(context)
+    private val rightBox = LinearLayout(context)
+    private val spacer = View(context)
+    private val titlesRow = LinearLayout(context)
+    private val dirRow = LinearLayout(context)
 
     // 撮影計画から読んだパラメータ
     private var lat = 0.0; private var lon = 0.0; private var altM = 0.0
@@ -263,8 +281,7 @@ class SimPage(
         addView(titleView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         // ① 撮影イメージ(高さは幅と横向きセンサー比から決まる=横向き/縦向きで枠は不変)
-        addView(render, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        //    並べる場所は relayout() が決める(縦向き=縦一列 / 横向き=左半分)。
 
         // ①' センサー寸法が未登録のときの代替表示(絵と入れ替える)。
         noSensorView.text = "センサーサイズが登録されていないので表示できません"
@@ -273,8 +290,6 @@ class SimPage(
         noSensorView.setTextColor(0xFF888888.toInt())
         noSensorView.setPadding(dp(12f), dp(48f), dp(12f), dp(48f))
         noSensorView.visibility = View.GONE
-        addView(noSensorView, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         // ②-0 センサー/焦点距離/画角(2026-08-08 UI依頼で計画1ページ目から移設)。
         //     ここは実際に画角が見える画面なので、数値の確認もここでできるようにする。
@@ -282,16 +297,11 @@ class SimPage(
         gearView.setTextColor(0xFF888888.toInt())
         gearView.gravity = Gravity.CENTER
         gearView.setPadding(0, dp(2f), 0, 0)
-        addView(gearView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         // ② 日時(欄外の下・年なし)
         dateLabel.textSize = 13f
         dateLabel.gravity = Gravity.CENTER
         dateLabel.setPadding(0, dp(2f), 0, dp(2f))
-        addView(dateLabel, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-
-        // ③ 余白(操作部を画面下部へ寄せる=下部固定位置)
-        addView(View(context), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
         // ④ 時刻スライダー(下部固定)。他の画面と同じ Material Slider。値ラベル(数字)は出さない(項目G)。
         seek.valueFrom = 0f
@@ -305,24 +315,21 @@ class SimPage(
             fraction = v / 1000f
             renderSky()
         }
-        addView(seek, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
         // ⑤ 撮影方向 / 仰角(タイトル文字つき)。ドラッグ中もイメージがリアルタイムに追従する。
-        val titles = LinearLayout(context).apply { orientation = HORIZONTAL }
-        titles.addView(TextView(context).apply {
+        titlesRow.orientation = HORIZONTAL
+        titlesRow.addView(TextView(context).apply {
             text = "撮影方向"; textSize = 13f; gravity = Gravity.CENTER
             setTypeface(typeface, android.graphics.Typeface.BOLD)
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        titles.addView(TextView(context).apply {
+        titlesRow.addView(TextView(context).apply {
             text = "仰角"; textSize = 13f; gravity = Gravity.CENTER
             setTypeface(typeface, android.graphics.Typeface.BOLD)
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        addView(titles, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
-        val dir = LinearLayout(context).apply { orientation = HORIZONTAL }
-        dir.addView(compass, LinearLayout.LayoutParams(0, dp(140f), 1f))
-        dir.addView(elevationView, LinearLayout.LayoutParams(0, dp(140f), 1f))
-        addView(dir, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        dirRow.orientation = HORIZONTAL
+        dirRow.addView(compass, LinearLayout.LayoutParams(0, dp(140f), 1f))
+        dirRow.addView(elevationView, LinearLayout.LayoutParams(0, dp(140f), 1f))
 
         // 指を離した時だけでなく、動かしている最中(onChange)にも描き直す。
         // 確定(onCommit=指を離した時)にだけ撮影計画へ保存する(ドラッグ中の毎フレーム保存は避ける)。
@@ -342,7 +349,59 @@ class SimPage(
             onLandscape(checked)     // 撮影計画へ反映(先頭ページと同じ)。再生成後に再bindされる。
             renderSky()
         }
-        addView(landscapeCheck)
+
+        relayout()
+    }
+
+    // 端末の向きで並べ替える(2026-08-30 UI依頼)。
+    //  縦向き … 上から 撮影イメージ / 機材 / 日時 / (余白) / 時刻スライダー / 方向・仰角 / 横向きで撮る
+    //  横向き … 左に撮影イメージ、右に操作(スライダー・撮影方向・仰角)
+    // 部品は作り直さず付け替えるだけなので、操作中の値や設定はそのまま残る。
+    private fun relayout() {
+        val land = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        for (v in listOf<View>(render, noSensorView, gearView, dateLabel, spacer, seek, titlesRow, dirRow, landscapeCheck)) {
+            (v.parent as? ViewGroup)?.removeView(v)
+        }
+        leftBox.removeAllViews(); rightBox.removeAllViews(); bodyBox.removeAllViews()
+        if (bodyBox.parent == null) {
+            addView(bodyBox, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        }
+        val mp = ViewGroup.LayoutParams.MATCH_PARENT
+        val wc = ViewGroup.LayoutParams.WRAP_CONTENT
+        if (land) {
+            bodyBox.orientation = HORIZONTAL
+            leftBox.orientation = VERTICAL; leftBox.gravity = Gravity.CENTER
+            rightBox.orientation = VERTICAL
+            leftBox.addView(render, LinearLayout.LayoutParams(mp, wc))
+            leftBox.addView(noSensorView, LinearLayout.LayoutParams(mp, wc))
+            rightBox.addView(gearView, LinearLayout.LayoutParams(mp, wc))
+            rightBox.addView(dateLabel, LinearLayout.LayoutParams(mp, wc))
+            rightBox.addView(spacer, LinearLayout.LayoutParams(mp, 0, 1f))
+            rightBox.addView(seek, LinearLayout.LayoutParams(mp, wc))
+            rightBox.addView(titlesRow, LinearLayout.LayoutParams(mp, wc))
+            rightBox.addView(dirRow, LinearLayout.LayoutParams(mp, wc))
+            rightBox.addView(landscapeCheck, LinearLayout.LayoutParams(wc, wc))
+            bodyBox.addView(leftBox, LinearLayout.LayoutParams(0, mp, 1f))
+            bodyBox.addView(rightBox, LinearLayout.LayoutParams(0, mp, 1f))
+        } else {
+            bodyBox.orientation = VERTICAL
+            bodyBox.addView(render, LinearLayout.LayoutParams(mp, wc))
+            bodyBox.addView(noSensorView, LinearLayout.LayoutParams(mp, wc))
+            bodyBox.addView(gearView, LinearLayout.LayoutParams(mp, wc))
+            bodyBox.addView(dateLabel, LinearLayout.LayoutParams(mp, wc))
+            bodyBox.addView(spacer, LinearLayout.LayoutParams(mp, 0, 1f))
+            bodyBox.addView(seek, LinearLayout.LayoutParams(mp, wc))
+            bodyBox.addView(titlesRow, LinearLayout.LayoutParams(mp, wc))
+            bodyBox.addView(dirRow, LinearLayout.LayoutParams(mp, wc))
+            bodyBox.addView(landscapeCheck, LinearLayout.LayoutParams(wc, wc))
+        }
+    }
+
+    // 回転はアクティビティが configChanges で受け止めるので、ここへ配られてくる。
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration?) {
+        super.onConfigurationChanged(newConfig)
+        relayout()
+        renderSky()
     }
 
     // タイトル1行目の撮影計画名(2026-08-08 UI依頼)。薄明ページの見出しと同じ文言を出す。
