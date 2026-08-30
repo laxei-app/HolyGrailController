@@ -364,9 +364,24 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
         restorePlan()    // 保存済み計画があれば復元、無ければ出荷時計画を表示(再生成しない)
         refreshPlanList()   // 複数計画リスト(分割バー上)を構築
+        applyWideLayout()   // 横向きで一覧が間延びしないよう幅と高さを整える
         restoreEdgeState()  // 再起動時: エッジが撮影中なら状態を復元(item9)
         resumePhoneCapture()  // 再起動時: スマホ直結で撮影中だった計画を再開(item2)
         Thread { try { HgeNative.nativePresenceStart() } catch (_: Exception) {} }.start()  // P4: 常駐プレゼンスマップ開始
+    }
+
+    // 横向きは幅が縦向きの2倍以上になる。撮影計画の一覧はそのまま引き伸ばされると
+    //  「名前は左端・⋮は右端」で目が左右に振られて読みにくい(2026-08-30 UI依頼)。
+    //  行の幅を縦向きくらいに抑える。左端は下のフォームと揃えたいので余りは右へ逃がす
+    //  (中央寄せにするとフォームと左端がずれる)。一覧の高さも新しい画面の高さで取り直す。
+    //  ※所持カメラ/所持レンズ/エッジ端末設定/撮影レポートは横向きだけ左右2分割にして
+    //    あるので(res/layout-land/)、ここでは触らない。
+    private val CONTENT_MAX_DP = 480
+
+    private fun applyWideLayout() {
+        val extra = (resources.displayMetrics.widthPixels - dp(CONTENT_MAX_DP)).coerceAtLeast(0)
+        findViewById<View>(R.id.plan_listContainer)?.setPadding(dp(4), dp(4), dp(4) + extra, dp(4))
+        setInitialSplit(R.id.plan_listScroll, R.id.plan_listContainer)
     }
 
     // 回転(縦⇄横)。AndroidManifest で configChanges を宣言してあるので、ここへ来るだけで
@@ -379,6 +394,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         super.onConfigurationChanged(newConfig)
         val page = if (::planPager.isInitialized) planPager.current else 0
         if (latestSchedule.isNotEmpty()) { updatePlanDisplay(latestSchedule) }
+        applyWideLayout()
         if (::planPager.isInitialized) { planPager.post { planPager.setCurrent(page, false) } }
     }
 
@@ -1518,6 +1534,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun setInitialSplit(listId: Int, containerId: Int) {
         val v = findViewById<View>(listId)
         val c = findViewById<View>(containerId)
+        // 横向きで左右2分割にした画面(所持カメラ/所持レンズ/エッジ端末設定/撮影レポート)は、
+        //  一覧が列の高さいっぱい(match_parent や weight)なので上下比率を使わない。
+        //  縦向きは固定 dp(120dp など)なので height > 0 で見分けられる。
+        if (v.layoutParams.height <= 0) { return }
         v.post {
             val quarter = resources.displayMetrics.heightPixels / 4
             val content = c.height
@@ -1530,6 +1550,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun setupDivider(dividerId: Int, listId: Int) {
         val divider = findViewById<View>(dividerId)
         val list = findViewById<View>(listId)
+        if (list.layoutParams.height <= 0) { return }   // 左右2分割の画面では上下比率を使わない(上の説明を参照)
         var startY = 0f; var startH = 0
         divider.setOnTouchListener { _, ev ->
             when (ev.action) {
