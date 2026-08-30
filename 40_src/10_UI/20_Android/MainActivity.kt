@@ -369,6 +369,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
         Thread { try { HgeNative.nativePresenceStart() } catch (_: Exception) {} }.start()  // P4: 常駐プレゼンスマップ開始
     }
 
+    // 回転(縦⇄横)。AndroidManifest で configChanges を宣言してあるので、ここへ来るだけで
+    //  画面は作り直されない = 開いていた画面も編集中の内容もそのまま残る(2026-08-30 UI依頼)。
+    //  文字だけの画面は幅が変わるだけで勝手に流し直されるので何もしなくてよい。
+    //  画面幅から寸法を決めて組み立てている所だけ、新しい幅で作り直す。
+    //   ・概要スケジュール … 薄明ボックスの幅を画面幅から決めている(equalizeTwilightBoxes)
+    //   ・薄明ページ     … ページ幅ぶん横へずらして並べているので現在ページへ置き直す
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val page = if (::planPager.isInitialized) planPager.current else 0
+        if (latestSchedule.isNotEmpty()) { updatePlanDisplay(latestSchedule) }
+        if (::planPager.isInitialized) { planPager.post { planPager.setCurrent(page, false) } }
+    }
+
     // アプリ再起動時、スマホ直結で撮影中だった計画(/asset/capturing.json)を再開する(item2)。
     // 開始した計画の状態は EV_STATE 通知でUIへ反映される。
     private fun resumePhoneCapture() {
@@ -1505,11 +1518,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun setInitialSplit(listId: Int, containerId: Int) {
         val v = findViewById<View>(listId)
         val c = findViewById<View>(containerId)
-        // 横向きの左右2分割では、リストは列の高さいっぱい(match_parent / weight)にしてある。
-        //  そこへ縦向け用の「画面の1/4」を入れるとリストが縮んで下が空くので、何もしない。
-        //  縦向きは固定 dp(120dp など)なので height > 0 で見分けられる。撮影計画は横向きでも
-        //  左列を上下に分けるため縦向きと同じ固定 dp のままで、ここを通る。
-        if (v.layoutParams.height <= 0) { return }
         v.post {
             val quarter = resources.displayMetrics.heightPixels / 4
             val content = c.height
@@ -1522,7 +1530,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun setupDivider(dividerId: Int, listId: Int) {
         val divider = findViewById<View>(dividerId)
         val list = findViewById<View>(listId)
-        if (list.layoutParams.height <= 0) { return }   // 横向きの左右2分割では上下比率を使わない(上の説明を参照)
         var startY = 0f; var startH = 0
         divider.setOnTouchListener { _, ev ->
             when (ev.action) {
