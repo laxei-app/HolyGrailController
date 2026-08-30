@@ -9,6 +9,9 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.View
+import android.view.ViewGroup
+import android.widget.LinearLayout
 import android.widget.Button
 import android.widget.ImageView
 import android.widget.ProgressBar
@@ -91,7 +94,62 @@ class EdgeFlashActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(usbReceiver, u, Context.RECEIVER_EXPORTED)
         else registerReceiver(usbReceiver, u)
 
+        applyOrientation()
         refreshState()
+    }
+
+    // 横向きは 左=書き込み中の状況(進み具合とログ) / 右=説明とボタン に分ける(2026-08-30 UI依頼)。
+    //  横へ広げただけだと、ボタンや説明が上へ積まれてログが画面外へ押し出され、
+    //  書き込み中の様子が見えなくなるため。
+    // レイアウトXMLを縦横で分けないのは、この画面も configChanges で回転を受けていて
+    //  作り直しが起きないから(横向きの形が縦向きに残ってしまう)。付け替えで対応する。
+    private var flSplit: LinearLayout? = null
+    private val flLp = HashMap<View, ViewGroup.LayoutParams>()   // 縦向きへ戻すときの元の指定
+
+    private fun dpi(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    private fun applyOrientation() {
+        val root = findViewById<LinearLayout>(R.id.fl_root) ?: return
+        val land = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        val state = findViewById<View>(R.id.fl_state) ?: return
+        val btns = findViewById<View>(R.id.fl_buttons) ?: return
+        val note = findViewById<View>(R.id.fl_note) ?: return
+        val barV = findViewById<View>(R.id.fl_bar) ?: return
+        val logSc = findViewById<View>(R.id.fl_logScroll) ?: return
+        val mp = ViewGroup.LayoutParams.MATCH_PARENT
+        val wc = ViewGroup.LayoutParams.WRAP_CONTENT
+        val parts = listOf(state, btns, note, barV, logSc)
+        if (land && flSplit == null) {
+            for (v in parts) { flLp[v] = v.layoutParams; root.removeView(v) }
+            val left = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            val right = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            left.addView(barV, LinearLayout.LayoutParams(mp, wc))
+            left.addView(logSc, LinearLayout.LayoutParams(mp, 0, 1f))
+            right.addView(state, LinearLayout.LayoutParams(mp, wc))
+            right.addView(btns, LinearLayout.LayoutParams(mp, wc))
+            right.addView(note, LinearLayout.LayoutParams(mp, wc))
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            row.addView(left, LinearLayout.LayoutParams(0, mp, 1f))
+            row.addView(View(this).apply { setBackgroundColor(0xFF000000.toInt()) },
+                        LinearLayout.LayoutParams(dpi(1), mp))
+            row.addView(right, LinearLayout.LayoutParams(0, mp, 1f))
+            root.addView(row, LinearLayout.LayoutParams(mp, 0, 1f))
+            flSplit = row
+        } else if (!land && flSplit != null) {
+            val row = flSplit!!
+            (row.getChildAt(0) as LinearLayout).removeAllViews()
+            (row.getChildAt(2) as LinearLayout).removeAllViews()
+            root.removeView(row)
+            var i = 1                                   // 0 はヘッダ
+            for (v in parts) { root.addView(v, i, flLp[v]); i++ }
+            flSplit = null
+        }
+    }
+
+    // 回転は configChanges で受けている(書き込み中の経過を消さないため)。並べ替えだけする。
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        applyOrientation()
     }
 
     override fun onResume() { super.onResume(); refreshState() }

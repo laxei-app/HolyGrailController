@@ -4,6 +4,7 @@
      ここだけが「開封した端末を使える状態にする」唯一の道になる。
      まず「調べる」で1バイトも書かずに素性を確かめ、そのあと「書き込む」。 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/fl_root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical">
@@ -29,7 +30,7 @@
         android:padding="12dp" android:textSize="16sp"
         android:text="USB ケーブルでエッジ端末をつないでください。" />
 
-    <LinearLayout
+    <LinearLayout android:id="@+id/fl_buttons"
         android:layout_width="match_parent" android:layout_height="wrap_content"
         android:orientation="horizontal" android:padding="8dp">
         <Button android:id="@+id/fl_probe"
@@ -41,7 +42,7 @@
     </LinearLayout>
 
     <!-- 「調べる」は1バイトも書かないので、いつ押しても端末を壊さない -->
-    <TextView
+    <TextView android:id="@+id/fl_note"
         android:layout_width="match_parent" android:layout_height="wrap_content"
         android:paddingStart="12dp" android:paddingEnd="12dp" android:paddingBottom="4dp"
         android:textSize="12sp" android:textColor="#9E9E9E"

@@ -381,6 +381,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val page = if (::planPager.isInitialized) planPager.current else 0
         if (latestSchedule.isNotEmpty()) { updatePlanDisplay(latestSchedule) }
         applyAllMasterDetail()
+        // デバッグログも縦横で並びが変わるので組み直す。選んでいた取得対象は引き継ぐ。
+        if (::flipper.isInitialized && flipper.displayedChild == 16) {
+            val keep = HashMap<String, Boolean>()
+            for ((k, v) in dlogTargets) { keep[k] = v.isChecked }
+            buildDebugLogScreen()
+            for ((k, v) in dlogTargets) { keep[k]?.let { v.isChecked = it } }
+        }
         // 色の設定は縦横で並びが変わるので組み直す。編集途中の色は引き継ぐ(作り直すと保存色に戻るため)。
         if (::flipper.isInitialized && flipper.displayedChild == 9) {
             val keepText = colorTextPicker?.color; val keepBg = colorBgPicker?.color
@@ -965,15 +972,33 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.removeAllViews()
         dlogTargets.clear()
 
-        fun heading(t: String) {
-            box.addView(TextView(this).apply {
+        // 横向きは 左=状況 / 右=操作 に分ける(2026-08-30 UI依頼)。横へ広げただけだと
+        //  操作部が上へ積まれて状況が画面外へ押し出され、見えなくなるため。
+        val land = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+        val ops: LinearLayout      // 操作(記録の指定・取得・取得する端末)
+        val st: LinearLayout       // 状況
+        if (land) {
+            ops = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            st = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            row.addView(st, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+            row.addView(View(this).apply { setBackgroundColor(0xFF000000.toInt()) },
+                        LinearLayout.LayoutParams(dp(1), ViewGroup.LayoutParams.MATCH_PARENT))
+            row.addView(ops, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+                        .apply { setMargins(dp(12), 0, 0, 0) })
+            box.addView(row, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        } else { ops = box; st = box }
+
+        fun heading(t: String, target: LinearLayout = ops) {
+            target.addView(TextView(this).apply {
                 text = t; setTypeface(null, Typeface.BOLD); textSize = 15f
                 setPadding(0, dp(10), 0, dp(4))
             })
         }
 
         heading("このスマートフォンの記録")
-        box.addView(TextView(this).apply {
+        ops.addView(TextView(this).apply {
             // エッジのぶんはエッジ端末設定にある。ここに全部置くと「どの端末の話か」が
             //  分からなくなるため、持ち主のところへ置く(2026-08-29 UI依頼)。
             text = "次の撮影から効きます。エッジ端末のログはエッジ端末設定で端末ごとに指定します。"
@@ -985,15 +1010,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
             setOnCheckedChangeListener { _, _ -> setLogOptShot(isChecked) }
         }
         dlogShotCb = shotCb
-        box.addView(shotCb)
+        ops.addView(shotCb)
 
         heading("取得")
         val run = blueButton("ログ取得") { if (dlogBusy) { dlogAbort = true } else { startLogFetch() } }
-        box.addView(run); dlogRunBtn = run
+        ops.addView(run); dlogRunBtn = run
         // 撮影中は触らせない(2026-08-29 UI依頼)。設定は次の撮影からしか効かず、取得は重い。
         //  走行中に触れる意味がないので、まとめて止めて理由を出す。
         if (isCaptureBusy()) {
-            box.addView(TextView(this).apply {
+            ops.addView(TextView(this).apply {
                 text = "撮影中です。撮影が終わってから操作してください。"
                 textSize = 12f; setTextColor(Color.GRAY); setPadding(0, dp(2), 0, 0)
             })
@@ -1003,22 +1028,22 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // スマホは常に対象にできる。エッジは**いまオンラインのものだけ**(届かない相手を
         //  選ばせても失敗するだけで、原因が分からなくなる)。既定はすべてチェック。
         val phoneCb = CheckBox(this).apply { text = "スマートフォン"; isChecked = true }
-        box.addView(phoneCb); dlogTargets[""] = phoneCb
+        ops.addView(phoneCb); dlogTargets[""] = phoneCb
         val online = edges.sortedBy { it.name.lowercase() }.filter { edgeOnline[it.name] == true }
         for (e in online) {
             val cb = CheckBox(this).apply { text = e.name; isChecked = true }
-            box.addView(cb); dlogTargets[e.name] = cb
+            ops.addView(cb); dlogTargets[e.name] = cb
         }
         if (online.isEmpty()) {
-            box.addView(TextView(this).apply {
+            ops.addView(TextView(this).apply {
                 text = "(オンラインのエッジ端末はありません)"
                 textSize = 12f; setTextColor(Color.GRAY); setPadding(dp(8), 0, 0, 0)
             })
         }
 
-        heading("状況")
+        heading("状況", st)
         val pg = TextView(this).apply { textSize = 13f; setTextColor(Color.DKGRAY) }
-        box.addView(pg); dlogProgress = pg
+        st.addView(pg); dlogProgress = pg
         setDlogEnabled(!dlogBusy && !isCaptureBusy())
     }
 
