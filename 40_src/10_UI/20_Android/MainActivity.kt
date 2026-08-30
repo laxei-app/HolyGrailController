@@ -5241,7 +5241,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // 先頭ページ: 概要スケジュール(表示専用)。時刻とイベント(Start/End/日の出/日の入/月の出/月の入)を
     // 日付ごとに時系列表示し、各薄明ページへ移動できるボックスを差し込む。
-    // 列の分け方は薄明の数で決める: 1つ=1列 / 2つ=左右に1つずつ / 3つ以上=日付で分ける。
+    // 列を分けるか = 薄明が2つ以上あるか。分ける位置 = 日付境界(0:00)、同じ日なら 12:00。
+    // 日付バッジは列の分け方とは独立で、日付が変わるところへ必ず出す。
     // 内容の左端は他の項目(見出し96dp + 内容)と揃える。
     private fun renderOverview(o: JSONObject) {
         // 内容の左端を他の項目(見出し96dp + 内容)と揃える(2026-08-30 UI依頼)。
@@ -5305,36 +5306,57 @@ class MainActivity : AppCompatActivity(), HgeListener {
             }
         }
 
-        // 表示物を1本の並びにする(日付バッジは描画時に差し込む)。列の切れ目は薄明ボックスの
-        //  前後にも置きたいので、イベント番号ではなくこの並びの番号で決める。
-        class Node(val ev: Ev?, val nav: Nav?)
+        // 表示物を1本の並びにする。列の切れ目は薄明ボックスの前後にも置きたいので、
+        //  イベント番号ではなくこの並びの番号で分割位置を決める。
+        // md は「その表示物が属する日」。薄明ボックスは差し込み先のイベントと同じ日にする
+        //  (朝のボックスは次のイベントの前に入るので、日付バッジをボックスより先に出すため)。
+        class Node(val ev: Ev?, val nav: Nav?, val md: String)
         val nodes = ArrayList<Node>()
         for ((idx, ev) in evs.withIndex()) {
-            before[idx]?.forEach { nodes.add(Node(null, it)) }
-            nodes.add(Node(ev, null))
-            after[idx]?.forEach { nodes.add(Node(null, it)) }
+            before[idx]?.forEach { nodes.add(Node(null, it, ev.md)) }
+            nodes.add(Node(ev, null, ev.md))
+            after[idx]?.forEach { nodes.add(Node(null, it, ev.md)) }
         }
 
-        // 縦2列にする分割位置 k(nodes[k] 以降が右列)。薄明の数で分け方を変える(2026-08-30 UI依頼)。
-        //  薄明1つ   … 1列のまま。
-        //  薄明2つ   … 左右に1つずつ。2つ目の薄明ボックスから右列にする(日付では分けない)。
-        //  薄明3つ以上 … 1列に2つ入ってしまうので日付で分ける。
-        var k = 0
-        if (navs.size == 2) {
-            var seen = 0
-            for ((i, n) in nodes.withIndex()) {
-                if (n.nav != null) { seen++; if (seen == 2) { k = i; break } }
-            }
-        } else if (navs.size >= 3) {
-            val d0 = evs.first().md
-            var s = nodes.indexOfFirst { it.ev != null && it.ev.md != d0 }
-            // 朝の薄明ボックスは「その次のイベントの前」に置かれる。日付の変わり目の直前に
-            //  ぶら下がっている朝のボックスは、そのイベントと一緒に右列へ送る。
-            while (s > 0 && nodes[s - 1].nav?.morning == true) { s-- }
-            if (s <= 0) { s = nodes.indexOfFirst { it.ev != null && it.ev.code == 2 } }  // 日付が変わらない → 昼間(日の入)で分ける
-            k = s
+        // 縦2列にする分割位置 k(nodes[k] 以降が右列)。2026-08-30 に決めたルール:
+        //  薄明1つ              … 1列のまま
+        //  薄明2つ・間に日付境界あり … その 0:00 で分ける
+        //  薄明2つ・間に日付境界なし … 同じ日の 12:00 で分ける
+        //  薄明3つ以上           … 日付が変わるところで分ける
+        // 切れ目は必ず「時刻」(0:00 か 12:00)なので、画面を見なくても境目が言える。
+        val cal = java.util.Calendar.getInstance()
+        fun clockOf(base: Long, hour: Int): Long {      // base と同じ日の hour:00
+            cal.timeInMillis = base
+            cal.set(java.util.Calendar.HOUR_OF_DAY, hour); cal.set(java.util.Calendar.MINUTE, 0)
+            cal.set(java.util.Calendar.SECOND, 0); cal.set(java.util.Calendar.MILLISECOND, 0)
+            return cal.timeInMillis
         }
-        val twoCol = k in 1 until nodes.size
+        // 時刻 t 以降の最初のノード。見つからなければ -1 を返し、下の twoCol 判定で1列に落ちる。
+        // 切れ目の直前にある薄明ボックスは「その後ろのイベントに掛かる見出し」なので、
+        //  薄明そのものが t より後ろなら一緒に右列へ送る(朝は明ける時刻、夕方は始まる時刻で見る)。
+        //  これをしないと、夕方の薄明だけ左列の末尾に残って夕方のイベントと離れてしまう。
+        fun splitAt(t: Long): Int {
+            var s = nodes.indexOfFirst { it.ev != null && it.ev.t >= t }
+            while (s > 0) {
+                val nv = nodes[s - 1].nav ?: break
+                if ((if (nv.morning) nv.tEnd else nv.tStart) < t) { break }
+                s--
+            }
+            return s
+        }
+        var k = 0
+        if (navs.size >= 3) {
+            val newDay = evs.firstOrNull { it.md != evs.first().md }
+            // 薄明3つ以上は必ず2日にまたがるので newDay は在るが、念のため 12:00 を保険にする。
+            k = if (newDay != null) splitAt(clockOf(newDay.t, 0)) else splitAt(clockOf(navs.first().tStart, 12))
+        } else if (navs.size == 2) {
+            val t1 = minOf(navs[0].tStart, navs[1].tStart)
+            val t2 = maxOf(navs[0].tStart, navs[1].tStart)
+            val zero = clockOf(t2, 0)                   // 後ろの薄明の日の 0:00
+            k = if (t1 < zero) splitAt(zero)            // 2つの薄明の間に日付境界がある
+                else splitAt(clockOf(t1, 12))           // 同じ日 → 昼の12:00
+        }
+        val twoCol = k in 1 until nodes.size            // 右列が空になるなら1列に落とす
 
         val col1: LinearLayout
         val col2: LinearLayout
@@ -5348,20 +5370,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         } else { col1 = planOverview; col2 = planOverview }
 
-        // 日付バッジは「読む順(左列を上から、続けて右列を上から)で日付が変わったところ」に1つだけ置く。
-        //  右列の先頭が左列の続きと同じ日付なら右列の頭には出さず、変わる位置=イベントの途中に入る
-        //  (2026-08-30 UI依頼)。日付で分けたときは切れ目がそのまま変わり目なので頭に出る。
+        // 日付バッジは「読む順(左列を上から、続けて右列を上から)で日付が変わったところ」に必ず1つ置く。
+        //  列の分け方とは独立。1列でも日付をまたげば途中に出るし(例 23:00開始→翌08:00)、
+        //  右列の先頭が左列の続きと同じ日付なら右列の頭には出さず、変わる位置=イベントの途中に入る。
+        //  ノードの md を見るので、日付の変わり目に薄明ボックスが重なってもバッジが先に出る。
         var curDate = ""
         for ((idx, n) in nodes.withIndex()) {
             val col = if (twoCol && idx >= k) col2 else col1
+            if (n.md != curDate) { curDate = n.md; col.addView(makeDateBadge(n.md)) }
             val ev = n.ev
-            if (ev != null) {
-                if (ev.md != curDate) { curDate = ev.md; col.addView(makeDateBadge(ev.md)) }
-                col.addView(makeEventRow(ev.time, ev.label))
-            } else {
-                val nv = n.nav!!
-                col.addView(makeTwilightBox(nv.page, nv.morning))
-            }
+            if (ev != null) { col.addView(makeEventRow(ev.time, ev.label)) }
+            else { val nv = n.nav!!; col.addView(makeTwilightBox(nv.page, nv.morning)) }
         }
         equalizeTwilightBoxes(twoCol)   // 全ボックスの幅・高さを揃える(言語非依存)
     }
