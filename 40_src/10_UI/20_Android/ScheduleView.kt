@@ -327,17 +327,33 @@ class ScheduleView(context: Context) : View(context) {
     //  invalid=0 night=1 sunrise=2 sunset=3 day=4 **preNight=5 postNight=6**。
     //  ここは preNight=6 postNight=7 のつもりで書かれていたため、夕日↔夜間前移行と
     //  夜間前移行↔夜間が既定(-24〜+6)に落ちて事実上チェックされていなかった(夕方だけ効かない)。
+    // ロック(撮影中/エッジ保有)の計画は**見るだけ**(2026-09-01 UI依頼)。
+    //  帯をタップして撮影制御方法を開くのは通し、境目の移動と帯の出し入れだけを止める。
+    //  isEnabled で丸ごと止めるとタップも拾えなくなるので、こちらで分ける。
+    var readOnly = false
+    private companion object { const val MIN_TRANS = 1.0 }   // 夜間前/後移行に必ず残す幅[°]
     private object CcmT { const val NIGHT = 1; const val SUNRISE = 2; const val SUNSET = 3
                           const val DAY = 4; const val PRE_NIGHT = 5; const val POST_NIGHT = 6 }
-    private fun clampRange(before: Int, after: Int): Pair<Double, Double> {
+    // 【2026-09-01 変更】夕日/朝日↔移行の下境界を -1.0 から -6.0 まで下げた(既定が -6.0 なのに
+    //  戻せなかった)。夜間境界も -6.0 まで上がるので、両方を寄せると移行の幅が 0 になる。
+    //  移行帯のもう一方の端(=いま画面に出ている値)から MIN_TRANS だけ残す。
+    //  相手の値は blocks[bi] の移行セグメントから読む(ネイティブの clamp と同じ結果になる)。
+    private fun clampRange(bi: Int, before: Int, after: Int): Pair<Double, Double> {
         fun has(t: Int) = before == t || after == t
         val sun   = has(CcmT.SUNRISE) || has(CcmT.SUNSET)
         val trans = has(CcmT.PRE_NIGHT) || has(CcmT.POST_NIGHT)
+        val tr = blocks.getOrNull(bi)?.segs?.firstOrNull { it.type == CcmT.PRE_NIGHT || it.type == CcmT.POST_NIGHT }
         return when {
             has(CcmT.DAY) && sun -> 3.0 to 6.0
-            sun && trans -> -1.0 to 2.0
+            sun && trans -> {
+                val night = tr?.let { minOf(it.altTop, it.altBottom) } ?: -18.0   // 移行の夜側の端
+                maxOf(-6.0, night + MIN_TRANS).coerceAtMost(2.0) to 2.0
+            }
             has(CcmT.DAY) && trans -> -3.0 to 4.0
-            has(CcmT.NIGHT) && trans -> -19.0 to -6.0   // 夜間境界(2026-08-17 に -12 から -6 まで拡張)
+            has(CcmT.NIGHT) && trans -> {
+                val sunSide = tr?.let { maxOf(it.altTop, it.altBottom) } ?: 0.0   // 移行の明るい側の端
+                -19.0 to minOf(-6.0, sunSide - MIN_TRANS).coerceAtLeast(-19.0)
+            }
             else -> -24.0 to 6.0
         }
     }
@@ -376,7 +392,9 @@ class ScheduleView(context: Context) : View(context) {
                 if (!axisLocked) {
                     if (abs(dx) < dragSlop && abs(dy) < dragSlop) return true
                     axisLocked = true
-                    if (land) {
+                    // 読取専用のドラッグはページ送りへ回す(境目も帯も動かさない)。
+                    if (readOnly) { mode = 3; parent?.requestDisallowInterceptTouchEvent(false) }
+                    else if (land) {
                         // 横向きは高度軸が左右。境目=左右 / 出し入れ=上下 / 余白の左右=ページ移動。
                         if (abs(dx) >= abs(dy)) {
                             mode = 1
@@ -405,7 +423,7 @@ class ScheduleView(context: Context) : View(context) {
                 if (mode == 1 && targetBoundary >= 0) {
                     val bnd = boundaries().getOrNull(targetBoundary)
                     if (bnd != null) {
-                        val (lo, hi) = clampRange(bnd.before, bnd.after)
+                        val (lo, hi) = clampRange(bnd.bi, bnd.before, bnd.after)
                         if (land) { val a = altOfXL(bnd.bi, e.x).coerceIn(lo, hi); previewX = xOfL(bnd.bi, a) }
                         else { val a = altOfY(bnd.bi, e.y).coerceIn(lo, hi); previewY = yOf(bnd.bi, a) }
                         invalidate()
@@ -424,7 +442,7 @@ class ScheduleView(context: Context) : View(context) {
                 } else if (e.actionMasked == MotionEvent.ACTION_UP && mode == 1 && targetBoundary >= 0) {
                     val bnd = boundaries().getOrNull(targetBoundary)
                     if (bnd != null) {
-                        val (lo, hi) = clampRange(bnd.before, bnd.after)
+                        val (lo, hi) = clampRange(bnd.bi, bnd.before, bnd.after)
                         val a = (if (land) altOfXL(bnd.bi, e.x) else altOfY(bnd.bi, e.y)).coerceIn(lo, hi)
                         val rising = if (blocks[bnd.bi].axisDown) 0 else 1
                         onMoveBoundary?.invoke(bnd.before, bnd.after, bnd.occ, a, rising)

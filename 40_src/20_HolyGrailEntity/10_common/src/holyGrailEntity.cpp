@@ -2463,10 +2463,47 @@ int32_t hge_setBoundaryByAlt(int32_t beforeType, int32_t afterType, int32_t occ,
 		auto has = [&](int t) { return beforeType == t || afterType == t; };
 		double lo = -24.0, hi = 6.0;
 		bool sun = has(tSunUp) || has(tSunDn), trans = has(tPre) || has(tPost);
+		// 【2026-09-01 変更】夕日/朝日↔移行の下境界を -1.0 から **-6.0** まで下げる。
+		//  既定が -6.0(ccmSunset::sunAltitudeEnd / ccmSunrise::sunAltitude)なのに、一度動かすと
+		//  既定の位置へ戻せなかった。夜間境界も -6.0 まで上げられるので、両方を -6.0 へ寄せると
+		//  夜間前/後移行の幅が 0 になる。**互いに kMinTrans は残す**(どちらから動かしても効く)。
+		const double kMinTrans = 1.0;
+		// その境目の現在値。ユーザーが動かしていれば g_plan.boundaries、無ければ ccm の既定値。
+		auto altOfBoundary = [&](int bt, int at2, double fallback) -> double
+		{
+			for (const auto& bo2 : g_plan.boundaries)
+			{
+				if (static_cast<int>(bo2.before) == bt && static_cast<int>(bo2.after) == at2) { return bo2.altDeg; }
+			}
+			return fallback;
+		};
 		if (has(tDay) && sun)          { lo = 3.0;   hi = 6.0;   }  // 日中↔夕日/朝日(上境界 +6〜+3)
-		else if (sun && trans)         { lo = -1.0;  hi = 2.0;   }  // 夕日/朝日↔移行(下境界 +2〜-1)
+		else if (sun && trans)                                      // 夕日/朝日↔移行(下境界 +2〜-6)
+		{
+			lo = -6.0; hi = 2.0;
+			const double nightDef = g_plan.ccm.night ? g_plan.ccm.night->sunAltitude : -18.0;
+			const double nb = has(tPre) ? altOfBoundary(tPre, tNight, nightDef)
+			                            : altOfBoundary(tNight, tPost, nightDef);
+			if (g_plan.ccm.useNight && lo < nb + kMinTrans) { lo = nb + kMinTrans; }
+			if (lo > hi) { lo = hi; }
+		}
 		else if (has(tDay) && trans)   { lo = -3.0;  hi = 4.0;   }  // 日中↔移行(日中境界 +4〜-3)
-		else if (has(tNight) && trans) { lo = -19.0; hi = -6.0;  }  // 夜間↔移行(夜間境界 -6〜-19。2026-08-17 に -12 から拡張)
+		else if (has(tNight) && trans)                              // 夜間↔移行(夜間境界 -6〜-19)
+		{
+			lo = -19.0; hi = -6.0;
+			// 夕日/朝日を使っていないときは移行の相手が日中なので、この制限は掛けない。
+			const bool sunUsed = has(tPre) ? g_plan.ccm.useSunset : g_plan.ccm.useSunrise;
+			if (sunUsed)
+			{
+				const double sunDef = has(tPre)
+					? (g_plan.ccm.sunset  ? g_plan.ccm.sunset->sunAltitudeEnd : -6.0)
+					: (g_plan.ccm.sunrise ? g_plan.ccm.sunrise->sunAltitude   : -6.0);
+				const double sb = has(tPre) ? altOfBoundary(tSunDn, tPre, sunDef)
+				                            : altOfBoundary(tPost, tSunUp, sunDef);
+				if (hi > sb - kMinTrans) { hi = sb - kMinTrans; }
+				if (hi < lo) { hi = lo; }
+			}
+		}
 		if (altDeg < lo) altDeg = lo;
 		if (altDeg > hi) altDeg = hi;
 	}

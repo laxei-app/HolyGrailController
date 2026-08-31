@@ -228,6 +228,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private var ccmJson: JSONObject? = null     // 編集中のccm全体(初期値 or 計画固有)
     private var editingKey = "night"            // 編集中の方法
     private var editingPlanCcm = false          // true=計画固有ccmを編集 / false=初期値ccm
+    // ロック(撮影中/エッジ保有)の計画の撮影制御方法は**見るだけ**にする(2026-09-01 UI依頼)。
+    //  以前は編集ボタンも薄明の帯も無効で、何が設定されているのか確かめようが無かった。
+    private var ccmReadOnly = false
     private var editColor = 0                    // (旧)per-ccm色。現在は未使用(色はシステム共通へ移行)
     // システム共通の色(型ごとの文字色/背景色。0xRRGGBB)。nativeGetColors から読み込む。
     private val ccmBgMap = HashMap<Int, Int>()
@@ -604,7 +607,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 edgeSpinnerUserTouched = false
                 // 保存先はスピナーが表示している計画。念のため選択中の計画と一致する時だけ書く(不一致=表示が追従前)。
                 val target = edgeSpinnerPlanId
-                val nm = if (pos in 1..edges.size) edges[pos - 1].name else ""
+                val nm = if (pos in 1..edgeSpinnerEdges.size) edgeSpinnerEdges[pos - 1].name else ""
                 if (target.isNotEmpty() && target == currentPlanId) { setPlanEdgeName(target, nm) }
                 // 【2026-08-06】保存の成否によらず、最後に「実際に保存されている値」を表示へ戻す。
                 //  上のガードで弾かれると保存されないのに選んだ表示だけが残り、
@@ -1964,7 +1967,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // パスワードは JSON では暗号文なので、平文はネイティブから別途もらう。
         box.addView(editRowPass("パスワード", "authPass", HgeNative.nativeOwnedCameraAuthPass(sel)))
         camAuthBaseline = camAuthSig()      // ここからの変化だけを「変更」とみなす
-        camEditBaseline = camEditSig()      // ロック中に「本当に変えたか」を見るため
 
         // 組み合わせるレンズ(先頭=初期値)。並べ替えはハンドルをドラッグ(ss/iso/fnと同じ)。
         box.addView(thinDivider())
@@ -1974,6 +1976,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val lensBox = LinearLayout(this); lensBox.orientation = LinearLayout.VERTICAL
         box.addView(lensBox); camLensContainer = lensBox
         renderCamLensReorder()
+        // ロック中に「本当に変えたか」を見るための基準。**組み合わせレンズを読み込んだ後**に採る
+        //  (2026-09-01 修正)。以前は認証欄の直後で採っていて camLensNames が空のままだったため、
+        //  レンズを持つカメラは開いて戻るだけで「変更できません」が出ていた。
+        camEditBaseline = camEditSig()
         // 項目2: 「変更の取り消し」を dirty 連動に(未変更=グレー無効、変更で有効、戻すと無効)。
         startDirtyWatch(camCancel) { camDetailSig() }
     }
@@ -2716,8 +2722,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun openCcmEdit(key: String) {
         val o = ccmJson?.optJSONObject(key) ?: return
         editingKey = key
+        // 計画固有の編集で、その計画がロックされていれば読取専用(初期値の編集は常に可)。
+        ccmReadOnly = editingPlanCcm && planReadOnly
         val title = mapOf("night" to "夜間撮影", "sunrise" to "朝日撮影", "sunset" to "夕日撮影", "day" to "日中撮影")[key]
-        findViewById<TextView>(R.id.edit_title).text = title + (if (editingPlanCcm) "（この計画）" else "（初期値）")
+        findViewById<TextView>(R.id.edit_title).text = title +
+            (if (!editingPlanCcm) "（初期値）" else if (ccmReadOnly) "（この計画・変更不可）" else "（この計画）")
         applyHeaderColor(R.id.edit_header, R.id.edit_title, keyType(key))   // タイトルバーにシステム共通色
         val showPreset = !editingPlanCcm   // 初期値編集時のみプリセット一覧を出す
         findViewById<View>(R.id.edit_presetScroll).visibility = if (showPreset) View.VISIBLE else View.GONE
@@ -2802,9 +2811,26 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 all.put(editingKey, merged); openCcmEdit(editingKey)   // プリセット値を読み込む(以後変更可)
             }
         }) else null
-        val cancelBtn = addPresetTopRow(R.id.edit_content, { cancelCcmEdit() }, onPick)
-        startDirtyWatch(cancelBtn) { buildCcmEditJson()?.toString() ?: "" }      // item8: 変更で赤・未変更でグレー
+        if (ccmReadOnly) {
+            // 見るだけなので「変更の取り消し」も「初期値リストから選択」も出さない。
+            findViewById<LinearLayout>(R.id.edit_content).let { b ->
+                b.findViewWithTag<View>("ptop")?.let { v -> b.removeView(v) } }
+            stopDirtyWatch()
+        } else {
+            val cancelBtn = addPresetTopRow(R.id.edit_content, { cancelCcmEdit() }, onPick)
+            startDirtyWatch(cancelBtn) { buildCcmEditJson()?.toString() ?: "" }  // item8: 変更で赤・未変更でグレー
+        }
         flipper.displayedChild = 3
+        // 入力部をまとめて有効/無効にする。読取専用を解いたとき戻す必要があるので毎回掛ける。
+        setEnabledDeep(findViewById<View>(R.id.edit_content), !ccmReadOnly)
+    }
+
+    // 入れ物(ViewGroup)はそのままに、中の部品だけ有効/無効にする。
+    //  入れ物まで無効にするとスクロールが効かなくなり、読むこともできなくなる。
+    //  並べ替えのドラッグは OnTouchListener なので isEnabled では止まらない(ccmReadOnly で見る)。
+    private fun setEnabledDeep(v: View, enabled: Boolean) {
+        if (v is ViewGroup) { for (i in 0 until v.childCount) setEnabledDeep(v.getChildAt(i), enabled) }
+        else v.isEnabled = enabled
     }
 
     // 撮影制御方法編集の取り消し(保存済みから再読込して破棄)。
@@ -2843,6 +2869,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // 編集内容を保存する(離脱時に呼ぶ。トースト/画面遷移はしない)。
     private fun persistCcmEdit() {
+        if (ccmReadOnly) return         // 見るだけの表示。画面を離れるときも書き戻さない
         val all = ccmJson ?: return
         val o = buildCcmEditJson() ?: return
         all.put(editingKey, o)
@@ -3202,6 +3229,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
         // ドラッグハンドルのタッチ処理。挿入位置(divider)を色で示し、離した位置へ並べ替える。
         private fun dragTouch(index: Int) = View.OnTouchListener { v, ev ->
+            if (ccmReadOnly) return@OnTouchListener false   // 読取専用では並べ替えない
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     v.parent?.requestDisallowInterceptTouchEvent(true)   // ScrollView のスクロールを抑止
@@ -3503,7 +3531,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (!onEdge) menu.add("削除" to { confirmDeletePlan(id, name) })
         // 項目2: エッジ送信済み(ロック中)かつ未撮影なら「エッジ端末から削除」で外して編集可能にする。
         //  停止しただけの計画はエッジが保有し続けロックされたまま(項目4)なので、これで明示的に外す。
-        if (onEdge && !capturingNow) menu.add("エッジ端末から削除" to { confirmRemoveFromEdge(id, name) })
+        // スマホで撮る計画(エッジ端末=「無し」)には出さない(2026-09-01 UI依頼)。
+        //  isPlanOnEdge は「今カメラを使っている」だけでも true になるので、それだけでは
+        //  スマホ直結の撮影中にもこの項目が出てしまう。エッジが持ち主のときだけ出す。
+        val heldByEdge = planEdgeName(id).isNotEmpty() || edgeHeldByEdge.values.any { it.contains(id) }
+        if (onEdge && !capturingNow && heldByEdge) menu.add("エッジ端末から削除" to { confirmRemoveFromEdge(id, name) })
         menu.add("過去の計画削除" to { confirmDeletePastPlans() })   // 終了日が過去の計画を一括削除(エッジ保有分は対象外)
         return menu
     }
@@ -5457,7 +5489,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
                              b.optLong("tStart", 0L) * 1000L, b.optLong("tEnd", 0L) * 1000L))
             }
         }
-        // 移動ボックスの差し込み位置は**時刻で決める**(2026-08-11 改定)。
+        // 移動ボックスの差し込み位置は**日の出/日の入のとなり**(2026-09-01 UI依頼)。
+        //  夕方の薄明 … そのほとんどが日の入の後なので **日の入の直後**
+        //  朝の薄明   … そのほとんどが日の出の前なので **日の出の直前**
+        // 対応する日の出/日の入がその薄明の時間帯に無いとき(撮影窓の外など)は時刻で決める。
         //  朝のブロック   … ブロックが終わる時刻以降で最初のイベントの前
         //  夕方のブロック … ブロックが始まる時刻以前で最後のイベントの後
         // 【なぜ変えたか】以前は「i番目の朝 → i番目の日の出」と順番で対応付けていた。
@@ -5468,13 +5503,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val after = HashMap<Int, MutableList<Nav>>()
         for (nv in navs) {
             if (nv.morning) {
-                // 朝は「その薄明が明けた後」に置きたいので、終了時刻以降の最初のイベントの前。
-                var at = evs.indexOfFirst { it.t >= nv.tEnd }
+                // 朝はその薄明の中にある日の出(9)の直前。無ければ終了時刻以降の最初のイベントの前。
+                var at = evs.indexOfFirst { it.code == 9 && it.t >= nv.tStart && it.t <= nv.tEnd }
+                if (at < 0) at = evs.indexOfFirst { it.t >= nv.tEnd }
                 if (at < 0) at = evs.size - 1                      // 後ろに何も無ければ最後の前
                 before.getOrPut(at) { mutableListOf() }.add(nv)
             } else {
-                // 夕方は「その薄明が始まる前」に置きたいので、開始時刻以前の最後のイベントの後。
-                var at = evs.indexOfLast { it.t <= nv.tStart }
+                // 夕方はその薄明の中にある日の入(2)の直後。無ければ開始時刻以前の最後のイベントの後。
+                var at = evs.indexOfFirst { it.code == 2 && it.t >= nv.tStart && it.t <= nv.tEnd }
+                if (at < 0) at = evs.indexOfLast { it.t <= nv.tStart }
                 if (at < 0) at = 0                                  // 前に何も無ければ先頭の後
                 after.getOrPut(at) { mutableListOf() }.add(nv)
             }
@@ -5694,8 +5731,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         intervalText.isEnabled = ed; landscapeCheck.isEnabled = ed
         syncShotCheck.isEnabled = ed; subCamText.isEnabled = ed	// 同期撮影も撮影中は編集不可
         cameraText.isEnabled = ed; lensText.isEnabled = ed; edgeSpinner.isEnabled = ed
-        schedulePages.forEach { it.isEnabled = ed }   // 項目11: compass/elevationView は廃止
-        findViewById<LinearLayout>(R.id.plan_ccmButtons).let { for (i in 0 until it.childCount) it.getChildAt(i).isEnabled = ed }
+        // 薄明ページと撮影制御方法ボタンは**ロック中も触れる**(2026-09-01 UI依頼)。
+        //  帯をタップして中身を見たいため。編集(境目の移動・帯の出し入れ)だけを止める。
+        schedulePages.forEach { it.isEnabled = true; it.readOnly = planReadOnly }
+        findViewById<LinearLayout>(R.id.plan_ccmButtons).let { for (i in 0 until it.childCount) it.getChildAt(i).isEnabled = true }
     }
 
     // 夕日/朝日を使う(insert=true)/使わない(insert=false)。他方の指定は保持する。
@@ -5748,8 +5787,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // --- エッジ端末 ---
     private fun selectedEdge(): Edge? {
         val i = edgeSpinner.selectedItemPosition
-        return if (i in 1..edges.size) edges[i - 1] else null
+        return if (i in 1..edgeSpinnerEdges.size) edgeSpinnerEdges[i - 1] else null
     }
+
+    // スピナーに並べるエッジ端末。**名前順**にする(2026-09-01 UI依頼)。登録順のままだと増えるほど探しにくい。
+    //  位置→端末の対応はこの一覧が権威(選択の保存もここから引く)。
+    //  登録一覧 edges そのものは並べ替えない(エッジ端末設定の並びと保存順を変えないため)。
+    private var edgeSpinnerEdges: List<Edge> = emptyList()
+    private fun sortedEdges(): List<Edge> =
+        edges.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
 
     // --- エッジ端末の登録(prefsに永続化。設定で追加・検索で自動登録。オフラインでも選択可) ---
     private fun hgcPrefs() = getSharedPreferences("hgc", MODE_PRIVATE)
@@ -6453,7 +6499,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (planId.isEmpty()) return
         val stored = planEdgeName(planId)
         val idx = if (stored.isEmpty()) 0
-                  else edges.indexOfFirst { it.name == stored }.let { if (it >= 0) it + 1 else 0 }
+                  else edgeSpinnerEdges.indexOfFirst { it.name == stored }.let { if (it >= 0) it + 1 else 0 }
         if (edgeSpinner.selectedItemPosition != idx) { try { edgeSpinner.setSelection(idx) } catch (_: Exception) {} }
         if (chosen != null && chosen != stored) {
             Toast.makeText(this, "エッジ端末を変更できませんでした。もう一度選んでください", Toast.LENGTH_SHORT).show()
@@ -6463,12 +6509,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun refreshEdgeSpinner() {
         val labels = mutableListOf("無し (スマホで撮影)")
         // IPは動的なので名称のみ表示。常時スイープの生存状態を ●=オンライン/○=オフライン で付す(不明=無印)。
-        edges.forEach {
+        edgeSpinnerEdges = sortedEdges()
+        edgeSpinnerEdges.forEach {
             val mark = when (edgeOnline[it.name]) { true -> "● "; false -> "○ "; null -> "" }
             labels.add(mark + it.name)
         }
         val name = planEdgeName(currentPlanId)
-        val idx = if (name.isEmpty()) 0 else edges.indexOfFirst { it.name == name }.let { if (it >= 0) it + 1 else 0 }
+        val idx = if (name.isEmpty()) 0 else edgeSpinnerEdges.indexOfFirst { it.name == name }.let { if (it >= 0) it + 1 else 0 }
         // このスピナーは currentPlanId の選択を表示している、と先に宣言する(保存先の固定)。
         //  ここで触っていない限り以降の選択通知は保存されないので、順序による漏れは起きない。
         edgeSpinnerPlanId = currentPlanId
