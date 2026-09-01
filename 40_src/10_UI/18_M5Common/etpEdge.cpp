@@ -155,7 +155,10 @@ bool applyTime(const std::string& data)
 	std::string edgeInfoJson(void)
 	{
 		json j;
-		j["name"]  = g_name;
+		// 【キーは種別が分かる名前にする(2026-09-02)】以前は "name" で、撮影計画の進捗応答も
+		//  同じ "name" に**計画名**を入れていた。取り違えたとき見分けが付かず、計画名が
+		//  エッジ端末として台帳へ登録される事故になった。名前で種別が分かるようにする。
+		j["edgeName"] = g_name;
 		// 自分のIP。**モードで場合分けしない**(2026-08-19)。net が STA/AP を問わず
 		//  「今使えるIPv4」を返すので、その先頭をそのまま通知する。
 		//  (以前は WiFi.localIP() が AP時 0.0.0.0 になるため自前で分岐していた)
@@ -301,7 +304,7 @@ bool applyTime(const std::string& data)
 		{
 			// data=planId なら計画別の状態/進捗を返す(1エッジ複数カメラで誤NOCAMERAポップを防ぐ)。
 			// data 空は従来の集約スナップショット(復元/生存確認用)。
-			char b[512];	// serial/assignedName/model(書き戻し用)を含むため 256→512
+			char b[640];	// serial/assignedName/model + planName/id を含むため 512→640
 			int32_t len = sizeof(b);
 			const char* pid = pk.data.empty() ? nullptr : pk.data.c_str();
 			if (hge_getProgressJsonFor(pid, b, &len) == ERR_HGC_OK) { rd = b; }

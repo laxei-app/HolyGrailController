@@ -190,6 +190,9 @@ object EdgeBleLink {
         return found
     }
 
+    // 外(ネイティブ)から畳ませる。応答の取り違えを見つけたときに呼ばれる。
+    fun drop(name: String) = dropLink(name)
+
     private fun dropLink(name: String) {
         links.remove(name)?.close()
     }
@@ -314,6 +317,11 @@ object EdgeBleLink {
             // 何バイト届いたところで詰まったのかを残す(0=応答が全く来ていない / 途中=分割の取りこぼし)。
             val got = synchronized(lk.rxBuf) { lk.rxBuf.size() }
             log("reply timeout (" + target + ") got=" + got + "B")
+            // 【タイムアウトはリンクごと畳む(2026-09-02)】待つのをやめただけでリンクを残すと、
+            //  **まだ飛んでいる本来の応答が次の要求の窓へ落ちて**、別コマンド/別計画の答えとして
+            //  拾われる。cmd 照合と計画idの照合ですり抜けは弾けるが、そもそも持ち越さないのが本筋。
+            //  TCP は失敗で closeConn() して同じことをしている。BLE もそれに揃える。
+            dropLink(target)
             return null
         } catch (e: Exception) {
             log("exchange failed: " + e.message)

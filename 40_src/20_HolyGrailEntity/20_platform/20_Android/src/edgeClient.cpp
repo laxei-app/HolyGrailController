@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <cerrno>
 #include <cstring>
+#include <functional>
 #include <mutex>
 #include <set>
 #include <string>
@@ -76,7 +77,8 @@ namespace
 	}
 
 	// TCP で 1 フレーム送って ack/nak を読む。return: method(ACK/NAK) or 0。応答 data は outData。
-	int tcpRequest(int fd, uint16_t cmd, uint16_t method, const std::string& data, std::string& outData)
+	// 応答は**パケットのまま**返す(cmd を捨てない)。要求と対応しているかを呼び側が確かめられるようにする。
+	int tcpRequest(int fd, uint16_t cmd, uint16_t method, const std::string& data, etp::packet& rp)
 	{
 		std::vector<uint8_t> out = etp::encode(cmd, method, data);
 		// MSG_NOSIGNAL: 相手が閉じた接続(使い回しで stale の場合)への send で SIGPIPE により
@@ -87,9 +89,8 @@ namespace
 		uint8_t buf[1024];
 		for (int i = 0; i < 64; ++i)	// 最大数回読む
 		{
-			etp::packet pk;
-			int c = etp::decode(rx.data(), rx.size(), pk);
-			if (c > 0) { outData = pk.data; return pk.method; }
+			int c = etp::decode(rx.data(), rx.size(), rp);
+			if (c > 0) { return rp.method; }
 			ssize_t n = recv(fd, buf, sizeof(buf), 0);
 			if (n <= 0) { break; }
 			rx.insert(rx.end(), buf, buf + n);
@@ -170,8 +171,36 @@ namespace
 
 	// BLE で 1 往復する。Android の BLE API は Kotlin にしかないので、そちらへ呼び返す。
 	//  return: method(ACK/NAK) or 0(失敗)。
+	// BLE の線を畳む。取り違えを見つけたときに呼ぶ(TCP の closeConn と同じ役目)。
+	//  畳んでおかないと、まだ飛んでいる本来の応答が次の要求の窓へ落ちて連鎖する。
+	void bleDropLink(const std::string& target)
+	{
+		JavaVM* vm = hgeJavaVm();
+		if (vm == nullptr) { return; }
+		JNIEnv* env = nullptr;
+		bool attached = false;
+		if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK)
+		{
+			if (vm->AttachCurrentThread(&env, nullptr) != JNI_OK) { return; }
+			attached = true;
+		}
+		jclass cls = env->FindClass("app/laxei/holygrail/HgeNative");
+		jmethodID mid = (cls != nullptr) ? env->GetStaticMethodID(cls, "bleDrop", "(Ljava/lang/String;)V") : nullptr;
+		if (mid != nullptr)
+		{
+			jstring jt = env->NewStringUTF(target.c_str());
+			env->CallStaticVoidMethod(cls, mid, jt);
+			if (env->ExceptionCheck()) { env->ExceptionClear(); }
+			env->DeleteLocalRef(jt);
+		}
+		if (cls != nullptr) { env->DeleteLocalRef(cls); }
+		if (attached) { vm->DetachCurrentThread(); }
+	}
+
+	// BLE も TCP と同じく応答をパケットのまま返す。以前は data と method だけ取り出して
+	//  **cmd を捨てていた**ため、別コマンドの応答が紛れ込んでも見分けが付かなかった。
 	int bleRequest(const std::string& target, uint16_t cmd, uint16_t method,
-	               const std::string& data, std::string& out)
+	               const std::string& data, etp::packet& rp)
 	{
 		JavaVM* vm = hgeJavaVm();
 		if (vm == nullptr) { return 0; }
@@ -203,8 +232,7 @@ namespace
 				const jsize n = env->GetArrayLength(rb);
 				std::vector<uint8_t> rx(static_cast<size_t>(n));
 				if (n > 0) { env->GetByteArrayRegion(rb, 0, n, reinterpret_cast<jbyte*>(rx.data())); }
-				etp::packet pk;
-				if (etp::decode(rx.data(), rx.size(), pk) > 0) { out = pk.data; result = pk.method; }
+				if (etp::decode(rx.data(), rx.size(), rp) > 0) { result = rp.method; }
 				env->DeleteLocalRef(jr);
 			}
 			env->DeleteLocalRef(ja);
@@ -260,32 +288,111 @@ namespace
 	// 永続接続で「操作の最初の1コマンド」を送る。使い回し接続が死んでいたら 1 度だけ張り直して再送。
 	// return: method(ACK/NAK) or 0(失敗)。要 g_connMtx。
 	int firstReq(const std::string& host, int port, uint16_t cmd, uint16_t method,
-	             const std::string& data, std::string& out)
+	             const std::string& data, etp::packet& rp)
 	{
 		bool fresh = false;
 		int fd = ensureConn(host, port, &fresh);
 		if (fd >= 0)
 		{
 			if (!fresh) { drainSocket(fd); }			// 使い回しは残骸を掃除してから
-			int m = tcpRequest(fd, cmd, method, data, out);
+			int m = tcpRequest(fd, cmd, method, data, rp);
 			if (m) { return m; }
 			if (fresh) { closeConn(); return 0; }		// 新規接続でも失敗ならエッジ側の問題
 			closeConn();								// 使い回しが stale → 張り直して 1 回だけ再送
 			fd = ensureConn(host, port, &fresh);
 		}
 		if (fd < 0) { return 0; }
-		int m = tcpRequest(fd, cmd, method, data, out);
+		int m = tcpRequest(fd, cmd, method, data, rp);
 		if (!m) { closeConn(); }
 		return m;
 	}
 
 	// ETP を 1 往復する唯一の関門。ここでトランスポートを選ぶ。
 	//  以降のコマンド実装はどちらで話しているかを知らない。
+	//
+	// 【要求と応答の対応づけ(2026-09-02)】エッジは応答を要求と同じ cmd で返す
+	//  (etpEdge.cpp の etp::encode(pk.cmd, rm, rd))。**違う cmd が返ったら取り違え**なので、
+	//  捨てて失敗にし、線も畳む。これが無いと、時間切れにした要求の遅れて来た応答が
+	//  次の要求の答えとして採用される(実害: 撮影計画名がエッジ端末として台帳に載った)。
+	//  TCP/BLE のどちらでも、この1か所で効く。
 	int edgeXchg(const std::string& host, int port, uint16_t cmd, uint16_t method,
 	             const std::string& data, std::string& out)
 	{
-		if (g_useBle.load()) { return bleRequest(host, cmd, method, data, out); }
-		return firstReq(host, port, cmd, method, data, out);
+		etp::packet rp;
+		const int m = g_useBle.load() ? bleRequest(host, cmd, method, data, rp)
+		                              : firstReq(host, port, cmd, method, data, rp);
+		if (m == 0) { return 0; }
+		if (rp.cmd != cmd)
+		{
+			ELOG("edgeXchg: reply cmd mismatch want=%u got=%u (discard)", (unsigned)cmd, (unsigned)rp.cmd);
+			if (g_useBle.load()) { bleDropLink(host); } else { closeConn(); }
+			return 0;
+		}
+		out = rp.data;
+		return m;
+	}
+
+	// 検索応答を1件ずつ受け入れ判定して JSON 配列に組み立てる。
+	//  **UDP/BLE のどちらもここだけを通る**(経路ごとに書かない)。
+	//   ・検索応答(C_SEARCH/M_ACK)か … 別コマンドの応答が紛れ込むのを弾く
+	//   ・edgeInfo の形か … edgeName と ip があること。進捗応答などはどちらも持たない
+	//   ・重複していないか … 同じ端末名は1件だけ(BLEはAPで全台 192.168.4.1 になり得るので名前で見る)
+	class searchCollector
+	{
+		std::set<std::string> seen;
+		std::string           arr = "[";
+	public:
+		void offer(const etp::packet& pk)
+		{
+			if (pk.cmd != etp::C_SEARCH || pk.method != etp::M_ACK) { return; }
+			const std::string nm = jsonStr(pk.data, "edgeName");
+			const std::string ip = jsonStr(pk.data, "ip");
+			if (nm.empty() || ip.empty()) { return; }
+			if (!seen.insert(nm).second) { return; }
+			if (arr.size() > 1) { arr += ","; }
+			arr += pk.data;
+		}
+		std::string done(void) { return arr + "]"; }
+	};
+
+	// 探索の**集め方だけ**が経路で違う。ここと edgeXchg 以外に経路の分岐を作らないこと。
+	//  UDP … ブロードキャスト1発で、相手不明の応答が複数返る
+	//  BLE … ブロードキャストが無いので、広告をスキャンして相手ごとに1往復する
+	void edgeDiscover(int timeoutMs, const std::function<void(const etp::packet&)>& sink)
+	{
+		if (g_useBle.load())
+		{
+			for (const std::string& nm : bleScanNames(timeoutMs))
+			{
+				if (nm.empty()) { continue; }
+				etp::packet rp;
+				if (bleRequest(nm, etp::C_SEARCH, etp::M_GET, "", rp) == etp::M_ACK) { sink(rp); }
+			}
+			return;
+		}
+		int fd = socket(AF_INET, SOCK_DGRAM, 0);
+		if (fd < 0) { return; }
+		int yes = 1;
+		setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &yes, sizeof(yes));
+		setRcvTimeout(fd, timeoutMs);
+		std::vector<uint8_t> q = etp::encode(etp::C_SEARCH, etp::M_GET, "");
+		for (uint32_t b : broadcastAddrs())
+		{
+			sockaddr_in dst{};
+			dst.sin_family = AF_INET;
+			dst.sin_port = htons(PORT_DISCOVERY);
+			dst.sin_addr.s_addr = b;
+			sendto(fd, q.data(), q.size(), 0, reinterpret_cast<sockaddr*>(&dst), sizeof(dst));
+		}
+		uint8_t buf[2048];	// edgeInfo は sessions(最大8件)を含むため余裕を持つ
+		for (int i = 0; i < 32; ++i)
+		{
+			ssize_t n = recvfrom(fd, buf, sizeof(buf), 0, nullptr, nullptr);
+			if (n <= 0) { break; }
+			etp::packet pk;
+			if (etp::decode(buf, static_cast<size_t>(n), pk) > 0) { sink(pk); }
+		}
+		close(fd);
 	}
 }
 
@@ -316,59 +423,11 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeSetBle(JNIEnv*, jobject, jboolean u
 JNIEXPORT jstring JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeEdgeSearch(JNIEnv* env, jobject, jint timeoutMs)
 {
-	if (g_useBle.load())
-	{
-		std::string arr = "[";
-		std::set<std::string> seen;	// BLE では IP が全台 192.168.4.1 になり得るので名前で重複排除
-		for (const std::string& nm : bleScanNames(timeoutMs))
-		{
-			if (nm.empty() || seen.count(nm)) { continue; }
-			seen.insert(nm);
-			std::string info;
-			if (bleRequest(nm, etp::C_SEARCH, etp::M_GET, "", info) != etp::M_ACK) { continue; }
-			if (info.empty()) { continue; }
-			if (arr.size() > 1) { arr += ","; }
-			arr += info;
-		}
-		arr += "]";
-		return env->NewStringUTF(arr.c_str());
-	}
-
-	int fd = socket(AF_INET, SOCK_DGRAM, 0);
-	if (fd < 0) { return env->NewStringUTF("[]"); }
-	int yes = 1;
-	setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &yes, sizeof(yes));
-	setRcvTimeout(fd, timeoutMs);
-
-	std::vector<uint8_t> q = etp::encode(etp::C_SEARCH, etp::M_GET, "");
-	for (uint32_t b : broadcastAddrs())
-	{
-		sockaddr_in dst{};
-		dst.sin_family = AF_INET;
-		dst.sin_port = htons(PORT_DISCOVERY);
-		dst.sin_addr.s_addr = b;
-		sendto(fd, q.data(), q.size(), 0, reinterpret_cast<sockaddr*>(&dst), sizeof(dst));
-	}
-
-	std::string arr = "[";
-	std::set<std::string> seen;	// ip で重複排除
-	uint8_t buf[2048];	// edgeInfo は sessions(実行中セッション一覧・最大8件)を含むため余裕を持つ
-	for (int i = 0; i < 32; ++i)
-	{
-		ssize_t n = recvfrom(fd, buf, sizeof(buf), 0, nullptr, nullptr);
-		if (n <= 0) { break; }
-		etp::packet pk;
-		int c = etp::decode(buf, static_cast<size_t>(n), pk);
-		if (c <= 0 || pk.cmd != etp::C_SEARCH || pk.method != etp::M_ACK) { continue; }
-		std::string ip = jsonStr(pk.data, "ip");
-		if (ip.empty() || seen.count(ip)) { continue; }
-		seen.insert(ip);
-		if (arr.size() > 1) { arr += ","; }
-		arr += pk.data;
-	}
-	arr += "]";
-	close(fd);
-	return env->NewStringUTF(arr.c_str());
+	// 集め方だけ経路に任せ、**受け入れ判定は共通の searchCollector 一本**に通す。
+	//  以前はここに UDP 版と BLE 版の2つの実装があり、検証は UDP 側にしか無かった。
+	searchCollector col;
+	edgeDiscover(timeoutMs, [&](const etp::packet& pk) { col.offer(pk); });
+	return env->NewStringUTF(col.done().c_str());
 }
 
 // 直近のエッジ操作でエッジが返した「お知らせコード」(0=なし)。何が悪かったのかを画面に出すのに使う。
@@ -413,10 +472,11 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring
 	int fd = g_connFd;	// 以降は確立済みの同一接続で送る(TCPのとき)
 	// 以降の 2)〜3) はトランスポートを問わず同じ手順で送る。TCP なら確立済みの fd を使い回し、
 	// BLE なら Kotlin 経由で 1 往復する。撮影開始の手順自体は変えていない。
+	// 経路の分岐はここでは持たない(edgeXchg が唯一の関門)。TCP なら同じ接続を使い回し、
+	//  BLE なら BLE で1往復する。応答の cmd 照合も edgeXchg が行う。
 	auto step = [&](uint16_t cmd, uint16_t method, const std::string& body, std::string& o) -> int
 	{
-		if (g_useBle.load()) { return bleRequest(hostS, cmd, method, body, o); }
-		return tcpRequest(fd, cmd, method, body, o);
+		return edgeXchg(hostS, port, cmd, method, body, o);
 	};
 	// C_CAPTURE_PLAN(約5.5KB)のインポートはエッジ側でSD書込み+スケジュール構築に~5秒かかり、
 	// さらに他セッションのカメラ確立と重なると遅れる。既定の受信5秒では2台目の順次開始が
@@ -659,7 +719,16 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeProgress(JNIEnv* env, jobject, jstr
 	std::lock_guard<std::mutex> lk(g_connMtx);
 	std::string rd;
 	int m = edgeXchg(hostS, port, etp::C_PROGRESS, etp::M_GET, pidS, rd);
-	return env->NewStringUTF((m == etp::M_ACK) ? rd.c_str() : "");
+	if (m != etp::M_ACK) { return env->NewStringUTF(""); }
+	// 【計画idの照合(2026-09-02)】同じ cmd を計画ごとに連続して投げるので、cmd 照合だけでは
+	//  「別の計画の進捗」を見分けられない。エッジは要求した id をそのまま返すので突き合わせる。
+	//  空要求(集約スナップショット)は特定の計画を指さないので照合しない。
+	if (!pidS.empty() && jsonStr(rd, "id") != pidS)
+	{
+		ELOG("edgeProgress: plan id mismatch want=%s got=%s (discard)", pidS.c_str(), jsonStr(rd, "id").c_str());
+		return env->NewStringUTF("");
+	}
+	return env->NewStringUTF(rd.c_str());
 }
 
 // エッジのログファイル名一覧(JSON配列 ["hg_....log",...])を取得する。失敗時 "[]"。

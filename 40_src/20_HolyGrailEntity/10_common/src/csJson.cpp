@@ -257,7 +257,10 @@ namespace csjson
 	std::string toJson(const hgc::cs& plan)
 	{
 		json j;
-		j["name"]      = plan.name;
+		// 【キー名(2026-09-02)】計画名は "planName"。"name" は機材やエッジ端末でも使う
+		//  一般名なので、別種のJSONと取り違えたときに見分けが付かなかった。
+		//  **保存ファイルの形式も変わる**(旧い計画ファイルは名前を失う。計画は作り直す)。
+		j["planName"]  = plan.name;
 		j["start"]     = dtToJson(plan.start);
 		j["end"]       = dtToJson(plan.end);
 		j["place"]     = placeToJson(plan.place);
@@ -331,7 +334,7 @@ namespace csjson
 		if (j.is_discarded() || !j.is_object()) { return false; }
 
 		plan = hgc::cs{};
-		plan.name      = j.value("name", std::string());
+		plan.name      = j.value("planName", std::string());
 		if (j.contains("start")) { plan.start = dtFromJson(j["start"]); }
 		if (j.contains("end"))   { plan.end   = dtFromJson(j["end"]); }
 		if (j.contains("place"))  { plan.place  = placeFromJson(j["place"]); }

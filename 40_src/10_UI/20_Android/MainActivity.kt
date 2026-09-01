@@ -426,7 +426,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 val arr = JSONArray(js)
                 for (i in 0 until arr.length()) {
                     val o = arr.getJSONObject(i)
-                    found.add(Edge(o.optString("name", "エッジ端末"), o.optString("ip"), o.optInt("port", 50506)))
+                    found.add(Edge(o.optString("edgeName"), o.optString("ip"), o.optInt("port", 50506)))
                 }
             } catch (_: Exception) {}
             // ローカル計画一覧(id)。各エッジに planId 別に問い合わせ、そのエッジで走行中の“全”計画を復元する。
@@ -437,8 +437,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 val pa = JSONArray(HgeNative.nativeListPlans())
                 for (k in 0 until pa.length()) { val po = pa.optJSONObject(k) ?: continue; val id = po.optString("id"); if (id.isNotEmpty()) localPlans.add(id) }
             } catch (_: Exception) {}
+            runOnUiThread { pruneOrphanPlanEdges(localPlans.toSet()) }   // 消えた計画のエッジ割当を掃除
             for (ed in found) {
-                runOnUiThread { updateEdgeIp(ed.name, ed.ip, ed.port); refreshEdgeSpinner() }   // 発見したエッジは撮影有無に関わらず登録
+                runOnUiThread { registerDiscoveredEdge(ed.name, ed.ip, ed.port); refreshEdgeSpinner() }   // 発見したエッジは撮影有無に関わらず登録
                 for (pid in localPlans) {
                     val pj = try { HgeNative.nativeEdgeProgress(ed.addr(), ed.port, pid) } catch (_: Exception) { "" }
                     if (pj.isEmpty()) continue
@@ -3421,7 +3422,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun buildPlanRow(p: JSONObject): View {
         val id = p.optString("id")
-        val name = p.optString("name")
+        val name = p.optString("planName")
         val capturable = p.optBoolean("capturable")
         val capturing = capturingPlans.contains(id)            // 実撮影中=点滅
         val disconnected = disconnectedPlans.contains(id)      // カメラ未検出(NOCAMERA)=✖点灯
@@ -3672,7 +3673,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 .firstOrNull { it.isNotEmpty() }
             if (!label.isNullOrEmpty()) return label
             // カメラ側に名前が1つも無いとき(機種名すら空)は、せめてどの計画かを言う。
-            val pn = o.optString("name")
+            val pn = o.optString("planName")
             if (pn.isNotEmpty()) return "計画「$pn」のカメラ"
         } catch (_: Exception) {}
         return "カメラ"
@@ -3905,7 +3906,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 if (capturingPlans.contains(id) || waitingPlans.contains(id) || disconnectedPlans.contains(id) ||
                     startingPlans.contains(id) || stoppingPlans.contains(id)) continue   // 念のため動作中は残す
                 if (isPlanOnEdge(id)) continue   // 項目6: エッジ保有(送信済み)の計画は一括削除の対象外
-                past.add(id to o.optString("name"))
+                past.add(id to o.optString("planName"))
             }
         } catch (_: Exception) {}
         if (past.isEmpty()) { Toast.makeText(this, "終了日が過去の計画はありません", Toast.LENGTH_SHORT).show(); return }
@@ -4156,7 +4157,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun updatePlanDisplay(json: String) {
         try {
             val o = JSONObject(json)
-            capName.text = o.optString("name")
+            capName.text = o.optString("planName")
             // 選択中計画の開始/終了をピッカー用カレンダーへ同期(計画切替時に時刻表示を追従)。
             try {
                 fmtIso.parse(o.optString("start"))?.let { startCal.time = it }
@@ -4480,7 +4481,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     if (assignedName.isNotEmpty()) append("  $assignedName")
                     if (serial.isNotEmpty()) append("  Sn:$serial")
                 }
-                list.add(Reservation(id, o.optString("name"), key, label, model, serial, planEdgeName(id), s, e))
+                list.add(Reservation(id, o.optString("planName"), key, label, model, serial, planEdgeName(id), s, e))
             }
         } catch (_: Exception) {}
         list.sortWith(compareBy({ it.camLabel }, { it.startMs }))
@@ -4598,7 +4599,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             for (i in 0 until arr.length()) {
                 val o = arr.optJSONObject(i) ?: continue
                 if (o.optString("id") != planId) continue
-                plan = o.optString("name")
+                plan = o.optString("planName")
                 cam = o.optString("camName").ifEmpty { o.optString("camModel") }   // 項目B/C: アプリ登録の名称
                 break
             }
@@ -5607,7 +5608,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         twilightPages.clear()
         schedulePages.clear()
         val ed = !planReadOnly
-        val planName = o.optString("name")
+        val planName = o.optString("planName")
         o.optJSONArray("blocks")?.let { arr ->
             for (i in 0 until arr.length()) {
                 val b = arr.getJSONObject(i)
@@ -5861,15 +5862,22 @@ class MainActivity : AppCompatActivity(), HgeListener {
         } catch (_: Exception) {}
     }
 
+    // 【壊れた行は読み込み時に落とす(2026-09-02)】台帳は一度おかしな行が入ると保存され続け、
+    //  自分では直らなかった。エッジのLCDは半角英数字しか出せないので、非ASCIIの名前は
+    //  端末名ではない=別種のJSON(撮影計画の進捗)が紛れ込んだ跡。落として書き戻す。
     private fun loadRegisteredEdges() {
         edges.clear()
+        var dropped = false
         try {
             val a = JSONArray(hgcPrefs().getString("regEdges", "[]") ?: "[]")
             for (i in 0 until a.length()) {
                 val o = a.getJSONObject(i)
-                edges.add(Edge(o.optString("name", "エッジ端末"), o.optString("ip"), o.optInt("port", 50506)))
+                val nm = o.optString("name")
+                if (nm.isEmpty() || !isAsciiEdgeName(nm)) { dropped = true; continue }
+                edges.add(Edge(nm, o.optString("ip"), o.optInt("port", 50506)))
             }
-        } catch (_: Exception) {}
+        } catch (_: Exception) { return }   // 読めないときは触らない(消してしまわない)
+        if (dropped) saveRegisteredEdges()
     }
     // エッジの端末名を変更したとき、スマホ側の登録も追従させる(2026-08-08)。
     //  ・登録済みリスト(regEdges)の名前を差し替える(新名が既にあれば古い方を消すだけ)
@@ -6473,7 +6481,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 val arr = JSONArray(js)
                 for (i in 0 until arr.length()) {
                     val o = arr.getJSONObject(i)
-                    if (o.optString("name") == name) return Edge(name, o.optString("ip"), o.optInt("port", 50506))
+                    if (o.optString("edgeName") == name) return Edge(name, o.optString("ip"), o.optInt("port", 50506))
                 }
             } catch (_: Exception) {}
         }
@@ -6481,13 +6489,35 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
     // 登録一覧の last-seen IP を更新(stop/poll 用に開始時の解決結果を保持)。
     // 常時スイープからも30秒ごとに呼ばれるため、変化が無ければ prefs へ書かない。
+    // 【登録済みのIP更新だけ】知らない名前が来ても**台帳に足さない**(2026-09-02)。
+    //  以前はここで黙って新規登録していたため、検索応答に紛れ込んだ別種のJSON
+    //  (撮影計画の進捗)の名前が、そのままエッジ端末として永久に残った。
+    //  台帳へ足せるのは、検証済みの探索結果(registerDiscoveredEdge)と画面からの登録だけ。
     private fun updateEdgeIp(name: String, ip: String, port: Int) {
         val i = edges.indexOfFirst { it.name == name }
-        if (i >= 0) {
-            if (edges[i].ip == ip && edges[i].port == port) return   // 変化なし
-            edges[i] = Edge(name, ip, port)
-        } else edges.add(Edge(name, ip, port))
+        if (i < 0) return                                        // 未登録は足さない
+        if (ip.isEmpty()) return                                 // 接続先の分からない値で潰さない
+        if (edges[i].ip == ip && edges[i].port == port) return   // 変化なし
+        edges[i] = Edge(name, ip, port)
         saveRegisteredEdges()
+    }
+
+    // 探索で見つけたエッジを台帳へ入れる(未登録なら追加、既登録ならIP更新)。
+    //  ここが**ネットワーク由来の唯一の登録口**なので、名前と接続先を確かめてから入れる。
+    private fun registerDiscoveredEdge(name: String, ip: String, port: Int) {
+        if (name.isEmpty() || !isAsciiEdgeName(name)) return   // エッジのLCDに出せない名前は端末名ではない
+        if (ip.isEmpty()) return                               // 接続先が無いものは端末として登録しない
+        if (edges.none { it.name == name }) { edges.add(Edge(name, ip, port)); saveRegisteredEdges() }
+        else updateEdgeIp(name, ip, port)
+    }
+
+    // 実在しない計画に紐づくエッジ割当(pe_<計画id>)を落とす。計画を消しても残り続けるため。
+    private fun pruneOrphanPlanEdges(liveIds: Set<String>) {
+        if (liveIds.isEmpty()) return   // 計画一覧が取れていないときは触らない
+        val p = hgcPrefs()
+        val gone = p.all.keys.filter { it.startsWith("pe_") && !liveIds.contains(it.removePrefix("pe_")) }
+        if (gone.isEmpty()) return
+        p.edit().apply { gone.forEach { remove(it) } }.apply()
     }
 
     // 実際に保存されているエッジ割当を、スピナーの表示へ反映する。
@@ -6834,7 +6864,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     val arr = JSONArray(js)
                     for (i in 0 until arr.length()) {
                         val o = arr.optJSONObject(i) ?: continue
-                        val nm = o.optString("name"); if (nm.isEmpty()) continue
+                        val nm = o.optString("edgeName"); if (nm.isEmpty()) continue
                         val sess = HashMap<String, Int>()
                         val has = o.has("sessions")   // 旧FWのエッジは sessions を返さない→セッション同期はしない
                         if (has) {
@@ -6894,7 +6924,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         //  既定=採らない に戻る)ので、毎回送って揃え直す。数十バイト。
                         //  設定は**その端末のもの**を送る(端末ごとに違ってよい)。
                         sendEdgeLogOpt(nm)
-                        updateEdgeIp(nm, f.edge.ip, f.edge.port)   // DHCPのIP変動を常時追従
+                        registerDiscoveredEdge(nm, f.edge.ip, f.edge.port)   // 未登録なら登録・既登録はIP追従
                         if (f.hasSessions) reconcileEdgeSessions(f.edge, f.sessions)
                         if (f.hasHeld) reconcileEdgeRoster(f.edge, f.heldPlans)   // 項目6: エッジ側削除の検知→ロック解除
                     }
@@ -7060,7 +7090,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val pa = JSONArray(HgeNative.nativeListPlans())
             for (k in 0 until pa.length()) {
                 val po = pa.optJSONObject(k) ?: continue
-                if (po.optString("id") == id) return po.optString("name")
+                if (po.optString("id") == id) return po.optString("planName")
             }
         } catch (_: Exception) {}
         return ""

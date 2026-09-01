@@ -555,7 +555,8 @@ namespace
 		//  ここで引き直さないと NPF と画角が "---" のまま戻らない(2026-08-19)。
 		applyOwnedCameraSettings(g_plan.camera);
 		char num[64];
-		std::string j = "{\"name\":\"" + jesc(g_plan.name) + "\"";
+		// 計画名は "planName"(2026-09-02)。"name" は機材やエッジ端末でも使う一般名だった。
+		std::string j = "{\"planName\":\"" + jesc(g_plan.name) + "\"";
 		// 撮影周期は小数第1位まで扱う(長秒ss時に ss+2.0/+2.5/+3.0 のような細かい設定を可能にするため)。
 		// int へ切り捨てると 15.5 が 15 に化けて UI と実体がズレるので小数で出す。
 		std::snprintf(num, sizeof(num), "%.1f", g_plan.interval);
@@ -2190,7 +2191,7 @@ int32_t hge_listPlansJson(char* buf, int32_t* inoutLen)
 		// カメラ予約表(項目17)と重複開始の抑止に使うため、計画のカメラも載せる。
 		//  model/serial=同一機体の判定に使う / assignedName・name=表示用。
 		const hgc::camera& pc = cs.camera;
-		std::string o = "{\"id\":\"" + jesc(id) + "\",\"name\":\"" + jesc(cs.name) + "\"" +
+		std::string o = "{\"id\":\"" + jesc(id) + "\",\"planName\":\"" + jesc(cs.name) + "\"" +
 		     ",\"start\":\"" + dtToStr(cs.start) + "\",\"end\":\"" + dtToStr(cs.end) + "\"" +
 		     ",\"capturable\":" + std::string(capturable ? "true" : "false") +
 		     ",\"camModel\":\"" + jesc(pc.model) + "\"" +
@@ -2377,8 +2378,8 @@ int32_t hge_renamePlan(const char* id, const char* name)
 	if (!dataManager::loadPlanFile(sid, saved)) { return ERR_HGC_NO_ELEMENT; }
 	nlohmann::json w = nlohmann::json::parse(saved, nullptr, false);
 	if (w.is_discarded() || !w.is_object()) { return ERR_HGC_JSON_PARSE; }
-	if (w.contains("plan") && w["plan"].is_object()) { w["plan"]["name"] = std::string(name); }
-	else { w["name"] = std::string(name); }
+	if (w.contains("plan") && w["plan"].is_object()) { w["plan"]["planName"] = std::string(name); }
+	else { w["planName"] = std::string(name); }
 	return dataManager::savePlanFile(sid, w.dump()) ? ERR_HGC_OK : ERR_HGC_INVALID_STATE;
 }
 
@@ -3001,9 +3002,12 @@ int32_t hge_recordCameraIdentity(const char* model, const char* serial, const ch
 int32_t hge_getProgressJson(char* buf, int32_t* inoutLen)
 {
 	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
-	char tmp[320];
+	// 【キー名(2026-09-02)】"name" は検索応答(edgeInfo)の**エッジ端末名**と同じキーだった。
+	//  取り違えたときに見分けが付かないので "planName" にする。"id" は要求した計画id
+	//  (集約版は特定の計画を指さないので空)。スマホは要求と一致するかを確かめる。
+	char tmp[384];
 	std::snprintf(tmp, sizeof(tmp),
-		"{\"state\":%d,\"name\":\"%s\",\"frame\":%d,\"total\":%d,\"remainSec\":%d,\"elapsedSec\":%d,"
+		"{\"state\":%d,\"id\":\"\",\"planName\":\"%s\",\"frame\":%d,\"total\":%d,\"remainSec\":%d,\"elapsedSec\":%d,"
 		"\"ccm\":\"%s\",\"iso\":\"%s\",\"ss\":\"%s\",\"fn\":\"%s\"}",
 		g_state.load(), jesc(g_plan.name).c_str(), g_pgFrame, g_pgTotal, g_pgRemain, g_pgElapsed,
 		jesc(g_pgCcm).c_str(), g_pgExp.iso.c_str(), g_pgExp.ss.c_str(), g_pgExp.fn.c_str());
@@ -3039,12 +3043,14 @@ int32_t hge_getProgressJsonFor(const char* planId, char* buf, int32_t* inoutLen)
 		cSerial = S->dev.serialno; cAssignedName = S->dev.assignedName; cModel = S->dev.model;	// 未接続なら空
 		cNotice = S->authNotice;	// 認証で弾かれている理由(0=無し)。スマホの案内を言い換えるため
 	}
-	char tmp[512];
+	// "id" は**要求された計画id をそのまま返す**。スマホは自分が聞いた計画の応答かを
+	//  これで確かめる(別の計画の進捗が貼られるのを防ぐ)。
+	char tmp[640];
 	std::snprintf(tmp, sizeof(tmp),
-		"{\"state\":%d,\"name\":\"%s\",\"frame\":%d,\"total\":%d,\"remainSec\":%d,\"elapsedSec\":%d,"
+		"{\"state\":%d,\"id\":\"%s\",\"planName\":\"%s\",\"frame\":%d,\"total\":%d,\"remainSec\":%d,\"elapsedSec\":%d,"
 		"\"ccm\":\"%s\",\"iso\":\"%s\",\"ss\":\"%s\",\"fn\":\"%s\","
 		"\"serial\":\"%s\",\"assignedName\":\"%s\",\"model\":\"%s\",\"notice\":%d}",
-		st, jesc(nm).c_str(), fr, tot, rem, el,
+		st, jesc(planId).c_str(), jesc(nm).c_str(), fr, tot, rem, el,
 		jesc(ccm).c_str(), exp.iso.c_str(), exp.ss.c_str(), exp.fn.c_str(),
 		jesc(cSerial).c_str(), jesc(cAssignedName).c_str(), jesc(cModel).c_str(), cNotice);
 	int32_t need = static_cast<int32_t>(std::strlen(tmp)) + 1;
