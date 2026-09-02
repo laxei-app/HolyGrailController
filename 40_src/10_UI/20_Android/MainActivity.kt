@@ -3533,7 +3533,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         txt.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         txt.addView(tv)
         val subTv = TextView(this)
-        subTv.text = planEdgeName(id).ifEmpty { "無し(スマホ)" } + "  " +
+        subTv.text = planEdgeName(id).ifEmpty { kPhoneEdgeLabel } + "  " +
                      p.optString("camAssignedName")
                          .ifEmpty { p.optString("camModel") }
                          .ifEmpty { "未定義" }
@@ -6490,7 +6490,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         edges.forEach { a.put(JSONObject().apply { put("name", it.name); put("ip", it.ip); put("port", it.port) }) }
         hgcPrefs().edit().putString("regEdges", a.toString()).apply()
     }
-    // 計画ごとのエッジ選択(prefsに端末"名称"を保存。空=無し=スマホで撮影)。
+    // 「端末」欄でエッジを使わない(スマホ直結)ときの表示(2026-09-02 UI依頼)。
+    //  選択肢と一覧の副行で同じ文字を出すため、1か所に置いて両方から使う。
+    private val kPhoneEdgeLabel = "スマホ"
+
+    // 計画ごとのエッジ選択(prefsに端末"名称"を保存。空=スマホ直結)。
     // IPはDHCPで変わり事前に不定のため、識別は端末名称で行い、IPは開始時に検索で解決する。
     private fun planEdgeName(planId: String) = if (planId.isEmpty()) "" else (hgcPrefs().getString("pe_$planId", "") ?: "")
     private fun setPlanEdgeName(planId: String, name: String) {
@@ -6572,7 +6576,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private fun refreshEdgeSpinner() {
-        val labels = mutableListOf("無し (スマホで撮影)")
+        val labels = mutableListOf(kPhoneEdgeLabel)
         // IPは動的なので名称のみ表示。常時スイープの生存状態を ●=オンライン/○=オフライン で付す(不明=無印)。
         edgeSpinnerEdges = sortedEdges()
         edgeSpinnerEdges.forEach {
