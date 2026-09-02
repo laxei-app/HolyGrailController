@@ -2522,7 +2522,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 planExec.execute {
                     HgeNative.nativeSetPlanCamera(name)
                     val sched = HgeNative.nativeScheduleJson()
-                    runOnUiThread { latestSchedule = sched; updatePlanDisplay(sched); reloadExpoEditors() }  // item3: iso/ss範囲をカメラに合わせ直す
+                    // 一覧の副行にカメラを出すようになったので(2026-09-02)、ここでも作り直す。
+                    //  詳細だけ直して一覧が古いままだと、同じ画面で違うカメラが2か所に出る。
+                    runOnUiThread { latestSchedule = sched; updatePlanDisplay(sched); reloadExpoEditors()  // item3: iso/ss範囲をカメラに合わせ直す
+                                    refreshPlanList() }
                 }
             }.show()
     }
@@ -3522,15 +3525,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 名前の下に副行を出す(2026-09-02 UI依頼)。所持カメラ/レンズの一覧と同じ「見出し＋副行」。
         //  一覧だけ見て「どれがどの端末・どのカメラか」が分かるようにする。開いて確かめなくて済む。
         //  見出しは付けない(2026-09-02 UI依頼)。端末名と愛称だけを並べる。
-        //  愛称はカメラがオンラインになってから入るので、未取得のうちは所持カメラの画面と
-        //  同じく「未定義」と出す(空欄だと不具合に見える)。
+        //  愛称はカメラがオンラインになってから入る。未取得のうちは**機種名**を出す
+        //  (2026-09-02 UI依頼)。「未定義」より、どのカメラの計画かが分かる方が役に立つ。
+        //  機種名も無い(カメラ未設定)ときだけ「未定義」と出す。空欄だと不具合に見える。
         val txt = LinearLayout(this)
         txt.orientation = LinearLayout.VERTICAL
         txt.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         txt.addView(tv)
         val subTv = TextView(this)
-        subTv.text = planEdgeName(id).ifEmpty { "無し(スマホ)" } +
-                     "  " + p.optString("camAssignedName").ifEmpty { "未定義" }
+        subTv.text = planEdgeName(id).ifEmpty { "無し(スマホ)" } + "  " +
+                     p.optString("camAssignedName")
+                         .ifEmpty { p.optString("camModel") }
+                         .ifEmpty { "未定義" }
         subTv.textSize = 12f
         subTv.setTextColor(Color.GRAY)
         subTv.isSingleLine = true
@@ -6491,6 +6497,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (planId.isEmpty()) return
         if (planEdgeName(planId) == name) return   // 変化なしは書かない(誤書き込みの影響を最小化・prefs churn抑制)
         hgcPrefs().edit().putString("pe_$planId", name).apply()
+        // 一覧の副行に端末名を出すようになったので(2026-09-02)、変わったら作り直す。
+        //  スピナーからの選択と、エッジ端末の改名に伴う付け替えの両方がここを通る。
+        if (::planListContainer.isInitialized) refreshPlanList()
     }
     private fun planEdge(planId: String): Edge? {
         val name = planEdgeName(planId)
