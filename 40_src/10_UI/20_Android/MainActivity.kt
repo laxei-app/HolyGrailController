@@ -3521,6 +3521,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         // 名前の下に副行を出す(2026-09-02 UI依頼)。所持カメラ/レンズの一覧と同じ「見出し＋副行」。
         //  一覧だけ見て「どれがどの端末・どのカメラか」が分かるようにする。開いて確かめなくて済む。
+        //  見出しは付けない(2026-09-02 UI依頼)。端末名と愛称だけを並べる。
         //  愛称はカメラがオンラインになってから入るので、未取得のうちは所持カメラの画面と
         //  同じく「未定義」と出す(空欄だと不具合に見える)。
         val txt = LinearLayout(this)
@@ -3528,8 +3529,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         txt.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         txt.addView(tv)
         val subTv = TextView(this)
-        subTv.text = "エッジ:" + planEdgeName(id).ifEmpty { "無し(スマホ)" } +
-                     "  愛称:" + p.optString("camAssignedName").ifEmpty { "未定義" }
+        subTv.text = planEdgeName(id).ifEmpty { "無し(スマホ)" } +
+                     "  " + p.optString("camAssignedName").ifEmpty { "未定義" }
         subTv.textSize = 12f
         subTv.setTextColor(Color.GRAY)
         subTv.isSingleLine = true
