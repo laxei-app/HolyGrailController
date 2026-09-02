@@ -15,6 +15,7 @@ import android.view.MotionEvent
 import android.view.View
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
 
@@ -80,10 +81,7 @@ class CompassView @JvmOverloads constructor(context: Context, attrs: AttributeSe
         c.drawText("S", cx, cy + rad + dp(13f), cardP)
         c.drawText("W", cx - rad - dp(10f), cy + dp(4f), cardP)
         // 太陽/月マーカー
-        drawMarker(c, sunriseAz, sunP, markTxt, "日の出")
-        drawMarker(c, sunsetAz, sunP, markTxt, "日の入")
-        drawMarker(c, moonriseAz, moonP, markTxt, "月出")
-        drawMarker(c, moonsetAz, moonP, markTxt, "月入")
+        drawMarkers(c)
         // 矢印(撮影方向)
         val tipR = rad - dp(8f)
         val tipX = px(azimuth, tipR); val tipY = py(azimuth, tipR)
@@ -98,12 +96,45 @@ class CompassView @JvmOverloads constructor(context: Context, attrs: AttributeSe
         c.drawCircle(cx, cy, dp(4f), tailP)
     }
 
-    private fun drawMarker(c: Canvas, az: Float, dot: Paint, txt: Paint, label: String) {
-        if (az.isNaN()) return
-        val x = px(az, rad); val y = py(az, rad)
-        c.drawCircle(x, y, dp(5f), dot)
-        val ly = if (y < cy) y - dp(7f) else y + dp(14f)
-        c.drawText(label, x, ly, txt)
+    // 日の出/日の入/月の出/月の入(2026-09-02 UI依頼で描き方を変更)。
+    //
+    // 【なぜ外へ出すか】以前は丸の真上/真下に文字を置いていたので、方位の輪・画角の扇・
+    //  E/W の方位ラベルと重なって読めなかった。これらは**必ず東か西の周りに出る**ので
+    //  円の左右には余白がある。文字は丸の外(東側は右へ、西側は左へ)に逃がす。
+    // 【角度も出す】何度から昇る/沈むのかは構図を決めるのに要る。目盛りを読ませずに済ませる。
+    // 【重なりをほどく】太陽と月が近い日は丸も文字も重なる。同じ側のものを上から順に見て、
+    //  行の高さぶん空いていなければ下へずらす(3つ以上でも順に押し下がる)。
+    private class Mark(val az: Float, val label: String, val dot: Paint) { var ly = 0f }
+
+    private fun drawMarkers(c: Canvas) {
+        val all = ArrayList<Mark>()
+        fun add(az: Float, label: String, p: Paint) { if (!az.isNaN()) all.add(Mark(norm(az), label, p)) }
+        add(sunriseAz, "日の出", sunP)
+        add(sunsetAz, "日の入", sunP)
+        add(moonriseAz, "月の出", moonP)
+        add(moonsetAz, "月の入", moonP)
+        if (all.isEmpty()) return
+        for (m in all) c.drawCircle(px(m.az, rad), py(m.az, rad), dp(5f), m.dot)
+
+        val lineH = markTxt.textSize * 1.25f
+        for (east in listOf(true, false)) {
+            val side = all.filter { (it.az < 180f) == east }
+            if (side.isEmpty()) continue
+            for (m in side) m.ly = py(m.az, rad) + markTxt.textSize * 0.35f   // 丸の中心に文字の高さを合わせる
+            val sorted = side.sortedBy { it.ly }
+            for (i in 1 until sorted.size) {
+                if (sorted[i].ly - sorted[i - 1].ly < lineH) sorted[i].ly = sorted[i - 1].ly + lineH
+            }
+            markTxt.textAlign = if (east) Paint.Align.LEFT else Paint.Align.RIGHT
+            for (m in sorted) {
+                val s = m.label + " " + "%.1f°".format(m.az)
+                val tw = markTxt.measureText(s)
+                // 方位ラベル(E/W)より外側から始める。長い文字は画面外へ出ないよう内側へ寄せる。
+                val x = if (east) min(cx + rad + dp(24f), width - tw - dp(2f))
+                        else       max(cx - rad - dp(24f), tw + dp(2f))
+                c.drawText(s, x, m.ly, markTxt)
+            }
+        }
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
