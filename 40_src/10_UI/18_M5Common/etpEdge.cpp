@@ -22,6 +22,7 @@
 #include "debugOut.h"
 #include "notice.h"	// お知らせはコードで返す(文言はUI)
 #include "netThread.h"	// STA/APを区別しないIP列挙
+#include "osClock.h"	// 表示用UTCオフセット(検索応答/ログの時刻)
 
 using json = nlohmann::json;
 
@@ -114,38 +115,46 @@ bool applyLogOpt(const std::string& body)
 
 bool applyTime(const std::string& data)
 	{
+		// 【UTCの整数で受け取る(2026-09-03 仕様変更)】以前は「現地時刻の文字列 + オフセット」を
+		//  受け取り、エッジ側で toUnixUtc して瞬間を組み立て直していた。ところがスマホは文字列と
+		//  オフセットを別の口から作っており、**タイムゾーンを変えた直後に食い違う**ことがあった
+		//  (書式器が生成時のTZを抱えたまま)。結果、エッジの時計が時差ぶんずれて RTC にも焼かれ、
+		//  一晩ずれたまま撮り続けた(2026-09-02 実害)。
+		//  瞬間は UTC の整数だけで受け取れば、書式やタイムゾーンが混ざる余地が無い。
+		//  utcOffsetMin は**表示のため**だけに使う(ずれても時計は狂わない)。
 		json j = json::parse(data, nullptr, false);
 		if (j.is_discarded() || !j.is_object()) { return false; }
-		std::string dts = j.value("datetime", std::string());
-		int off = j.value("utcOffsetMin", 0);
+		if (!j.contains("utc")) { return false; }	// 旧形式(datetime)は受け付けない
+		const long long utc = j.value("utc", 0LL);
+		const int       off = j.value("utcOffsetMin", 0);
+		if (utc < 1577836800LL) { return false; }	// 2020-01-01 より前は明らかに嘘
 
-		hgc::dateTime d{};
-		if (std::sscanf(dts.c_str(), "%hu-%hu-%huT%hu:%hu:%hu",
-		                &d.year, &d.month, &d.day, &d.hour, &d.min, &d.sec) != 6)
-		{
-			return false;
-		}
-		long long utc = hgc::toUnixUtc(d, off);	// ローカル+オフセット → UTC
-
-		// タイムゾーンは常に採る。値が変わったときだけ NVS へ書かれるので摩耗しない。
-		hge_setUtcOffset(off);
-
-		// 【時計は選り好みして合わせる(2026-08-28)】スマホは見つけたエッジへ定期的に時刻を送る。
-		//  毎回そのまま入れると、次の2つで実害が出る。
-		//   ・撮影中に時計が飛ぶ … 周期も窓の判定も std::time を見ているので、コマが飛んだり
-		//     窓が終わったと誤認したりする
-		//   ・時計が戻る … カメラ認証の nc の種は時刻から作る。戻るとカメラが覚えている値を
-		//     下回り、401 が続いて撮れなくなる(2026-08-28 実測)
-		//  そこで「未設定なら無条件」「入っていて差が小さければ触らない」「大きくても撮影中は待つ」。
+		// 【撮影待機中・撮影中は時計もタイムゾーンも受け付けない(2026-09-03 仕様)】
+		//  ・撮影中に時計が飛ぶ … 周期も窓の判定も std::time を見ているので、コマが飛んだり
+		//    窓が終わったと誤認したりする
+		//  ・時計が戻る … カメラ認証の nc の種は時刻から作る。戻るとカメラが覚えている値を
+		//    下回り、401 が続いて撮れなくなる(2026-08-28 実測)
+		//  ・タイムゾーンは窓の時刻計算(buildSchedule)にも効くので、走っている間は動かさない
+		//  **未設定のときだけは無条件**。RTC の電池切れや RTC を持たない機種(StickS3)は
+		//  起動時に時計が無く、これを塞ぐと永久に始まらない。
 		const long long now   = static_cast<long long>(std::time(nullptr));
 		const bool      unset = (now < 1577836800LL);	// 2020-01-01 より前 = 未設定
 		const long long diff  = (now > utc) ? (now - utc) : (utc - now);
 		const bool      busy  = (hge_getState() != HGE_ST_IDLE);
+
+		// タイムゾーンは差の大小によらず採る(現地へ移動しても瞬間は変わらないため diff は 0 のまま)。
+		if (unset || !busy) { hge_setUtcOffset(off); }
+
 		if (unset || (diff > 3 && !busy))
 		{
 			setSystemClock(utc);
 			setRtcFromUtc(utc);
 			DBGLN(col::GRN, "etpEdge: clock set off=%d diff=%lld%s", off, diff, unset ? " (was unset)" : "");
+		}
+		else if (busy && (diff > 3 || off != osclock::utcOffsetMin()))
+		{
+			DBGLN(col::YEL, "etpEdge: clock/tz kept (busy) diff=%lld off=%d cur=%d",
+			      diff, off, osclock::utcOffsetMin());
 		}
 
 		return true;
@@ -170,6 +179,13 @@ bool applyTime(const std::string& data)
 		j["model"] = "Edge";
 		j["fw"]    = std::string(hge_version());
 		j["state"] = hge_getState();
+		// 【自分の時刻を知らせる(2026-09-03)】撮影待機中・撮影中は時計を受け付けないので、
+		//  ずれたまま走り続けることがある。スマホが気づけるよう、現在のUTCと表示用オフセットを出す。
+		//  時計が未設定のうちは載せない(スマホ側で「ずれ」と誤解させないため)。
+		{
+			const long long nowUtc = static_cast<long long>(std::time(nullptr));
+			if (nowUtc >= 1577836800LL) { j["utc"] = nowUtc; j["tzOff"] = osclock::utcOffsetMin(); }
+		}
 		// 実行中セッション一覧。スマホの常時スイープが「このエッジで何が走っているか」を検索応答1発で
 		// 把握し、エッジ側ローカル開始/再起動後の自動再開/停止をスマホ表示へ同期する(§6.2.1)。
 		{

@@ -307,6 +307,15 @@ namespace
 		return m;
 	}
 
+	// C_TIME の中身。**瞬間は UTC の整数だけ**で渡す(2026-09-03)。以前は「現地時刻の文字列 +
+	//  オフセット」で送っていたが、文字列とオフセットの出どころが違い、タイムゾーンを変えた直後に
+	//  食い違って**エッジの時計が時差ぶんずれた**(2026-09-02 実害)。整数なら書式器を通らないので
+	//  混ざりようがない。utcOffsetMin はエッジの**表示用**で、ずれても時計は狂わない。
+	std::string timeJson(long long utcSec, int offMin)
+	{
+		return "{\"utc\":" + std::to_string(utcSec) + ",\"utcOffsetMin\":" + std::to_string(offMin) + "}";
+	}
+
 	// ETP を 1 往復する唯一の関門。ここでトランスポートを選ぶ。
 	//  以降のコマンド実装はどちらで話しているかを知らない。
 	//
@@ -442,21 +451,18 @@ Java_app_laxei_holygrail_HgeNative_nativeLastEdgeNoticeN1(JNIEnv*, jobject)
 // エッジ端末へ time→capturePlan→action を送って撮影開始させる。return: 0=成功。
 JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring host_, jint port,
-                                                   jstring datetime_, jint offMin, jbyteArray nameBmp, jstring planId_,
+                                                   jlong utcSec, jint offMin, jbyteArray nameBmp, jstring planId_,
                                                    jstring planJson_)
 {
 	const char* host = env->GetStringUTFChars(host_, nullptr);
-	const char* dt   = env->GetStringUTFChars(datetime_, nullptr);
 	const char* pid  = planId_ ? env->GetStringUTFChars(planId_, nullptr) : nullptr;
 	// 項目5: 送る計画JSONは呼び出し側が planId から取得して渡す(選択中の計画=グローバル状態に依存しない)。
 	//  これにより「選択→JSON取得」を呼び出し側の短時間ロックで済ませ、遅いネットワーク送信を planExec から外せる。
 	const char* pj   = planJson_ ? env->GetStringUTFChars(planJson_, nullptr) : nullptr;
 	std::string hostS = host ? host : "";
-	std::string dtS   = dt ? dt : "";
 	std::string pidS  = pid ? pid : "";
 	std::string pjS   = pj ? pj : "";
 	env->ReleaseStringUTFChars(host_, host);
-	env->ReleaseStringUTFChars(datetime_, dt);
 	if (pid) { env->ReleaseStringUTFChars(planId_, pid); }
 	if (pj)  { env->ReleaseStringUTFChars(planJson_, pj); }
 
@@ -465,8 +471,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring
 	jint result = 0;
 	std::string rd;
 	// 1) 時刻同期(操作の先頭。使い回し接続が死んでいれば firstReq が張り直して再送)
-	std::string timeJson = "{\"datetime\":\"" + dtS + "\",\"utcOffsetMin\":" + std::to_string(offMin) + "}";
-	int mTime = edgeXchg(hostS, port, etp::C_TIME, etp::M_PUT, timeJson, rd);
+	int mTime = edgeXchg(hostS, port, etp::C_TIME, etp::M_PUT, timeJson(utcSec, offMin), rd);
 	ELOG("edgeStart C_TIME method=%d fd=%d", mTime, g_connFd);
 	if (mTime != etp::M_ACK) { closeConn(); return -2; }
 	int fd = g_connFd;	// 以降は確立済みの同一接続で送る(TCPのとき)
@@ -591,19 +596,15 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeDeletePlan(JNIEnv* env, jobject, js
 // エッジ端末へ時刻同期(C_TIME)だけを能動的に送る。撮影開始と無関係に定期同期する用
 // (RTC無し機=StickS3が電波悪い所でもスマホが近くにあれば時計を保てるように)。
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeEdgeSyncTime(JNIEnv* env, jobject, jstring host_, jint port, jstring datetime_, jint offMin)
+Java_app_laxei_holygrail_HgeNative_nativeEdgeSyncTime(JNIEnv* env, jobject, jstring host_, jint port, jlong utcSec, jint offMin)
 {
 	const char* host = env->GetStringUTFChars(host_, nullptr);
-	const char* dt   = datetime_ ? env->GetStringUTFChars(datetime_, nullptr) : nullptr;
 	std::string hostS = host ? host : "";
-	std::string dtS   = dt ? dt : "";
 	env->ReleaseStringUTFChars(host_, host);
-	if (dt) { env->ReleaseStringUTFChars(datetime_, dt); }
 
 	std::lock_guard<std::mutex> lk(g_connMtx);
 	std::string rd;
-	std::string timeJson = "{\"datetime\":\"" + dtS + "\",\"utcOffsetMin\":" + std::to_string(offMin) + "}";
-	int m = edgeXchg(hostS, port, etp::C_TIME, etp::M_PUT, timeJson, rd);
+	int m = edgeXchg(hostS, port, etp::C_TIME, etp::M_PUT, timeJson(utcSec, offMin), rd);
 	return (m == etp::M_ACK) ? 0 : -2;
 }
 

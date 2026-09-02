@@ -6846,13 +6846,38 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //   ・撮影窓の判定ができない
     //   ・カメラ認証の nc の種が 0 になり、他の端末が一度触ると追いつけなくなる(実測)
     //  スイープは登録済みエッジを常時見つけているので、そこに乗せるのが素直。
+    // 【送る値はその場で作る(2026-09-03)】瞬間は UTC のエポック秒、表示用オフセットは
+    //  そのとき の TimeZone から取り直す。書式器に持たせると生成時のTZを抱えたままになり、
+    //  現地でTZを変えた直後に食い違ってエッジの時計がずれる。
+    private fun nowUtcSec(): Long = System.currentTimeMillis() / 1000L
+    private fun nowOffMin(): Int = TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60000
+
+    // 【エッジの時計のずれを知らせる(2026-09-03)】エッジは撮影待機中・撮影中は時計もタイムゾーンも
+    //  受け付けない(走っている最中に時刻が飛ぶとコマも窓の判定も壊れるため)。そのため一度ずれると
+    //  計画を止めるまで直らず、**気づかないまま一晩ずれたまま撮る**ことが起きた(2026-09-02 実害)。
+    //  検索応答に載るエッジの時計と突き合わせ、ずれていたら知らせる。**開始は止めない**(2026-09-03 指示)。
+    //  同じ端末で何度も出さない。直れば忘れて、また出せるようにする。
+    private val edgeClockWarned = HashSet<String>()
+    private val kClockSkewSec = 60L        // これを超えたら「時計がずれている」とみなす
+
+    private fun checkEdgeClock(name: String, edgeUtc: Long, edgeTzOff: Int) {
+        if (edgeUtc <= 0L) { return }      // 時計未設定または旧FW → 判定しない
+        val skew = Math.abs(nowUtcSec() - edgeUtc)
+        val tzNg = (edgeTzOff != nowOffMin())
+        if (skew <= kClockSkewSec && !tzNg) { edgeClockWarned.remove(name); return }   // 直った
+        if (!edgeClockWarned.add(name)) { return }                                     // 既に知らせた
+        val sb = StringBuilder("エッジ端末「").append(name).append("」の時計がずれています")
+        if (skew > kClockSkewSec) { sb.append("(").append(skew / 60).append("分").append(skew % 60).append("秒)") }
+        if (tzNg) { sb.append("(タイムゾーンが違います)") }
+        sb.append("。撮影中・待機中は直せません。計画を止めると次の同期で直ります")
+        Toast.makeText(this, sb.toString(), Toast.LENGTH_LONG).show()
+    }
+
     private fun sendEdgeTime(ed: Edge) {
         if (ed.ip.isEmpty()) return
-        val now = Calendar.getInstance()
-        val s = fmtIso.format(now.time)
-        val off = TimeZone.getDefault().getOffset(now.timeInMillis) / 60000
         edgeTimeSentAt[ed.name] = System.currentTimeMillis()
-        Thread { try { HgeNative.nativeEdgeSyncTime(ed.addr(), ed.port, s, off) } catch (_: Exception) {} }.start()
+        val u = nowUtcSec(); val off = nowOffMin()
+        Thread { try { HgeNative.nativeEdgeSyncTime(ed.addr(), ed.port, u, off) } catch (_: Exception) {} }.start()
     }
 
     // エッジへ渡した台帳の指紋(エッジ名 → 中身のハッシュ)。同じ物を送り直さないため。
@@ -6896,8 +6921,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
             Thread {
                 val js = try { HgeNative.nativeEdgeSearch(2000) } catch (_: Exception) { "[]" }
                 // name → (edge, sessionsフィールド有無, sessions{planId→state}, heldPlansフィールド有無, 保有ロスター)
+                //  utc/tzOff はエッジ自身の時計(新FWのみ)。0=未設定または旧FW→ずれの判定はしない。
                 data class Found(val edge: Edge, val hasSessions: Boolean, val sessions: Map<String, Int>,
-                                 val hasHeld: Boolean, val heldPlans: Set<String>, val reports: Int)
+                                 val hasHeld: Boolean, val heldPlans: Set<String>, val reports: Int,
+                                 val utc: Long, val tzOff: Int)
                 val found = HashMap<String, Found>()
                 try {
                     val arr = JSONArray(js)
@@ -6922,7 +6949,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         }
                         // 溜まっている撮影レポートの件数(新FWのみ)。>0 のときだけ引き取りに行く。
                         found[nm] = Found(Edge(nm, o.optString("ip"), o.optInt("port", 50506)), has, sess, hasHeld, held,
-                                          o.optInt("reports", 0))
+                                          o.optInt("reports", 0), o.optLong("utc", 0L), o.optInt("tzOff", 0))
                     }
                 } catch (_: Exception) {}
                 // UDP無応答の登録エッジ: 連続2回でTCP生存確認(取りこぼし救済)→それも不応答ならオフライン。
@@ -6963,6 +6990,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         //  既定=採らない に戻る)ので、毎回送って揃え直す。数十バイト。
                         //  設定は**その端末のもの**を送る(端末ごとに違ってよい)。
                         sendEdgeLogOpt(nm)
+                        checkEdgeClock(nm, f.utc, f.tzOff)   // 時計のずれを知らせる(止めはしない)
                         registerDiscoveredEdge(nm, f.edge.ip, f.edge.port)   // 未登録なら登録・既登録はIP追従
                         if (f.hasSessions) reconcileEdgeSessions(f.edge, f.sessions)
                         if (f.hasHeld) reconcileEdgeRoster(f.edge, f.heldPlans)   // 項目6: エッジ側削除の検知→ロック解除
@@ -7081,10 +7109,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         override fun run() {
             val e = selectedEdge()
             if (e != null && e.ip.isNotEmpty()) {
-                val now = Calendar.getInstance()
-                val s = fmtIso.format(now.time)
-                val off = TimeZone.getDefault().getOffset(now.timeInMillis) / 60000
-                Thread { try { HgeNative.nativeEdgeSyncTime(e.addr(), e.port, s, off) } catch (_: Exception) {} }.start()
+                val u = nowUtcSec(); val off = nowOffMin()
+                Thread { try { HgeNative.nativeEdgeSyncTime(e.addr(), e.port, u, off) } catch (_: Exception) {} }.start()
             }
             handler.postDelayed(this, 30000)   // 30秒ごと
         }
@@ -7140,16 +7166,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  依存しないので planExec を占有せず、送信中も計画選択が詰まらない。
     private fun startOnEdge(e: Edge, planId: String, planJson: String) {
         // 時刻同期(C_TIME)はエッジ端末の時計を「現在時刻」に合わせるためのもの。現在時刻を送る。
-        val nowCal = Calendar.getInstance()
-        val s = fmtIso.format(nowCal.time)
-        val off = TimeZone.getDefault().getOffset(nowCal.timeInMillis) / 60000
+        // 瞬間は UTC の整数、表示用オフセットはその場で取り直す(2026-09-03。nowUtcSec の説明を参照)。
+        val utcSec = nowUtcSec()
+        val off = nowOffMin()
         val name = planNameFor(planId)   // 対象planIdの名前を同期取得(非同期キャッシュ latestSchedule は使わない)
         val nameBmp = makeNameBitmapBytes(if (name.isEmpty()) "撮影計画" else name)
         run {
             // 【2026-08-06 廃止】開始前のカメラIP通知はやめた(理由は pushPresenceToActiveEdges の跡地を参照)。
             //  エッジは自分でカメラを見つけるので、スマホが見ているIPを渡す必要がない。
             //  探索に1秒余分にかかっても、間違ったネットワークのIPを渡すより良い。
-            val r = HgeNative.nativeEdgeStart(e.addr(), e.port, s, off, nameBmp, planId, planJson)
+            val r = HgeNative.nativeEdgeStart(e.addr(), e.port, utcSec, off, nameBmp, planId, planJson)
             // 開始が失敗コードを返しても、エッジ側では実際に走っている場合がある:
             //  ・既に同じ計画がエッジで走行中 → C_ACTION が INVALID_STATE で NAK(-4)
             //  ・2台順次開始のETP競合や ACK 取りこぼしで NAK/タイムアウト

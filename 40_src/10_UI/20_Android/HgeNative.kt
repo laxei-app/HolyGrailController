@@ -168,7 +168,10 @@ object HgeNative {
         EdgeBleLink.scanEdgeNames(timeoutMs.toLong()).toTypedArray()
 
     external fun nativeEdgeSearch(timeoutMs: Int): String           // edgeInfo の JSON 配列
-    external fun nativeEdgeStart(host: String, port: Int, datetime: String, offMin: Int, nameBmp: ByteArray, planId: String, planJson: String): Int
+    // 【時刻は UTC のエポック秒で渡す(2026-09-03)】書式器(SimpleDateFormat)は生成時のタイムゾーンを
+    //  抱えるため、現地でTZを変えた直後に「文字列は旧TZ・オフセットは新TZ」となり、エッジの時計が
+    //  時差ぶんずれた(2026-09-02 実害)。整数なら混ざりようがない。offMin はエッジの表示用。
+    external fun nativeEdgeStart(host: String, port: Int, utcSec: Long, offMin: Int, nameBmp: ByteArray, planId: String, planJson: String): Int
     // 直近のエッジ操作でエッジが返した「お知らせコード」(0=なし)。文言はUIが持つ。
     external fun nativeLastEdgeNotice(): Int
     // お知らせの付随数値(例: エッジが扱えるカメラ台数)
@@ -179,7 +182,7 @@ object HgeNative {
     external fun nativeLastStartNotice(): Int
     external fun nativeEdgeStop(host: String, port: Int, planId: String): Int
     external fun nativeEdgeDeletePlan(host: String, port: Int, planId: String): Int   // 項目6: エッジから計画を削除(撮影中は停止してから)
-    external fun nativeEdgeSyncTime(host: String, port: Int, datetime: String, offMin: Int): Int // 能動的な時刻同期(C_TIMEのみ)
+    external fun nativeEdgeSyncTime(host: String, port: Int, utcSec: Long, offMin: Int): Int // 能動的な時刻同期(C_TIMEのみ)
     // 所持カメラ台帳をエッジへ渡す(C_CAMERA_BOOK)。送った内容がその時点の全量で、
     //  エッジは持っている台帳を捨てて入れ替える(追加/変更/削除がこれ1本で伝わる)。
     external fun nativeEdgeSendCameraBook(host: String, port: Int, book: String): Int
