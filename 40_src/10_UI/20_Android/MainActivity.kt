@@ -3409,9 +3409,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
         add.setTextColor(0xFF1565C0.toInt())
         add.setOnClickListener { doNewPlan() }
         planListContainer.addView(add)
+        // 行の区切りは薄い線(2026-09-02 UI依頼)。所持カメラ/レンズの一覧と同じ見え方にする。
+        //  副行が付いて1行が2段になったので、線が無いとどこまでが1件か分かりにくい。
+        //  ※点滅処理(planBlink)は子を LinearLayout に絞って走査するので、線が挟まっても素通しする。
+        planListContainer.addView(thinDivider())
         try {
             val arr = JSONArray(js)
-            for (i in 0 until arr.length()) { planListContainer.addView(buildPlanRow(arr.getJSONObject(i))) }
+            for (i in 0 until arr.length()) {
+                planListContainer.addView(buildPlanRow(arr.getJSONObject(i)))
+                planListContainer.addView(thinDivider())
+            }
         } catch (_: Exception) {}
         // 再構築直後に選択中行のEditTextが自動フォーカスしてキーボードが出るのを防ぐ(フォーカスをスクロールへ)。
         planListScroll.isFocusableInTouchMode = true
@@ -3472,7 +3479,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         tv.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
         tv.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
         if (id == currentPlanId) tv.setTypeface(null, Typeface.BOLD)
-        tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        tv.layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         if (!active && id == currentPlanId) {
             // 選択中かつ非実行中の計画 → 名前タップで編集可能(キーボード)。
             //  確定は「完了(Done)」だけでなく、フォーカスが外れた時(別の場所をタップ)にも行う。
@@ -3511,7 +3519,24 @@ class MainActivity : AppCompatActivity(), HgeListener {
             tv.isFocusable = false; tv.isFocusableInTouchMode = false
             tv.setOnClickListener { selectPlanRow(id) }
         }
-        row.addView(tv)
+        // 名前の下に副行を出す(2026-09-02 UI依頼)。所持カメラ/レンズの一覧と同じ「見出し＋副行」。
+        //  一覧だけ見て「どれがどの端末・どのカメラか」が分かるようにする。開いて確かめなくて済む。
+        //  愛称はカメラがオンラインになってから入るので、未取得のうちは所持カメラの画面と
+        //  同じく「未定義」と出す(空欄だと不具合に見える)。
+        val txt = LinearLayout(this)
+        txt.orientation = LinearLayout.VERTICAL
+        txt.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        txt.addView(tv)
+        val subTv = TextView(this)
+        subTv.text = "エッジ:" + planEdgeName(id).ifEmpty { "無し(スマホ)" } +
+                     "  愛称:" + p.optString("camAssignedName").ifEmpty { "未定義" }
+        subTv.textSize = 12f
+        subTv.setTextColor(Color.GRAY)
+        subTv.isSingleLine = true
+        subTv.setPadding(dp(4), 0, dp(4), 0)
+        subTv.setOnClickListener { selectPlanRow(id) }   // 副行のタップでも行を選べる
+        txt.addView(subTv)
+        row.addView(txt)
         // ⋮ コンテキストメニュー(他画面=撮影場所/撮影制御方法リストと同じ緑ピル。項目5)
         //  項目6: エッジ端末に送信済み(=どこかのエッジが保有)の計画は削除できない → 「削除」項目を出さない。
         //  スマホで停止すればエッジからも消え、ロックが解けて再び削除可能になる。
