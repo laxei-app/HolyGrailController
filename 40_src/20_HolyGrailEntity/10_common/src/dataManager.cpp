@@ -1,4 +1,5 @@
-﻿#include "common.h"
+﻿#include "osClock.h"	// 出荷時/新規の場所のタイムゾーン既定値
+#include "common.h"
 #include "dataManager.h"
 #include "secret.h"
 #include "httpAuth.h"
@@ -296,6 +297,9 @@ void dataManager::factoryFixedPlan(hgc::cs& plan)
 	plan.place.latitude  = 35.681;
 	plan.place.longitude = 139.767;
 	plan.place.altitude  = 40.0;
+	// 出荷時の場所のタイムゾーンは**端末の現在値**。国内で使う限り +9 が入り、
+	//  タイムゾーンを意識せずに使える(2026-09-03)。
+	plan.place.tzOffMin  = osclock::utcOffsetMin();
 
 	factoryCamera(plan.camera);
 	factoryLens(plan.lens);

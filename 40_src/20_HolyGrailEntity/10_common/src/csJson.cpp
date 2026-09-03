@@ -3,6 +3,7 @@
 #include "secret.h"		// パスワードはファイル・通信ともに暗号化して載せる
 #include "httpAuth.h"		// 読み込んだ資格情報はそのまま 401 の候補にする
 #include <json/nlohmann/json.hpp>
+#include <ctime>
 #include <cctype>
 
 using json = nlohmann::json;
@@ -54,10 +55,28 @@ namespace csjson
 			return e;
 		}
 
+		// 端末の現在のUTCオフセット[分]。**旧データに tzOffMin が無いときの既定値**にだけ使う。
+		//  osclock を呼ばないのは、ここが純粋な直列化で端末に触るべきでないため(単体テストも通る)。
+		//  UTCの分解時刻を mktime にローカルとして解釈させ、その差を時差として求める常套手段。
+		int deviceUtcOffsetMin(void)
+		{
+			const std::time_t t = std::time(nullptr);
+			std::tm g{};
+#if defined(_WIN32)
+			gmtime_s(&g, &t);
+#else
+			gmtime_r(&t, &g);
+#endif
+			g.tm_isdst = -1;
+			const std::time_t back = std::mktime(&g);
+			if (back == static_cast<std::time_t>(-1)) { return 0; }
+			return static_cast<int>(std::difftime(t, back) / 60.0);
+		}
+
 		json placeToJson(const hgc::place& p)
 		{
 			return json{ {"name", p.name}, {"memo", p.memo}, {"latitude", p.latitude}, {"longitude", p.longitude},
-			             {"altitude", p.altitude}, {"autoInsert", p.autoInsert} };
+			             {"altitude", p.altitude}, {"autoInsert", p.autoInsert}, {"tzOffMin", p.tzOffMin} };
 		}
 		hgc::place placeFromJson(const json& j)
 		{
@@ -68,6 +87,9 @@ namespace csjson
 			p.longitude  = j.value("longitude", 0.0);
 			p.altitude   = j.value("altitude", 0.0);
 			p.autoInsert = j.value("autoInsert", false);
+			// 旧いデータには tzOffMin が無い。**端末の現在のタイムゾーン**を入れる。
+			//  国内で作った場所はこれで +9 になり、移行のための操作は要らない。
+			p.tzOffMin   = j.value("tzOffMin", deviceUtcOffsetMin());
 			return p;
 		}
 

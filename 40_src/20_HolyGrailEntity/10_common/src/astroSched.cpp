@@ -162,9 +162,9 @@ namespace astro
 		return { fovH, fovW };			// 縦位置は長辺・短辺が入れ替わる
 	}
 
-	errCode buildSchedule(hgc::cs& plan, int utcOffsetMin)
+	errCode buildSchedule(hgc::cs& plan)
 	{
-		const int off = utcOffsetMin;
+		const int off = plan.place.tzOffMin;	// 撮影場所のタイムゾーンで解釈する
 		astro_observer_t obs = Astronomy_MakeObserver(plan.place.latitude, plan.place.longitude, plan.place.altitude);
 		astro_time_t tStart = toAstro(plan.start, off);
 		astro_time_t tEnd   = toAstro(plan.end, off);

@@ -46,7 +46,7 @@ namespace
 	{
 		hgc::cs p;
 		p.name = name;
-		p.place.name = "Tokyo"; p.place.latitude = 35.681; p.place.longitude = 139.767; p.place.altitude = 40.0;
+		p.place.name = "Tokyo"; p.place.latitude = 35.681; p.place.longitude = 139.767; p.place.altitude = 40.0;  p.place.tzOffMin = 540;	// 計画の時刻は場所のTZで解釈する(2026-09-03)
 		p.start = dt(2026, 8, 11, 16, 0);
 		p.end   = dt(2026, 8, 12,  7, 0);
 		p.interval = 15.0;
@@ -93,7 +93,7 @@ int main(void)
 	std::printf("\n[1] 窓は計画所有の実体を指す(複製しない)\n");
 	{
 		hgc::cs p = makePlan("A");
-		check(astro::buildSchedule(p, 540) == ERR_HGC_OK, "buildSchedule が成功する");
+		check(astro::buildSchedule(p) == ERR_HGC_OK, "buildSchedule が成功する");
 		check(!p.ccmList.empty(), "窓が1つ以上できる");
 		check(countType(p, hgc::ccmType::night) > 0, "夜間の窓ができる");
 		check(countType(p, hgc::ccmType::day) > 0, "日中の窓ができる");
@@ -114,14 +114,14 @@ int main(void)
 		hgc::cs b = makePlan("B");
 		a.ccm.day->name = "Aの日中"; a.ccm.day->limitBright = hgc::exposure{ "1600", "8", "1.4" };
 		b.ccm.day->name = "Bの日中"; b.ccm.day->limitBright = hgc::exposure{ "3200", "8", "1.4" };
-		check(astro::buildSchedule(a, 540) == ERR_HGC_OK, "A のスケジュール");
-		check(astro::buildSchedule(b, 540) == ERR_HGC_OK, "B のスケジュール");
+		check(astro::buildSchedule(a) == ERR_HGC_OK, "A のスケジュール");
+		check(astro::buildSchedule(b) == ERR_HGC_OK, "B のスケジュール");
 		checkStr(firstOfType(a, hgc::ccmType::day)->name, "Aの日中", "A は A の設定のまま");
 		checkStr(firstOfType(b, hgc::ccmType::day)->name, "Bの日中", "B は B の設定のまま");
 		checkStr(firstOfType(a, hgc::ccmType::day)->limitBright.iso, "1600", "A の暗所限界が B に汚染されない");
 		checkStr(firstOfType(b, hgc::ccmType::day)->limitBright.iso, "3200", "B の暗所限界が A に汚染されない");
 		// A を引き直しても B は動かない。
-		check(astro::buildSchedule(a, 540) == ERR_HGC_OK, "A を引き直す");
+		check(astro::buildSchedule(a) == ERR_HGC_OK, "A を引き直す");
 		checkStr(firstOfType(b, hgc::ccmType::day)->name, "Bの日中", "A の引き直しで B が変わらない");
 	}
 
@@ -133,18 +133,18 @@ int main(void)
 		p.ccm.useSunrise = true;	// 朝日/夕日は既定で「使わない」(2026-08-17)。このテストは明示的に使う
 		p.ccm.sunrise->name = "朝日(ユーザー編集)";
 		p.ccm.sunrise->limitDark = hgc::exposure{ "200", "1/2000", "11" };
-		check(astro::buildSchedule(p, 540) == ERR_HGC_OK, "使う状態でスケジュール");
+		check(astro::buildSchedule(p) == ERR_HGC_OK, "使う状態でスケジュール");
 		const int sunriseWindows = countType(p, hgc::ccmType::sunrise);
 		check(sunriseWindows > 0, "朝日の窓ができる");
 
 		p.ccm.useSunrise = false;
-		check(astro::buildSchedule(p, 540) == ERR_HGC_OK, "使わない状態でスケジュール");
+		check(astro::buildSchedule(p) == ERR_HGC_OK, "使わない状態でスケジュール");
 		check(countType(p, hgc::ccmType::sunrise) == 0, "朝日の窓が無くなる");
 		check(p.ccm.sunrise != nullptr, "使わなくても実体は残る");
 		checkStr(p.ccm.sunrise->name, "朝日(ユーザー編集)", "使わない間も編集内容が残る");
 
 		p.ccm.useSunrise = true;
-		check(astro::buildSchedule(p, 540) == ERR_HGC_OK, "また使う状態でスケジュール");
+		check(astro::buildSchedule(p) == ERR_HGC_OK, "また使う状態でスケジュール");
 		check(countType(p, hgc::ccmType::sunrise) == sunriseWindows, "朝日の窓が元どおり戻る");
 		checkStr(p.ccm.sunrise->name, "朝日(ユーザー編集)", "戻したとき初期値で上書きされない");
 		checkStr(firstOfType(p, hgc::ccmType::sunrise)->limitDark.iso, "200", "編集した限界がそのまま使われる");
@@ -159,7 +159,7 @@ int main(void)
 		p.ccm.night->limitBright = hgc::exposure{ "3200", "6", "2.0" };
 		p.ccm.useSunset  = false;
 		p.ccm.useSunrise = true;	// 既定は「使わない」。true/false 両方が往復することを見る
-		check(astro::buildSchedule(p, 540) == ERR_HGC_OK, "スケジュール");
+		check(astro::buildSchedule(p) == ERR_HGC_OK, "スケジュール");
 		const std::string js = csjson::toJson(p);
 
 		// 窓ごとに実体を書いていない(旧形式の名残が無い)ことを、サイズと内容で確かめる。
@@ -187,7 +187,7 @@ int main(void)
 			hgc::cs r = makePlan("E");
 			r.ccm.night->limitBright = hgc::exposure{ "3200", "6", "2.8" };
 			r.ccm.night->limitBright.fnWish = "1.4";	// 暗いレンズで丸められた状態
-			check(astro::buildSchedule(r, 540) == ERR_HGC_OK, "スケジュール(fnWish)");
+			check(astro::buildSchedule(r) == ERR_HGC_OK, "スケジュール(fnWish)");
 			const std::string js2 = csjson::toJson(r);
 			check(js2.find("\"fnWish\":\"1.4\"") != std::string::npos, "fnWish を書く");
 			hgc::cs t;
@@ -208,7 +208,7 @@ int main(void)
 		hgc::cs p = makePlan("F");
 		check(p.ccm.useSunrise == false, "朝日は既定で使わない");
 		check(p.ccm.useSunset  == false, "夕日は既定で使わない");
-		check(astro::buildSchedule(p, 540) == ERR_HGC_OK, "既定のスケジュール");
+		check(astro::buildSchedule(p) == ERR_HGC_OK, "既定のスケジュール");
 		check(countType(p, hgc::ccmType::sunrise) == 0, "既定では朝日の窓ができない");
 		check(countType(p, hgc::ccmType::sunset)  == 0, "既定では夕日の窓ができない");
 		check(countType(p, hgc::ccmType::night)   >  0, "夜間の窓はできる");
@@ -234,10 +234,10 @@ int main(void)
 	std::printf("\n[5] 終了≤開始は失敗を返し、既存の窓を壊さない\n");
 	{
 		hgc::cs p = makePlan("E");
-		check(astro::buildSchedule(p, 540) == ERR_HGC_OK, "正常なスケジュール");
+		check(astro::buildSchedule(p) == ERR_HGC_OK, "正常なスケジュール");
 		const size_t before = p.ccmList.size();
 		p.end = p.start;					// 終了=開始
-		check(astro::buildSchedule(p, 540) != ERR_HGC_OK, "終了=開始は失敗を返す");
+		check(astro::buildSchedule(p) != ERR_HGC_OK, "終了=開始は失敗を返す");
 		check(p.ccmList.size() == before, "失敗しても既存の窓を消さない");
 	}
 
@@ -249,7 +249,7 @@ int main(void)
 		p.ccm.night->limitBright = hgc::exposure{ "2500", "10", "1.8" };
 		p.ccm.night->preNightEv  = -1.0;
 		p.ccm.night->postNightEv = 2.0;
-		check(astro::buildSchedule(p, 540) == ERR_HGC_OK, "スケジュール");
+		check(astro::buildSchedule(p) == ERR_HGC_OK, "スケジュール");
 		checkStr(p.nightFixedExposure.iso, "2500", "夜間の固定露出(iso)");
 		checkStr(p.nightFixedExposure.ss,  "10",   "夜間の固定露出(ss)");
 		check(p.nightPreNightEv  == -1.0, "夜間前移行の目標ev");

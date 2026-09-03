@@ -39,7 +39,14 @@ namespace
 
 	hgc::cs               g_plan;
 	bool                  g_planReady = false;
+	// 端末のタイムゾーン。**ログの時刻とエッジの時計だけ**に使う(2026-09-03)。
+	//  計画の時刻に使ってはいけない(planOff を使うこと)。
 	int                   g_offMin = 0;
+
+	// その計画の時刻を解釈するタイムゾーン。**撮影場所が持つ**。
+	//  日本で作った「モンゴルの計画」も、どの端末で走らせても同じ瞬間になる。
+	//  端末のTZ(g_offMin)で解釈していたため、現地でTZを変えると切替時刻が時差ぶんずれた。
+	inline int planOff(const hgc::cs& p) { return p.place.tzOffMin; }
 	std::string           g_schedJson;
 	std::string           g_editId;	// 編集対象の撮影計画 id(plan_<id>.json)。空=未保存
 	// 計画固有の撮影制御方法(初期値ccmとは別管理)。計画作成時に初期値をコピーし、以後独立に編集する。
@@ -125,8 +132,8 @@ namespace
 	{
 		for (auto& s : g_sessions)
 		{
-			const long long ss = hgc::toUnixUtc(s->plan.start, g_offMin) - PRE_MARGIN_SEC;
-			const long long se = hgc::toUnixUtc(s->plan.end, g_offMin) + (long long)std::llround(s->plan.interval);
+			const long long ss = hgc::toUnixUtc(s->plan.start, planOff(s->plan)) - PRE_MARGIN_SEC;
+			const long long se = hgc::toUnixUtc(s->plan.end, planOff(s->plan)) + (long long)std::llround(s->plan.interval);
 			if (!rangesOverlap(ns, ne, ss, se)) { continue; }
 			const bool otherIsPano = (s->plan.syncShot && !s->plan.subCameras.empty());
 			if (newIsPano || otherIsPano) { return true; }
@@ -141,8 +148,8 @@ namespace
 		auto add = [&](long long s, long long e) { if (e > s) { ev.push_back({ s, +1 }); ev.push_back({ e, -1 }); } };
 		for (auto& s : g_sessions)
 		{
-			long long ss = hgc::toUnixUtc(s->plan.start, g_offMin) - PRE_MARGIN_SEC;
-			long long se = hgc::toUnixUtc(s->plan.end, g_offMin) + (long long)std::llround(s->plan.interval);
+			long long ss = hgc::toUnixUtc(s->plan.start, planOff(s->plan)) - PRE_MARGIN_SEC;
+			long long se = hgc::toUnixUtc(s->plan.end, planOff(s->plan)) + (long long)std::llround(s->plan.interval);
 			add(ss, se);
 			// 既に走っている側が同期撮影でも同じ(あちらの単独実行を守る)。
 				// (同期撮影の単独実行は syncShotConflicts が別に見る)
@@ -316,10 +323,11 @@ namespace
 		return o;
 	}
 
-	// unix秒 → ローカル日時(g_offMin 基準)。
+	// unix秒 → 現地日時。**編集中の計画の撮影場所のTZ**で直す(2026-09-03)。
+	//  呼び出しはすべて計画の表示/計算のためのもので、端末のTZとは関係ない。
 	hgc::dateTime localFromUnix(long long sec)
 	{
-		time_t local = static_cast<time_t>(sec + static_cast<long long>(g_offMin) * 60);
+		time_t local = static_cast<time_t>(sec + static_cast<long long>(planOff(g_plan)) * 60);
 		std::tm g{};
 #if defined(_WIN32)
 		gmtime_s(&g, &local);
@@ -332,12 +340,12 @@ namespace
 		d.min = static_cast<uint16_t>(g.tm_min); d.sec = static_cast<uint16_t>(g.tm_sec);
 		return d;
 	}
-	double sunAltAtUnix(long long sec) { return astro::sunHoriz(localFromUnix(sec), g_offMin, g_plan.place).altitude; }
+	double sunAltAtUnix(long long sec) { return astro::sunHoriz(localFromUnix(sec), planOff(g_plan), g_plan.place).altitude; }
 	const hgc::ccmBase* activeCcmAtUnix(long long sec)
 	{
 		for (const auto& w : g_plan.ccmList)
 		{
-			long long s = hgc::toUnixUtc(w.start, g_offMin), e = hgc::toUnixUtc(w.end, g_offMin);
+			long long s = hgc::toUnixUtc(w.start, planOff(g_plan)), e = hgc::toUnixUtc(w.end, planOff(g_plan));
 			if (sec >= s && sec < e) { return w.ccm.get(); }
 		}
 		return nullptr;
@@ -349,7 +357,7 @@ namespace
 	{
 		for (const auto& w : g_plan.ccmList)
 		{
-			long long s = hgc::toUnixUtc(w.start, g_offMin), e = hgc::toUnixUtc(w.end, g_offMin);
+			long long s = hgc::toUnixUtc(w.start, planOff(g_plan)), e = hgc::toUnixUtc(w.end, planOff(g_plan));
 			if (sec >= s && sec < e) { outStart = s; outEnd = e; return true; }
 		}
 		return false;
@@ -361,7 +369,7 @@ namespace
 	{
 		const double TOP = 6.0, BOT = -24.0;
 		auto clampAlt = [&](double a) { return a > TOP ? TOP : (a < BOT ? BOT : a); };
-		long long s0 = hgc::toUnixUtc(g_plan.start, g_offMin), s1 = hgc::toUnixUtc(g_plan.end, g_offMin);
+		long long s0 = hgc::toUnixUtc(g_plan.start, planOff(g_plan)), s1 = hgc::toUnixUtc(g_plan.end, planOff(g_plan));
 		if (s1 <= s0) { return "[]"; }
 		hgc::dateTime d0 = localFromUnix(s0), d1 = localFromUnix(s1);
 		bool multiDay = !(d0.year == d1.year && d0.month == d1.month && d0.day == d1.day);
@@ -520,7 +528,7 @@ namespace
 			for (const auto& ev : g_plan.events)
 			{
 				if (ev.event != hgc::csEvent::moonrise && ev.event != hgc::csEvent::moonset) continue;
-				long long mt = hgc::toUnixUtc(ev.when, g_offMin);
+				long long mt = hgc::toUnixUtc(ev.when, planOff(g_plan));
 				if (mt < sm[a].t || mt > sm[b].t) continue;
 				addMark(ev.event == hgc::csEvent::moonrise ? "\\u6708\\u306e\\u51fa" : "\\u6708\\u306e\\u5165\\u308a", mt, clampAlt(sunAltAtUnix(mt)));
 			}
@@ -628,10 +636,10 @@ namespace
 			astro::horiz hz{};
 			switch (ev.event)
 			{
-			case hgc::csEvent::sunrise: key = "sunriseAz"; hz = astro::sunHoriz(ev.when, g_offMin, g_plan.place); break;
-			case hgc::csEvent::sunset:  key = "sunsetAz";  hz = astro::sunHoriz(ev.when, g_offMin, g_plan.place); break;
-			case hgc::csEvent::moonrise:key = "moonriseAz";hz = astro::moonHoriz(ev.when, g_offMin, g_plan.place); break;
-			case hgc::csEvent::moonset: key = "moonsetAz"; hz = astro::moonHoriz(ev.when, g_offMin, g_plan.place); break;
+			case hgc::csEvent::sunrise: key = "sunriseAz"; hz = astro::sunHoriz(ev.when, planOff(g_plan), g_plan.place); break;
+			case hgc::csEvent::sunset:  key = "sunsetAz";  hz = astro::sunHoriz(ev.when, planOff(g_plan), g_plan.place); break;
+			case hgc::csEvent::moonrise:key = "moonriseAz";hz = astro::moonHoriz(ev.when, planOff(g_plan), g_plan.place); break;
+			case hgc::csEvent::moonset: key = "moonsetAz"; hz = astro::moonHoriz(ev.when, planOff(g_plan), g_plan.place); break;
 			default: break;
 			}
 			if (key && j.find(std::string("\"") + key + "\"") == std::string::npos)
@@ -654,8 +662,8 @@ namespace
 			const auto& w = g_plan.ccmList[i];
 			int ct = w.ccm ? static_cast<int>(w.ccm->type) : 0;
 			std::string nm = w.ccm ? w.ccm->name : "";
-			double sa = astro::sunHoriz(w.start, g_offMin, g_plan.place).altitude;	// 境目(開始)の太陽高度
-			double ea = astro::sunHoriz(w.end,   g_offMin, g_plan.place).altitude;	// 境目(終了)の太陽高度
+			double sa = astro::sunHoriz(w.start, planOff(g_plan), g_plan.place).altitude;	// 境目(開始)の太陽高度
+			double ea = astro::sunHoriz(w.end,   planOff(g_plan), g_plan.place).altitude;	// 境目(終了)の太陽高度
 			char ab[32];
 			j += "{\"type\":" + std::to_string(ct) +
 			     ",\"name\":\"" + jesc(nm) + "\"" +
@@ -780,7 +788,7 @@ namespace
 		// 撮影制御方法は計画のJSONに入っている。欠けている型があるときだけ初期値で補う
 		// (保存が壊れていた場合の保険。正常な計画では取り込み直さない)。
 		if (!g_plan.ccm.complete()) { seedPlanCcmFromDefaults(g_plan); }
-		const errCode be = astro::buildSchedule(g_plan, g_offMin);
+		const errCode be = astro::buildSchedule(g_plan);
 		if (be != ERR_HGC_OK) { return be; }
 		buildScheduleJson();
 		g_editId = id;
@@ -802,7 +810,7 @@ namespace
 		g_plan.start = startDt;
 		g_plan.end   = endDt;
 		seedPlanCcmFromDefaults(g_plan);	// 新規作成: ここでだけ4種すべてを初期値から取り込む
-		astro::buildSchedule(g_plan, g_offMin);
+		astro::buildSchedule(g_plan);
 		buildScheduleJson();
 	}
 
@@ -1162,7 +1170,7 @@ namespace
 		//   これにより「重ならなければ何件でも予約」しても、同時にカメラを掴むのは重なり制限どおり最大2台に収まる。
 		//   待機中は WAITING(待機表示)。停止要求(cancel)で即座に中断する。
 		{
-			long long armAt = hgc::toUnixUtc(S->plan.start, g_offMin) - PRE_MARGIN_SEC;
+			long long armAt = hgc::toUnixUtc(S->plan.start, planOff(S->plan)) - PRE_MARGIN_SEC;
 			if ((long long)std::time(nullptr) < armAt)
 			{
 				S->state = HGE_ST_WAITING; notifyStateP(S->planId, HGE_ST_WAITING); refreshAggregateState();
@@ -1457,7 +1465,7 @@ namespace
 				// 実行状況: 撮影窓を終えてのIDLE(=完了)のみ意図を消す。失敗(ERROR/接続断)や
 				// 窓内での停止/シャットダウンでは残し、再起動時に再開できるようにする。
 				if (s == HGE_ST_IDLE &&
-				    static_cast<long long>(std::time(nullptr)) >= hgc::toUnixUtc(S->plan.end, g_offMin))
+				    static_cast<long long>(std::time(nullptr)) >= hgc::toUnixUtc(S->plan.end, planOff(S->plan)))
 				{ setCapturing(S->planId, false); }
 			},
 			[S](const captureRunner::progressInfo& p) {
@@ -1682,7 +1690,7 @@ namespace
 		}
 		hgc::exposureSmoothing smooth = dataManager::currentSmoothing();
 		applyOwnedCameraSettings(S->plan.camera);	// スマホ直結でも所持カメラの測光方式で撮る
-		errCode e = S->runner->ready(S->plan, &S->dev, smooth, g_offMin);
+		errCode e = S->runner->ready(S->plan, &S->dev, smooth, planOff(S->plan));
 		{	// 同期撮影: 確保できた追加カメラを runner へ渡す(ready の後・撮影開始の前)。
 			std::vector<class device*> sp;
 			sp.reserve(S->subDevs.size());
@@ -1992,13 +2000,14 @@ int32_t hge_setPlanTimes(const char* startIso, const char* endIso, int32_t offMi
 	if (std::sscanf(endIso, "%hu-%hu-%huT%hu:%hu:%hu",
 	                &en.year, &en.month, &en.day, &en.hour, &en.min, &en.sec) != 6) { return ERR_HGC_INVALID_ARG; }
 
-	g_offMin = offMin;
-	dataManager::setLogOffset(g_offMin);
+	// 【端末のTZは持ち込まない(2026-09-03)】開始/終了は「撮影場所の現地時刻」の壁時計。
+	//  offMin は旧仕様の名残で、ここでは使わない(場所の tzOffMin が権威)。
+	(void)offMin;
 	g_plan.start = s;
 	g_plan.end   = en;
 
 	// 計画固有ccm(編集済みなら維持)を用いてスケジュールを再生成する。
-	errCode e = astro::buildSchedule(g_plan, g_offMin);
+	errCode e = astro::buildSchedule(g_plan);
 	if (e != ERR_HGC_OK) { return e; }
 	buildScheduleJson();
 	g_planReady = true;
@@ -2022,7 +2031,7 @@ int32_t hge_setPlanDirection(double azimuth, double elevation)
 	g_plan.elevation = elevation;
 
 	// 撮影方向が変わると「太陽が画角に入る時刻」が変わるためスケジュールを再生成する。
-	errCode e = astro::buildSchedule(g_plan, g_offMin);
+	errCode e = astro::buildSchedule(g_plan);
 	if (e != ERR_HGC_OK) { return e; }
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
@@ -2134,7 +2143,7 @@ int32_t hge_getPlanJsonById(const char* id, char* buf, int32_t* inoutLen)
 		cs.lens   = fp.lens;
 	}
 	if (!cs.ccm.complete()) { seedPlanCcmFromDefaults(cs); }
-	const errCode be = astro::buildSchedule(cs, g_offMin);
+	const errCode be = astro::buildSchedule(cs);
 	if (be != ERR_HGC_OK) { return be; }
 	applyOwnedCameraSettings(cs.camera);
 	slimSubCamerasForTransfer(cs);
@@ -2183,8 +2192,8 @@ int32_t hge_listPlansJson(char* buf, int32_t* inoutLen)
 			got = dataManager::loadPlanFile(id, saved) && csjson::fromJson(saved, cs);
 		}
 		if (!got) { continue; }
-		long long startU = hgc::toUnixUtc(cs.start, g_offMin);
-		long long endU   = hgc::toUnixUtc(cs.end, g_offMin);
+		long long startU = hgc::toUnixUtc(cs.start, planOff(cs));
+		long long endU   = hgc::toUnixUtc(cs.end, planOff(cs));
 		bool capturable = endU > static_cast<long long>(now);
 		captureSession* sess = sessionFor(id);
 		int st = sess ? sess->state.load() : static_cast<int>(HGE_ST_IDLE);
@@ -2222,7 +2231,7 @@ int32_t hge_newPlan(const char* presetName)
 		if (dataManager::autoInsertPlace(ap))
 		{
 			g_plan.place = ap;
-			astro::buildSchedule(g_plan, g_offMin);
+			astro::buildSchedule(g_plan);
 		}
 	}
 	buildScheduleJson();
@@ -2327,7 +2336,7 @@ int32_t hge_setPlanCcmJson(const char* json, int32_t len)
 	dropFnWishOnUserEdit(oldS.get(), g_plan.ccm.sunset.get());
 	dropFnWishOnUserEdit(oldD.get(), g_plan.ccm.day.get());
 	clampPlanCcmToGear();	// item3: 計画のカメラ/レンズ上下限へccm露出をクランプ(初期値選択も含む)
-	errCode e = astro::buildSchedule(g_plan, g_offMin);
+	errCode e = astro::buildSchedule(g_plan);
 	if (e != ERR_HGC_OK) { return e; }
 	// 仕様 7.4.2: ssが撮影周期-2を超えたら撮影周期を自動的に最長ss+2へ伸ばす。
 	int mn = minIntervalSec(g_plan);
@@ -2387,7 +2396,7 @@ int32_t hge_setPlanLandscape(int32_t landscape)
 {
 	if (!g_planReady) { errCode e = loadFixedPlanImpl(); if (e != ERR_HGC_OK) { return e; } }
 	g_plan.landscape = (landscape != 0);
-	errCode e = astro::buildSchedule(g_plan, g_offMin);	// 画角が変わる
+	errCode e = astro::buildSchedule(g_plan);	// 画角が変わる
 	if (e != ERR_HGC_OK) { return e; }
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
@@ -2401,7 +2410,7 @@ int32_t hge_setBandMode(int32_t sunriseMode, int32_t sunsetMode)
 	g_plan.ccm.useSunrise = (sunriseMode != 2);
 	g_plan.ccm.useSunset  = (sunsetMode  != 2);
 	g_plan.boundaries.clear();	// 帯の挿入/排除は構造が変わるため、古い境界上書きを破棄(整合性維持)
-	errCode e = astro::buildSchedule(g_plan, g_offMin);
+	errCode e = astro::buildSchedule(g_plan);
 	if (e != ERR_HGC_OK) { return e; }
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
@@ -2426,7 +2435,7 @@ int32_t hge_setBoundary(int32_t beforeType, int32_t afterType, int32_t occ, cons
 		if (b.before == bo.before && b.after == bo.after && b.occ == bo.occ) { b.when = w; replaced = true; break; }
 	}
 	if (!replaced) { g_plan.boundaries.push_back(bo); }
-	errCode e = astro::buildSchedule(g_plan, g_offMin);
+	errCode e = astro::buildSchedule(g_plan);
 	if (e != ERR_HGC_OK) { return e; }
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
@@ -2511,8 +2520,8 @@ int32_t hge_setBoundaryByAlt(int32_t beforeType, int32_t afterType, int32_t occ,
 	// sunAltitudeTime は基準日の正午から前方探索する。朝(上昇)の交差は正午より前にあるため、
 	// そのままだと翌日の上昇交差を拾って境界が翌日へ飛ぶ。基準を前日へ寄せて当日の朝を拾わせる。
 	hgc::dateTime searchBase = base;
-	if (rising != 0) { searchBase = localFromUnix(hgc::toUnixUtc(base, g_offMin) - 18 * 3600); }
-	astro::altTime at = astro::sunAltitudeTime(g_plan.place, searchBase, altDeg, rising != 0, g_offMin);
+	if (rising != 0) { searchBase = localFromUnix(hgc::toUnixUtc(base, planOff(g_plan)) - 18 * 3600); }
+	astro::altTime at = astro::sunAltitudeTime(g_plan.place, searchBase, altDeg, rising != 0, planOff(g_plan));
 	if (!at.valid) { return ERR_HGC_NOT_FOUND; }
 	// 境目は「時刻」ではなく「太陽高度(移動範囲でクランプ済)」で保存する。撮影日時を変えても
 	// その高度で現在の窓内に再適用でき、古い時刻の使い回しでスケジュールが壊れない(§7.3.2)。
@@ -2529,7 +2538,7 @@ int32_t hge_setBoundaryByAlt(int32_t beforeType, int32_t afterType, int32_t occ,
 		if (b.before == bo.before && b.after == bo.after && b.occ == bo.occ) { b = bo; replaced = true; break; }
 	}
 	if (!replaced) { g_plan.boundaries.push_back(bo); }
-	errCode e = astro::buildSchedule(g_plan, g_offMin);
+	errCode e = astro::buildSchedule(g_plan);
 	if (e != ERR_HGC_OK) { return e; }
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
@@ -2542,7 +2551,7 @@ int32_t hge_clearScheduleEdits(void)
 	g_plan.ccm.useSunrise = true;
 	g_plan.ccm.useSunset  = true;
 	g_plan.boundaries.clear();
-	errCode e = astro::buildSchedule(g_plan, g_offMin);
+	errCode e = astro::buildSchedule(g_plan);
 	if (e != ERR_HGC_OK) { return e; }
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
@@ -2622,8 +2631,8 @@ int32_t hge_sunAltitudeTimes(int32_t altitudeDeg, char* buf, int32_t* inoutLen)
 	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
 	if (!g_planReady) { loadFixedPlanImpl(); }
 	double alt = static_cast<double>(altitudeDeg);
-	astro::altTime st = astro::sunAltitudeTime(g_plan.place, g_plan.start, alt, false, g_offMin);
-	astro::altTime en = astro::sunAltitudeTime(g_plan.place, g_plan.start, alt, true,  g_offMin);
+	astro::altTime st = astro::sunAltitudeTime(g_plan.place, g_plan.start, alt, false, planOff(g_plan));
+	astro::altTime en = astro::sunAltitudeTime(g_plan.place, g_plan.start, alt, true,  planOff(g_plan));
 	auto fmt = [](const astro::altTime& a) -> std::string {
 		if (!a.valid) { return "--:--"; }
 		char t[32];
@@ -2716,7 +2725,7 @@ int32_t hge_setPlanCamera(const char* name)
 	g_plan.camera = c;
 	clampPlanCcmToGear();	// item3: 新しいカメラの上下限へccm露出をクランプ
 	// センサーサイズ/画角が変わると太陽の画角侵入時刻が変わるためスケジュールを再生成する。
-	errCode e = astro::buildSchedule(g_plan, g_offMin);
+	errCode e = astro::buildSchedule(g_plan);
 	if (e != ERR_HGC_OK) { return e; }
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
@@ -2775,7 +2784,7 @@ int32_t hge_setPlanLens(const char* name)
 	g_plan.lens = l;
 	clampPlanCcmToGear();	// item3: 新しいレンズの開放/最小絞りへfnをクランプ
 	// 焦点距離が変わると画角が変わるためスケジュールを再生成する。
-	errCode e = astro::buildSchedule(g_plan, g_offMin);
+	errCode e = astro::buildSchedule(g_plan);
 	if (e != ERR_HGC_OK) { return e; }
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
@@ -2791,7 +2800,7 @@ int32_t hge_setPlanLocation(double latitude, double longitude, const char* name)
 	g_plan.place.latitude  = latitude;
 	g_plan.place.longitude = longitude;
 	if (name != nullptr && name[0]) { g_plan.place.name = name; }
-	errCode e = astro::buildSchedule(g_plan, g_offMin);	// 位置変化→太陽/月の時刻が変わる
+	errCode e = astro::buildSchedule(g_plan);	// 位置変化→太陽/月の時刻が変わる
 	if (e != ERR_HGC_OK) { return e; }
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
@@ -2841,7 +2850,7 @@ int32_t hge_setPlanPlace(const char* name)
 	hgc::place p;
 	if (!dataManager::findPlace(std::string(name), p)) { return ERR_HGC_NO_ELEMENT; }
 	g_plan.place = p;	// name/memo/緯度経度/標高/autoInsert をまるごと反映
-	errCode e = astro::buildSchedule(g_plan, g_offMin);	// 位置変化→太陽/月の時刻が変わる
+	errCode e = astro::buildSchedule(g_plan);	// 位置変化→太陽/月の時刻が変わる
 	if (e != ERR_HGC_OK) { return e; }
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
@@ -3135,11 +3144,11 @@ int32_t hge_captureStartPlan(const char* planId_)
 		if (!sess->plan.ccm.complete()) { seedPlanCcmFromDefaults(sess->plan); }
 		if (sess->plan.ccmList.empty())
 		{
-			const errCode be = astro::buildSchedule(sess->plan, g_offMin);
+			const errCode be = astro::buildSchedule(sess->plan);
 			if (be != ERR_HGC_OK) { dataManager::logEvent("INFO", "buildSchedule failed at start (edit)"); return be; }
 			char sb[120];
 			std::snprintf(sb, sizeof(sb), "buildSchedule(edit): windows=%u off=%d",
-			              (unsigned)sess->plan.ccmList.size(), (int)g_offMin);
+			              (unsigned)sess->plan.ccmList.size(), (int)planOff(sess->plan));
 			dataManager::logEvent("INFO", sb);
 		}
 	}
@@ -3152,14 +3161,14 @@ int32_t hge_captureStartPlan(const char* planId_)
 		if (!sess->plan.ccm.complete()) { seedPlanCcmFromDefaults(sess->plan); }
 		if (sess->plan.ccmList.empty())
 		{
-			const errCode be = astro::buildSchedule(sess->plan, g_offMin);
+			const errCode be = astro::buildSchedule(sess->plan);
 			if (be != ERR_HGC_OK) { dataManager::logEvent("INFO", "buildSchedule failed at start"); return be; }
 			// 【何本の窓ができたかを残す】0本だと撮影ループが黙って空回りするので、
 			//  組み立て直後の本数とオフセットを控えておく(原因の切り分け用)。
 			{
 				char sb[120];
 				std::snprintf(sb, sizeof(sb), "buildSchedule: windows=%u off=%d",
-				              (unsigned)sess->plan.ccmList.size(), (int)g_offMin);
+				              (unsigned)sess->plan.ccmList.size(), (int)planOff(sess->plan));
 				dataManager::logEvent("INFO", sb);
 			}
 		}
@@ -3186,8 +3195,8 @@ int32_t hge_captureStartPlan(const char* planId_)
 	// §7.4 重なり制限: 撮影期間[start-30s, end+1フレーム]が同時に重なる自撮影は2件まで。
 	//  受付(=撮影開始要求)の時点でエラーにする。スマホ→エッジ投げ(hge_edgeStart)はこの経路を通らず対象外。
 	{
-		long long ns = hgc::toUnixUtc(sess->plan.start, g_offMin) - PRE_MARGIN_SEC;
-		long long ne = hgc::toUnixUtc(sess->plan.end, g_offMin) + (long long)std::llround(sess->plan.interval);
+		long long ns = hgc::toUnixUtc(sess->plan.start, planOff(sess->plan)) - PRE_MARGIN_SEC;
+		long long ne = hgc::toUnixUtc(sess->plan.end, planOff(sess->plan)) + (long long)std::llround(sess->plan.interval);
 		// 同期撮影は単独実行(どちらの向きでも)。理由はお知らせコードでUIへ返す。
 		const bool pano = (sess->plan.syncShot && !sess->plan.subCameras.empty());
 		if (syncShotConflicts(ns, ne, pano))
@@ -3215,7 +3224,7 @@ int32_t hge_captureStartPlan(const char* planId_)
 	ensureWatching();					// 3b: 共有SSDP受動待ち受けを起動(冪等)
 	// 遅延アーム: 窓が遠い予約は開始スレッドを作らず WAITING 表示のみ(スレッドは hge_pump が期日に生成)。
 	// 期日が近い/過去なら即生成し、失敗(内部RAM断片化)しても deferred に落として hge_pump が再試行する。
-	raw->armAtEpoch = hgc::toUnixUtc(raw->plan.start, g_offMin) - PRE_MARGIN_SEC;
+	raw->armAtEpoch = hgc::toUnixUtc(raw->plan.start, planOff(raw->plan)) - PRE_MARGIN_SEC;
 	long long now = static_cast<long long>(std::time(nullptr));
 	// #1: 撮影開始要求を受けた「今」カメラを確かめる。定期監視のオフライン化は TTL(150秒)待ちで、
 	//  電源が入っていないカメラでも ×アイコンが出るまで最大2分半かかっていた(エッジで顕著)。
@@ -3417,7 +3426,7 @@ int32_t hge_resumeCapture(void)
 		// 撮影窓が既に終了している計画は再開不要 → 意図をクリアして次回起動で蒸し返さない。
 		hgc::cs cs;
 		if (csjson::fromJson(saved, cs) &&
-		    static_cast<long long>(std::time(nullptr)) >= hgc::toUnixUtc(cs.end, g_offMin))
+		    static_cast<long long>(std::time(nullptr)) >= hgc::toUnixUtc(cs.end, planOff(cs)))
 		{ setCapturing(id, false); continue; }
 		if (hge_captureStartPlan(id.c_str()) == ERR_HGC_OK) { ++n; }
 	}

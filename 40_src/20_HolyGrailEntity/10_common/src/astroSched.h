@@ -65,7 +65,9 @@ namespace astro
 	//               plan.ccm が所有する実体を**複製せずに指す**。
 	//  utcOffsetMin : ローカル時刻のUTCオフセット[分]。
 	//  戻り値は必ず確認すること。終了≤開始のときは何も作らずに ERR_HGC_INVALID_ARG を返す。
-	errCode buildSchedule(hgc::cs& plan, int utcOffsetMin);
+	// 【オフセットは受け取らない(2026-09-03)】計画の時刻は plan.place.tzOffMin で解釈する。
+	//  引数で渡せるようにしておくと、呼ぶ側が端末のタイムゾーンを渡してしまう(実際そうなっていた)。
+	errCode buildSchedule(hgc::cs& plan);
 }
 
 #endif // _ASTRO_SCHED_H_

@@ -4391,6 +4391,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private var placeLng = 0.0
     private var placeCoordTv: TextView? = null
     private var placeAltEt: EditText? = null
+    private var placeTzOffMin: Int = 0      // その場所のタイムゾーン(UTCからの分。東が正)
     private var placeMemoEt: EditText? = null
     private var placeAutoCb: CheckBox? = null
 
@@ -5139,6 +5140,21 @@ class MainActivity : AppCompatActivity(), HgeListener {
             setText(o.optDouble("altitude", 0.0).toInt().toString())
         }
         placeAltEt = altEt; box.addView(altEt)
+        // タイムゾーン(2026-09-03)。
+        //  【なぜ場所が持つか】計画の時刻(開始/終了・撮影制御方法の切替)は「その場所の現地時刻」で、
+        //   スマホやエッジがどこにあるかとは関係ない。端末のTZで解釈していたため、日本で作った
+        //   計画を現地へ持って行くと切替時刻が時差ぶんずれた。場所が持てば、どの端末で走らせても
+        //   同じ瞬間になる。**既定は端末の値**なので、国内で使う限り気にしなくてよい。
+        placeTzOffMin = o.optInt("tzOffMin", nowOffMin())
+        box.addView(TextView(this).apply { text = "タイムゾーン"; textSize = 13f; setTextColor(Color.GRAY); setPadding(0, dp(8), 0, dp(2)) })
+        val tzRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val tzTv = TextView(this).apply { textSize = 18f; setTextColor(Color.BLACK); text = tzLabel(placeTzOffMin) }
+        tzRow.addView(tzTv)
+        tzRow.addView(linkText("　✎ 変更") { showPlaceTzDialog { off -> placeTzOffMin = off; tzTv.text = tzLabel(off); persistPlaceDetail(false, rebuildList = true) } })
+        tzRow.addView(linkText("　＋ この端末に合わせる") {
+            placeTzOffMin = nowOffMin(); tzTv.text = tzLabel(placeTzOffMin); persistPlaceDetail(false, rebuildList = true)
+        })
+        box.addView(tzRow)
         // メモ(説明)
         box.addView(TextView(this).apply { text = "メモ"; textSize = 13f; setTextColor(Color.GRAY); setPadding(0, dp(8), 0, dp(2)) })
         val memoEt = EditText(this).apply {
@@ -5202,6 +5218,42 @@ class MainActivity : AppCompatActivity(), HgeListener {
         placeCoordTv?.text = if (placeLat == 0.0 && placeLng == 0.0) "未設定（ボタンで取得）"
             else "${toDms(placeLat, 'N', 'S')}  ${toDms(placeLng, 'E', 'W')}\n%.5f, %.5f".format(placeLat, placeLng)
     }
+    // タイムゾーンの表示。"+09:00" の形にする(分まで持つ地域があるため時だけにはしない)。
+    private fun tzLabel(offMin: Int): String {
+        val sign = if (offMin < 0) "-" else "+"
+        val a = Math.abs(offMin)
+        return "%s%02d:%02d".format(sign, a / 60, a % 60)
+    }
+
+    // タイムゾーンを手で入れる。よく使う候補を出しつつ、任意の値も入れられるようにする。
+    //  緯度経度からタイムゾーンを自動で決めることはできない(オフラインで引く手段が無く、
+    //  経度からの近似は国境付近で外れる)。手で選ぶのが確実。
+    private fun showPlaceTzDialog(onPick: (Int) -> Unit) {
+        val cands = listOf(
+            "この端末 (" + tzLabel(nowOffMin()) + ")" to nowOffMin(),
+            "日本 +09:00" to 540, "モンゴル +08:00" to 480, "中国 +08:00" to 480,
+            "台湾 +08:00" to 480, "韓国 +09:00" to 540, "UTC +00:00" to 0)
+        val labels = cands.map { it.first } + listOf("その他(手入力)")
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("タイムゾーン")
+            .setItems(labels.toTypedArray()) { _, which ->
+                if (which < cands.size) { onPick(cands[which].second); return@setItems }
+                val et = EditText(this)
+                et.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_SIGNED or InputType.TYPE_NUMBER_FLAG_DECIMAL
+                et.hint = "UTCからの時差(時)。例 8 / 9.5 / -5"
+                androidx.appcompat.app.AlertDialog.Builder(this)
+                    .setTitle("UTCからの時差(時)")
+                    .setView(et)
+                    .setPositiveButton("OK") { _, _ ->
+                        val h = et.text.toString().trim().toDoubleOrNull()
+                        if (h == null || h < -12.0 || h > 14.0) {
+                            Toast.makeText(this, "-12〜+14 の範囲で入れてください", Toast.LENGTH_SHORT).show()
+                        } else onPick(Math.round(h * 60.0).toInt())
+                    }
+                    .setNegativeButton("キャンセル", null).show()
+            }.show()
+    }
+
     private fun toDms(v: Double, pos: Char, neg: Char): String {
         val hemi = if (v >= 0) pos else neg
         val a = Math.abs(v); val d = a.toInt(); val mf = (a - d) * 60.0; val m = mf.toInt(); val s = (mf - m) * 60.0
@@ -5218,7 +5270,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val json = JSONObject().apply {
             put("name", name); put("memo", memo)
             put("latitude", placeLat); put("longitude", placeLng)
-            put("altitude", alt); put("autoInsert", auto)
+            put("altitude", alt); put("autoInsert", auto); put("tzOffMin", placeTzOffMin)
         }.toString()
         Thread {
             HgeNative.nativeSetPlaceDetail(key, json)
