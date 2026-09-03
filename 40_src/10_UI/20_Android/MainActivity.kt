@@ -3533,10 +3533,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         txt.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         txt.addView(tv)
         val subTv = TextView(this)
+        // 計画のTZが端末と違えば副行にも出す(2026-09-03 UI依頼)。開かなくても気づけるように。
+        val planTz = p.optInt("tzOffMin", nowOffMin())
         subTv.text = planEdgeName(id).ifEmpty { kPhoneEdgeLabel } + "  " +
                      p.optString("camAssignedName")
                          .ifEmpty { p.optString("camModel") }
-                         .ifEmpty { "未定義" }
+                         .ifEmpty { "未定義" } +
+                     (if (planTz != nowOffMin()) "  ⚠ " + tzLabel(planTz) else "")
         subTv.textSize = 12f
         subTv.setTextColor(Color.GRAY)
         subTv.isSingleLine = true
@@ -4197,7 +4200,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 updateTimeButtons()
             } catch (_: Exception) {}
             placeText.text = o.optString("place")
-            latlngText.text = o.optString("latlng") + "  標高 " + o.optInt("altitude") + "m"
+            // 【計画のTZが端末と違うときは知らせる(2026-09-03 UI依頼)】画面に出る時刻は
+            //  すべて**撮影場所の現地時刻**なので、端末の時計と1時間ずれて見えることがある。
+            //  黙っていると「時刻がおかしい」と誤解する。止めはしない(そのまま撮れる)。
+            val planTz = o.optInt("tzOffMin", nowOffMin())
+            val tzNote = if (planTz != nowOffMin())
+                             "  ⚠ 現地時刻 " + tzLabel(planTz) + "(この端末は " + tzLabel(nowOffMin()) + ")"
+                         else ""
+            latlngText.text = o.optString("latlng") + "  標高 " + o.optInt("altitude") + "m" + tzNote
             // 同機種を複数台持つと名称だけでは区別できないので、カメラ本体で付けた名前を添える。
             val camAn = o.optString("cameraAssignedName")
             // 見出しはレイアウト側にあるので、ここは中身だけを入れる。
@@ -4283,7 +4293,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     val r = HgeNative.nativeSetPlanPlace(nm)
                     val sched = HgeNative.nativeScheduleJson()
                     runOnUiThread {
-                        if (r == 0) { latestSchedule = sched; updatePlanDisplay(sched); Toast.makeText(this, "撮影場所: $nm", Toast.LENGTH_SHORT).show() }
+                        // 場所が変わるとタイムゾーンも変わりうるので一覧も作り直す(副行の⚠を出すため)。
+                        if (r == 0) { latestSchedule = sched; updatePlanDisplay(sched); refreshPlanList(); Toast.makeText(this, "撮影場所: $nm", Toast.LENGTH_SHORT).show() }
                         else Toast.makeText(this, "撮影場所の設定に失敗 (code=$r)", Toast.LENGTH_LONG).show()
                     }
                 }.start()

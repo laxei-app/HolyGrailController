@@ -576,6 +576,9 @@ namespace
 		std::snprintf(num, sizeof(num), "%.4f,%.4f", g_plan.place.latitude, g_plan.place.longitude);
 		j += ",\"latlng\":\"" + std::string(num) + "\"";
 		j += ",\"altitude\":" + std::to_string(static_cast<int>(g_plan.place.altitude));
+		// 計画の時刻をどのタイムゾーンで読むか(2026-09-03)。撮影場所が持つ。
+		//  端末のTZと違うとき、UIが「この計画は現地時刻です」と知らせるために使う。
+		j += ",\"tzOffMin\":" + std::to_string(planOff(g_plan));
 		// 項目C: 計画のカメラ表示はアプリ登録の「名称」(name)に統一する(選択肢と同じ)。
 		//  従来は maker+model("Canon EOS R10")=愛称相当を出していた。name が空なら model へフォールバック。
 		j += ",\"camera\":\"" + jesc(g_plan.camera.name.empty() ? g_plan.camera.model : g_plan.camera.name) + "\"";
@@ -2207,6 +2210,7 @@ int32_t hge_listPlansJson(char* buf, int32_t* inoutLen)
 		     ",\"camName\":\"" + jesc(pc.name) + "\"" +
 		     ",\"camAssignedName\":\"" + jesc(pc.assignedName) + "\"" +
 		     ",\"camSerial\":\"" + jesc(pc.serial) + "\"" +
+		     ",\"tzOffMin\":" + std::to_string(planOff(cs)) +
 		     ",\"state\":" + std::to_string(st) + "}";
 		rows.push_back(std::make_pair(startU, o));
 	}
