@@ -346,6 +346,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 起動時のログ整理(当日以外が5件以上なら古い順に削除、最新4件まで残す)。端末TZで「当日」を判定。
         val tzOffMin = java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60000
         Thread { HgeNative.nativePruneOldLogs(tzOffMin) }.start()
+        seedFirstPlaceFromLocation()              // 初回だけ、出荷時の場所を現在地で作り直す
         handler.postDelayed(edgeTimeSync, 3000)   // 選択中エッジへ能動的な時刻同期を開始(RTC無し機/電波悪環境向け)
         handler.postDelayed(edgeSweep, 6000)      // エッジ常時スイープ(生存/IP追従+エッジ側開始・停止の検出。撮影の有無に関わらず30秒毎)
         handler.postDelayed(hgePump, 5000)        // 遅延アームのポンプ(スマホ直接撮影の予約計画の開始スレッドを期日に生成)
@@ -5303,6 +5304,60 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // 現在地(GPS/ネットワーク)を取得して onGot(lat,lng,alt) を呼ぶ(§7.9)。権限が無ければ要求。
+    // 【初回起動の1件を現在地にする(2026-09-04 UI依頼)】Entity は撮影場所ファイルが無いとき
+    //  出荷時の場所(Tokyo)を1件だけ作る。撮影地はたいてい手元なので、取れるなら現在地に差し替える。
+    //   ・タイムゾーンは端末から取る。**権限が要らず必ず取れる**(位置情報とは違う)
+    //   ・座標が取れないとき(権限なし/測位失敗)は Tokyo のまま。無理に空にはしない
+    //   ・標高は測位値→取れなければ標高API→それも駄目なら 0。座標さえ取れれば現在地を使う
+    //  一度試したら二度としない(prefs)。ユーザーが消した場所を毎回作り直さないため。
+    //  出荷時のまま(1件・名前が Tokyo)のときだけ触る。使い始めた後のデータは書き換えない。
+    private fun seedFirstPlaceFromLocation() {
+        val pf = hgcPrefs()
+        if (pf.getBoolean("placeSeedTried", false)) { return }
+        val arr = placeArray(HgeNative.nativeGetPlaces())
+        if (arr.length() != 1 || arr.optJSONObject(0)?.optString("name") != "Tokyo") {
+            pf.edit().putBoolean("placeSeedTried", true).apply()   // 既に使われている → 触らない
+            return
+        }
+        pf.edit().putBoolean("placeSeedTried", true).apply()
+        fetchCurrentLocation { la, lo, alt ->
+            val o = JSONObject().apply {
+                put("name", kCurrentPlaceName); put("memo", "")
+                put("latitude", la); put("longitude", lo)
+                put("altitude", alt); put("autoInsert", false); put("tzOffMin", nowOffMin())
+            }.toString()
+            Thread {
+                HgeNative.nativeSetPlaceDetail("Tokyo", o)      // 出荷時の1件を現在地で置き換える
+                runOnUiThread { selPlace = kCurrentPlaceName }
+                // 標高は**標高APIを優先**する。測位が返す高さは楕円体高で、海面からの標高とは
+                //  40m ほど違う(実測: API 58m に対し測位 108m)。APIが駄目なら測位値のままにする。
+                fetchElevationForSeed(la, lo)
+            }.start()
+        }
+    }
+
+    // 種の標高だけを後から埋める。画面を開いていなくても書ける経路(fetchElevationInto は入力欄に書く)。
+    private fun fetchElevationForSeed(lat: Double, lng: Double) {
+        Thread {
+            try {
+                val u = String.format(Locale.US, "https://api.open-meteo.com/v1/elevation?latitude=%.6f&longitude=%.6f", lat, lng)
+                val conn = (java.net.URL(u).openConnection() as java.net.HttpURLConnection).apply {
+                    connectTimeout = 6000; readTimeout = 6000; requestMethod = "GET"
+                }
+                val body = conn.inputStream.bufferedReader().use { it.readText() }
+                conn.disconnect()
+                val elev = JSONObject(body).optJSONArray("elevation")?.optDouble(0, Double.NaN) ?: Double.NaN
+                if (elev.isNaN()) { return@Thread }
+                val o = JSONObject().apply {
+                    put("name", kCurrentPlaceName); put("memo", "")
+                    put("latitude", lat); put("longitude", lng)
+                    put("altitude", elev); put("autoInsert", false); put("tzOffMin", nowOffMin())
+                }.toString()
+                HgeNative.nativeSetPlaceDetail(kCurrentPlaceName, o)
+            } catch (_: Exception) {}   // 取れなければ 0 のまま。画面から「緯度経度から取得」で拾える
+        }.start()
+    }
+
     private fun fetchCurrentLocation(onGot: (Double, Double, Double) -> Unit) {
         val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
                       ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
@@ -6568,6 +6623,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 「端末」欄でエッジを使わない(スマホ直結)ときの表示(2026-09-02 UI依頼)。
     //  選択肢と一覧の副行で同じ文字を出すため、1か所に置いて両方から使う。
     private val kPhoneEdgeLabel = "スマホ"
+
+    // 初回起動で作る撮影場所の名前(2026-09-04 UI依頼)。
+    private val kCurrentPlaceName = "current location"
 
     // 計画ごとのエッジ選択(prefsに端末"名称"を保存。空=スマホ直結)。
     // IPはDHCPで変わり事前に不定のため、識別は端末名称で行い、IPは開始時に検索で解決する。

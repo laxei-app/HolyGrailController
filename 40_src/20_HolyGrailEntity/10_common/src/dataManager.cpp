@@ -289,17 +289,25 @@ static void factoryLens(hgc::lens& l)
 	l.fisheye     = false;
 }
 
+// 出荷時の場所。**固定計画と場所リストの両方がここを見る**(定義を1つにする)。
+//  名前を ASCII にしているのは Entity に日本語を置かない決まりのため(f6a4e8d)。
+//  タイムゾーンは端末の現在値。ファイルに固定値を焼くと、どこで使い始めても同じ値になる。
+static hgc::place factoryPlace(void)
+{
+	hgc::place q;
+	q.name      = "Tokyo";
+	q.latitude  = 35.681;
+	q.longitude = 139.767;
+	q.altitude  = 40.0;
+	q.tzOffMin  = osclock::utcOffsetMin();
+	return q;
+}
+
 void dataManager::factoryFixedPlan(hgc::cs& plan)
 {
 	plan.name = "FixedPlan";
 
-	plan.place.name = "Tokyo";
-	plan.place.latitude  = 35.681;
-	plan.place.longitude = 139.767;
-	plan.place.altitude  = 40.0;
-	// 出荷時の場所のタイムゾーンは**端末の現在値**。国内で使う限り +9 が入り、
-	//  タイムゾーンを意識せずに使える(2026-09-03)。
-	plan.place.tzOffMin  = osclock::utcOffsetMin();
+	plan.place = factoryPlace();	// 場所リストの種と同じ定義を使う(2026-09-03)
 
 	factoryCamera(plan.camera);
 	factoryLens(plan.lens);
@@ -426,13 +434,21 @@ namespace
 		std::string d = osfile::dir("asset");
 		return d.empty() ? std::string() : (d + "/places.json");
 	}
+	bool savePlaces(void);	// 初回の種を書き出すため前方宣言(定義は下)
 	void ensurePlaces(void)
 	{
 		if (g_placesLoaded) { return; }
 		g_placesLoaded = true;
 		std::string body;
 		std::string p = placesPath();
-		if (!p.empty() && osfile::readAll(p, body)) { csjson::placesFromJson(body, g_places); }
+		// 【初回起動だけ種を置く(2026-09-03)】撮影場所リストが空だと「登録済みの場所から選択」が
+		//  何も出さず、固定計画の場所とも食い違う。ファイルが無いとき=一度も起動していないときだけ
+		//  1件作る。**「読めたが空」は作らない**(ユーザーが全部消した状態を勝手に復活させない)。
+		//  読めたファイルが壊れていたときも作らない(種で上書きしてしまう方が危ない)。
+		//  保存先がまだ使えない(placesPath が空。エッジのSD未マウント等)ときも作らない。
+		const bool existed = (!p.empty() && osfile::readAll(p, body));
+		if (existed) { csjson::placesFromJson(body, g_places); }
+		else if (!p.empty()) { g_places.push_back(factoryPlace()); savePlaces(); }
 		// 項目10の移行: 旧形式(places.json の autoInsert が場所ごと。複数trueになり得た)から、
 		// 全体設定(settings.json の "autoInsertPlace" に名称1つ)へ一度だけ移す。設定が未設定のときのみ、
 		// 最初に autoInsert=true だった場所を採用する(複数あっても1つに収束させる)。
