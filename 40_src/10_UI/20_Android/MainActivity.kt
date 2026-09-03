@@ -3533,13 +3533,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         txt.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         txt.addView(tv)
         val subTv = TextView(this)
-        // 計画のTZが端末と違えば副行にも出す(2026-09-03 UI依頼)。開かなくても気づけるように。
-        val planTz = p.optInt("tzOffMin", nowOffMin())
         subTv.text = planEdgeName(id).ifEmpty { kPhoneEdgeLabel } + "  " +
                      p.optString("camAssignedName")
                          .ifEmpty { p.optString("camModel") }
-                         .ifEmpty { "未定義" } +
-                     (if (planTz != nowOffMin()) "  ⚠ " + tzLabel(planTz) else "")
+                         .ifEmpty { "未定義" }
         subTv.textSize = 12f
         subTv.setTextColor(Color.GRAY)
         subTv.isSingleLine = true
@@ -3599,7 +3596,29 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  操作側が id 指定で計画を扱うようにしたので(nativeCaptureStartPlan / nativeGetPlanJsonById)、
     //  選択は「ユーザーが一覧でタップしたとき」と「画面再入」だけが動かす。戻す処理は不要。
 
+    // 計画のタイムゾーン(撮影場所が持つ)。分からなければ端末の値を返す。
+    private fun planTzOffMin(id: String): Int {
+        try {
+            val pa = JSONArray(HgeNative.nativeListPlans())
+            for (k in 0 until pa.length()) {
+                val po = pa.optJSONObject(k) ?: continue
+                if (po.optString("id") == id) return po.optInt("tzOffMin", nowOffMin())
+            }
+        } catch (_: Exception) {}
+        return nowOffMin()
+    }
+
+    // 【開始を指示したときだけ知らせる(2026-09-03 UI依頼)】計画の時刻は撮影場所の現地時刻なので、
+    //  端末のタイムゾーンと違うと端末の時計とはずれた時刻に動く。**止めはしない**。
+    //  画面に出しっぱなしにすると、タイムゾーンを直しても作り直すまで残って格好が悪い。
+    //  一瞬出て消えるトーストなら、その場の状態だけを伝えられる。
+    private fun warnPlanTzIfDiffers(id: String) {
+        if (planTzOffMin(id) == nowOffMin()) { return }
+        Toast.makeText(this, "スマホのタイムゾーンと異なるので実際の時刻とずれます。", Toast.LENGTH_LONG).show()
+    }
+
     private fun startPlan(id: String) {
+        warnPlanTzIfDiffers(id)
         // 項目A/17: 開始アイコンをタップした瞬間に予約表で二重使用を確かめる。同じカメラを別の計画が
         // 重なる時間で使うなら、開始も「エッジ端末への送信」も一切行わない(1件目は可・2件目以降は不可)。
         //  ・一度エッジに計画が入ると端末側で開始できてしまうため、送る前にここで確実に弾く。
@@ -4200,14 +4219,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 updateTimeButtons()
             } catch (_: Exception) {}
             placeText.text = o.optString("place")
-            // 【計画のTZが端末と違うときは知らせる(2026-09-03 UI依頼)】画面に出る時刻は
-            //  すべて**撮影場所の現地時刻**なので、端末の時計と1時間ずれて見えることがある。
-            //  黙っていると「時刻がおかしい」と誤解する。止めはしない(そのまま撮れる)。
-            val planTz = o.optInt("tzOffMin", nowOffMin())
-            val tzNote = if (planTz != nowOffMin())
-                             "  ⚠ 現地時刻 " + tzLabel(planTz) + "(この端末は " + tzLabel(nowOffMin()) + ")"
-                         else ""
-            latlngText.text = o.optString("latlng") + "  標高 " + o.optInt("altitude") + "m" + tzNote
+            latlngText.text = o.optString("latlng") + "  標高 " + o.optInt("altitude") + "m"
             // 同機種を複数台持つと名称だけでは区別できないので、カメラ本体で付けた名前を添える。
             val camAn = o.optString("cameraAssignedName")
             // 見出しはレイアウト側にあるので、ここは中身だけを入れる。
