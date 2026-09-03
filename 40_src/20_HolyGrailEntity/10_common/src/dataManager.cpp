@@ -1244,7 +1244,11 @@ bool dataManager::setOwnedLensDetailJson(const std::string& origName, const std:
 
 	hgc::lens* lp = nullptr;
 	for (auto& l : g_ownedLenses) { if (l.name == origName) { lp = &l; break; } }
-	if (!lp) { g_ownedLenses.emplace_back(); lp = &g_ownedLenses.back(); }
+	// 【無い名前へは書かない(2026-09-04 UI依頼)】撮影場所と同じ理由。改名の後に届いた
+	//  書き込みが古い名前を宛先にすると、同じレンズがもう1件増えて一覧の選択が動く。
+	//  追加は addOwnedLens が行うので、ここで作る必要はない。
+	//  ※所持カメラの方は手入力の追加でこの経路を使っているので、あちらは作れるままにする。
+	if (!lp) { return false; }
 
 	lp->maker       = j.value("maker", lp->maker);
 	lp->name        = j.value("name", lp->name);

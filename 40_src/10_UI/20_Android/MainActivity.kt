@@ -1344,7 +1344,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // プリセット一覧。名称はその場で直接編集可。新規追加も文字を直接入力。⋮=緑ピル。
     private fun buildPresetList(containerId: Int) {
-        val box = findViewById<LinearLayout>(containerId); box.removeAllViews()
+        val box = findViewById<LinearLayout>(containerId)
+        clearListFocus(box)                 // 消す子にフォーカスが残っていると落ちる
+        box.removeAllViews()
+        pendingPresetRename = null          // 行を作り直すので前の行の確定処理は捨てる
         val prefName = HgeNative.nativeGetPreferredCcm(presetType)
         for (p in presetCcms) {
             val nm = p.optString("name")
@@ -1357,10 +1360,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 et.setBackgroundColor(0x00000000); et.setTypeface(null, Typeface.BOLD); et.setTextColor(Color.BLACK)
                 et.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                 et.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
-                et.setOnFocusChangeListener { _, has -> if (!has) commitRename(nm, et.text.toString()) }
+                // 改名は実際に変わるときだけ一度だけ。Done→フォーカス喪失で二重に走ると、
+                //  2回目が自分自身とぶつかって「使用されています」が出る。
+                var renamed = false
+                val doRename = {
+                    val t = et.text.toString().trim()
+                    if (!renamed && t.isNotEmpty() && t != nm) { renamed = true; commitRename(nm, t) }
+                }
+                pendingPresetRename = doRename
+                et.setOnFocusChangeListener { _, has -> if (!has) doRename() }
                 et.setOnEditorActionListener { v, a, _ ->
                     if (a == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
-                        commitRename(nm, v.text.toString()); v.clearFocus()
+                        doRename(); v.clearFocus()
                         (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(v.windowToken, 0)
                         true
                     } else false
@@ -1389,7 +1400,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private fun rebuildPresetList() { buildPresetList(presetListId()) }
-    private fun persistCurrentPreset() { persistCcmEdit() }
+    // 名前を宛先にして書くので、編集中の名前があれば先に確定させる。
+    private fun persistCurrentPreset() { commitPresetNameEdit(); persistCcmEdit() }
 
     private fun selectPreset(name: String) {
         if (name == selPresetName) return   // 同じ行の再タップは編集(フォーカス)のみ
@@ -1828,7 +1840,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // ---------- 620 所持カメラ ----------
     private fun buildCameraList() {
         val box = findViewById<LinearLayout>(R.id.cameralist_container)
+        clearListFocus(box)                 // 消す子にフォーカスが残っていると落ちる
         box.removeAllViews()
+        pendingCameraRename = null          // 行を作り直すので前の行の確定処理は捨てる
         val arr = camArray(HgeNative.nativeGetOwnedCameras())
         val names = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optJSONObject("camera")?.optString("name") }
         if (selCamera == null || selCamera !in names) selCamera = names.firstOrNull()
@@ -1839,24 +1853,35 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val fr = cam.optString("assignedName").ifEmpty { "未定義" }
             val sn = cam.optString("serial").ifEmpty { "未定義" }
             val sub = "愛称:$fr  S/N:$sn"
+            // 改名の確定は「フォーカスが外れた時」と「保持した確定処理」の両方から来るので、
+            //  実際に名前が変わるときだけ一度だけ走らせる(二重に走ると2回目が自分自身と
+            //  ぶつかって「使用されています」が出る)。
+            var renamed = false
+            val doRename = { newName: String ->
+                val nm = newName.trim()
+                if (!renamed && nm.isNotEmpty() && nm != name && !blockedByEdge(name, "変更")) {
+                    renamed = true; commitCameraRename(name, nm)
+                }
+            }
             box.addView(listRow(name, sub, name == selCamera,
-                onSelect = { selectCamera(name) },
+                onSelect = { commitCameraNameEdit(); selectCamera(name) },
                 menuItems = listOf(
                     "削除" to {
                         // エッジが計画を持っているカメラは消せない(消すと台帳から資格情報が落ち、
                         //  その計画が単独復帰したときに認証できなくなる)。
                         if (!blockedByEdge(name, "削除")) {
-                            Thread { HgeNative.nativeRemoveOwnedCamera(name)
+                            dataExec.execute { HgeNative.nativeRemoveOwnedCamera(name)
                                 runOnUiThread { if (selCamera == name) selCamera = null; buildCameraList(); buildCameraDetail()
-                                                pushCameraBookToEdges() } }.start()
+                                                pushCameraBookToEdges() } }
                         }
                     },
                     "接続カメラ検索" to { searchAndAddCameras() }
                 ),
-                onRename = { newName -> if (!blockedByEdge(name, "変更")) commitCameraRename(name, newName) }))
+                onRename = { newName -> doRename(newName) },
+                onEditor  = { e -> pendingCameraRename = { doRename(e.text.toString()) } }))
             box.addView(thinDivider())
         }
-        box.addView(linkText("＋ 新規カメラ追加") { openCameraAdd() })
+        box.addView(linkText("＋ 新規カメラ追加") { commitCameraNameEdit(); openCameraAdd() })
     }
 
     // マスタに無いカメラを手入力で追加する(レンタル機など)。型番だけ聞き、残りは詳細画面で埋めてもらう。
@@ -2101,6 +2126,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // カメラ詳細を保存する。名称はリストで編集するため selCamera を用いる。
     // rebuild=true は一覧/詳細を作り直す。origName 指定時はその名前を保存対象(改名時の元キー)とする。
     private fun persistCameraDetail(rebuild: Boolean, origName: String? = null) {
+        // 名前を宛先にして書くので、編集中の名前があれば**先に**確定させる。
+        //  (自分自身の改名から来たときは既に消費済みなので何もしない)
+        if (origName == null) { commitCameraNameEdit() }
         val orig = origName ?: selCamera ?: return
         if (camFields.isEmpty()) return
         // エッジが計画を持っているカメラは変更できない。ただし**中身が変わっていなければ素通し**
@@ -2128,13 +2156,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val authChanged = (authSig != camAuthBaseline)
         camAuthBaseline = authSig
         if (rebuild) {
-            Thread {
+            dataExec.execute {
                 HgeNative.nativeSetOwnedCameraDetail(orig, js)
                 runOnUiThread { buildCameraList(); buildCameraDetail(); pushCameraBookToEdges() }
-            }.start()
+            }
         } else {
-            Thread { HgeNative.nativeSetOwnedCameraDetail(orig, js)
-                     runOnUiThread { pushCameraBookToEdges() } }.start()
+            dataExec.execute { HgeNative.nativeSetOwnedCameraDetail(orig, js)
+                               runOnUiThread { pushCameraBookToEdges() } }
         }
         if (authChanged) { noticeAuthChangedIfHeld(selCamera ?: orig) }
     }
@@ -2253,7 +2281,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // ---------- 630 所持レンズ ----------
     private fun buildLensList() {
         val box = findViewById<LinearLayout>(R.id.lenslist_container)
+        clearListFocus(box)                 // 消す子にフォーカスが残っていると落ちる
         box.removeAllViews()
+        pendingLensRename = null            // 行を作り直すので前の行の確定処理は捨てる
         val arr = camArray(HgeNative.nativeGetOwnedLenses())
         val names = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("name") }
         if (selLens == null || selLens !in names) selLens = names.firstOrNull()
@@ -2261,16 +2291,23 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val l = arr.optJSONObject(i) ?: continue
             val name = l.optString("name")
             val sub = "${l.optString("maker")}  ${l.optDouble("focalLength", 0.0).toInt()}mm  F${l.optDouble("fn", 0.0)}"
+            // 改名は実際に変わるときだけ一度だけ(所持カメラ/撮影場所と同じ)。
+            var renamed = false
+            val doRename = { newName: String ->
+                val nm = newName.trim()
+                if (!renamed && nm.isNotEmpty() && nm != name) { renamed = true; commitLensRename(name, nm) }
+            }
             box.addView(listRow(name, sub, name == selLens,
-                onSelect = { selectLens(name) },
+                onSelect = { commitLensNameEdit(); selectLens(name) },
                 menuItems = listOf("削除" to {
-                    Thread { HgeNative.nativeRemoveOwnedLens(name)
-                        runOnUiThread { if (selLens == name) selLens = null; buildLensList(); buildLensDetail() } }.start()
+                    dataExec.execute { HgeNative.nativeRemoveOwnedLens(name)
+                        runOnUiThread { if (selLens == name) selLens = null; buildLensList(); buildLensDetail() } }
                 }),
-                onRename = { newName -> commitLensRename(name, newName) }))
+                onRename = { newName -> doRename(newName) },
+                onEditor  = { e -> pendingLensRename = { doRename(e.text.toString()) } }))
             box.addView(thinDivider())
         }
-        box.addView(linkText("＋ 新規レンズ追加") { openLensAdd() })
+        box.addView(linkText("＋ 新規レンズ追加") { commitLensNameEdit(); openLensAdd() })
     }
 
     private fun buildLensDetail() {
@@ -2318,6 +2355,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private fun persistLensDetail(rebuild: Boolean, origName: String? = null) {
+        if (origName == null) { commitLensNameEdit() }   // 名前を宛先にする前に先に確定させる
         val orig = origName ?: selLens ?: return
         if (lensFields.isEmpty()) return
         val o = JSONObject()
@@ -2331,9 +2369,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         o.put("hasContact", lensContact?.isChecked ?: true)
         val js = o.toString()
         if (rebuild) {
-            Thread { HgeNative.nativeSetOwnedLensDetail(orig, js); runOnUiThread { buildLensList(); buildLensDetail() } }.start()
+            dataExec.execute { HgeNative.nativeSetOwnedLensDetail(orig, js); runOnUiThread { buildLensList(); buildLensDetail() } }
         } else {
-            Thread { HgeNative.nativeSetOwnedLensDetail(orig, js) }.start()
+            dataExec.execute { HgeNative.nativeSetOwnedLensDetail(orig, js) }
         }
     }
 
@@ -4462,19 +4500,47 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // ============================================================
     //  640 撮影場所リスト(§7.9)。登録した場所を撮影計画で選択する。
     // ============================================================
-    // 撮影場所の書き込みは**単一スレッドで直列化**する(2026-09-04 UI依頼)。
-    //  改名・座標・標高・現在地の取得結果がそれぞれ別スレッドで書いていたため、
-    //  改名が先に通ると後から来た書き込みが**古い名前**を宛先にしてしまい、Entity が
-    //  その名前の場所を新しく作っていた(一覧に行が増えて選択が別の項目へ移る)。
-    private val placeExec = java.util.concurrent.Executors.newSingleThreadExecutor()
-    // 一覧で編集中の場所名を確定させる処理。ダイアログはフォーカスを奪わないので、
-    //  フォーカス喪失だけに頼ると「名前にカーソルがあるまま地図を開く」流れで取りこぼす。
-    private var pendingPlaceRename: (() -> Unit)? = null
+    // 【マスタデータの書き込みは単一スレッドで直列化する(2026-09-04 UI依頼)】
+    //  撮影場所・所持カメラ・所持レンズは「名前」を宛先にして書く。改名と中身の保存が
+    //  別スレッドで走ると、改名が先に通ったときに後から来た書き込みが**古い名前**を
+    //  宛先にしてしまい、Entity がその名前のデータを新しく作る(一覧に行が増えて
+    //  選択が別の項目へ移ったように見える)。1本の列に並べて順序を決める。
+    private val dataExec = java.util.concurrent.Executors.newSingleThreadExecutor()
+
+    // 一覧で編集中の名前を確定させる処理(選択行の入力欄を作るときに入れる)。
+    //  改名は「入力欄のフォーカスが外れた時」に走るが、**ダイアログはアクティビティの
+    //  フォーカスを奪わない**ので、名前を打った直後にダイアログを開く流れでは確定が
+    //  後回しになる。名前を宛先にして書く前に、必ずここを通して先に確定させる。
+    private var pendingPlaceRename:  (() -> Unit)? = null
+    private var pendingCameraRename: (() -> Unit)? = null
+    private var pendingLensRename:   (() -> Unit)? = null
+    private var pendingEdgeRename:   (() -> Unit)? = null
+    private var pendingPresetRename: (() -> Unit)? = null
+
     private fun commitPlaceNameEdit() {
         val f = pendingPlaceRename ?: return
         pendingPlaceRename = null
-        clearListFocus(findViewById(R.id.places_container))
-        f.invoke()
+        clearListFocus(findViewById(R.id.places_container)); f.invoke()
+    }
+    private fun commitCameraNameEdit() {
+        val f = pendingCameraRename ?: return
+        pendingCameraRename = null
+        clearListFocus(findViewById(R.id.cameralist_container)); f.invoke()
+    }
+    private fun commitLensNameEdit() {
+        val f = pendingLensRename ?: return
+        pendingLensRename = null
+        clearListFocus(findViewById(R.id.lenslist_container)); f.invoke()
+    }
+    private fun commitEdgeNameEdit() {
+        val f = pendingEdgeRename ?: return
+        pendingEdgeRename = null
+        clearListFocus(findViewById(R.id.edge_container)); f.invoke()
+    }
+    private fun commitPresetNameEdit() {
+        val f = pendingPresetRename ?: return
+        pendingPresetRename = null
+        clearListFocus(findViewById(presetListId())); f.invoke()
     }
 
     // 一覧の入力欄からフォーカスを外し、キーボードも閉じる。
@@ -5183,7 +5249,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             box.addView(listRow(name, sub, name == selPlace,
                 onSelect = { selectPlace(name) },
                 menuItems = listOf("削除" to {
-                    placeExec.execute { HgeNative.nativeRemovePlace(name)
+                    dataExec.execute { HgeNative.nativeRemovePlace(name)
                         runOnUiThread { if (selPlace == name) selPlace = null; buildPlacesList(); buildPlaceDetail() } }
                 }),
                 onRename = { newName -> doRename(newName) },
@@ -5194,7 +5260,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private fun addPlace() {
-        placeExec.execute {
+        dataExec.execute {
             HgeNative.nativeAddPlace("")
             val names = placeNames()
             val added = names.lastOrNull()
@@ -5398,7 +5464,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             put("latitude", placeLat); put("longitude", placeLng)
             put("altitude", alt); put("autoInsert", auto); put("tzOffMin", placeTzOffMin)
         }.toString()
-        placeExec.execute {
+        dataExec.execute {
             HgeNative.nativeSetPlaceDetail(key, json)
             if (rebuild) runOnUiThread { buildPlacesList(); buildPlaceDetail() }
             else if (rebuildList) runOnUiThread { buildPlacesList() }   // 座標だけ更新(詳細の入力欄は保持)
@@ -5437,7 +5503,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         fetchCurrentLocation { la, lo, alt ->
             Thread {
                 val elev = fetchElevationOrNull(la, lo) ?: alt   // 通信は単一スレッドを塞がないよう別で
-                placeExec.execute {
+                dataExec.execute {
                 // 待っている間にユーザーが名前を変えた/消したときは**何もしない**。無い名前へ書くと
                 //  Entity は新しい場所を作ってしまい、一覧に幻の行が増える。
                 val cur = findPlaceJson(name) ?: return@execute
@@ -6240,7 +6306,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  以前はここだけ独自の行を組み立てていて、右端に素の Button が出ていた。
     private fun buildEdgeList() {
         val box = findViewById<LinearLayout>(R.id.edge_container)
+        clearListFocus(box)                 // 消す子にフォーカスが残っていると落ちる
         box.removeAllViews()
+        pendingEdgeRename = null            // 行を作り直すので前の行の確定処理は捨てる
         if (edges.isEmpty()) {
             box.addView(TextView(this).apply {
                 text = "(登録なし。下の「＋ 新規エッジ端末」から追加)"
@@ -6259,9 +6327,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 false -> "オフライン"
                 else  -> "確認中"        // 起動直後、まだ一度もスイープしていない
             }
+            // 改名は実際に変わるときだけ一度だけ(所持カメラ/撮影場所と同じ)。
+            var renamed = false
+            val doRename = { newName: String ->
+                val nm = newName.trim()
+                if (!renamed && nm != e.name) { renamed = true; commitEdgeRename(e.name, nm) }
+            }
             box.addView(listRow(e.name, sub, sel,
                 onSelect = {
                     // 今見ている端末の入力を控えてから切り替える(打った内容を捨てない)。
+                    commitEdgeNameEdit()
                     stashEdgeForm()
                     selectedEdgeName = e.name
                     scannedPop = ""; scannedName = ""
@@ -6275,7 +6350,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 // 名前は**この行で直接**直す(所持カメラ/レンズと同じ)。以前は下の設定欄に
                 //  「端末識別名」があり、一覧と入力欄の2か所に名前があって分かりにくかった。
                 //  選択中の行だけ編集できる(listRow の決まり)。
-                onRename = { newName -> commitEdgeRename(e.name, newName) }))
+                onRename = { newName -> doRename(newName) },
+                onEditor  = { et -> pendingEdgeRename = { doRename(et.text.toString()) } }))
             box.addView(thinDivider())
         }
         // 新規は一番下(所持カメラ/レンズと同じ)。
