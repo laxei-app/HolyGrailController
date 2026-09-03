@@ -99,6 +99,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private lateinit var planListScroll: ScrollView      // 先頭ページの計画リスト(分割バー上)
     private lateinit var planListContainer: LinearLayout
     // 編集対象の計画 id。切替(選択/新規/複製/起動時)のたびに「変更の取り消し」用のベースラインを取り直す。
+    // 一覧で編集中の計画名を確定させる処理(選択行のEditTextを作るときに入れる)。
+    private var pendingPlanRename: (() -> Unit)? = null
     private var currentPlanId: String = ""
         set(value) {
             val changed = field != value; field = value
@@ -3390,16 +3392,42 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // ============================================================
     //  複数撮影計画リスト(分割バー上。§7.3.1/§7.3.3)
     // ============================================================
+    // 一覧に載っている計画idを取り出す(選択が生きているかの判定用)。
+    private fun planIdsIn(js: String): Set<String> {
+        val out = mutableSetOf<String>()
+        try {
+            val a = JSONArray(js)
+            for (i in 0 until a.length()) { a.optJSONObject(i)?.optString("id")?.let { if (it.isNotEmpty()) out.add(it) } }
+        } catch (_: Exception) {}
+        return out
+    }
+
     private fun refreshPlanList() {
         // 一覧の読み出しも計画操作と同じ単一スレッドで実行し、改名・編集の直後に最新状態を読む。
         planExec.execute {
-            val js = HgeNative.nativeListPlans()
+            var js = HgeNative.nativeListPlans()
+            // 【選択を持つのはUI側だけ(2026-09-04 UI依頼)】一覧の作り直しは「中身の更新」であって
+            //  「選択の変更」ではない。以前はここで毎回 native の選択を取り込んでいたため、内容を
+            //  変えた拍子に別の計画へ飛んだ。新規計画は**最初の保存でidが確定する**ので、その最中に
+            //  読むと別のidが返る(だから「移ることも移らないこともある」)。
+            //  選択を動かすのは、ユーザーのタップ・新規作成・複製・削除だけ。ここでは逆に、
+            //  native がずれていたらUIの選択へ**戻す**(食い違ったまま編集して別計画を壊さない)。
+            val sel = currentPlanId
+            if (sel.isNotEmpty() && planIdsIn(js).contains(sel) && HgeNative.nativeCurrentPlanId() != sel) {
+                HgeNative.nativeSelectPlan(sel)
+                js = HgeNative.nativeListPlans()   // 編集中の計画は未保存の変更も載るので取り直す
+            }
             val cur = HgeNative.nativeCurrentPlanId()
             // 項目5: 計画の新規作成/変更/削除いずれの経路も refreshPlanList を通るので、ここで予約表を
             //  全計画から作り直す(終了が過去の計画は buildReservations 内で除外)。削除した計画が予約表に
             //  残る・変更が反映されない不具合の根治。buildReservations/saveReservations はUI非依存。
             saveReservations(buildReservations())
-            runOnUiThread { currentPlanId = cur; buildPlanList(js); updateReadOnly(); refreshEdgeSpinner() }
+            val ids = planIdsIn(js)
+            runOnUiThread {
+                // 選択が消えた(削除された)ときと、まだ何も選んでいない起動時だけ native に従う。
+                if (currentPlanId.isEmpty() || !ids.contains(currentPlanId)) { currentPlanId = cur }
+                buildPlanList(js); updateReadOnly(); refreshEdgeSpinner()
+            }
         }
     }
 
@@ -3501,6 +3529,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     }
                 }
             }
+            // 【確定処理を持っておく(2026-09-04 UI依頼)】ダイアログはアクティビティのフォーカスを
+            //  奪わないので、フォーカス喪失だけに頼ると「名前を打った直後に撮影場所を開く」流れで
+            //  改名を取りこぼす(入れた名前が消える)。書き換える前に commitPlanNameEdit() で呼ぶ。
+            pendingPlanRename = commit
             tv.setOnEditorActionListener { v, actionId, _ ->
                 if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
                     planListScroll.isFocusableInTouchMode = true
@@ -3516,7 +3548,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
             // EditText が破棄される。その時に保留中の編集を確定する(タップで抜けても保存される)。
             tv.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
                 override fun onViewAttachedToWindow(v: View) {}
-                override fun onViewDetachedFromWindow(v: View) { commit() }
+                override fun onViewDetachedFromWindow(v: View) {
+                    commit()
+                    if (pendingPlanRename === commit) { pendingPlanRename = null }
+                }
             })
         } else {
             // 未選択(または撮影中)の行 → タップで選択のみ(キーボードは出さない)。
@@ -4278,8 +4313,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
         } catch (_: Exception) {}
     }
 
+    // 一覧で計画名を編集中なら、その場で確定させる。改名は「入力欄のフォーカスが外れた時」に
+    //  走るが、**ダイアログはアクティビティのフォーカスを奪わない**ので、名前を打った直後に
+    //  ダイアログを開く操作では確定しないまま残る(入れたはずの名前が消えたように見える)。
+    //  計画を書き換えるダイアログを出す前に呼ぶ。
+    private fun commitPlanNameEdit() { pendingPlanRename?.invoke() }   // 二重確定は commit 側が弾く
+
     // --- 撮影場所の入力(緯度経度)。登録済みから選択 / テキスト貼り付け / 地図から選択(osmdroid) ---
     private fun showPlaceEditChooser() {
+        commitPlanNameEdit()   // 名前を打った直後でも改名を取りこぼさない
         val cur = try { JSONObject(latestSchedule).optString("latlng") } catch (_: Exception) { "" }
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle("撮影場所を設定")
@@ -4302,15 +4344,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .setTitle("登録済みの場所")
             .setItems(names.toTypedArray()) { _, which ->
                 val nm = names[which]
-                Thread {
+                planExec.execute {   // 計画への書き込みは必ず単一スレッドで(他の計画操作と直列化)
                     val r = HgeNative.nativeSetPlanPlace(nm)
-                    val sched = HgeNative.nativeScheduleJson()
                     runOnUiThread {
-                        // 場所が変わるとタイムゾーンも変わりうるので一覧も作り直す(副行の⚠を出すため)。
-                        if (r == 0) { latestSchedule = sched; updatePlanDisplay(sched); refreshPlanList(); Toast.makeText(this, "撮影場所: $nm", Toast.LENGTH_SHORT).show() }
+                        // 詳細の表示は EV_SCHEDULE が更新する(ここで二重に出さない)。場所が変わると
+                        //  タイムゾーンも変わりうるので一覧だけ作り直す(選択は動かない)。
+                        if (r == 0) { refreshPlanList(); Toast.makeText(this, "撮影場所: $nm", Toast.LENGTH_SHORT).show() }
                         else Toast.makeText(this, "撮影場所の設定に失敗 (code=$r)", Toast.LENGTH_LONG).show()
                     }
-                }.start()
+                }
             }
             .setNegativeButton("キャンセル", null)
             .show()
@@ -4358,16 +4400,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // 緯度経度を Entity へ反映(スケジュール再生成)。name 空=地名は据え置き。
+    // 【計画への書き込みは必ず planExec(2026-09-04 UI依頼)】計画の操作は単一スレッドで直列化する
+    //  決まりなのに、撮影場所の2経路だけ生スレッドで走っていた。名前の確定(改名)と同時に走ると
+    //  Entity の g_plan を二方向から触ることになり、一覧の選択が別の計画へ飛ぶ原因になっていた。
+    //  詳細の表示は EV_SCHEDULE が受け持つ(ここで別途 updatePlanDisplay しない)。
     private fun applyPlace(lat: Double, lng: Double, name: String) {
-        Thread {
+        planExec.execute {
             val r = HgeNative.nativeSetPlanLocation(lat, lng, name)
-            val sched = HgeNative.nativeScheduleJson()
             runOnUiThread {
-                if (r == 0) { latestSchedule = sched; updatePlanDisplay(sched)
-                    Toast.makeText(this, "撮影場所を更新: %.4f, %.4f".format(lat, lng), Toast.LENGTH_SHORT).show() }
+                if (r == 0) Toast.makeText(this, "撮影場所を更新: %.4f, %.4f".format(lat, lng), Toast.LENGTH_SHORT).show()
                 else Toast.makeText(this, "撮影場所の設定に失敗 (code=$r)", Toast.LENGTH_LONG).show()
             }
-        }.start()
+        }
     }
 
     // 地図から選択(osmdroid=OpenStreetMap。タイルは無料・APIキー不要)。タップで地点を選び「設定」で反映。
@@ -5342,16 +5386,26 @@ class MainActivity : AppCompatActivity(), HgeListener {
         fetchCurrentLocation { la, lo, alt ->
             Thread {
                 val elev = fetchElevationOrNull(la, lo) ?: alt
-                val o = (findPlaceJson(name) ?: JSONObject()).apply {
+                // 待っている間にユーザーが名前を変えた/消したときは**何もしない**。無い名前へ書くと
+                //  Entity は新しい場所を作ってしまい、一覧に幻の行が増える。
+                val cur = findPlaceJson(name) ?: return@Thread
+                val o = JSONObject(cur.toString()).apply {
                     put("name", newName ?: name)
                     put("latitude", la); put("longitude", lo); put("altitude", elev)
                 }.toString()
                 HgeNative.nativeSetPlaceDetail(name, o)
                 runOnUiThread {
-                    // 取得を待つ間に別の場所へ切替えていたら画面は動かさない(データは書けている)。
-                    if (selPlace == null || selPlace == name) {
-                        selPlace = newName ?: name; buildPlacesList(); buildPlaceDetail()
+                    if (selPlace == null) { selPlace = newName ?: name }                    // 起動直後(まだ何も選んでいない)
+                    else if (selPlace == name && newName != null) { selPlace = newName }    // 改名を選択にも反映
+                    // 【選択も入力中の欄も動かさない(2026-09-04 UI依頼)】開いている詳細は作り直さず
+                    //  値だけ差し替える。作り直すと入力欄が壊れ、選択が動いたように見える。
+                    if (selPlace == (newName ?: name)) {
+                        placeLat = la; placeLng = lo; refreshPlaceCoordText()
+                        placeAltEt?.setText(elev.toInt().toString())
                     }
+                    // 一覧の作り直しは入力中の欄を壊すので、どこにも入力中でないときだけ行う
+                    //  (作り直さなくても、次に場所を選び直した時点で最新になる)。
+                    if (currentFocus == null) { buildPlacesList() }
                 }
             }.start()
         }
