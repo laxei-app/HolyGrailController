@@ -5105,7 +5105,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
         Thread {
             HgeNative.nativeAddPlace("")
             val names = placeNames()
-            runOnUiThread { selPlace = names.lastOrNull(); buildPlacesList(); buildPlaceDetail() }
+            val added = names.lastOrNull()
+            runOnUiThread {
+                selPlace = added; buildPlacesList(); buildPlaceDetail()
+                // 【新しい場所も現在地から作る(2026-09-04 UI依頼)】撮影地はたいてい手元なので、
+                //  座標と標高を入れた状態から始める。取れなければ Entity が入れた出荷時の場所
+                //  (Tokyo)のまま。取得は非同期なので、先に一覧と詳細を出してから追いかける。
+                if (added != null) { fillPlaceFromCurrentLocation(added) }
+            }
         }.start()
     }
 
@@ -5308,7 +5315,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  出荷時の場所(Tokyo)を1件だけ作る。撮影地はたいてい手元なので、取れるなら現在地に差し替える。
     //   ・タイムゾーンは端末から取る。**権限が要らず必ず取れる**(位置情報とは違う)
     //   ・座標が取れないとき(権限なし/測位失敗)は Tokyo のまま。無理に空にはしない
-    //   ・標高は測位値→取れなければ標高API→それも駄目なら 0。座標さえ取れれば現在地を使う
+    //   ・標高は標高API→取れなければ測位値。座標さえ取れれば現在地を使う
     //  一度試したら二度としない(prefs)。ユーザーが消した場所を毎回作り直さないため。
     //  出荷時のまま(1件・名前が Tokyo)のときだけ触る。使い始めた後のデータは書き換えない。
     private fun seedFirstPlaceFromLocation() {
@@ -5320,42 +5327,58 @@ class MainActivity : AppCompatActivity(), HgeListener {
             return
         }
         pf.edit().putBoolean("placeSeedTried", true).apply()
+        fillPlaceFromCurrentLocation("Tokyo", kCurrentPlaceName)
+    }
+
+    // 撮影場所1件を現在地の座標・標高で埋める。**作った直後の場所にだけ使う**。
+    //  ・座標が取れない(権限なし/測位失敗)ときは何もしない。呼び出し元が入れた既定値、
+    //    つまり出荷時の場所(Tokyo)がそのまま残る
+    //  ・標高は**標高APIを優先**する。測位が返す高さは楕円体高で、海面からの標高とは 40m ほど
+    //    違う(実測: API 58m に対し測位 108m)。APIが駄目なら測位値を使う
+    //  ・名前を変えたいときだけ newName を渡す(初回起動の1件を current location にする)
+    //  setPlaceDetailJson は受け取った autoInsert を真値として扱うので、自動挿入に指定済みの
+    //  場所へ使うと指定が外れる。新規の場所は必ず false なので問題にならない。
+    private fun fillPlaceFromCurrentLocation(name: String, newName: String? = null) {
         fetchCurrentLocation { la, lo, alt ->
-            val o = JSONObject().apply {
-                put("name", kCurrentPlaceName); put("memo", "")
-                put("latitude", la); put("longitude", lo)
-                put("altitude", alt); put("autoInsert", false); put("tzOffMin", nowOffMin())
-            }.toString()
             Thread {
-                HgeNative.nativeSetPlaceDetail("Tokyo", o)      // 出荷時の1件を現在地で置き換える
-                runOnUiThread { selPlace = kCurrentPlaceName }
-                // 標高は**標高APIを優先**する。測位が返す高さは楕円体高で、海面からの標高とは
-                //  40m ほど違う(実測: API 58m に対し測位 108m)。APIが駄目なら測位値のままにする。
-                fetchElevationForSeed(la, lo)
+                val elev = fetchElevationOrNull(la, lo) ?: alt
+                val o = (findPlaceJson(name) ?: JSONObject()).apply {
+                    put("name", newName ?: name)
+                    put("latitude", la); put("longitude", lo); put("altitude", elev)
+                }.toString()
+                HgeNative.nativeSetPlaceDetail(name, o)
+                runOnUiThread {
+                    // 取得を待つ間に別の場所へ切替えていたら画面は動かさない(データは書けている)。
+                    if (selPlace == null || selPlace == name) {
+                        selPlace = newName ?: name; buildPlacesList(); buildPlaceDetail()
+                    }
+                }
             }.start()
         }
     }
 
-    // 種の標高だけを後から埋める。画面を開いていなくても書ける経路(fetchElevationInto は入力欄に書く)。
-    private fun fetchElevationForSeed(lat: Double, lng: Double) {
-        Thread {
-            try {
-                val u = String.format(Locale.US, "https://api.open-meteo.com/v1/elevation?latitude=%.6f&longitude=%.6f", lat, lng)
-                val conn = (java.net.URL(u).openConnection() as java.net.HttpURLConnection).apply {
-                    connectTimeout = 6000; readTimeout = 6000; requestMethod = "GET"
-                }
-                val body = conn.inputStream.bufferedReader().use { it.readText() }
-                conn.disconnect()
-                val elev = JSONObject(body).optJSONArray("elevation")?.optDouble(0, Double.NaN) ?: Double.NaN
-                if (elev.isNaN()) { return@Thread }
-                val o = JSONObject().apply {
-                    put("name", kCurrentPlaceName); put("memo", "")
-                    put("latitude", lat); put("longitude", lng)
-                    put("altitude", elev); put("autoInsert", false); put("tzOffMin", nowOffMin())
-                }.toString()
-                HgeNative.nativeSetPlaceDetail(kCurrentPlaceName, o)
-            } catch (_: Exception) {}   // 取れなければ 0 のまま。画面から「緯度経度から取得」で拾える
-        }.start()
+    private fun findPlaceJson(name: String): JSONObject? {
+        val arr = placeArray(HgeNative.nativeGetPlaces())
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            if (o.optString("name") == name) { return o }
+        }
+        return null
+    }
+
+    // 標高APIを呼んで値を返す(取れなければ null)。**呼び出し側のスレッドで待つ**。
+    //  入力欄へ書く fetchElevationInto と違い、画面を開いていなくても使える。
+    private fun fetchElevationOrNull(lat: Double, lng: Double): Double? {
+        try {
+            val u = String.format(Locale.US, "https://api.open-meteo.com/v1/elevation?latitude=%.6f&longitude=%.6f", lat, lng)
+            val conn = (java.net.URL(u).openConnection() as java.net.HttpURLConnection).apply {
+                connectTimeout = 6000; readTimeout = 6000; requestMethod = "GET"
+            }
+            val body = conn.inputStream.bufferedReader().use { it.readText() }
+            conn.disconnect()
+            val elev = JSONObject(body).optJSONArray("elevation")?.optDouble(0, Double.NaN) ?: Double.NaN
+            return if (elev.isNaN()) null else elev
+        } catch (_: Exception) { return null }   // 圏外/エッジのAPへバインド中など。画面から手入力できる
     }
 
     private fun fetchCurrentLocation(onGot: (Double, Double, Double) -> Unit) {

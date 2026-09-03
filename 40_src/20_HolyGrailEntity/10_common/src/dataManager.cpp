@@ -726,11 +726,12 @@ std::string dataManager::placesJson(void)
 bool dataManager::addPlace(const std::string& name)
 {
 	ensurePlaces();
-	hgc::place p;
+	// 【新しい場所の既定は出荷時の場所(2026-09-04 UI依頼)】座標 0,0(ギニア湾)から始めると
+	//  スケジュールが作れず、標高も 0 のまま。出荷時の場所を丸ごと既定にする。
+	//  タイムゾーンも factoryPlace() が**端末の現在値**を入れる(既定の 0=UTC のままにしない)。
+	//  スマホは、この後に現在地が取れれば座標と標高を上書きする(取れなければこの値が残る)。
+	hgc::place p = factoryPlace();
 	p.name = uniquePlaceName(name.empty() ? std::string("New place") : name);
-	// 新しい場所のタイムゾーンは**端末の現在値**(2026-09-03)。構造体の既定は 0(UTC)なので、
-	//  ここで入れないと追加した直後だけ +00:00 になる。国内で使う限り +9 が入り、意識しなくてよい。
-	p.tzOffMin = osclock::utcOffsetMin();
 	g_places.push_back(std::move(p));
 	return savePlaces();
 }
