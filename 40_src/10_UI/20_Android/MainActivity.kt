@@ -1744,8 +1744,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun ownedLensNames(): List<String> { val a = camArray(HgeNative.nativeGetOwnedLenses()); return (0 until a.length()).mapNotNull { a.optJSONObject(it)?.optString("name") } }
 
     // onRename を渡すと名称をインライン編集できる(タップで選択、確定/フォーカス外で改名)。全分割バー画面で共通。
+    // onEditor: 選択行の名前入力欄を作ったときに呼ぶ(確定処理を持っておく側で使う)。
     private fun listRow(title: String, sub: String, selected: Boolean, onSelect: () -> Unit,
-                        menuItems: List<Pair<String, () -> Unit>>, onRename: ((String) -> Unit)? = null): View {
+                        menuItems: List<Pair<String, () -> Unit>>, onRename: ((String) -> Unit)? = null,
+                        onEditor: ((EditText) -> Unit)? = null): View {
         val row = LinearLayout(this)
         row.orientation = LinearLayout.HORIZONTAL
         row.gravity = Gravity.CENTER_VERTICAL
@@ -1771,6 +1773,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 } else false
             }
             txt.addView(e)
+            onEditor?.invoke(e)
         } else {
             val t = TextView(this); t.text = title
             t.textSize = if (selected) 19f else 16f
@@ -3432,6 +3435,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private fun buildPlanList(js: String) {
+        clearListFocus(planListContainer)   // 消す子にフォーカスが残っていると落ちる
         planListContainer.removeAllViews()
         // 常に先頭に「新規撮影計画」行(タップで初期値の新規計画を作成)。
         val add = TextView(this)
@@ -4317,7 +4321,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  走るが、**ダイアログはアクティビティのフォーカスを奪わない**ので、名前を打った直後に
     //  ダイアログを開く操作では確定しないまま残る(入れたはずの名前が消えたように見える)。
     //  計画を書き換えるダイアログを出す前に呼ぶ。
-    private fun commitPlanNameEdit() { pendingPlanRename?.invoke() }   // 二重確定は commit 側が弾く
+    private fun commitPlanNameEdit() {
+        val f = pendingPlanRename ?: return
+        clearListFocus(planListContainer)
+        f.invoke()                                     // 二重確定は commit 側が弾く
+    }
 
     // --- 撮影場所の入力(緯度経度)。登録済みから選択 / テキスト貼り付け / 地図から選択(osmdroid) ---
     private fun showPlaceEditChooser() {
@@ -4454,6 +4462,35 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // ============================================================
     //  640 撮影場所リスト(§7.9)。登録した場所を撮影計画で選択する。
     // ============================================================
+    // 撮影場所の書き込みは**単一スレッドで直列化**する(2026-09-04 UI依頼)。
+    //  改名・座標・標高・現在地の取得結果がそれぞれ別スレッドで書いていたため、
+    //  改名が先に通ると後から来た書き込みが**古い名前**を宛先にしてしまい、Entity が
+    //  その名前の場所を新しく作っていた(一覧に行が増えて選択が別の項目へ移る)。
+    private val placeExec = java.util.concurrent.Executors.newSingleThreadExecutor()
+    // 一覧で編集中の場所名を確定させる処理。ダイアログはフォーカスを奪わないので、
+    //  フォーカス喪失だけに頼ると「名前にカーソルがあるまま地図を開く」流れで取りこぼす。
+    private var pendingPlaceRename: (() -> Unit)? = null
+    private fun commitPlaceNameEdit() {
+        val f = pendingPlaceRename ?: return
+        pendingPlaceRename = null
+        clearListFocus(findViewById(R.id.places_container))
+        f.invoke()
+    }
+
+    // 一覧の入力欄からフォーカスを外し、キーボードも閉じる。
+    //  **removeAllViews() は、消す子にフォーカスが残っているとフォーカス探索が落ちる**
+    //  (addFocusables で NPE。実機で確認)。作り直す前と、確定の前に必ず通す。
+    private fun clearListFocus(box: View?) {
+        if (box == null) { return }
+        val f = currentFocus ?: return
+        var v: View? = f
+        while (v != null && v !== box) { v = v.parent as? View }
+        if (v !== box) { return }                       // その一覧の入力欄ではない
+        box.isFocusableInTouchMode = true
+        box.requestFocus()
+        (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
+            .hideSoftInputFromWindow(box.windowToken, 0)
+    }
     private var selPlace: String? = null
     private var placeLat = 0.0
     private var placeLng = 0.0
@@ -5124,7 +5161,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun buildPlacesList() {
         val box = findViewById<LinearLayout>(R.id.places_container)
+        clearListFocus(box)              // 消す子にフォーカスが残っていると落ちる
         box.removeAllViews()
+        pendingPlaceRename = null        // 行を作り直すので、前の行の確定処理は捨てる
         val arr = placeArray(HgeNative.nativeGetPlaces())
         val names = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("name") }
         if (selPlace == null || selPlace !in names) selPlace = names.firstOrNull()
@@ -5133,20 +5172,29 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val name = o.optString("name")
             val sub = "%.4f, %.4f  標高 %dm".format(o.optDouble("latitude", 0.0), o.optDouble("longitude", 0.0), o.optDouble("altitude", 0.0).toInt()) +
                       (if (o.optString("memo").isNotEmpty()) "  ${o.optString("memo")}" else "")
+            // 改名の確定は「フォーカスが外れた時」と「保持した確定処理」の両方から来るので、
+            //  実際に名前が変わるときだけ一度だけ走らせる(二重に走ると2回目が自分自身と
+            //  ぶつかって「使用されています」が出る)。計画一覧と同じ作り。
+            var renamed = false
+            val doRename = { newName: String ->
+                val nm = newName.trim()
+                if (!renamed && nm.isNotEmpty() && nm != name) { renamed = true; commitPlaceRename(name, nm) }
+            }
             box.addView(listRow(name, sub, name == selPlace,
                 onSelect = { selectPlace(name) },
                 menuItems = listOf("削除" to {
-                    Thread { HgeNative.nativeRemovePlace(name)
-                        runOnUiThread { if (selPlace == name) selPlace = null; buildPlacesList(); buildPlaceDetail() } }.start()
+                    placeExec.execute { HgeNative.nativeRemovePlace(name)
+                        runOnUiThread { if (selPlace == name) selPlace = null; buildPlacesList(); buildPlaceDetail() } }
                 }),
-                onRename = { newName -> commitPlaceRename(name, newName) }))
+                onRename = { newName -> doRename(newName) },
+                onEditor  = { e -> pendingPlaceRename = { doRename(e.text.toString()) } }))
             box.addView(thinDivider())
         }
         box.addView(linkText("＋ 新しい場所の追加") { addPlace() })
     }
 
     private fun addPlace() {
-        Thread {
+        placeExec.execute {
             HgeNative.nativeAddPlace("")
             val names = placeNames()
             val added = names.lastOrNull()
@@ -5157,7 +5205,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 //  (Tokyo)のまま。取得は非同期なので、先に一覧と詳細を出してから追いかける。
                 if (added != null) { fillPlaceFromCurrentLocation(added) }
             }
-        }.start()
+        }
     }
 
     private fun selectPlace(name: String) {
@@ -5193,12 +5241,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.addView(TextView(this).apply { text = "緯度・経度"; textSize = 13f; setTextColor(Color.GRAY); setPadding(0, dp(4), 0, dp(2)) })
         val btnRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         btnRow.addView(linkText("📍 地図から取得") {
+            // 名前にカーソルが残ったままでも、ここで改名を確定させてから開く。
+            //  確定しないまま座標を書くと、後から来る改名との順序で宛先が食い違う。
+            commitPlaceNameEdit()
             val la0 = if (placeLat != 0.0 || placeLng != 0.0) placeLat else 35.681
             val lo0 = if (placeLat != 0.0 || placeLng != 0.0) placeLng else 139.767
             openMapPicker(la0, lo0) { la, lo -> onPlaceCoord(la, lo) }
         })
-        btnRow.addView(linkText("✎ 貼り付け") { showPlacePasteDialog("%.6f, %.6f".format(placeLat, placeLng)) { la, lo -> onPlaceCoord(la, lo) } })
-        btnRow.addView(linkText("＋ 現在地") { fetchCurrentLocation { la, lo, alt -> if (alt != 0.0) placeAltEt?.setText(alt.toInt().toString()); onPlaceCoord(la, lo) } })
+        btnRow.addView(linkText("✎ 貼り付け") { commitPlaceNameEdit(); showPlacePasteDialog("%.6f, %.6f".format(placeLat, placeLng)) { la, lo -> onPlaceCoord(la, lo) } })
+        btnRow.addView(linkText("＋ 現在地") { commitPlaceNameEdit(); fetchCurrentLocation { la, lo, alt -> if (alt != 0.0) placeAltEt?.setText(alt.toInt().toString()); onPlaceCoord(la, lo) } })
         box.addView(btnRow)
         val coordTv = TextView(this).apply { textSize = 18f; setTextColor(Color.BLACK); setPadding(0, dp(2), 0, dp(8)) }
         placeCoordTv = coordTv; box.addView(coordTv); refreshPlaceCoordText()
@@ -5347,11 +5398,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
             put("latitude", placeLat); put("longitude", placeLng)
             put("altitude", alt); put("autoInsert", auto); put("tzOffMin", placeTzOffMin)
         }.toString()
-        Thread {
+        placeExec.execute {
             HgeNative.nativeSetPlaceDetail(key, json)
             if (rebuild) runOnUiThread { buildPlacesList(); buildPlaceDetail() }
             else if (rebuildList) runOnUiThread { buildPlacesList() }   // 座標だけ更新(詳細の入力欄は保持)
-        }.start()
+        }
     }
 
     // 現在地(GPS/ネットワーク)を取得して onGot(lat,lng,alt) を呼ぶ(§7.9)。権限が無ければ要求。
@@ -5385,10 +5436,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun fillPlaceFromCurrentLocation(name: String, newName: String? = null) {
         fetchCurrentLocation { la, lo, alt ->
             Thread {
-                val elev = fetchElevationOrNull(la, lo) ?: alt
+                val elev = fetchElevationOrNull(la, lo) ?: alt   // 通信は単一スレッドを塞がないよう別で
+                placeExec.execute {
                 // 待っている間にユーザーが名前を変えた/消したときは**何もしない**。無い名前へ書くと
                 //  Entity は新しい場所を作ってしまい、一覧に幻の行が増える。
-                val cur = findPlaceJson(name) ?: return@Thread
+                val cur = findPlaceJson(name) ?: return@execute
                 val o = JSONObject(cur.toString()).apply {
                     put("name", newName ?: name)
                     put("latitude", la); put("longitude", lo); put("altitude", elev)
@@ -5406,6 +5458,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     // 一覧の作り直しは入力中の欄を壊すので、どこにも入力中でないときだけ行う
                     //  (作り直さなくても、次に場所を選び直した時点で最新になる)。
                     if (currentFocus == null) { buildPlacesList() }
+                }
                 }
             }.start()
         }

@@ -788,7 +788,11 @@ bool dataManager::setPlaceDetailJson(const std::string& origName, const std::str
 	if (!csjson::placesFromJson(std::string("[") + jsonStr + "]", parsed) || parsed.empty()) { return false; }
 	hgc::place* dst = nullptr;
 	for (auto& p : g_places) { if (p.name == origName) { dst = &p; break; } }
-	if (!dst) { g_places.emplace_back(); dst = &g_places.back(); }
+	// 【無い名前へは書かない(2026-09-04 UI依頼)】以前はここで新しい場所を作っていた。
+	//  非同期の書き込み(標高・現在地)が改名の後に届くと、宛先が古い名前のままなので
+	//  同じ場所がもう1件増え、一覧の選択が別の項目へ移っていた。
+	//  この関数は「その名前の場所を直す」用途しかないので、見つからなければ失敗を返す。
+	if (!dst) { return false; }
 	const bool wantAuto = parsed.front().autoInsert;	// 受け取ったチェック状態(項目10: 保存先は全体設定)
 	*dst = parsed.front();
 	dst->autoInsert = false;	// places.json 側は真値として使わない(全体設定が真)
