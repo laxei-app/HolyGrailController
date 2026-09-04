@@ -925,10 +925,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 "・エッジ端末の登録とネットワーク設定\n" +
                 "・撮影ログ / 撮影レポート / 操作履歴\n\n" +
                 "機材マスタ(カメラ・レンズの一覧)は残します。\n" +
-                "エッジ端末本体の設定と、エッジが持っている撮影計画は消えません。" +
-                "必要ならエッジ端末側でも初期化してください。\n\n" +
-                "元に戻せません。消したあとアプリは終了します。")
-            .setPositiveButton("消して終了する") { _, _ -> doFactoryReset() }
+                "エッジ端末本体の設定と、エッジが持っている撮影計画は消えません。\n\n" +
+                "元に戻せません。消したあとアプリを開き直します。")
+            .setPositiveButton("消して開き直す") { _, _ -> doFactoryReset() }
             .setNegativeButton("やめる", null)
             .show()
     }
@@ -946,12 +945,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         } catch (_: Exception) {
             // 消せなかったものがあっても、残りは消して終了する(中途半端でも次の起動で作り直される)
         }
-        Toast.makeText(this, "初期化しました。アプリを開き直してください", Toast.LENGTH_LONG).show()
-        // トーストが出てから終わらせる。ここで戻ってきても書き戻さないよう、必ず落とす。
-        handler.postDelayed({
-            finishAffinity()
-            android.os.Process.killProcess(android.os.Process.myPid())
-        }, 1200)
+        Toast.makeText(this, "初期化しました。開き直します", Toast.LENGTH_SHORT).show()
+        // トーストが出てから落とす。**必ず落とすこと**(落とさないとメモリから書き戻る)。
+        //  落としたあと自分では起動できないので、別プロセスの RestartActivity に任せる。
+        handler.postDelayed({ RestartActivity.restart(this) }, 900)
     }
 
     // このアプリの版数("0.0.x")。build.gradle.kts の versionName をそのまま読む。

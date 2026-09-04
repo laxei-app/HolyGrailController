@@ -53,6 +53,17 @@
             </intent-filter>
         </activity>
 
+        <!-- 「出荷時設定に戻す」のあとアプリを開き直すためだけの画面(2026-09-05 UI依頼)。
+             **別プロセスに置くことが要点**。本体プロセスを落としてから開き直す役なので、
+             同じプロセスだと自分も巻き込まれて何も起動できない。
+             ランチャーには出さない(exported=false・intent-filter なし)。 -->
+        <activity
+            android:name="app.laxei.holygrail.RestartActivity"
+            android:process=":restart"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:exported="false" />
+
         <!-- 買ってきたエッジ端末へ USB でファームを書き込む画面。
              新品には自分たちのファームが入っていないため OTA では焼けず、ここが唯一の道。
              USB_DEVICE_ATTACHED を受けるのは、挿したときに権限を貰っておくため。
