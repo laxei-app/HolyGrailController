@@ -543,6 +543,27 @@ class MainActivity : AppCompatActivity(), HgeListener {
         planMenu = findViewById(R.id.plan_menu)
     }
 
+    // 【ヘッダはホームとメニューの2つ(2026-09-05 UI依頼)】戻るアイコンは廃止した。
+    //  メニューから設定画面へ入ったあと撮影計画へ戻るのに操作が多かったため、
+    //  どの画面からも1回で「撮影計画(ホーム)」へ行けるようにする。
+    //  1つ戻る操作は**端末の戻るキー**に任せる(goBackOneScreen はそのまま残している)。
+    //
+    //  画面を離れるときの後始末(保存・監視の停止)は行き先で変わらないので、
+    //  leaveXxx(dest) に行き先だけ渡す形にした。dest は 0=撮影計画 / 4=メニュー。
+    private val kScreenHome = 0
+    private val kScreenMenu = 4
+
+    // ヘッダのホーム/メニューを1か所で配線する。押されたら行き先(0/4)を渡して呼ぶ。
+    private fun wireHeader(homeId: Int, menuId: Int, onLeave: (Int) -> Unit) {
+        findViewById<ImageView>(homeId)?.setOnClickListener { onLeave(kScreenHome) }
+        findViewById<ImageView>(menuId)?.setOnClickListener { onLeave(kScreenMenu) }
+    }
+
+    private fun gotoScreen(dest: Int) {
+        flipper.displayedChild = dest
+        if (dest == kScreenMenu) { buildGearMenu() } else { capturePlanBaseline() }
+    }
+
     // 項目I: 現在の画面に応じて「戻る」を実行する。各画面の戻るボタンと同じ動作にする。
     //  戻り先があれば true、先頭ページ(=これ以上戻れない)なら false を返す。
     //  ViewFlipper index: 0 撮影計画 / 1 撮影中 / 2 ccmメニュー(未使用) / 3 ccm編集 /
@@ -557,9 +578,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
             3 -> { stopDirtyWatch(); persistCcmEdit(); flipper.displayedChild = if (editingPlanCcm) 0 else 4 }
             4 -> { flipper.displayedChild = 0; capturePlanBaseline() }   // メニュー → 撮影計画
             5 -> leaveCameraList()
-            6 -> leaveCameraAdd(false)
+            6 -> leaveCameraAdd(-1)      // 追加画面 → 元の所持カメラ一覧
             7 -> leaveLensList()
-            8 -> leaveLensAdd(false)
+            8 -> leaveLensAdd(-1)        // 追加画面 → 元の所持レンズ一覧
             9 -> leaveColorScreen()
             10 -> leaveSmoothingScreen()
             11 -> leavePlacesList()
@@ -653,22 +674,28 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 撮影制御方法の編集ボタン(全種・固定配置)をスケジュールの下に構築する。
         buildCcmEditButtons()
         // メニュー(plan_menu→600.メニュー)。帯付きの一覧から各画面へ分岐。
+        wireHeader(R.id.cap_home, R.id.cap_menu) { gotoScreen(it) }
         planMenu.setOnClickListener {
             if (tplMode) { leaveTemplates { openGearMenu() } } else { openGearMenu() }
         }
-        findViewById<ImageView>(R.id.gmenu_back).setOnClickListener { flipper.displayedChild = 0; capturePlanBaseline() }
+        // ひな形のときだけ見えるホーム。元の計画へ戻してから撮影計画を出す。
+        findViewById<ImageView>(R.id.plan_home).setOnClickListener {
+            if (tplMode) { leaveTemplates { gotoScreen(kScreenHome) } }
+        }
+        // メニュー画面にはホームだけ(メニューの中にメニューは要らない)
+        findViewById<ImageView>(R.id.gmenu_home).setOnClickListener { gotoScreen(kScreenHome) }
         // 650 カメラ予約表(項目17)。戻る/メニューどちらもメニューへ戻す。
-        findViewById<ImageView>(R.id.reserve_back).setOnClickListener { flipper.displayedChild = 4; buildGearMenu() }
+        wireHeader(R.id.reserve_home, R.id.reserve_menu) { gotoScreen(it) }
         // 660 操作履歴(項目9)
-        findViewById<ImageView>(R.id.history_back).setOnClickListener { flipper.displayedChild = 4; buildGearMenu() }
+        wireHeader(R.id.history_home, R.id.history_menu) { gotoScreen(it) }
         // 670 撮影レポート。読むだけの画面なので離脱時に保存するものは無い。
-        findViewById<ImageView>(R.id.report_back).setOnClickListener { flipper.displayedChild = 4; buildGearMenu() }
+        wireHeader(R.id.report_home, R.id.report_menu) { gotoScreen(it) }
         // 8.2 エッジ端末設定(2026-08-08 UI依頼で画面化)
-        findViewById<ImageView>(R.id.edge_back).setOnClickListener { stashEdgeForm(); flipper.displayedChild = 4; buildGearMenu() }
-        findViewById<ImageView>(R.id.dlog_back).setOnClickListener {
+        wireHeader(R.id.edge_home, R.id.edge_menu) { stashEdgeForm(); gotoScreen(it) }
+        wireHeader(R.id.dlog_home, R.id.dlog_menu) { dest ->
             // 取得中は戻らせない(端末の戻るキーと同じ扱い)。
-            if (dlogBusy) Toast.makeText(this, "取得中です。中断してから戻ってください", Toast.LENGTH_SHORT).show()
-            else { flipper.displayedChild = 4; buildGearMenu() }
+            if (dlogBusy) Toast.makeText(this, "取得中です。中断してから移動してください", Toast.LENGTH_SHORT).show()
+            else { gotoScreen(dest) }
         }
         findViewById<Button>(R.id.history_clear).setOnClickListener {
             AlertDialog.Builder(this)
@@ -682,19 +709,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 .show()
         }
         // 620 所持カメラ(戻る/メニューで離脱時に自動保存)
-        findViewById<ImageView>(R.id.cameralist_back).setOnClickListener { leaveCameraList() }
+        wireHeader(R.id.cameralist_home, R.id.cameralist_menu) { leaveCameraList(it) }
         // 622 カメラ追加(離脱時にチェックを追加 / 取消でチェック解除)
-        findViewById<ImageView>(R.id.cameraadd_back).setOnClickListener { leaveCameraAdd(false) }
-        findViewById<ImageView>(R.id.cameraadd_menu).setOnClickListener { leaveCameraAdd(true) }
+        wireHeader(R.id.cameraadd_home, R.id.cameraadd_menu) { leaveCameraAdd(it) }
         findViewById<Button>(R.id.cameraadd_cancel).setOnClickListener { checkedCamAdd.clear(); buildCameraAdd() }
         // 630 所持レンズ
-        findViewById<ImageView>(R.id.lenslist_back).setOnClickListener { leaveLensList() }
+        wireHeader(R.id.lenslist_home, R.id.lenslist_menu) { leaveLensList(it) }
         // 632 レンズ追加
-        findViewById<ImageView>(R.id.lensadd_back).setOnClickListener { leaveLensAdd(false) }
-        findViewById<ImageView>(R.id.lensadd_menu).setOnClickListener { leaveLensAdd(true) }
+        wireHeader(R.id.lensadd_home, R.id.lensadd_menu) { leaveLensAdd(it) }
         findViewById<Button>(R.id.lensadd_cancel).setOnClickListener { checkedLensAdd.clear(); buildLensAdd() }
         // 640 撮影場所リスト(§7.9)。戻る/メニューで離脱時に自動保存。
-        findViewById<ImageView>(R.id.places_back).setOnClickListener { leavePlacesList() }
+        wireHeader(R.id.places_home, R.id.places_menu) { leavePlacesList(it) }
         // 撮影計画(330)のカメラ/レンズをタップで所持から選択する。
         cameraText.setOnClickListener { choosePlanCamera() }
         lensText.setOnClickListener { choosePlanLens() }
@@ -705,12 +730,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<Button>(R.id.cmenu_sunrise).setOnClickListener { openCcmEdit("sunrise") }
         findViewById<Button>(R.id.cmenu_sunset).setOnClickListener { openCcmEdit("sunset") }
         findViewById<Button>(R.id.cmenu_day).setOnClickListener { openCcmEdit("day") }
-        findViewById<ImageView>(R.id.edit_back).setOnClickListener { stopDirtyWatch(); persistCcmEdit(); flipper.displayedChild = if (editingPlanCcm) 0 else 4 }
+        // 撮影制御方法の編集は、計画から開いたときも初期値から開いたときも同じ画面。
+        //  ホーム/メニューのどちらを押したかで行き先を決める(以前は開いた経路で決めていた)。
+        wireHeader(R.id.edit_home, R.id.edit_menu) { stopDirtyWatch(); persistCcmEdit(); gotoScreen(it) }
         findViewById<Button>(R.id.edit_save).visibility = View.GONE   // 取消はエディタ先頭行へ移動
         // 色はメニュー「色の設定」(システム共通)で設定する(per-ccm色は廃止)。
-        findViewById<ImageView>(R.id.color_back).setOnClickListener { leaveColorScreen() }
+        wireHeader(R.id.color_home, R.id.color_menu) { leaveColorScreen(it) }
         // 露出平滑化(630)。戻る/メニューで保存して離脱。取り消しで保存値から再読込。
-        findViewById<ImageView>(R.id.smooth_back).setOnClickListener { leaveSmoothingScreen() }
+        wireHeader(R.id.smooth_home, R.id.smooth_menu) { leaveSmoothingScreen(it) }
         findViewById<Button>(R.id.smooth_cancel).setOnClickListener { loadSmoothingScreen(); resetDirtyBaseline() }
         setupValueSlider(R.id.smooth_hyst_seek, 20) {
             findViewById<TextView>(R.id.smooth_hyst_val).text = String.format("%.1fev", seekToHyst(it))
@@ -1306,7 +1333,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // メニューの作り直しは saveColorScreen の保存完了後にやる。
     // ここで同期に呼ぶと、保存と読み直しを待たずに描いて古い色が出る。
-    private fun leaveColorScreen() { stopDirtyWatch(); saveColorScreen(); flipper.displayedChild = 4 }
+    private fun leaveColorScreen(dest: Int = kScreenMenu) { stopDirtyWatch(); saveColorScreen(); gotoScreen(dest) }
 
     // ---------- 630 露出平滑化(自動露出 全体設定。settings.json) ----------
     private fun openSmoothingScreen() {
@@ -1325,7 +1352,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         setSliderProgress(R.id.smooth_ma_seek, m)
         findViewById<TextView>(R.id.smooth_ma_val).text = "${m}frame"
     }
-    private fun leaveSmoothingScreen() { stopDirtyWatch(); saveSmoothingScreen(); flipper.displayedChild = 4; buildGearMenu() }
+    private fun leaveSmoothingScreen(dest: Int = kScreenMenu) { stopDirtyWatch(); saveSmoothingScreen(); gotoScreen(dest) }
     private fun saveSmoothingScreen() {
         val js = JSONObject()
             .put("hysteresis", seekToHyst(sliderProgress(R.id.smooth_hyst_seek)))
@@ -2138,7 +2165,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .setNegativeButton("キャンセル", null).show()
     }
 
-    private fun leaveCameraList() { stopDirtyWatch(); persistCameraDetail(false); flipper.displayedChild = 4 }
+    private fun leaveCameraList(dest: Int = kScreenMenu) { stopDirtyWatch(); persistCameraDetail(false); gotoScreen(dest) }
 
     // リスト選択(タップ)。同じ行の再タップは編集(フォーカス)のみ。別の行なら前の詳細を保存して切替。
     private fun selectCamera(name: String) {
@@ -2291,9 +2318,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // 622 を離れる時: チェックしたカメラを追加(toMenu=true は600へ、false は620へ)。
-    private fun leaveCameraAdd(toMenu: Boolean) {
+    // dest: 0=撮影計画 / 4=メニュー / それ以外=元の所持カメラ一覧へ戻る(取消ボタン用)
+    private fun leaveCameraAdd(dest: Int) {
         val sel = ArrayList(checkedCamAdd); checkedCamAdd.clear()
-        if (sel.isEmpty()) { if (toMenu) openGearMenu() else openCameraList(); return }
+        val back = { if (dest == kScreenHome || dest == kScreenMenu) gotoScreen(dest) else openCameraList() }
+        if (sel.isEmpty()) { back(); return }
         Thread {
             // §4a: 同機種で未識別(愛称もシリアルも無い)のカメラが既にあると、もう一台は区別できないため追加不可。
             var ok = 0; val failed = ArrayList<String>()
@@ -2305,7 +2334,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     ok == 0 -> "追加できません: 同機種で未識別のカメラが既にあります。先に愛称かシリアルを設定してください"
                     else -> "${ok}台追加。${failed.size}台は追加不可(同機種の未識別カメラが既にあるため)"
                 }
-                Toast.makeText(this, msg, Toast.LENGTH_LONG).show(); if (toMenu) openGearMenu() else openCameraList()
+                Toast.makeText(this, msg, Toast.LENGTH_LONG).show(); back()
             }
         }.start()
     }
@@ -2359,7 +2388,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         return sb.toString()
     }
 
-    private fun leaveLensList() { stopDirtyWatch(); persistLensDetail(false); flipper.displayedChild = 4 }
+    private fun leaveLensList(dest: Int = kScreenMenu) { stopDirtyWatch(); persistLensDetail(false); gotoScreen(dest) }
 
     private fun selectLens(name: String) {
         if (name == selLens) return
@@ -2426,12 +2455,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
     }
 
-    private fun leaveLensAdd(toMenu: Boolean) {
+    // dest: 0=撮影計画 / 4=メニュー / それ以外=元の所持レンズ一覧へ戻る(取消ボタン用)
+    private fun leaveLensAdd(dest: Int) {
         val sel = ArrayList(checkedLensAdd); checkedLensAdd.clear()
-        if (sel.isEmpty()) { if (toMenu) openGearMenu() else openLensList(); return }
+        val back = { if (dest == kScreenHome || dest == kScreenMenu) gotoScreen(dest) else openLensList() }
+        if (sel.isEmpty()) { back(); return }
         Thread {
             sel.forEach { HgeNative.nativeAddOwnedLens(it) }
-            runOnUiThread { Toast.makeText(this, "${sel.size}本を追加しました", Toast.LENGTH_SHORT).show(); if (toMenu) openGearMenu() else openLensList() }
+            runOnUiThread { Toast.makeText(this, "${sel.size}本を追加しました", Toast.LENGTH_SHORT).show(); back() }
         }.start()
     }
 
@@ -3553,6 +3584,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // ひな形モードでできないことを画面から消す。題も差し替える。
     private fun applyTplMode() {
         findViewById<View>(R.id.plan_edgeRow)?.visibility = if (tplMode) View.GONE else View.VISIBLE
+        // ホームは「撮影計画ひな形」のときだけ出す。撮影計画そのものがホームなので、
+        //  そこでは押す意味がない(場所は空けたままにして題を中央に保つ)。
+        findViewById<View>(R.id.plan_home)?.visibility = if (tplMode) View.VISIBLE else View.INVISIBLE
         updatePagerTitle()
     }
 
@@ -4805,7 +4839,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         setInitialSplit(R.id.places_container)
         flipper.displayedChild = 11
     }
-    private fun leavePlacesList() { stopDirtyWatch(); persistPlaceDetail(false); flipper.displayedChild = 4; buildGearMenu() }
+    private fun leavePlacesList(dest: Int = kScreenMenu) { stopDirtyWatch(); persistPlaceDetail(false); gotoScreen(dest) }
 
     // ============================================================
     //  650 カメラ予約表(項目17)

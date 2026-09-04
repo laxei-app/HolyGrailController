@@ -16,10 +16,16 @@
         android:gravity="center_vertical"
         android:padding="8dp">
 
-        <!-- 戻り先が無いため戻るアイコンは廃止(タイトル中央揃え用のスペーサのみ残す) -->
-        <Space
+        <!-- ホーム。撮影計画そのもの(ホーム)では隠し、撮影計画ひな形のときだけ出す
+             (2026-09-05 UI依頼)。同じ画面を入口違いで使っているため。 -->
+        <ImageView
+            android:id="@+id/plan_home"
             android:layout_width="32dp"
-            android:layout_height="32dp" />
+            android:layout_height="32dp"
+            android:clickable="true"
+            android:focusable="true"
+            android:visibility="invisible"
+            android:src="@drawable/ic_home_r" />
 
         <TextView
             android:id="@+id/plan_title"

@@ -15,13 +15,13 @@
         android:background="#1565C0"
         android:gravity="center_vertical"
         android:padding="8dp">
-        <ImageView android:id="@+id/edge_back" android:layout_width="32dp" android:layout_height="32dp"
-            android:clickable="true" android:focusable="true" android:src="@drawable/ic_back_r" />
+        <ImageView android:id="@+id/edge_home" android:layout_width="32dp" android:layout_height="32dp"
+            android:clickable="true" android:focusable="true" android:src="@drawable/ic_home_r" />
         <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
             android:gravity="center" android:text="エッジ端末設定" android:textColor="#FFFFFF"
             android:textSize="20sp" android:textStyle="bold" />
-        <!-- 右上のメニューは廃止(2026-08-29 UI依頼)。題が中央に見えるよう幅だけ残す -->
-        <View android:layout_width="32dp" android:layout_height="32dp" />
+        <ImageView android:id="@+id/edge_menu" android:layout_width="32dp" android:layout_height="32dp"
+            android:clickable="true" android:focusable="true" android:src="@drawable/ic_menu_r" />
     </LinearLayout>
 
     <!-- 上: 登録済みエッジ端末の一覧(タップで設定対象。先頭に新規追加行) -->
