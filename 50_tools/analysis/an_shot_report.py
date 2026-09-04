@@ -81,22 +81,58 @@ def hhmm(v):
 
 
 # ---------------------------------------------------------------- 突き合わせ
+#
+# 【カメラ内時計のずれ(2026-09-04 EOS R50V で遭遇)】EXIF の撮影時刻はカメラの時計で、
+#  ログの時刻はスマホの時計。両者がずれていると時刻では対応が取れない。R50V は
+#  スマホより **約57秒進んで** いて、±3秒の許容では 1320コマ中 130コマしか合わなかった。
+#  15秒周期なので「時刻を何秒ずらすと一番合うか」で探すと 15秒の倍数がすべて同点になり、
+#  時刻だけでは決められない。
+#
+#  そこで **コマ数が一致するときは順番で対応づける**。撮影は1コマ1ファイルで欠けも
+#  重複も無いので、これが最も確実。対応が正しいことは ISO/ss/F が一致することで検算する
+#  (合わない場合は時刻での突き合わせに戻す)。**指標の計算は何も変えていない。**
 img, log = load(IMG), load(LOG)
-byt = {}
-for r in log:
-    byt[sec(r["shtime"])] = r
+imgv = [r for r in img if r.get("time", "") not in ("", "ERR")]
+
+def gear_mismatch(pairs):
+    """順番で対応づけたとき、ISO/ss/F が食い違うコマ数"""
+    n = 0
+    for r, lr in pairs:
+        try:
+            if (abs(float(r["iso"]) - float(lr["iso"])) > 1e-6 or
+                abs(float(r["ss"])  - float(lr["ss"]))  > 1e-6 or
+                abs(float(r["fn"])  - float(lr["fn"]))  > 1e-6):
+                n += 1
+        except Exception:
+            n += 1
+    return n
+
+pairs = []
+if len(imgv) == len(log) and len(log) > 0:
+    cand = list(zip(imgv, log))
+    bad = gear_mismatch(cand)
+    if bad * 20 <= len(cand):               # 5%未満の食い違いなら順番対応で確定
+        pairs = cand
+        d = [sec(r["time"]) - sec(lr["shtime"]) for r, lr in cand]
+        d.sort()
+        print("順番で対応づけ: %d コマ (ISO/ss/F の食い違い %d コマ)" % (len(cand), bad))
+        print("  カメラ内時計とスマホの時計のずれ: 中央 %+d 秒 (%+d 〜 %+d)"
+              % (d[len(d) // 2], d[0], d[-1]))
+
+if not pairs:                               # 数が合わない/機材が食い違う → 従来の時刻突き合わせ
+    byt = {}
+    for r in log:
+        byt[sec(r["shtime"])] = r
+    for r in imgv:
+        t = sec(r["time"])
+        for dd in (0, 1, -1, 2, -2, 3, -3):  # EXIFの秒とログのシャッター時刻は数秒ずれる
+            if t + dd in byt:
+                pairs.append((r, byt[t + dd]))
+                break
+
 rows = []
-for r in img:
-    if r.get("time", "") in ("", "ERR"):
-        continue
-    t = sec(r["time"])
-    lr = None
-    for d in (0, 1, -1, 2, -2, 3, -3):      # EXIFの秒とログのシャッター時刻は数秒ずれる
-        if t + d in byt:
-            lr = byt[t + d]
-            break
-    if lr is None:
-        continue
+for r, lr in pairs:
+    t = sec(lr["shtime"])                   # 時刻はログ(スマホの時計)に揃える
     rows.append(dict(t=t, time=hhmm(t), ccm=lr["ccm"], iso=float(r["iso"]), ss=float(r["ss"]),
                      fn=float(r["fn"]), mean=float(r["Ymean"]), med=float(r["Ymed"]),
                      sat=float(r["sat"]), Ymeter=lr["Ymeter"], everr=lr["evadj"]))
