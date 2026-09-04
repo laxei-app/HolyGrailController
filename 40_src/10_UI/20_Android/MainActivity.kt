@@ -4424,7 +4424,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(TextView(this@MainActivity).apply { text = "地図をタップして撮影場所を選択"; textSize = 12f; setPadding(dp(16), dp(8), dp(16), dp(4)); setTextColor(0xFF888888.toInt()) })
-            addView(map, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(420)))
+            // 地図は残り全部(高さ0＋weight)。ダイアログ自体を画面いっぱいにするので、
+            //  題とボタンを除いた分を地図が使う(2026-09-04 UI依頼)。
+            addView(map, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                                                 ViewGroup.LayoutParams.MATCH_PARENT)
         }
         val dlg = androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle("地図から選択")
@@ -4434,6 +4438,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .create()
         dlg.setOnDismissListener { map.onPause(); map.onDetach() }
         dlg.show()
+        // 【地図は画面いっぱいに(2026-09-04 UI依頼)】狭いと目的の地点まで何度も動かすことになる。
+        //  **枠外が無くなるので枠外タッチでは戻れない**。戻るのは「キャンセル」か端末の戻るキー。
+        dlg.window?.apply {
+            // ダイアログ既定の背景には余白(影と角丸)が入っていて、その分だけ地図が狭くなる。
+            //  無地に差し替えて左右いっぱいまで使う。
+            setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.WHITE))
+            setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        }
         map.onResume()
     }
 
