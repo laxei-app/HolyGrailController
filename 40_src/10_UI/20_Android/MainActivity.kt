@@ -554,6 +554,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private val kScreenMenu = 4
 
     // ヘッダのホーム/メニューを1か所で配線する。押されたら行き先(0/4)を渡して呼ぶ。
+    // エッジ端末書き込み画面(別の画面部品)から「ホーム」で戻ってきたときの引き継ぎ。
+    //  あちらは finish() で呼び出し元(メニュー)へ戻るだけなので、印を置いてもらって
+    //  こちらで撮影計画を出す。
+    companion object { @JvmStatic var goHomeOnResume = false }
+
+    override fun onResume() {
+        super.onResume()
+        if (goHomeOnResume) { goHomeOnResume = false; if (::flipper.isInitialized) gotoScreen(kScreenHome) }
+    }
+
     private fun wireHeader(homeId: Int, menuId: Int, onLeave: (Int) -> Unit) {
         findViewById<ImageView>(homeId)?.setOnClickListener { onLeave(kScreenHome) }
         findViewById<ImageView>(menuId)?.setOnClickListener { onLeave(kScreenMenu) }

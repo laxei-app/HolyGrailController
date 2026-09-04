@@ -79,7 +79,11 @@ class EdgeFlashActivity : AppCompatActivity() {
         probeBtn = findViewById(R.id.fl_probe)
         writeBtn = findViewById(R.id.fl_write)
 
-        findViewById<ImageView>(R.id.fl_back).setOnClickListener { finish() }
+        // 【書き込み中は閉じさせない(2026-09-05 UI依頼)】書き込みは別スレッドで走っており、
+        //  画面を閉じても止まらない。閉じると経過が見えないまま裏で続き、失敗しても気づけない。
+        //  デバッグログの取得中と同じ扱いにする。端末の戻るキーも同じ(下の onBackPressed)。
+        findViewById<ImageView>(R.id.fl_home).setOnClickListener { leaveTo(true) }
+        findViewById<ImageView>(R.id.fl_menu).setOnClickListener { leaveTo(false) }
         probeBtn.setOnClickListener { withDevice { dev -> runOffUi { doProbe(dev) } } }
         writeBtn.setOnClickListener { withDevice { dev -> runOffUi { doWrite(dev) } } }
 
@@ -153,6 +157,30 @@ class EdgeFlashActivity : AppCompatActivity() {
     }
 
     override fun onResume() { super.onResume(); refreshState() }
+
+    // ホーム/メニューへ戻る。書き込み中は断る。
+    //  この画面は MainActivity とは別の画面部品なので、閉じると呼び出し元(メニュー)へ戻る。
+    //  ホームのときだけ、MainActivity に「撮影計画を出す」と伝えてから閉じる。
+    private fun leaveTo(home: Boolean) {
+        if (busy) {
+            android.widget.Toast.makeText(this, "書き込み中です。終わるまでお待ちください",
+                                          android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (home) { MainActivity.goHomeOnResume = true }
+        finish()
+    }
+
+    @Deprecated("端末の戻るキー。書き込み中だけ止める")
+    override fun onBackPressed() {
+        if (busy) {
+            android.widget.Toast.makeText(this, "書き込み中です。終わるまでお待ちください",
+                                          android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        @Suppress("DEPRECATION")
+        super.onBackPressed()
+    }
 
     override fun onDestroy() {
         super.onDestroy()
