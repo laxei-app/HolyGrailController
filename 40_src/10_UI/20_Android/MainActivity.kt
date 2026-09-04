@@ -882,6 +882,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         gearItem(box, "操作履歴") { openHistory() }            // 項目9
         gearItem(box, "撮影レポート") { openReportList() }     // 670: 撮影1回ぶんの結果と所見
 
+        gearBand(box, "初期化")
+        gearItem(box, "出荷時設定に戻す") { confirmFactoryReset() }
+
         // 版数を一番下に出す(2026-08-08 UI依頼)。どのビルドを使っているかを画面だけで確認できる。
         // major.minor はエッジ端末と一致させる約束なので、食い違っていたらどちらかの書き込み漏れ。
         box.addView(TextView(this).apply {
@@ -890,6 +893,65 @@ class MainActivity : AppCompatActivity(), HgeListener {
             setTextColor(0xFF9E9E9E.toInt())
             setPadding(dp(16), dp(16), dp(16), dp(8))
         })
+    }
+
+    // ================= 出荷時設定に戻す(2026-09-05 UI依頼) =================
+    // インストール直後と同じ状態にする。**消すだけ**で、初期状態を作り直す処理は書かない。
+    //  ・撮影計画      → loadFixedPlanImpl() が出荷時の固定計画を1件作る
+    //  ・撮影場所      → ensurePlaces() が Tokyo を1件作り、seedFirstPlaceFromLocation() が現在地へ差し替える
+    //  ・撮影制御方法  → ensurePresets() が型ごと1件と preferredCcm を作る
+    //  ・全体設定      → ensureSettings() は空のまま。既定値は読み出し側が持っている
+    //  ・所持カメラ/レンズ → 空のまま(インストール直後と同じ。マスタから選び直す)
+    //  ・機材マスタ    → 消さない。消しても installBundledIfNewer() が同梱版を戻すだけで、
+    //                    残しておけば通信も発生しない
+    //
+    // 【プロセスを落とすことが必須】Entity は読み込んだ内容をメモリに抱えている
+    //  (g_placesLoaded / g_ownedLoaded / g_settingsLoaded / g_presetsLoaded / g_planReady …)。
+    //  SharedPreferences も同じ。消しただけで動き続けると**次の保存で書き戻る**ので、
+    //  消した直後にプロセスごと終わらせる。
+    private fun confirmFactoryReset() {
+        if (isCaptureBusy()) {
+            Toast.makeText(this, "撮影中は初期化できません。中止してからやり直してください", Toast.LENGTH_LONG).show()
+            return
+        }
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("出荷時設定に戻す")
+            .setMessage(
+                "この端末のデータをすべて消して、インストール直後の状態に戻します。\n\n" +
+                "・撮影計画と撮影計画ひな形\n" +
+                "・撮影場所\n" +
+                "・所持カメラ / 所持レンズ\n" +
+                "・撮影制御方法の初期値と全体設定\n" +
+                "・エッジ端末の登録とネットワーク設定\n" +
+                "・撮影ログ / 撮影レポート / 操作履歴\n\n" +
+                "機材マスタ(カメラ・レンズの一覧)は残します。\n" +
+                "エッジ端末本体の設定と、エッジが持っている撮影計画は消えません。" +
+                "必要ならエッジ端末側でも初期化してください。\n\n" +
+                "元に戻せません。消したあとアプリは終了します。")
+            .setPositiveButton("消して終了する") { _, _ -> doFactoryReset() }
+            .setNegativeButton("やめる", null)
+            .show()
+    }
+
+    private fun doFactoryReset() {
+        try {
+            val base = getExternalFilesDir(null) ?: filesDir
+            // master は残す(同梱版が戻るだけなので消す意味が無く、通信も避けられる)
+            for (d in listOf("asset", "plan", "log")) {
+                java.io.File(base, d).listFiles()?.forEach { it.delete() }
+            }
+            // **commit を使う**。apply は非同期で、書き終わる前にプロセスを落とすと消えない。
+            hgcPrefs().edit().clear().commit()
+            getSharedPreferences("gearMaster", MODE_PRIVATE).edit().clear().commit()
+        } catch (_: Exception) {
+            // 消せなかったものがあっても、残りは消して終了する(中途半端でも次の起動で作り直される)
+        }
+        Toast.makeText(this, "初期化しました。アプリを開き直してください", Toast.LENGTH_LONG).show()
+        // トーストが出てから終わらせる。ここで戻ってきても書き戻さないよう、必ず落とす。
+        handler.postDelayed({
+            finishAffinity()
+            android.os.Process.killProcess(android.os.Process.myPid())
+        }, 1200)
     }
 
     // このアプリの版数("0.0.x")。build.gradle.kts の versionName をそのまま読む。
