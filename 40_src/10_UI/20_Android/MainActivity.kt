@@ -5706,7 +5706,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
             return
         }
         pf.edit().putBoolean("placeSeedTried", true).apply()
-        fillPlaceFromCurrentLocation("Tokyo", kCurrentPlaceName)
+        //  出荷時の固定計画も同じ場所にする(2026-09-05 UI依頼)。そうしないと計画は Tokyo、
+        //  撮影場所リストは current location という食い違った状態で使い始めることになる。
+        fillPlaceFromCurrentLocation("Tokyo", kCurrentPlaceName, alsoSetPlan = true)
     }
 
     // 撮影場所1件を現在地の座標・標高で埋める。**作った直後の場所にだけ使う**。
@@ -5715,9 +5717,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  ・標高は**標高APIを優先**する。測位が返す高さは楕円体高で、海面からの標高とは 40m ほど
     //    違う(実測: API 58m に対し測位 108m)。APIが駄目なら測位値を使う
     //  ・名前を変えたいときだけ newName を渡す(初回起動の1件を current location にする)
+    //  ・alsoSetPlan=true で、いま編集中の撮影計画の撮影場所にもこの場所を入れる。
+    //    **初回起動の種のときだけ**使う(出荷時の固定計画と場所リストを食い違わせないため)。
+    //    新しい場所を足したときに勝手に計画の場所が変わってはいけないので、既定は false。
     //  setPlaceDetailJson は受け取った autoInsert を真値として扱うので、自動挿入に指定済みの
     //  場所へ使うと指定が外れる。新規の場所は必ず false なので問題にならない。
-    private fun fillPlaceFromCurrentLocation(name: String, newName: String? = null) {
+    private fun fillPlaceFromCurrentLocation(name: String, newName: String? = null,
+                                             alsoSetPlan: Boolean = false) {
         fetchCurrentLocation { la, lo, alt ->
             Thread {
                 val elev = fetchElevationOrNull(la, lo) ?: alt   // 通信は単一スレッドを塞がないよう別で
@@ -5742,6 +5748,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     // 一覧の作り直しは入力中の欄を壊すので、どこにも入力中でないときだけ行う
                     //  (作り直さなくても、次に場所を選び直した時点で最新になる)。
                     if (currentFocus == null) { buildPlacesList() }
+                    // 計画への反映は**計画の単一スレッド**で行う(計画の操作は planExec に集約する決まり)。
+                    //  hge_setPlanPlace がスケジュールを作り直して保存し、EV_SCHEDULE で詳細が更新される。
+                    if (alsoSetPlan) {
+                        planExec.execute {
+                            HgeNative.nativeSetPlanPlace(newName ?: name)
+                            runOnUiThread { refreshPlanList() }
+                        }
+                    }
                 }
                 }
             }.start()
