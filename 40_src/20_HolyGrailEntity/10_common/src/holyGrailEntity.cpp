@@ -49,6 +49,10 @@ namespace
 	inline int planOff(const hgc::cs& p) { return p.place.tzOffMin; }
 	std::string           g_schedJson;
 	std::string           g_editId;	// 編集対象の撮影計画 id(plan_<id>.json)。空=未保存
+	// 【編集対象がひな形か(2026-09-04 UI依頼)】撮影計画ひな形は計画とまったく同じ形で、
+	//  置き場所(tpl_<id>.json)だけが違う。編集の仕組みを丸ごと使い回すため、ひな形も
+	//  「編集中の計画」として g_plan に載せる。保存先だけこの旗で振り分ける。
+	bool                  g_editIsTpl = false;
 	// 計画固有の撮影制御方法(初期値ccmとは別管理)。計画作成時に初期値をコピーし、以後独立に編集する。
 
 	std::vector<device>   g_devices;
@@ -766,11 +770,91 @@ namespace
 		return csjson::toJson(g_plan);
 	}
 
-	// 現在の計画を plan_<g_editId>.json へ保存する(id 未割当なら採番)。
+	// 現在の編集対象を保存する(id 未割当なら採番)。ひな形なら tpl_<id>.json へ。
 	errCode saveCurrentPlan(void)
 	{
 		if (g_editId.empty()) { g_editId = makePlanId(); }
-		return dataManager::savePlanFile(g_editId, wrapCurrentPlan()) ? ERR_HGC_OK : ERR_HGC_INVALID_STATE;
+		const bool ok = g_editIsTpl ? dataManager::saveTplFile(g_editId, wrapCurrentPlan())
+		                            : dataManager::savePlanFile(g_editId, wrapCurrentPlan());
+		return ok ? ERR_HGC_OK : ERR_HGC_INVALID_STATE;
+	}
+
+	// ひな形の名前を集める(重複回避用)。編集中のひな形は未保存の変更も見る。
+	std::vector<std::string> collectTplNames(const std::string& excludeId)
+	{
+		std::vector<std::string> names;
+		for (const std::string& id : dataManager::listTplIds())
+		{
+			if (id == excludeId) { continue; }
+			if (id == g_editId && g_editIsTpl && g_planReady) { names.push_back(g_plan.name); continue; }
+			std::string saved; hgc::cs cs;
+			if (dataManager::loadTplFile(id, saved) && csjson::fromJson(saved, cs)) { names.push_back(cs.name); }
+		}
+		return names;
+	}
+
+	// tpl_<id>.json を編集対象として読み込む(loadPlanById のひな形版)。
+	errCode loadTplById(const std::string& id)
+	{
+		std::string saved;
+		if (!dataManager::loadTplFile(id, saved) ||
+		    !csjson::fromJson(saved, g_plan)) { return ERR_HGC_NO_ELEMENT; }
+		if (!g_plan.ccm.complete()) { seedPlanCcmFromDefaults(g_plan); }
+		const errCode be = astro::buildSchedule(g_plan);
+		if (be != ERR_HGC_OK) { return be; }
+		buildScheduleJson();
+		g_editId    = id;
+		g_editIsTpl = true;
+		g_planReady = true;
+		return ERR_HGC_OK;
+	}
+
+	// ひな形の id を採番する(計画とは別の並び。同じ形式の時刻)。
+	std::string makeTplId(void)
+	{
+		time_t now = std::time(nullptr);
+		hgc::dateTime d; int off = 0;
+		localFromTime(now, d, off);
+		char base[20];
+		std::snprintf(base, sizeof(base), "%04u%02u%02u-%02u%02u%02u",
+		              d.year, d.month, d.day, d.hour, d.min, d.sec);
+		std::vector<std::string> ids = dataManager::listTplIds();
+		auto exists = [&](const std::string& x) {
+			for (const auto& e : ids) { if (e == x) { return true; } }
+			return false;
+		};
+		if (!exists(base)) { return std::string(base); }
+		for (int n = 2; n < 100; ++n)
+		{
+			std::string c = std::string(base) + "-" + std::to_string(n);
+			if (!exists(c)) { return c; }
+		}
+		return std::string(base);
+	}
+
+	// カメラの資格情報を所持カメラから取り直す(2026-09-04 UI依頼)。
+	//  ひな形はカメラごと持つが、作ったあとにパスワードを変えたりカメラを買い替えると
+	//  古いシリアル/パスワードが計画に入り、認証に失敗する(403で締め出される経路がある)。
+	//  同じ名前の所持カメラが見つかったときだけ差し替える。見つからなければひな形の値のまま
+	//  (シミュレーションはセンサー寸法で決まるので壊れない)。
+	void refreshCameraFromOwned(hgc::cs& cs)
+	{
+		hgc::camera oc;
+		if (!cs.camera.name.empty() && dataManager::findOwnedCamera(cs.camera.name, oc)) { cs.camera = oc; }
+	}
+
+	// 開始日を「今日」にし、終了は同じ長さを保ってずらす(2026-09-04 UI依頼)。
+	void shiftToToday(hgc::cs& cs)
+	{
+		const int off = cs.place.tzOffMin;
+		const long long s0 = hgc::toUnixUtc(cs.start, off);
+		const long long e0 = hgc::toUnixUtc(cs.end,   off);
+		const long long dur = (e0 > s0) ? (e0 - s0) : 0;
+		const hgc::dateTime today = hgc::fromUnixUtc(static_cast<long long>(std::time(nullptr)), off);
+		hgc::dateTime ns = cs.start;			// 時刻はひな形のまま
+		ns.year = today.year; ns.month = today.month; ns.day = today.day;
+		cs.start = ns;
+		cs.end   = hgc::fromUnixUtc(hgc::toUnixUtc(ns, off) + dur, off);
 	}
 
 	// plan_<id>.json を編集対象として読み込み、スケジュールを再生成する。成功で g_editId=id。
@@ -794,7 +878,8 @@ namespace
 		const errCode be = astro::buildSchedule(g_plan);
 		if (be != ERR_HGC_OK) { return be; }
 		buildScheduleJson();
-		g_editId = id;
+		g_editId    = id;
+		g_editIsTpl = false;	// 計画を開いた → ひな形ではない
 		g_planReady = true;
 		return ERR_HGC_OK;
 	}
@@ -847,7 +932,8 @@ namespace
 
 		// 無ければ出荷時の固定計画を作成して保存する。
 		makeFactoryCurrent(nullptr);
-		g_editId = makePlanId();
+		g_editId    = makePlanId();
+		g_editIsTpl = false;
 		dataManager::savePlanFile(g_editId, wrapCurrentPlan());
 		g_planReady = true;
 		return ERR_HGC_OK;
@@ -1970,6 +2056,7 @@ int32_t hge_importPlan(const char* id, const char* json, int32_t len)
 	if (r != ERR_HGC_OK) { return r; }
 	if (id != nullptr && id[0] != '\0') { g_editId = id; }
 	else if (g_editId.empty())          { g_editId = makePlanId(); }
+	g_editIsTpl = false;	// 受け取るのは計画
 	// 受信の記録(2026-08-07)。従来ここは何もログを残さず、走行中の計画を黙って上書きできた。
 	// 走行中セッションは自分のスナップショットで走り続けるので、ログに出ている計画内容と
 	// 実際に効いている制御がずれる。2026-08-07 02:00 の Edje00 で、2回のSTARTのあいだに
@@ -2239,7 +2326,8 @@ int32_t hge_newPlan(const char* presetName)
 		}
 	}
 	buildScheduleJson();
-	g_editId = makePlanId();
+	g_editId    = makePlanId();
+	g_editIsTpl = false;
 	g_planReady = true;
 	dataManager::savePlanFile(g_editId, wrapCurrentPlan());
 	notify(HGE_EV_SCHEDULE, g_schedJson);
@@ -2253,7 +2341,8 @@ int32_t hge_copyPlan(const char* id)
 	errCode e = loadPlanById(std::string(id));	// 元計画を現在へ読み込む
 	if (e != ERR_HGC_OK) { return e; }
 	g_plan.name = uniqueName(g_plan.name + " copy", collectPlanNames(""));	// item5: 重複回避
-	g_editId = makePlanId();			// 別 id で複製保存
+	g_editId    = makePlanId();			// 別 id で複製保存
+	g_editIsTpl = false;
 	buildScheduleJson();				// 名称変更を反映
 	dataManager::savePlanFile(g_editId, wrapCurrentPlan());
 	notify(HGE_EV_SCHEDULE, g_schedJson);
@@ -2284,7 +2373,8 @@ int32_t hge_deletePlan(const char* id)
 		else
 		{
 			makeFactoryCurrent(nullptr);
-			g_editId = makePlanId();
+			g_editId    = makePlanId();
+			g_editIsTpl = false;
 			g_planReady = true;
 			dataManager::savePlanFile(g_editId, wrapCurrentPlan());
 		}
@@ -2301,6 +2391,184 @@ int32_t hge_selectPlan(const char* id)
 	if (e != ERR_HGC_OK) { return e; }
 	notify(HGE_EV_SCHEDULE, g_schedJson);
 	return ERR_HGC_OK;
+}
+
+// ================= 撮影計画ひな形(2026-09-04 UI依頼) =================
+// 計画とまったく同じ形のまま tpl_<id>.json へ置く。編集は「編集中の計画」の仕組みを
+// そのまま使う(hge_selectTemplate で g_plan に載せる)ので、編集用のAPIは増やさない。
+// 日付・時刻・カメラ・レンズも持つ(シミュレーションで星の見え方を試せるようにするため)。
+// エッジ端末の割当はスマホ側の設定なので、ここには入らない。
+
+// ひな形の一覧(名前の昇順)。撮影計画の一覧とは別で、計画一覧には出てこない。
+int32_t hge_listTemplatesJson(char* buf, int32_t* inoutLen)
+{
+	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
+	std::vector<std::pair<std::string, std::string>> rows;	// {名前(ソート鍵), 行JSON}
+	for (const std::string& id : dataManager::listTplIds())
+	{
+		hgc::cs cs;
+		if (id == g_editId && g_editIsTpl && g_planReady) { cs = g_plan; }	// 編集中は未保存の変更も見せる
+		else
+		{
+			std::string saved;
+			if (!dataManager::loadTplFile(id, saved) || !csjson::fromJson(saved, cs)) { continue; }
+		}
+		const hgc::camera& pc = cs.camera;
+		std::string o = "{\"id\":\"" + jesc(id) + "\",\"planName\":\"" + jesc(cs.name) + "\"" +
+		     ",\"start\":\"" + dtToStr(cs.start) + "\",\"end\":\"" + dtToStr(cs.end) + "\"" +
+		     ",\"camModel\":\"" + jesc(pc.model) + "\"" +
+		     ",\"camName\":\"" + jesc(pc.name) + "\"" +
+		     ",\"camAssignedName\":\"" + jesc(pc.assignedName) + "\"" +
+		     ",\"lens\":\"" + jesc(cs.lens.name) + "\"" +
+		     ",\"place\":\"" + jesc(cs.place.name) + "\"" +
+		     ",\"tzOffMin\":" + std::to_string(cs.place.tzOffMin) + "}";
+		rows.push_back(std::make_pair(cs.name, o));
+	}
+	std::stable_sort(rows.begin(), rows.end(),
+	                 [](const std::pair<std::string, std::string>& a,
+	                    const std::pair<std::string, std::string>& b) { return a.first < b.first; });
+	std::string js = "[";
+	for (size_t i = 0; i < rows.size(); ++i) { if (i) { js += ","; } js += rows[i].second; }
+	js += "]";
+	return copyOut(js, buf, inoutLen);
+}
+
+// ひな形を編集対象にする(以後の編集・保存はひな形へ向かう)。
+int32_t hge_selectTemplate(const char* id)
+{
+	if (id == nullptr || id[0] == '\0') { return ERR_HGC_INVALID_ARG; }
+	if (!g_planReady) { loadFixedPlanImpl(); }
+	errCode e = loadTplById(std::string(id));
+	if (e != ERR_HGC_OK) { return e; }
+	notify(HGE_EV_SCHEDULE, g_schedJson);
+	return ERR_HGC_OK;
+}
+
+// 今の計画をひな形として保存する。**編集対象は動かさない**(計画を編集したまま控えを取る)。
+//  name が空なら計画名を使う。同名のひな形があれば連番を付ける(夕焼け → 夕焼け2)。
+int32_t hge_saveTemplateFromPlan(const char* name)
+{
+	if (!g_planReady) { loadFixedPlanImpl(); }
+	hgc::cs cs = g_plan;
+	std::string base = (name != nullptr && name[0]) ? std::string(name) : cs.name;
+	if (base.empty()) { base = "New template"; }
+	cs.name = uniqueName(base, collectTplNames(""));
+	const std::string id = makeTplId();
+	return dataManager::saveTplFile(id, csjson::toJson(cs)) ? ERR_HGC_OK : ERR_HGC_INVALID_STATE;
+}
+
+// ひな形を複製する。編集対象は動かさない。
+int32_t hge_copyTemplate(const char* id)
+{
+	if (id == nullptr || id[0] == '\0') { return ERR_HGC_INVALID_ARG; }
+	std::string saved; hgc::cs cs;
+	if (!dataManager::loadTplFile(std::string(id), saved) ||
+	    !csjson::fromJson(saved, cs)) { return ERR_HGC_NO_ELEMENT; }
+	cs.name = uniqueName(cs.name, collectTplNames(""));	// 末尾に連番(前に付けると名前順で離れる)
+	return dataManager::saveTplFile(makeTplId(), csjson::toJson(cs)) ? ERR_HGC_OK : ERR_HGC_INVALID_STATE;
+}
+
+// ひな形を消す。編集中のものを消したら、残りの先頭へ移る(無ければ編集対象は計画へ戻す)。
+int32_t hge_deleteTemplate(const char* id)
+{
+	if (id == nullptr || id[0] == '\0') { return ERR_HGC_INVALID_ARG; }
+	if (!dataManager::deleteTplFile(std::string(id))) { return ERR_HGC_NO_ELEMENT; }
+	if (g_editIsTpl && g_editId == std::string(id))
+	{
+		std::vector<std::string> ids = dataManager::listTplIds();
+		if (!ids.empty()) { loadTplById(ids.front()); }
+		else
+		{
+			g_editIsTpl = false;
+			std::vector<std::string> pids = dataManager::listPlanIds();
+			if (!pids.empty()) { loadPlanById(pids.back()); }
+		}
+		notify(HGE_EV_SCHEDULE, g_schedJson);
+	}
+	return ERR_HGC_OK;
+}
+
+// ひな形の名前を変える。編集中のものなら未保存の変更ごと保存する。
+int32_t hge_renameTemplate(const char* id, const char* name)
+{
+	if (id == nullptr || id[0] == '\0' || name == nullptr) { return ERR_HGC_INVALID_ARG; }
+	const std::string sid = id;
+	{
+		std::vector<std::string> others = collectTplNames(sid);
+		for (const auto& nm : others) { if (nm == std::string(name)) { return ERR_HGC_NAME_DUP; } }
+	}
+	if (g_editIsTpl && sid == g_editId)
+	{
+		g_plan.name = name;
+		buildScheduleJson();
+		notify(HGE_EV_SCHEDULE, g_schedJson);
+		return saveCurrentPlan();
+	}
+	std::string saved; hgc::cs cs;
+	if (!dataManager::loadTplFile(sid, saved) || !csjson::fromJson(saved, cs)) { return ERR_HGC_NO_ELEMENT; }
+	cs.name = name;
+	return dataManager::saveTplFile(sid, csjson::toJson(cs)) ? ERR_HGC_OK : ERR_HGC_INVALID_STATE;
+}
+
+// ひな形から撮影計画を作り、それを編集対象にする。
+//  ・開始日は今日(時刻はひな形のまま)。終了は同じ長さを保ってずらす
+//  ・計画名はひな形と同じ。既にあれば末尾に連番
+//  ・カメラの資格情報は所持カメラから取り直す
+int32_t hge_newPlanFromTemplate(const char* id)
+{
+	if (id == nullptr || id[0] == '\0') { return ERR_HGC_INVALID_ARG; }
+	if (!g_planReady) { loadFixedPlanImpl(); }
+	std::string saved; hgc::cs cs;
+	if (!dataManager::loadTplFile(std::string(id), saved) ||
+	    !csjson::fromJson(saved, cs)) { return ERR_HGC_NO_ELEMENT; }
+	cs.name = uniqueName(cs.name, collectPlanNames(""));
+	shiftToToday(cs);
+	refreshCameraFromOwned(cs);
+	g_plan = cs;
+	if (!g_plan.ccm.complete()) { seedPlanCcmFromDefaults(g_plan); }
+	const errCode be = astro::buildSchedule(g_plan);
+	if (be != ERR_HGC_OK) { return be; }
+	buildScheduleJson();
+	g_editId    = makePlanId();
+	g_editIsTpl = false;
+	g_planReady = true;
+	dataManager::savePlanFile(g_editId, wrapCurrentPlan());
+	notify(HGE_EV_SCHEDULE, g_schedJson);
+	return ERR_HGC_OK;
+}
+
+// 既にある撮影計画をひな形の内容で更新する。
+//  **計画名・開始/終了時刻はそのまま**(一覧で自分の計画を見失わないように)。
+//  エッジ端末の割当はスマホ側の設定なので、ここでは触らない。
+int32_t hge_updatePlanFromTemplate(const char* planId, const char* tplId)
+{
+	if (planId == nullptr || planId[0] == '\0' ||
+	    tplId  == nullptr || tplId[0]  == '\0') { return ERR_HGC_INVALID_ARG; }
+	std::string ps, ts; hgc::cs cur, tpl;
+	if (!dataManager::loadPlanFile(std::string(planId), ps) ||
+	    !csjson::fromJson(ps, cur)) { return ERR_HGC_NO_ELEMENT; }
+	if (!dataManager::loadTplFile(std::string(tplId), ts) ||
+	    !csjson::fromJson(ts, tpl)) { return ERR_HGC_NO_ELEMENT; }
+	const std::string keepName  = cur.name;
+	const hgc::dateTime keepSt  = cur.start;
+	const hgc::dateTime keepEn  = cur.end;
+	cur = tpl;
+	cur.name = keepName; cur.start = keepSt; cur.end = keepEn;
+	refreshCameraFromOwned(cur);
+	if (!cur.ccm.complete()) { seedPlanCcmFromDefaults(cur); }
+	if (std::string(planId) == g_editId && !g_editIsTpl)
+	{
+		g_plan = cur;
+		const errCode be = astro::buildSchedule(g_plan);
+		if (be != ERR_HGC_OK) { return be; }
+		buildScheduleJson();
+		const errCode se = saveCurrentPlan();
+		notify(HGE_EV_SCHEDULE, g_schedJson);
+		return se;
+	}
+	astro::buildSchedule(cur);
+	return dataManager::savePlanFile(std::string(planId), csjson::toJson(cur))
+	           ? ERR_HGC_OK : ERR_HGC_INVALID_STATE;
 }
 
 int32_t hge_getCurrentPlanId(char* buf, int32_t* inoutLen)

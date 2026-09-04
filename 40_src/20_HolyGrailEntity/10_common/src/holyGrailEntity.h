@@ -259,6 +259,16 @@ int32_t hge_setOwnedLensDetail(const char* origName, const char* json);
 // --- 撮影場所(§7.9)。登録した場所を撮影計画で選択する。 ---
 int32_t hge_getPlacesJson(char* buf, int32_t* inoutLen);   // 登録済み場所の配列 JSON
 int32_t hge_addPlace(const char* name);                    // 空可(自動採番)
+
+// --- 撮影計画ひな形(2026-09-04 UI依頼)。計画と同じ形で tpl_<id>.json に置く ---
+int32_t hge_listTemplatesJson(char* buf, int32_t* inoutLen); // 名前順
+int32_t hge_selectTemplate(const char* id);                  // ひな形を編集対象にする
+int32_t hge_saveTemplateFromPlan(const char* name);          // 今の計画をひな形へ(空=計画名)
+int32_t hge_copyTemplate(const char* id);
+int32_t hge_deleteTemplate(const char* id);
+int32_t hge_renameTemplate(const char* id, const char* name);
+int32_t hge_newPlanFromTemplate(const char* id);             // 開始日=今日 / 名前は連番回避
+int32_t hge_updatePlanFromTemplate(const char* planId, const char* tplId); // 名前・時刻は据え置き
 int32_t hge_removePlace(const char* name);
 int32_t hge_setPlaceAutoInsert(const char* name, int32_t autoInsert);
 // 場所詳細(name/memo/latitude/longitude/altitude/autoInsert)を JSON で更新/新規作成。origName 一致を置換。

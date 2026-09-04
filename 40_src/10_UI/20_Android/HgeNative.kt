@@ -110,6 +110,16 @@ object HgeNative {
     external fun nativeSetPlanLocation(lat: Double, lng: Double, name: String): Int  // 撮影場所(緯度経度)を直接設定し再生成
     // --- 撮影場所リスト(§7.9)。登録した場所を撮影計画で選択する ---
     external fun nativeGetPlaces(): String            // [{"name","memo","latitude","longitude","altitude","autoInsert"},...]
+    // --- 撮影計画ひな形(2026-09-04 UI依頼)。計画と同じ形で、計画一覧には出ない ---
+    external fun nativeListTemplates(): String                 // 名前順
+    external fun nativeSelectTemplate(id: String): Int         // ひな形を編集対象にする
+    external fun nativeSaveTemplateFromPlan(name: String): Int // 今の計画をひな形へ(空=計画名)
+    external fun nativeCopyTemplate(id: String): Int
+    external fun nativeDeleteTemplate(id: String): Int
+    external fun nativeRenameTemplate(id: String, name: String): Int
+    external fun nativeNewPlanFromTemplate(id: String): Int    // 開始日=今日 / 名前は連番回避
+    external fun nativeUpdatePlanFromTemplate(planId: String, tplId: String): Int
+
     external fun nativeAddPlace(name: String): Int    // 空可(自動採番)
     external fun nativeRemovePlace(name: String): Int
     external fun nativeSetPlaceAutoInsert(name: String, autoInsert: Int): Int

@@ -562,6 +562,55 @@ Java_app_laxei_holygrail_HgeNative_nativeSetOwnedLensDetail(JNIEnv* env, jobject
 	return r;
 }
 
+// --- 撮影計画ひな形(2026-09-04 UI依頼) ---
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeListTemplates(JNIEnv* env, jobject /*thiz*/)
+{ return callBufGetter(env, hge_listTemplatesJson); }
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSelectTemplate(JNIEnv* env, jobject /*thiz*/, jstring id)
+{ return callNameCmd(env, id, hge_selectTemplate); }
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSaveTemplateFromPlan(JNIEnv* env, jobject /*thiz*/, jstring name)
+{ return callNameCmd(env, name, hge_saveTemplateFromPlan); }
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeCopyTemplate(JNIEnv* env, jobject /*thiz*/, jstring id)
+{ return callNameCmd(env, id, hge_copyTemplate); }
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeDeleteTemplate(JNIEnv* env, jobject /*thiz*/, jstring id)
+{ return callNameCmd(env, id, hge_deleteTemplate); }
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeRenameTemplate(JNIEnv* env, jobject /*thiz*/, jstring id, jstring name)
+{
+	if (id == nullptr || name == nullptr) { return -1; }
+	const char* i = env->GetStringUTFChars(id, nullptr);
+	const char* n = env->GetStringUTFChars(name, nullptr);
+	jint r = hge_renameTemplate(i ? i : "", n ? n : "");
+	env->ReleaseStringUTFChars(id, i);
+	env->ReleaseStringUTFChars(name, n);
+	return r;
+}
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeNewPlanFromTemplate(JNIEnv* env, jobject /*thiz*/, jstring id)
+{ return callNameCmd(env, id, hge_newPlanFromTemplate); }
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeUpdatePlanFromTemplate(JNIEnv* env, jobject /*thiz*/, jstring planId, jstring tplId)
+{
+	if (planId == nullptr || tplId == nullptr) { return -1; }
+	const char* p = env->GetStringUTFChars(planId, nullptr);
+	const char* t = env->GetStringUTFChars(tplId, nullptr);
+	jint r = hge_updatePlanFromTemplate(p ? p : "", t ? t : "");
+	env->ReleaseStringUTFChars(planId, p);
+	env->ReleaseStringUTFChars(tplId, t);
+	return r;
+}
+
 // --- 撮影場所(§7.9) ---
 JNIEXPORT jstring JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeGetPlaces(JNIEnv* env, jobject /*thiz*/)

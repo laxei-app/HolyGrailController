@@ -150,6 +150,12 @@ namespace
 		std::string d = osfile::dir("plan");
 		return d.empty() ? std::string() : (d + "/plan_" + id + ".json");
 	}
+	// tpl_<id>.json のフルパス(撮影計画ひな形)。中身は計画とまったく同じ形。
+	std::string tplFilePath(const std::string& id)
+	{
+		std::string d = osfile::dir("plan");
+		return d.empty() ? std::string() : (d + "/tpl_" + id + ".json");
+	}
 }
 
 bool dataManager::savePlanFile(const std::string& id, const std::string& wrappedJson)
@@ -157,6 +163,36 @@ bool dataManager::savePlanFile(const std::string& id, const std::string& wrapped
 	std::string p = planFilePath(id);
 	if (p.empty() || id.empty()) { return false; }
 	return osfile::writeAll(p, wrappedJson.data(), wrappedJson.size());
+}
+
+bool dataManager::saveTplFile(const std::string& id, const std::string& wrappedJson)
+{
+	std::string p = tplFilePath(id);
+	if (p.empty() || id.empty()) { return false; }
+	return osfile::writeAll(p, wrappedJson.data(), wrappedJson.size());
+}
+
+bool dataManager::loadTplFile(const std::string& id, std::string& out)
+{
+	std::string p = tplFilePath(id);
+	return !p.empty() && !id.empty() && osfile::readAll(p, out);
+}
+
+bool dataManager::deleteTplFile(const std::string& id)
+{
+	if (id.empty()) { return false; }
+	return osfile::removeFile("plan", "tpl_" + id + ".json");
+}
+
+std::vector<std::string> dataManager::listTplIds(void)
+{
+	std::vector<std::string> ids;
+	for (const std::string& n : osfile::listFiles("plan", "tpl_", ".json"))
+	{
+		ids.push_back(n.substr(4, n.size() - 4 - 5));	// 前"tpl_"(4) 後".json"(5)
+	}
+	std::sort(ids.begin(), ids.end());
+	return ids;
 }
 
 bool dataManager::loadPlanFile(const std::string& id, std::string& out)

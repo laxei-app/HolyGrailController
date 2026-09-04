@@ -160,6 +160,12 @@ public:
 	// 撮影計画(cs)の自己完結JSONを保存/読込/削除する(撮影制御方法も cs が持つ)。
 	// id は作成時刻 yyyyMMdd-HHmmss(衝突時 -NN)。dataManager は id の規則は関知しない。
 	static bool savePlanFile(const std::string& id, const std::string& wrappedJson);
+	// --- 撮影計画ひな形(tpl_<id>.json)。計画とまったく同じ形で、置き場所だけ分ける ---
+	//  一覧は listPlanIds が "plan_" で拾うので、ひな形は自動的に計画一覧へ出てこない。
+	static bool saveTplFile(const std::string& id, const std::string& wrappedJson);
+	static bool loadTplFile(const std::string& id, std::string& out);
+	static bool deleteTplFile(const std::string& id);
+	static std::vector<std::string> listTplIds(void);
 	static bool loadPlanFile(const std::string& id, std::string& out);
 	static bool deletePlanFile(const std::string& id);
 	// 保存済み撮影計画の id 一覧(昇順)。plan_<id>.json から id 部分を取り出す。

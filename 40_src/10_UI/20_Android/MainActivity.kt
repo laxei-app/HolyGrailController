@@ -98,6 +98,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private lateinit var planFormScroll: ScrollView      // 先頭ページのフォーム縦スクロール
     private lateinit var planListScroll: ScrollView      // 先頭ページの計画リスト(分割バー上)
     private lateinit var planListContainer: LinearLayout
+    // 【撮影計画ひな形(2026-09-04 UI依頼)】ひな形は撮影計画とまったく同じ形なので、
+    //  画面も撮影計画画面をそのまま使う。上の一覧の中身と、できることだけを切り替える。
+    //  ユーザーには別画面に見えるが、中身は同じページ(ViewFlipper は増えない)。
+    //  **モードを変えるのは画面に入るときと出るときだけ**。ポーリングの途中で変わると
+    //  選択が化ける(以前 restoreViewingSelection で起きた不具合と同じ形になる)。
+    private var tplMode = false
+    private var planIdBeforeTpl = ""      // ひな形画面へ入る前に選んでいた計画(戻すため)
+
     // 編集対象の計画 id。切替(選択/新規/複製/起動時)のたびに「変更の取り消し」用のベースラインを取り直す。
     private var currentPlanId: String = ""
         set(value) {
@@ -645,7 +653,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 撮影制御方法の編集ボタン(全種・固定配置)をスケジュールの下に構築する。
         buildCcmEditButtons()
         // メニュー(plan_menu→600.メニュー)。帯付きの一覧から各画面へ分岐。
-        planMenu.setOnClickListener { openGearMenu() }
+        planMenu.setOnClickListener {
+            if (tplMode) { leaveTemplates { openGearMenu() } } else { openGearMenu() }
+        }
         findViewById<ImageView>(R.id.gmenu_back).setOnClickListener { flipper.displayedChild = 0; capturePlanBaseline() }
         // 650 カメラ予約表(項目17)。戻る/メニューどちらもメニューへ戻す。
         findViewById<ImageView>(R.id.reserve_back).setOnClickListener { flipper.displayedChild = 4; buildGearMenu() }
@@ -823,6 +833,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         gearBand(box, "撮影計画")
         gearItem(box, "撮影計画") { flipper.displayedChild = 0 }
         gearItem(box, "撮影場所") { openPlacesList() }
+        gearItem(box, "撮影計画ひな形") { openTemplates() }
         gearItem(box, "カメラ予約表") { openReserveTable() }   // 項目17
         gearBand(box, "撮影制御方法 初期値")
         // 項目3: 「月の影響への対処」は撮影制御方法初期値から削除。
@@ -3396,6 +3407,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun refreshPlanList() {
         // 一覧の読み出しも計画操作と同じ単一スレッドで実行し、改名・編集の直後に最新状態を読む。
         planExec.execute {
+            // 【ひな形モード(2026-09-04 UI依頼)】一覧をひな形に差し替える。選択を native へ
+            //  戻す処理はしない(戻すと、いま開いているひな形が押し出される)。
+            if (tplMode) {
+                val tj = HgeNative.nativeListTemplates()
+                val tids = planIdsIn(tj)
+                runOnUiThread {
+                    if (currentPlanId.isEmpty() || !tids.contains(currentPlanId)) {
+                        currentPlanId = tids.firstOrNull() ?: ""
+                    }
+                    buildPlanList(tj); updateReadOnly()
+                }
+                return@execute
+            }
             var js = HgeNative.nativeListPlans()
             // 【選択を持つのはUI側だけ(2026-09-04 UI依頼)】一覧の作り直しは「中身の更新」であって
             //  「選択の変更」ではない。以前はここで毎回 native の選択を取り込んでいたため、内容を
@@ -3422,6 +3446,57 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
     }
 
+    // 【ひな形画面に入る(2026-09-04 UI依頼)】撮影計画画面のまま、一覧をひな形に差し替える。
+    //  ひな形が1件も無いときは入らない。入ると下の編集欄が「今の計画」を映したままになり、
+    //  何を編集しているのか分からなくなるため。作り方を案内して戻す。
+    private fun openTemplates() {
+        planExec.execute {
+            val ids = tplIdsSorted()
+            runOnUiThread {
+                if (ids.isEmpty()) {
+                    Toast.makeText(this, "ひな形がありません。撮影計画の⋮から「ひな形に保存」で作れます",
+                                   Toast.LENGTH_LONG).show()
+                    return@runOnUiThread
+                }
+                planIdBeforeTpl = currentPlanId
+                tplMode = true
+                selectTplRow(ids.first())
+                flipper.displayedChild = 0
+            }
+        }
+    }
+
+    // ひな形画面から出る。**元の計画へ戻してから**画面を切り替える(戻すのは非同期なので、
+    //  終わる前に画面を出すと、撮影計画画面がひな形を映したまま出てしまう)。
+    private fun leaveTemplates(then: () -> Unit) {
+        val back = planIdBeforeTpl
+        planExec.execute {
+            if (back.isNotEmpty()) { HgeNative.nativeSelectPlan(back) }
+            runOnUiThread {
+                tplMode = false
+                if (back.isNotEmpty()) { currentPlanId = back }
+                refreshPlanList(); updateReadOnly(); applyTplMode()
+                then()
+            }
+        }
+    }
+
+    private fun tplIdsSorted(): List<String> = planIdsIn(HgeNative.nativeListTemplates()).toList()
+
+    // ひな形を1件選ぶ(編集対象にする)。撮影計画の selectPlanRow と同じ役目。
+    private fun selectTplRow(id: String) {
+        planExec.execute {
+            HgeNative.nativeSelectTemplate(id)
+            runOnUiThread { currentPlanId = id; refreshPlanList(); applyTplMode(); reloadExpoEditors() }
+        }
+    }
+
+    // ひな形モードでできないことを画面から消す。題も差し替える。
+    private fun applyTplMode() {
+        findViewById<View>(R.id.plan_edgeRow)?.visibility = if (tplMode) View.GONE else View.VISIBLE
+        updatePagerTitle()
+    }
+
     private fun buildPlanList(js: String) {
         clearListFocus(planListContainer)   // 消す子にフォーカスが残っていると落ちる
         planListContainer.removeAllViews()
@@ -3437,7 +3512,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         } catch (_: Exception) {}
         // 【「＋ 新規◯◯」は一覧の一番下(2026-09-04 UI依頼)】以前ここだけ先頭にあった。
         //  画面によって上下すると、探す場所が毎回変わって使いにくい。他の一覧に揃える。
-        planListContainer.addView(linkText("＋ 新規撮影計画") { commitPlanNameEdit(); doNewPlan() })
+        //  ひな形画面には出さない。ひな形は撮影計画の⋮「ひな形に保存」から作るもので、
+        //  まっさらな状態から作る意味がないため(コピーは行の⋮にある)。
+        if (!tplMode) {
+            planListContainer.addView(linkText("＋ 新規撮影計画") { commitPlanNameEdit(); doNewPlan() })
+        }
         // 再構築直後に選択中行のEditTextが自動フォーカスしてキーボードが出るのを防ぐ(フォーカスをスクロールへ)。
         planListScroll.isFocusableInTouchMode = true
         planListScroll.requestFocus()
@@ -3448,7 +3527,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun buildPlanRow(p: JSONObject): View {
         val id = p.optString("id")
         val name = p.optString("planName")
-        val capturable = p.optBoolean("capturable")
+        val capturable = p.optBoolean("capturable") && !tplMode   // ひな形は撮影しないので開始アイコンを出さない
         val capturing = capturingPlans.contains(id)            // 実撮影中=点滅
         val disconnected = disconnectedPlans.contains(id)      // カメラ未検出(NOCAMERA)=✖点灯
         val waiting = waitingPlans.contains(id)                // 撮影窓前で待機=点灯
@@ -3510,7 +3589,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 if (!committed && nm.isNotEmpty() && nm != name) {
                     committed = true
                     planExec.execute {
-                        val r = HgeNative.nativeRenamePlan(id, nm)   // item5: 重複なら ERR_NAME_DUP
+                        val r = if (tplMode) HgeNative.nativeRenameTemplate(id, nm)
+                                else HgeNative.nativeRenamePlan(id, nm)   // item5: 重複なら ERR_NAME_DUP
                         runOnUiThread { if (r == HgeNative.ERR_NAME_DUP) showNameInUse(nm); refreshPlanList() }
                     }
                 }
@@ -3542,7 +3622,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         } else {
             // 未選択(または撮影中)の行 → タップで選択のみ(キーボードは出さない)。
             tv.isFocusable = false; tv.isFocusableInTouchMode = false
-            tv.setOnClickListener { selectPlanRow(id) }
+            tv.setOnClickListener { if (tplMode) selectTplRow(id) else selectPlanRow(id) }
         }
         // 名前の下に副行を出す(2026-09-02 UI依頼)。所持カメラ/レンズの一覧と同じ「見出し＋副行」。
         //  一覧だけ見て「どれがどの端末・どのカメラか」が分かるようにする。開いて確かめなくて済む。
@@ -3555,15 +3635,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
         txt.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         txt.addView(tv)
         val subTv = TextView(this)
-        subTv.text = planEdgeName(id).ifEmpty { kPhoneEdgeLabel } + "  " +
-                     p.optString("camAssignedName")
-                         .ifEmpty { p.optString("camModel") }
-                         .ifEmpty { "未定義" }
+        // ひな形は端末を持たないので、代わりにレンズを出す(カメラとレンズでシミュレーションが決まる)。
+        val camTxt = p.optString("camAssignedName").ifEmpty { p.optString("camModel") }.ifEmpty { "未定義" }
+        subTv.text = if (tplMode) camTxt + "  " + p.optString("lens").ifEmpty { "レンズ未定義" }
+                     else planEdgeName(id).ifEmpty { kPhoneEdgeLabel } + "  " + camTxt
         subTv.textSize = 12f
         subTv.setTextColor(Color.GRAY)
         subTv.isSingleLine = true
         subTv.setPadding(dp(4), 0, dp(4), 0)
-        subTv.setOnClickListener { selectPlanRow(id) }   // 副行のタップでも行を選べる
+        subTv.setOnClickListener { if (tplMode) selectTplRow(id) else selectPlanRow(id) }   // 副行のタップでも行を選べる
         txt.addView(subTv)
         row.addView(txt)
         // ⋮ コンテキストメニュー(他画面=撮影場所/撮影制御方法リストと同じ緑ピル。項目5)
@@ -3578,11 +3658,22 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // 計画行の ⋮ メニュー内容。タップのたびに最新の状態で組み立てる(項目2)。
     private fun buildPlanRowMenu(id: String, name: String): List<Pair<String, () -> Unit>> {
+        // ひな形の ⋮。撮影しないので開始/停止・エッジ関係の項目は無い。
+        if (tplMode) {
+            return listOf(
+                "このひな形で撮影計画を作る" to { newPlanFromTemplate(id) },
+                "コピーを追加" to {
+                    planExec.execute { HgeNative.nativeCopyTemplate(id); runOnUiThread { refreshPlanList() } }
+                },
+                "削除" to { confirmDeleteTemplate(id, name) })
+        }
         val onEdge = isPlanOnEdge(id)
         // 「実撮影中」だけを撮影中とみなす。中止操作直後は stoppingPlans に数秒残るが、
         //  中止済みならもう撮影していないので「エッジ端末から削除」を出してよい。
         val capturingNow = capturingPlans.contains(id)
         val menu = mutableListOf<Pair<String, () -> Unit>>("コピーを追加" to { copyPlanRow(id) })
+        menu.add("ひな形に保存" to { saveTemplateFrom(id, name) })
+        if (!onEdge) { menu.add("ひな形で更新" to { chooseTemplateForUpdate(id) }) }
         if (!onEdge) menu.add("削除" to { confirmDeletePlan(id, name) })
         // 項目2: エッジ送信済み(ロック中)かつ未撮影なら「エッジ端末から削除」で外して編集可能にする。
         //  停止しただけの計画はエッジが保有し続けロックされたまま(項目4)なので、これで明示的に外す。
@@ -3601,6 +3692,97 @@ class MainActivity : AppCompatActivity(), HgeListener {
             HgeNative.nativeSelectPlan(id)   // EV_SCHEDULE で詳細表示が更新される
             runOnUiThread { currentPlanId = id; refreshPlanList(); reloadExpoEditors() }  // item3: 計画のカメラ/レンズに合わせ露出スライダ範囲を更新
         }
+    }
+
+    // ひな形から撮影計画を作り、そのまま撮影計画画面へ移る(画面は同じなのでモードを戻すだけ)。
+    private fun newPlanFromTemplate(tplId: String) {
+        planExec.execute {
+            val r = HgeNative.nativeNewPlanFromTemplate(tplId)
+            val cur = HgeNative.nativeCurrentPlanId()
+            runOnUiThread {
+                if (r != 0) { Toast.makeText(this, "作成に失敗しました (code=$r)", Toast.LENGTH_LONG).show(); return@runOnUiThread }
+                tplMode = false                    // ひな形画面 → 撮影計画画面(同じページ)
+                planIdBeforeTpl = ""
+                currentPlanId = cur
+                setPlanEdgeName(cur, "")           // 端末は「スマホ」から始める(ひな形は端末を持たない)
+                refreshPlanList(); updateReadOnly(); applyTplMode(); reloadExpoEditors()
+                Toast.makeText(this, "撮影計画を作りました", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // 今の計画をひな形として保存する。名前を先に聞く(ひな形は一覧に出ないので後で直せない)。
+    private fun saveTemplateFrom(planId: String, planName: String) {
+        val et = EditText(this); et.setText(planName); et.isSingleLine = true
+        val wrap = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(20), dp(8), dp(20), 0); addView(et) }
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("ひな形に保存")
+            .setView(wrap)
+            .setPositiveButton("保存") { _, _ ->
+                val nm = et.text.toString().trim()
+                planExec.execute {
+                    // 保存するのは「今の計画」なので、対象がいま開いている計画でなければ開いてから。
+                    if (HgeNative.nativeCurrentPlanId() != planId) { HgeNative.nativeSelectPlan(planId) }
+                    val r = HgeNative.nativeSaveTemplateFromPlan(nm)
+                    runOnUiThread {
+                        Toast.makeText(this, if (r == 0) "ひな形に保存しました" else "保存に失敗しました (code=$r)",
+                                       Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            .setNegativeButton("やめる", null)
+            .show()
+    }
+
+    // ひな形を選んで、今の計画をその内容で更新する。名前・開始/終了時刻・端末は変わらない。
+    private fun chooseTemplateForUpdate(planId: String) {
+        planExec.execute {
+            val arr = try { JSONArray(HgeNative.nativeListTemplates()) } catch (_: Exception) { JSONArray() }
+            val ids = ArrayList<String>(); val labels = ArrayList<String>()
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                ids.add(o.optString("id")); labels.add(o.optString("planName"))
+            }
+            runOnUiThread {
+                if (ids.isEmpty()) {
+                    Toast.makeText(this, "ひな形がありません。⋮の「ひな形に保存」で作れます", Toast.LENGTH_LONG).show()
+                    return@runOnUiThread
+                }
+                androidx.appcompat.app.AlertDialog.Builder(this)
+                    .setTitle("ひな形で更新")
+                    .setItems(labels.toTypedArray()) { _, w ->
+                        planExec.execute {
+                            val r = HgeNative.nativeUpdatePlanFromTemplate(planId, ids[w])
+                            runOnUiThread {
+                                if (r == 0) { refreshPlanList(); reloadExpoEditors() }
+                                Toast.makeText(this, if (r == 0) "「" + labels[w] + "」で更新しました" else "更新に失敗しました (code=$r)",
+                                               Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                    .setNegativeButton("やめる", null)
+                    .show()
+            }
+        }
+    }
+
+    private fun confirmDeleteTemplate(id: String, name: String) {
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("ひな形の削除")
+            .setMessage("「" + name + "」を削除しますか？")
+            .setPositiveButton("削除する") { _, _ ->
+                planExec.execute {
+                    HgeNative.nativeDeleteTemplate(id)
+                    val cur = HgeNative.nativeCurrentPlanId()
+                    val left = planIdsIn(HgeNative.nativeListTemplates())
+                    runOnUiThread {
+                        if (left.isEmpty()) { leaveTemplates { openGearMenu() } }   // 空になったら画面から出る
+                        else { currentPlanId = cur; refreshPlanList(); reloadExpoEditors() }
+                    }
+                }
+            }
+            .setNegativeButton("やめる", null)
+            .show()
     }
 
     private fun doNewPlan() {
@@ -6050,7 +6232,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun updatePagerTitle() {
         val n = planPager.pageCount.coerceAtLeast(1)
         val cur = planPager.current
-        findViewById<TextView>(R.id.plan_title).text = "撮影計画  ${cur + 1}/$n"
+        val head = if (tplMode) "撮影計画ひな形" else "撮影計画"
+        findViewById<TextView>(R.id.plan_title).text = "$head  ${cur + 1}/$n"
     }
 
     // 撮影要求済(撮影中/待機/未検出)の計画を表示しているときは一切編集できない(item7)。各操作部の有効/無効を切替。

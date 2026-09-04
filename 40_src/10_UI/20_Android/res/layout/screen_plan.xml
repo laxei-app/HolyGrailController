@@ -170,8 +170,9 @@
                     </LinearLayout>
                 </LinearLayout>
 
-                <!-- エッジ端末 -->
-                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                <!-- エッジ端末(撮影計画ひな形では隠す。ひな形は端末を持たない) -->
+                <LinearLayout android:id="@+id/plan_edgeRow"
+                    android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="10dp" android:orientation="horizontal"
                     android:gravity="center_vertical">
                     <TextView android:id="@+id/plan_edgeLabel" android:layout_width="96dp"
