@@ -99,8 +99,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private lateinit var planListScroll: ScrollView      // 先頭ページの計画リスト(分割バー上)
     private lateinit var planListContainer: LinearLayout
     // 編集対象の計画 id。切替(選択/新規/複製/起動時)のたびに「変更の取り消し」用のベースラインを取り直す。
-    // 一覧で編集中の計画名を確定させる処理(選択行のEditTextを作るときに入れる)。
-    private var pendingPlanRename: (() -> Unit)? = null
     private var currentPlanId: String = ""
         set(value) {
             val changed = field != value; field = value
@@ -570,6 +568,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private fun wireListeners() {
+        wireSplitFrames()                       // 一覧型7画面の分割バーをまとめて配線する
         // 項目11: 計画1ページ目の方向/仰角ウィジェットは廃止(設定は撮影シミュレーション画面で行う)。
         startDate.setOnClickListener { pickDate(startCal) }
         startTime.setOnClickListener { pickTime(startCal) }
@@ -622,7 +621,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
         }
         // 撮影計画リスト(分割バー上)の分割バー。
-        setupDivider(R.id.plan_listDivider, R.id.plan_listScroll)
         // 撮影周期(タップでキーボード入力)。最小未満は警告。
         intervalText.setOnClickListener { editInterval() }
         // 横向き(ランドスケープ)。
@@ -655,7 +653,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<ImageView>(R.id.history_back).setOnClickListener { flipper.displayedChild = 4; buildGearMenu() }
         // 670 撮影レポート。読むだけの画面なので離脱時に保存するものは無い。
         findViewById<ImageView>(R.id.report_back).setOnClickListener { flipper.displayedChild = 4; buildGearMenu() }
-        setupDivider(R.id.report_divider, R.id.report_listScroll)
         // 8.2 エッジ端末設定(2026-08-08 UI依頼で画面化)
         findViewById<ImageView>(R.id.edge_back).setOnClickListener { stashEdgeForm(); flipper.displayedChild = 4; buildGearMenu() }
         findViewById<ImageView>(R.id.dlog_back).setOnClickListener {
@@ -663,7 +660,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
             if (dlogBusy) Toast.makeText(this, "取得中です。中断してから戻ってください", Toast.LENGTH_SHORT).show()
             else { flipper.displayedChild = 4; buildGearMenu() }
         }
-        setupDivider(R.id.edge_divider, R.id.edge_listScroll)
         findViewById<Button>(R.id.history_clear).setOnClickListener {
             AlertDialog.Builder(this)
                 .setTitle("履歴削除")
@@ -677,21 +673,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         // 620 所持カメラ(戻る/メニューで離脱時に自動保存)
         findViewById<ImageView>(R.id.cameralist_back).setOnClickListener { leaveCameraList() }
-        setupDivider(R.id.cameralist_divider, R.id.cameralist_listScroll)
         // 622 カメラ追加(離脱時にチェックを追加 / 取消でチェック解除)
         findViewById<ImageView>(R.id.cameraadd_back).setOnClickListener { leaveCameraAdd(false) }
         findViewById<ImageView>(R.id.cameraadd_menu).setOnClickListener { leaveCameraAdd(true) }
         findViewById<Button>(R.id.cameraadd_cancel).setOnClickListener { checkedCamAdd.clear(); buildCameraAdd() }
         // 630 所持レンズ
         findViewById<ImageView>(R.id.lenslist_back).setOnClickListener { leaveLensList() }
-        setupDivider(R.id.lenslist_divider, R.id.lenslist_listScroll)
         // 632 レンズ追加
         findViewById<ImageView>(R.id.lensadd_back).setOnClickListener { leaveLensAdd(false) }
         findViewById<ImageView>(R.id.lensadd_menu).setOnClickListener { leaveLensAdd(true) }
         findViewById<Button>(R.id.lensadd_cancel).setOnClickListener { checkedLensAdd.clear(); buildLensAdd() }
         // 640 撮影場所リスト(§7.9)。戻る/メニューで離脱時に自動保存。
         findViewById<ImageView>(R.id.places_back).setOnClickListener { leavePlacesList() }
-        setupDivider(R.id.places_divider, R.id.places_listScroll)
         // 撮影計画(330)のカメラ/レンズをタップで所持から選択する。
         cameraText.setOnClickListener { choosePlanCamera() }
         lensText.setOnClickListener { choosePlanLens() }
@@ -716,7 +709,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
             findViewById<TextView>(R.id.smooth_ma_val).text = "${it}frame"
         }
         // 初期値プリセット一覧の分割バー(620と同挙動)
-        setupDivider(R.id.edit_presetDivider, R.id.edit_presetScroll)
         // スライダーの値ラベル更新(露出スライダーと形を統一するため Material Slider・仕様8)
         setupValueSlider(R.id.edit_alt_seek, 14, gradient = true) {
             val deg = seekToAlt(it)
@@ -1328,7 +1320,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         selPresetName = if (pref in names) pref else names.firstOrNull()
         loadEditorOnly()
         buildPresetList(presetListId())
-        setInitialSplit(presetScrollId(), presetListId())
+        setInitialSplit(presetListId())
     }
 
     // 選択中プリセットを ccmJson に積んでエディタを開く(一覧は作り直さない)。
@@ -1347,7 +1339,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val box = findViewById<LinearLayout>(containerId)
         clearListFocus(box)                 // 消す子にフォーカスが残っていると落ちる
         box.removeAllViews()
-        pendingPresetRename = null          // 行を作り直すので前の行の確定処理は捨てる
+        pendingRename.remove(containerId)   // 行を作り直すので前の行の確定処理は捨てる
         val prefName = HgeNative.nativeGetPreferredCcm(presetType)
         for (p in presetCcms) {
             val nm = p.optString("name")
@@ -1367,7 +1359,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     val t = et.text.toString().trim()
                     if (!renamed && t.isNotEmpty() && t != nm) { renamed = true; commitRename(nm, t) }
                 }
-                pendingPresetRename = doRename
+                pendingRename[presetListId()] = doRename
                 et.setOnFocusChangeListener { _, has -> if (!has) doRename() }
                 et.setOnEditorActionListener { v, a, _ ->
                     if (a == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
@@ -1401,7 +1393,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun rebuildPresetList() { buildPresetList(presetListId()) }
     // 名前を宛先にして書くので、編集中の名前があれば先に確定させる。
-    private fun persistCurrentPreset() { commitPresetNameEdit(); persistCcmEdit() }
+    private fun persistCurrentPreset() { commitListNameEdit(presetListId()); persistCcmEdit() }
 
     private fun selectPreset(name: String) {
         if (name == selPresetName) return   // 同じ行の再タップは編集(フォーカス)のみ
@@ -1591,11 +1583,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun openCameraList() {
         buildCameraList(); buildCameraDetail()
-        setInitialSplit(R.id.cameralist_listScroll, R.id.cameralist_container)
+        setInitialSplit(R.id.cameralist_container)
         flipper.displayedChild = 5
     }
     private fun openCameraAdd()  { checkedCamAdd.clear(); buildCameraAdd(); flipper.displayedChild = 6 }
-    private fun openLensList()   { buildLensList(); buildLensDetail(); setInitialSplit(R.id.lenslist_listScroll, R.id.lenslist_container); flipper.displayedChild = 7 }
+    private fun openLensList()   { buildLensList(); buildLensDetail(); setInitialSplit(R.id.lenslist_container); flipper.displayedChild = 7 }
     private fun openLensAdd()    { checkedLensAdd.clear(); expandedMakers.clear(); buildLensAdd(); flipper.displayedChild = 8 }
 
     // 分割バーの初期高さ(上=リスト)。リストが短ければ内容ぴったりまで上に詰め、
@@ -1654,14 +1646,29 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // 一覧のある画面をまとめて向きに合わせる。画面はすべて起動時に組み立て済み(ViewFlipper)なので、
     //  表示中かどうかに関わらず全部まとめて掛けてよい。
-    private fun applyAllMasterDetail() {
-        applyMasterDetail(R.id.plan_listScroll,       R.id.plan_listDivider)
-        applyMasterDetail(R.id.cameralist_listScroll, R.id.cameralist_divider)
-        applyMasterDetail(R.id.lenslist_listScroll,   R.id.lenslist_divider)
-        applyMasterDetail(R.id.edge_listScroll,       R.id.edge_divider)
-        applyMasterDetail(R.id.report_listScroll,     R.id.report_divider)
-        applyMasterDetail(R.id.places_listScroll,     R.id.places_divider)
-        applyMasterDetail(R.id.edit_presetScroll,     R.id.edit_presetDivider)
+    // 【「上=一覧 / 分割バー / 下=詳細」の枠は1つの表で回す(2026-09-04 UI依頼)】
+    //  同じ3点セット(スクロール/分割バー/入れ物)を持つ画面が7つある。以前は分割バーの配線・
+    //  横向きの左右分割・初期の高さを画面ごとに書いていて、追加や修正のたびに書き漏らす形だった。
+    //  ここに1行足せば3つとも回る。レイアウトXMLは id が画面ごとに違うので4本のまま
+    //  (同じ id を持つ画面を ViewFlipper に並べると findViewById が区別できなくなるため)。
+    private class SplitFrame(val scrollId: Int, val dividerId: Int, val containerId: Int)
+    private val splitFrames = listOf(
+        SplitFrame(R.id.plan_listScroll,       R.id.plan_listDivider,   R.id.plan_listContainer),
+        SplitFrame(R.id.cameralist_listScroll, R.id.cameralist_divider, R.id.cameralist_container),
+        SplitFrame(R.id.lenslist_listScroll,   R.id.lenslist_divider,   R.id.lenslist_container),
+        SplitFrame(R.id.places_listScroll,     R.id.places_divider,     R.id.places_container),
+        SplitFrame(R.id.edge_listScroll,       R.id.edge_divider,       R.id.edge_container),
+        SplitFrame(R.id.report_listScroll,     R.id.report_divider,     R.id.report_container),
+        SplitFrame(R.id.edit_presetScroll,     R.id.edit_presetDivider, R.id.edit_presetList))
+
+    private fun wireSplitFrames() { splitFrames.forEach { setupDivider(it.dividerId, it.scrollId) } }
+
+    private fun applyAllMasterDetail() { splitFrames.forEach { applyMasterDetail(it.scrollId, it.dividerId) } }
+
+    // 一覧の入れ物の id だけで初期の高さを決める(スクロールの id を書き間違えようがない)。
+    private fun setInitialSplit(containerId: Int) {
+        val f = splitFrames.firstOrNull { it.containerId == containerId } ?: return
+        setInitialSplit(f.scrollId, f.containerId)
     }
 
     private fun setInitialSplit(listId: Int, containerId: Int) {
@@ -1838,51 +1845,34 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // ---------- 620 所持カメラ ----------
-    private fun buildCameraList() {
-        val box = findViewById<LinearLayout>(R.id.cameralist_container)
-        clearListFocus(box)                 // 消す子にフォーカスが残っていると落ちる
-        box.removeAllViews()
-        pendingCameraRename = null          // 行を作り直すので前の行の確定処理は捨てる
-        val arr = camArray(HgeNative.nativeGetOwnedCameras())
-        val names = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optJSONObject("camera")?.optString("name") }
-        if (selCamera == null || selCamera !in names) selCamera = names.firstOrNull()
-        for (i in 0 until arr.length()) {
-            val cam = arr.optJSONObject(i)?.optJSONObject("camera") ?: continue
-            val name = cam.optString("name")
-            // 項目D: 愛称/シリアルは未取得なら「未定義」と出す(SSDPでオンライン取得後に実値が入る)。
-            val fr = cam.optString("assignedName").ifEmpty { "未定義" }
-            val sn = cam.optString("serial").ifEmpty { "未定義" }
-            val sub = "愛称:$fr  S/N:$sn"
-            // 改名の確定は「フォーカスが外れた時」と「保持した確定処理」の両方から来るので、
-            //  実際に名前が変わるときだけ一度だけ走らせる(二重に走ると2回目が自分自身と
-            //  ぶつかって「使用されています」が出る)。
-            var renamed = false
-            val doRename = { newName: String ->
-                val nm = newName.trim()
-                if (!renamed && nm.isNotEmpty() && nm != name && !blockedByEdge(name, "変更")) {
-                    renamed = true; commitCameraRename(name, nm)
-                }
+    private fun buildCameraList(): Unit = renderList(ListPane(
+        containerId = R.id.cameralist_container,
+        rows = {
+            val arr = camArray(HgeNative.nativeGetOwnedCameras())
+            (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optJSONObject("camera") }.map { cam ->
+                val name = cam.optString("name")
+                // 項目D: 愛称/シリアルは未取得なら「未定義」と出す(SSDPでオンライン取得後に実値が入る)。
+                ListItem(name, name,
+                    "愛称:" + cam.optString("assignedName").ifEmpty { "未定義" } +
+                        "  S/N:" + cam.optString("serial").ifEmpty { "未定義" },
+                    listOf(
+                        "削除" to {
+                            // エッジが計画を持っているカメラは消せない(消すと台帳から資格情報が落ち、
+                            //  その計画が単独復帰したときに認証できなくなる)。
+                            if (!blockedByEdge(name, "削除")) {
+                                dataExec.execute { HgeNative.nativeRemoveOwnedCamera(name)
+                                    runOnUiThread { if (selCamera == name) selCamera = null; buildCameraList(); buildCameraDetail()
+                                                    pushCameraBookToEdges() } }
+                            }
+                        },
+                        "接続カメラ検索" to { searchAndAddCameras() }))
             }
-            box.addView(listRow(name, sub, name == selCamera,
-                onSelect = { commitCameraNameEdit(); selectCamera(name) },
-                menuItems = listOf(
-                    "削除" to {
-                        // エッジが計画を持っているカメラは消せない(消すと台帳から資格情報が落ち、
-                        //  その計画が単独復帰したときに認証できなくなる)。
-                        if (!blockedByEdge(name, "削除")) {
-                            dataExec.execute { HgeNative.nativeRemoveOwnedCamera(name)
-                                runOnUiThread { if (selCamera == name) selCamera = null; buildCameraList(); buildCameraDetail()
-                                                pushCameraBookToEdges() } }
-                        }
-                    },
-                    "接続カメラ検索" to { searchAndAddCameras() }
-                ),
-                onRename = { newName -> doRename(newName) },
-                onEditor  = { e -> pendingCameraRename = { doRename(e.text.toString()) } }))
-            box.addView(thinDivider())
-        }
-        box.addView(linkText("＋ 新規カメラ追加") { commitCameraNameEdit(); openCameraAdd() })
-    }
+        },
+        selected = { selCamera }, setSelected = { selCamera = it },
+        onSelect = { selectCamera(it) },
+        // エッジが計画を持っているカメラは名前も変えられない。
+        onRename = { orig, nm -> if (!blockedByEdge(orig, "変更")) commitCameraRename(orig, nm) },
+        addLabel = "＋ 新規カメラ追加", onAdd = { openCameraAdd() }))
 
     // マスタに無いカメラを手入力で追加する(レンタル機など)。型番だけ聞き、残りは詳細画面で埋めてもらう。
     private fun promptAddCustomCamera() {
@@ -2128,7 +2118,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun persistCameraDetail(rebuild: Boolean, origName: String? = null) {
         // 名前を宛先にして書くので、編集中の名前があれば**先に**確定させる。
         //  (自分自身の改名から来たときは既に消費済みなので何もしない)
-        if (origName == null) { commitCameraNameEdit() }
+        if (origName == null) { commitListNameEdit(R.id.cameralist_container) }
         val orig = origName ?: selCamera ?: return
         if (camFields.isEmpty()) return
         // エッジが計画を持っているカメラは変更できない。ただし**中身が変わっていなければ素通し**
@@ -2279,36 +2269,24 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // ---------- 630 所持レンズ ----------
-    private fun buildLensList() {
-        val box = findViewById<LinearLayout>(R.id.lenslist_container)
-        clearListFocus(box)                 // 消す子にフォーカスが残っていると落ちる
-        box.removeAllViews()
-        pendingLensRename = null            // 行を作り直すので前の行の確定処理は捨てる
-        val arr = camArray(HgeNative.nativeGetOwnedLenses())
-        val names = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("name") }
-        if (selLens == null || selLens !in names) selLens = names.firstOrNull()
-        for (i in 0 until arr.length()) {
-            val l = arr.optJSONObject(i) ?: continue
-            val name = l.optString("name")
-            val sub = "${l.optString("maker")}  ${l.optDouble("focalLength", 0.0).toInt()}mm  F${l.optDouble("fn", 0.0)}"
-            // 改名は実際に変わるときだけ一度だけ(所持カメラ/撮影場所と同じ)。
-            var renamed = false
-            val doRename = { newName: String ->
-                val nm = newName.trim()
-                if (!renamed && nm.isNotEmpty() && nm != name) { renamed = true; commitLensRename(name, nm) }
+    private fun buildLensList(): Unit = renderList(ListPane(
+        containerId = R.id.lenslist_container,
+        rows = {
+            val arr = camArray(HgeNative.nativeGetOwnedLenses())
+            (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }.map { l ->
+                val name = l.optString("name")
+                ListItem(name, name,
+                    "${l.optString("maker")}  ${l.optDouble("focalLength", 0.0).toInt()}mm  F${l.optDouble("fn", 0.0)}",
+                    listOf("削除" to {
+                        dataExec.execute { HgeNative.nativeRemoveOwnedLens(name)
+                            runOnUiThread { if (selLens == name) selLens = null; buildLensList(); buildLensDetail() } }
+                    }))
             }
-            box.addView(listRow(name, sub, name == selLens,
-                onSelect = { commitLensNameEdit(); selectLens(name) },
-                menuItems = listOf("削除" to {
-                    dataExec.execute { HgeNative.nativeRemoveOwnedLens(name)
-                        runOnUiThread { if (selLens == name) selLens = null; buildLensList(); buildLensDetail() } }
-                }),
-                onRename = { newName -> doRename(newName) },
-                onEditor  = { e -> pendingLensRename = { doRename(e.text.toString()) } }))
-            box.addView(thinDivider())
-        }
-        box.addView(linkText("＋ 新規レンズ追加") { commitLensNameEdit(); openLensAdd() })
-    }
+        },
+        selected = { selLens }, setSelected = { selLens = it },
+        onSelect = { selectLens(it) },
+        onRename = { orig, nm -> commitLensRename(orig, nm) },
+        addLabel = "＋ 新規レンズ追加", onAdd = { openLensAdd() }))
 
     private fun buildLensDetail() {
         val box = findViewById<LinearLayout>(R.id.lenslist_detail)
@@ -2355,7 +2333,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private fun persistLensDetail(rebuild: Boolean, origName: String? = null) {
-        if (origName == null) { commitLensNameEdit() }   // 名前を宛先にする前に先に確定させる
+        if (origName == null) { commitListNameEdit(R.id.lenslist_container) }   // 名前を宛先にする前に先に確定させる
         val orig = origName ?: selLens ?: return
         if (lensFields.isEmpty()) return
         val o = JSONObject()
@@ -3475,18 +3453,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun buildPlanList(js: String) {
         clearListFocus(planListContainer)   // 消す子にフォーカスが残っていると落ちる
         planListContainer.removeAllViews()
-        // 常に先頭に「新規撮影計画」行(タップで初期値の新規計画を作成)。
-        val add = TextView(this)
-        add.text = "＋ 新規撮影計画"
-        add.textSize = 15f
-        add.setPadding(dp(8), dp(10), dp(8), dp(10))
-        add.setTextColor(0xFF1565C0.toInt())
-        add.setOnClickListener { doNewPlan() }
-        planListContainer.addView(add)
         // 行の区切りは薄い線(2026-09-02 UI依頼)。所持カメラ/レンズの一覧と同じ見え方にする。
         //  副行が付いて1行が2段になったので、線が無いとどこまでが1件か分かりにくい。
         //  ※点滅処理(planBlink)は子を LinearLayout に絞って走査するので、線が挟まっても素通しする。
-        planListContainer.addView(thinDivider())
         try {
             val arr = JSONArray(js)
             for (i in 0 until arr.length()) {
@@ -3494,11 +3463,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 planListContainer.addView(thinDivider())
             }
         } catch (_: Exception) {}
+        // 【「＋ 新規◯◯」は一覧の一番下(2026-09-04 UI依頼)】以前ここだけ先頭にあった。
+        //  画面によって上下すると、探す場所が毎回変わって使いにくい。他の一覧に揃える。
+        planListContainer.addView(linkText("＋ 新規撮影計画") { commitPlanNameEdit(); doNewPlan() })
         // 再構築直後に選択中行のEditTextが自動フォーカスしてキーボードが出るのを防ぐ(フォーカスをスクロールへ)。
         planListScroll.isFocusableInTouchMode = true
         planListScroll.requestFocus()
         // リスト件数が少なければ内容ぴったりまで縮める(item6: リスト最下段で止める)。
-        setInitialSplit(R.id.plan_listScroll, R.id.plan_listContainer)
+        setInitialSplit(R.id.plan_listContainer)
     }
 
     private fun buildPlanRow(p: JSONObject): View {
@@ -3574,7 +3546,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             // 【確定処理を持っておく(2026-09-04 UI依頼)】ダイアログはアクティビティのフォーカスを
             //  奪わないので、フォーカス喪失だけに頼ると「名前を打った直後に撮影場所を開く」流れで
             //  改名を取りこぼす(入れた名前が消える)。書き換える前に commitPlanNameEdit() で呼ぶ。
-            pendingPlanRename = commit
+            pendingRename[R.id.plan_listContainer] = commit
             tv.setOnEditorActionListener { v, actionId, _ ->
                 if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
                     planListScroll.isFocusableInTouchMode = true
@@ -3592,7 +3564,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 override fun onViewAttachedToWindow(v: View) {}
                 override fun onViewDetachedFromWindow(v: View) {
                     commit()
-                    if (pendingPlanRename === commit) { pendingPlanRename = null }
+                    if (pendingRename[R.id.plan_listContainer] === commit) { pendingRename.remove(R.id.plan_listContainer) }
                 }
             })
         } else {
@@ -4359,11 +4331,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  走るが、**ダイアログはアクティビティのフォーカスを奪わない**ので、名前を打った直後に
     //  ダイアログを開く操作では確定しないまま残る(入れたはずの名前が消えたように見える)。
     //  計画を書き換えるダイアログを出す前に呼ぶ。
-    private fun commitPlanNameEdit() {
-        val f = pendingPlanRename ?: return
-        clearListFocus(planListContainer)
-        f.invoke()                                     // 二重確定は commit 側が弾く
-    }
+    private fun commitPlanNameEdit() = commitListNameEdit(R.id.plan_listContainer)
 
     // --- 撮影場所の入力(緯度経度)。登録済みから選択 / テキスト貼り付け / 地図から選択(osmdroid) ---
     private fun showPlaceEditChooser() {
@@ -4511,41 +4479,77 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  改名は「入力欄のフォーカスが外れた時」に走るが、**ダイアログはアクティビティの
     //  フォーカスを奪わない**ので、名前を打った直後にダイアログを開く流れでは確定が
     //  後回しになる。名前を宛先にして書く前に、必ずここを通して先に確定させる。
-    private var pendingPlaceRename:  (() -> Unit)? = null
-    private var pendingCameraRename: (() -> Unit)? = null
-    private var pendingLensRename:   (() -> Unit)? = null
-    private var pendingEdgeRename:   (() -> Unit)? = null
-    private var pendingPresetRename: (() -> Unit)? = null
+    //  一覧ごとに1つ持つ(キー=一覧の入れ物のid)。画面ごとに変数を分けていたのをやめた。
+    private val pendingRename = HashMap<Int, () -> Unit>()
 
-    private fun commitPlaceNameEdit() {
-        val f = pendingPlaceRename ?: return
-        pendingPlaceRename = null
-        clearListFocus(findViewById(R.id.places_container)); f.invoke()
-    }
-    private fun commitCameraNameEdit() {
-        val f = pendingCameraRename ?: return
-        pendingCameraRename = null
-        clearListFocus(findViewById(R.id.cameralist_container)); f.invoke()
-    }
-    private fun commitLensNameEdit() {
-        val f = pendingLensRename ?: return
-        pendingLensRename = null
-        clearListFocus(findViewById(R.id.lenslist_container)); f.invoke()
-    }
-    private fun commitEdgeNameEdit() {
-        val f = pendingEdgeRename ?: return
-        pendingEdgeRename = null
-        clearListFocus(findViewById(R.id.edge_container)); f.invoke()
-    }
-    private fun commitPresetNameEdit() {
-        val f = pendingPresetRename ?: return
-        pendingPresetRename = null
-        clearListFocus(findViewById(presetListId())); f.invoke()
+    private fun commitListNameEdit(containerId: Int) {
+        val f = pendingRename.remove(containerId) ?: return
+        clearListFocus(findViewById(containerId)); f.invoke()
     }
 
     // 一覧の入力欄からフォーカスを外し、キーボードも閉じる。
     //  **removeAllViews() は、消す子にフォーカスが残っているとフォーカス探索が落ちる**
     //  (addFocusables で NPE。実機で確認)。作り直す前と、確定の前に必ず通す。
+    // ================= 一覧(上)の共通部品(2026-09-04 UI依頼) =================
+    // 「上=一覧 / 分割バー / 下=詳細」の画面は形が同じなのに、一覧を組み立てる糊だけが
+    //  画面ごとに写し取られていた。同じ不具合を何度も直す元になっていたのでここへまとめる。
+    //  枠(分割バー・横向きの左右分割・初期の高さ)は元から共通(setupDivider/applyMasterDetail)。
+    //  **詳細の側は画面ごとに中身が別物なので共通化しない**。
+    //  ※撮影計画の一覧は載せない: キーが id(他は名前)で、状態アイコン・点滅・撮影中の編集不可が
+    //    あり、条件を持ち込むとこの部品が壊れやすくなる。枠だけ共有して一覧は独自のままにする。
+    private class ListItem(
+        val key: String,                                  // 選択・改名の宛先(いまはどれも名前)
+        val title: String,
+        val sub: String,
+        val menu: List<Pair<String, () -> Unit>> = emptyList())
+
+    private class ListPane(
+        val containerId: Int,
+        val rows: () -> List<ListItem>,
+        val selected: () -> String?,
+        val setSelected: (String?) -> Unit,               // 選択が消えたときの付け替え(保存は走らせない)
+        val onSelect: (String) -> Unit,
+        val onRename: ((String, String) -> Unit)? = null, // null=名前を直せない一覧
+        val addLabel: String = "",
+        val onAdd: (() -> Unit)? = null,                  // null=追加行を出さない
+        val emptyText: String = "")
+
+    // 一覧を組み立てる。行の見た目は listRow、区切りは thinDivider(他の一覧と同じ)。
+    //  ・選択が消えていたら先頭へ付け替える(保存は走らせない)
+    //  ・改名は実際に変わるときだけ一度だけ。確定処理は保持し、別の操作の前に必ず通す
+    //  ・作り直す前にフォーカスを外す(消す子にフォーカスが残っていると Android が落ちる)
+    //  ・「＋ 新規◯◯」は**必ず一覧の一番下**(画面によって上下していたのを揃えた)
+    private fun renderList(p: ListPane) {
+        val box = findViewById<LinearLayout>(p.containerId) ?: return
+        clearListFocus(box)
+        box.removeAllViews()
+        pendingRename.remove(p.containerId)
+        val items = p.rows()
+        val keys = items.map { it.key }
+        if (p.selected() == null || p.selected() !in keys) { p.setSelected(keys.firstOrNull()) }
+        if (items.isEmpty() && p.emptyText.isNotEmpty()) {
+            box.addView(TextView(this).apply {
+                text = p.emptyText; setPadding(dp(8), dp(6), 0, dp(6)); setTextColor(Color.GRAY)
+            })
+        }
+        for (it in items) {
+            var renamed = false
+            val doRename = { newName: String ->
+                val nm = newName.trim()
+                if (!renamed && nm.isNotEmpty() && nm != it.key) { renamed = true; p.onRename?.invoke(it.key, nm) }
+            }
+            box.addView(listRow(it.title, it.sub, it.key == p.selected(),
+                onSelect = { commitListNameEdit(p.containerId); p.onSelect(it.key) },
+                menuItems = it.menu,
+                onRename = if (p.onRename == null) null else ({ newName -> doRename(newName) }),
+                onEditor = { e -> pendingRename[p.containerId] = { doRename(e.text.toString()) } }))
+            box.addView(thinDivider())
+        }
+        if (p.onAdd != null) {
+            box.addView(linkText(p.addLabel) { commitListNameEdit(p.containerId); p.onAdd.invoke() })
+        }
+    }
+
     private fun clearListFocus(box: View?) {
         if (box == null) { return }
         val f = currentFocus ?: return
@@ -4571,7 +4575,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun openPlacesList() {
         buildPlacesList(); buildPlaceDetail()
-        setInitialSplit(R.id.places_listScroll, R.id.places_container)
+        setInitialSplit(R.id.places_container)
         flipper.displayedChild = 11
     }
     private fun leavePlacesList() { stopDirtyWatch(); persistPlaceDetail(false); flipper.displayedChild = 4; buildGearMenu() }
@@ -4902,7 +4906,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun openReportList() {
         buildReportList(); buildReportDetail()
-        setInitialSplit(R.id.report_listScroll, R.id.report_container)
+        setInitialSplit(R.id.report_container)
         flipper.displayedChild = 14
     }
 
@@ -5225,39 +5229,26 @@ class MainActivity : AppCompatActivity(), HgeListener {
         return null
     }
 
-    private fun buildPlacesList() {
-        val box = findViewById<LinearLayout>(R.id.places_container)
-        clearListFocus(box)              // 消す子にフォーカスが残っていると落ちる
-        box.removeAllViews()
-        pendingPlaceRename = null        // 行を作り直すので、前の行の確定処理は捨てる
-        val arr = placeArray(HgeNative.nativeGetPlaces())
-        val names = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("name") }
-        if (selPlace == null || selPlace !in names) selPlace = names.firstOrNull()
-        for (i in 0 until arr.length()) {
-            val o = arr.optJSONObject(i) ?: continue
-            val name = o.optString("name")
-            val sub = "%.4f, %.4f  標高 %dm".format(o.optDouble("latitude", 0.0), o.optDouble("longitude", 0.0), o.optDouble("altitude", 0.0).toInt()) +
-                      (if (o.optString("memo").isNotEmpty()) "  ${o.optString("memo")}" else "")
-            // 改名の確定は「フォーカスが外れた時」と「保持した確定処理」の両方から来るので、
-            //  実際に名前が変わるときだけ一度だけ走らせる(二重に走ると2回目が自分自身と
-            //  ぶつかって「使用されています」が出る)。計画一覧と同じ作り。
-            var renamed = false
-            val doRename = { newName: String ->
-                val nm = newName.trim()
-                if (!renamed && nm.isNotEmpty() && nm != name) { renamed = true; commitPlaceRename(name, nm) }
+    private fun buildPlacesList(): Unit = renderList(ListPane(
+        containerId = R.id.places_container,
+        rows = {
+            val arr = placeArray(HgeNative.nativeGetPlaces())
+            (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }.map { o ->
+                val name = o.optString("name")
+                ListItem(name, name,
+                    "%.4f, %.4f  標高 %dm".format(o.optDouble("latitude", 0.0), o.optDouble("longitude", 0.0),
+                                                  o.optDouble("altitude", 0.0).toInt()) +
+                        (if (o.optString("memo").isNotEmpty()) "  ${o.optString("memo")}" else ""),
+                    listOf("削除" to {
+                        dataExec.execute { HgeNative.nativeRemovePlace(name)
+                            runOnUiThread { if (selPlace == name) selPlace = null; buildPlacesList(); buildPlaceDetail() } }
+                    }))
             }
-            box.addView(listRow(name, sub, name == selPlace,
-                onSelect = { selectPlace(name) },
-                menuItems = listOf("削除" to {
-                    dataExec.execute { HgeNative.nativeRemovePlace(name)
-                        runOnUiThread { if (selPlace == name) selPlace = null; buildPlacesList(); buildPlaceDetail() } }
-                }),
-                onRename = { newName -> doRename(newName) },
-                onEditor  = { e -> pendingPlaceRename = { doRename(e.text.toString()) } }))
-            box.addView(thinDivider())
-        }
-        box.addView(linkText("＋ 新しい場所の追加") { addPlace() })
-    }
+        },
+        selected = { selPlace }, setSelected = { selPlace = it },
+        onSelect = { selectPlace(it) },
+        onRename = { orig, nm -> commitPlaceRename(orig, nm) },
+        addLabel = "＋ 新しい場所の追加", onAdd = { addPlace() }))
 
     private fun addPlace() {
         dataExec.execute {
@@ -5309,13 +5300,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         btnRow.addView(linkText("📍 地図から取得") {
             // 名前にカーソルが残ったままでも、ここで改名を確定させてから開く。
             //  確定しないまま座標を書くと、後から来る改名との順序で宛先が食い違う。
-            commitPlaceNameEdit()
+            commitListNameEdit(R.id.places_container)
             val la0 = if (placeLat != 0.0 || placeLng != 0.0) placeLat else 35.681
             val lo0 = if (placeLat != 0.0 || placeLng != 0.0) placeLng else 139.767
             openMapPicker(la0, lo0) { la, lo -> onPlaceCoord(la, lo) }
         })
-        btnRow.addView(linkText("✎ 貼り付け") { commitPlaceNameEdit(); showPlacePasteDialog("%.6f, %.6f".format(placeLat, placeLng)) { la, lo -> onPlaceCoord(la, lo) } })
-        btnRow.addView(linkText("＋ 現在地") { commitPlaceNameEdit(); fetchCurrentLocation { la, lo, alt -> if (alt != 0.0) placeAltEt?.setText(alt.toInt().toString()); onPlaceCoord(la, lo) } })
+        btnRow.addView(linkText("✎ 貼り付け") { commitListNameEdit(R.id.places_container); showPlacePasteDialog("%.6f, %.6f".format(placeLat, placeLng)) { la, lo -> onPlaceCoord(la, lo) } })
+        btnRow.addView(linkText("＋ 現在地") { commitListNameEdit(R.id.places_container); fetchCurrentLocation { la, lo, alt -> if (alt != 0.0) placeAltEt?.setText(alt.toInt().toString()); onPlaceCoord(la, lo) } })
         box.addView(btnRow)
         val coordTv = TextView(this).apply { textSize = 18f; setTextColor(Color.BLACK); setPadding(0, dp(2), 0, dp(8)) }
         placeCoordTv = coordTv; box.addView(coordTv); refreshPlaceCoordText()
@@ -6295,7 +6286,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         newEdgeName = ""
         scannedPop = ""; scannedName = ""
         buildEdgeList(); buildEdgeForm()
-        setInitialSplit(R.id.edge_listScroll, R.id.edge_container)
+        setInitialSplit(R.id.edge_container)
         flipper.displayedChild = 15
     }
 
@@ -6308,7 +6299,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val box = findViewById<LinearLayout>(R.id.edge_container)
         clearListFocus(box)                 // 消す子にフォーカスが残っていると落ちる
         box.removeAllViews()
-        pendingEdgeRename = null            // 行を作り直すので前の行の確定処理は捨てる
+        pendingRename.remove(R.id.edge_container)   // 行を作り直すので前の行の確定処理は捨てる
         if (edges.isEmpty()) {
             box.addView(TextView(this).apply {
                 text = "(登録なし。下の「＋ 新規エッジ端末」から追加)"
@@ -6336,7 +6327,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             box.addView(listRow(e.name, sub, sel,
                 onSelect = {
                     // 今見ている端末の入力を控えてから切り替える(打った内容を捨てない)。
-                    commitEdgeNameEdit()
+                    commitListNameEdit(R.id.edge_container)
                     stashEdgeForm()
                     selectedEdgeName = e.name
                     scannedPop = ""; scannedName = ""
@@ -6351,7 +6342,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 //  「端末識別名」があり、一覧と入力欄の2か所に名前があって分かりにくかった。
                 //  選択中の行だけ編集できる(listRow の決まり)。
                 onRename = { newName -> doRename(newName) },
-                onEditor  = { et -> pendingEdgeRename = { doRename(et.text.toString()) } }))
+                onEditor  = { et -> pendingRename[R.id.edge_container] = { doRename(et.text.toString()) } }))
             box.addView(thinDivider())
         }
         // 新規は一番下(所持カメラ/レンズと同じ)。
