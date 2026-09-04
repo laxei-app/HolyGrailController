@@ -1334,61 +1334,26 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
     }
 
-    // プリセット一覧。名称はその場で直接編集可。新規追加も文字を直接入力。⋮=緑ピル。
+    // プリセット一覧。名称は行で直接編集(他の一覧と同じ)。★=優先的な初期値。
+    //  【「＋ 新規追加」は押した時点で作る(2026-09-04 UI依頼)】以前はこの行が入力欄で、
+    //   名前を打って確定してから作っていた。他の一覧(撮影場所/所持カメラ/所持レンズ)は
+    //   押した時点で作って行で名前を直す形なので、そちらへ揃えた。
     private fun buildPresetList(containerId: Int) {
-        val box = findViewById<LinearLayout>(containerId)
-        clearListFocus(box)                 // 消す子にフォーカスが残っていると落ちる
-        box.removeAllViews()
-        pendingRename.remove(containerId)   // 行を作り直すので前の行の確定処理は捨てる
         val prefName = HgeNative.nativeGetPreferredCcm(presetType)
-        for (p in presetCcms) {
-            val nm = p.optString("name")
-            val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL; row.gravity = Gravity.CENTER_VERTICAL
-            val star = TextView(this); star.text = if (nm == prefName) "★" else "　"; star.textSize = 14f; star.setPadding(dp(2), 0, dp(4), 0)
-            row.addView(star)
-            if (nm == selPresetName) {
-                // 選択中のみ名称インライン編集可(分割バー画面共通の動作)。
-                val et = EditText(this); et.setText(nm); et.isSingleLine = true; et.textSize = 19f
-                et.setBackgroundColor(0x00000000); et.setTypeface(null, Typeface.BOLD); et.setTextColor(Color.BLACK)
-                et.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                et.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
-                // 改名は実際に変わるときだけ一度だけ。Done→フォーカス喪失で二重に走ると、
-                //  2回目が自分自身とぶつかって「使用されています」が出る。
-                var renamed = false
-                val doRename = {
-                    val t = et.text.toString().trim()
-                    if (!renamed && t.isNotEmpty() && t != nm) { renamed = true; commitRename(nm, t) }
+        renderList(ListPane(
+            containerId = containerId,
+            rows = {
+                presetCcms.map { p ->
+                    val nm = p.optString("name")
+                    ListItem(nm, nm, "", listOf("削除" to { removePreset(nm) }),
+                             mark = if (nm == prefName) "★" else "　")
                 }
-                pendingRename[presetListId()] = doRename
-                et.setOnFocusChangeListener { _, has -> if (!has) doRename() }
-                et.setOnEditorActionListener { v, a, _ ->
-                    if (a == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
-                        doRename(); v.clearFocus()
-                        (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).hideSoftInputFromWindow(v.windowToken, 0)
-                        true
-                    } else false
-                }
-                row.addView(et)
-            } else {
-                // 未選択はタップで選択のみ(キーボードを出さない)。
-                val t = TextView(this); t.text = nm; t.textSize = 16f; t.setTextColor(Color.parseColor("#888888"))
-                t.setPadding(0, dp(6), 0, dp(6))
-                t.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                t.setOnClickListener { selectPreset(nm) }
-                row.addView(t)
-            }
-            row.addView(ctxMenuButton(listOf("削除" to { removePreset(nm) })))
-            box.addView(row); box.addView(thinDivider())
-        }
-        // 新規追加(文字を直接入力して確定で作成)
-        val addEt = EditText(this); addEt.hint = "＋ 新規追加"; addEt.isSingleLine = true; addEt.textSize = 16f
-        addEt.setBackgroundColor(0x00000000); addEt.setTextColor(Color.parseColor("#1565C0"))
-        addEt.setPadding(dp(6), dp(8), dp(6), dp(8))
-        addEt.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
-        val commitAdd = { val t = addEt.text.toString().trim(); if (t.isNotEmpty()) { addEt.setText(""); addPresetNamed(t) } }
-        addEt.setOnEditorActionListener { _, _, _ -> commitAdd(); true }
-        addEt.setOnFocusChangeListener { _, has -> if (!has) commitAdd() }
-        box.addView(addEt)
+            },
+            selected = { selPresetName }, setSelected = { selPresetName = it },
+            onSelect = { selectPreset(it) },
+            onRename = { orig, nm -> commitRename(orig, nm) },
+            // 名前は「今の1件をコピーした」と分かるものにする(addPresetNamed が空きを探す)。
+            addLabel = "＋ 新規追加", onAdd = { addPresetNamed(selPresetName ?: "Preset") }))
     }
 
     private fun rebuildPresetList() { buildPresetList(presetListId()) }
@@ -1764,13 +1729,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // onRename を渡すと名称をインライン編集できる(タップで選択、確定/フォーカス外で改名)。全分割バー画面で共通。
     // onEditor: 選択行の名前入力欄を作ったときに呼ぶ(確定処理を持っておく側で使う)。
+    // mark: 行頭の印(撮影制御方法の初期値の★=優先。空なら場所を取らない)。
     private fun listRow(title: String, sub: String, selected: Boolean, onSelect: () -> Unit,
                         menuItems: List<Pair<String, () -> Unit>>, onRename: ((String) -> Unit)? = null,
-                        onEditor: ((EditText) -> Unit)? = null): View {
+                        onEditor: ((EditText) -> Unit)? = null, mark: String = ""): View {
         val row = LinearLayout(this)
         row.orientation = LinearLayout.HORIZONTAL
         row.gravity = Gravity.CENTER_VERTICAL
         row.setPadding(dp(6), dp(8), dp(6), dp(8))
+        if (mark.isNotEmpty()) {
+            row.addView(TextView(this).apply {
+                text = mark; textSize = 14f; setPadding(dp(2), 0, dp(4), 0)
+                setOnClickListener { onSelect() }
+            })
+        }
         val txt = LinearLayout(this); txt.orientation = LinearLayout.VERTICAL
         txt.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         if (selected && onRename != null) {
@@ -4501,7 +4473,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val key: String,                                  // 選択・改名の宛先(いまはどれも名前)
         val title: String,
         val sub: String,
-        val menu: List<Pair<String, () -> Unit>> = emptyList())
+        val menu: List<Pair<String, () -> Unit>> = emptyList(),
+        val mark: String = "")                            // 行頭の印(★など)
 
     private class ListPane(
         val containerId: Int,
@@ -4542,7 +4515,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 onSelect = { commitListNameEdit(p.containerId); p.onSelect(it.key) },
                 menuItems = it.menu,
                 onRename = if (p.onRename == null) null else ({ newName -> doRename(newName) }),
-                onEditor = { e -> pendingRename[p.containerId] = { doRename(e.text.toString()) } }))
+                onEditor = { e -> pendingRename[p.containerId] = { doRename(e.text.toString()) } },
+                mark = it.mark))
             box.addView(thinDivider())
         }
         if (p.onAdd != null) {
@@ -6266,7 +6240,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 一覧で選んだ端末が設定対象(selectedEdgeName)になり、BLEのQR表示要求もその名前の機体
     // だけに向ける。新規(未選択)のときだけ、名前を広告しない出荷時のエッジにも反応する。
     private var selectedEdgeName = ""          // 一覧で選択中の端末名(空=新規追加)
-    private var newEdgeName = ""               // 新規登録で打っている途中の名前(画面を組み直しても消さない)
     private var edgeApMode = false             // AP/STA の切替状態(ラベルの出し分けにも使う)
     private var edgeNameEt: EditText? = null
     private var edgeSsidEt: EditText? = null
@@ -6283,7 +6256,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  並びは一覧と同じアルファベット順。**1件も無いときだけ**新規で開く。
         selectedEdgeName = edges.sortedBy { it.name.lowercase() }.firstOrNull()?.name ?: ""
         edgeApMode = loadEdgeCfg(selectedEdgeName).ap   // その端末を最後に設定したモードで開く
-        newEdgeName = ""
         scannedPop = ""; scannedName = ""
         buildEdgeList(); buildEdgeForm()
         setInitialSplit(R.id.edge_container)
@@ -6296,88 +6268,55 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  ・「＋ 新規エッジ端末」は**一覧の一番下**(所持カメラの「＋ 新規カメラ追加」と同じ位置)
     //  以前はここだけ独自の行を組み立てていて、右端に素の Button が出ていた。
     private fun buildEdgeList() {
-        val box = findViewById<LinearLayout>(R.id.edge_container)
-        clearListFocus(box)                 // 消す子にフォーカスが残っていると落ちる
-        box.removeAllViews()
-        pendingRename.remove(R.id.edge_container)   // 行を作り直すので前の行の確定処理は捨てる
-        if (edges.isEmpty()) {
-            box.addView(TextView(this).apply {
-                text = "(登録なし。下の「＋ 新規エッジ端末」から追加)"
-                setPadding(dp(8), dp(6), 0, dp(6))
-                setTextColor(Color.GRAY)
-            })
-        }
-        // 並びはアルファベット順(大文字小文字を区別しない)。登録した順だと、増えたときに
-        //  どこにあるか分からなくなる。**表示の並びだけ**で、保存の順は変えない。
-        edges.sortedBy { it.name.lowercase() }.forEach { e ->
-            val sel = e.name == selectedEdgeName
-            // 副行は**いま届いているか**。IP は普段読んでも何もできないのでやめた
-            //  (2026-08-29 UI依頼)。押す前に「送っても無駄」と分かるのが要点。
-            val sub = when (edgeOnline[e.name]) {
-                true  -> "オンライン"
-                false -> "オフライン"
-                else  -> "確認中"        // 起動直後、まだ一度もスイープしていない
-            }
-            // 改名は実際に変わるときだけ一度だけ(所持カメラ/撮影場所と同じ)。
-            var renamed = false
-            val doRename = { newName: String ->
-                val nm = newName.trim()
-                if (!renamed && nm != e.name) { renamed = true; commitEdgeRename(e.name, nm) }
-            }
-            box.addView(listRow(e.name, sub, sel,
-                onSelect = {
-                    // 今見ている端末の入力を控えてから切り替える(打った内容を捨てない)。
-                    commitListNameEdit(R.id.edge_container)
-                    stashEdgeForm()
-                    selectedEdgeName = e.name
-                    scannedPop = ""; scannedName = ""
-                    edgeApMode = loadEdgeCfg(e.name).ap      // その端末を最後に設定したモードで開く
-                    buildEdgeList(); buildEdgeForm()
-                },
-                menuItems = listOf(
-                    "削除" to { confirmRemoveEdge(e) },
-                    "すべて削除" to { confirmRemoveAllEdges() }
-                ),
-                // 名前は**この行で直接**直す(所持カメラ/レンズと同じ)。以前は下の設定欄に
-                //  「端末識別名」があり、一覧と入力欄の2か所に名前があって分かりにくかった。
-                //  選択中の行だけ編集できる(listRow の決まり)。
-                onRename = { newName -> doRename(newName) },
-                onEditor  = { et -> pendingRename[R.id.edge_container] = { doRename(et.text.toString()) } }))
-            box.addView(thinDivider())
-        }
-        // 新規は一番下(所持カメラ/レンズと同じ)。
-        //  【名前はここで打つ(2026-08-29 UI依頼)】新規のときは、この行そのものを入力欄に
-        //   する。登録済みの改名が行で行えるのに、新規だけ下の設定欄というのは筋が通らない。
-        //   この欄が edgeNameEt になるので、送信/登録の処理は今までどおりここから名前を読む。
-        if (selectedEdgeName.isEmpty()) {
-            val e = EditText(this); applyEdgeNameInput(e)
-            e.hint = "＋ 新規エッジ端末の名前 (半角英数字)"
-            e.setText(newEdgeName.ifEmpty { scannedName })
-            e.textSize = 19f
-            e.setTypeface(null, Typeface.BOLD)
-            e.setTextColor(Color.BLACK)
-            e.setBackgroundColor(0x00000000)
-            e.setPadding(dp(6), dp(8), dp(6), dp(8))
-            e.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
-            // 打った内容は覚えておく。画面を組み直しても消えないように。
-            e.setOnFocusChangeListener { _, has -> if (!has) newEdgeName = e.text.toString().trim() }
-            e.setOnEditorActionListener { v, a, _ ->
-                if (a == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
-                    newEdgeName = v.text.toString().trim(); v.clearFocus()
-                    (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
-                        .hideSoftInputFromWindow(v.windowToken, 0)
-                    true
-                } else false
-            }
-            box.addView(e)
-            edgeNameEt = e          // 送信/登録はこの欄から名前を読む
-        } else {
-            box.addView(linkText("＋ 新規エッジ端末") {
-                stashEdgeForm()                       // 打った内容を捨てない
-                selectedEdgeName = ""; scannedPop = ""; scannedName = ""; newEdgeName = ""
+        renderList(ListPane(
+            containerId = R.id.edge_container,
+            // 並びはアルファベット順(大文字小文字を区別しない)。登録した順だと、増えたときに
+            //  どこにあるか分からなくなる。**表示の並びだけ**で、保存の順は変えない。
+            rows = {
+                edges.sortedBy { it.name.lowercase() }.map { e ->
+                    // 副行は**いま届いているか**。IP は普段読んでも何もできないのでやめた
+                    //  (2026-08-29 UI依頼)。押す前に「送っても無駄」と分かるのが要点。
+                    val sub = when (edgeOnline[e.name]) {
+                        true  -> "オンライン"
+                        false -> "オフライン"
+                        else  -> "確認中"        // 起動直後、まだ一度もスイープしていない
+                    }
+                    ListItem(e.name, e.name, sub, listOf(
+                        "削除" to { confirmRemoveEdge(e) },
+                        "すべて削除" to { confirmRemoveAllEdges() }))
+                }
+            },
+            selected = { selectedEdgeName.ifEmpty { null } },
+            setSelected = { selectedEdgeName = it ?: "" },
+            onSelect = { nm ->
+                stashEdgeForm()                          // 今見ている端末の入力を控えてから切り替える
+                selectedEdgeName = nm
+                scannedPop = ""; scannedName = ""
+                edgeApMode = loadEdgeCfg(nm).ap          // その端末を最後に設定したモードで開く
                 buildEdgeList(); buildEdgeForm()
-            })
-        }
+            },
+            // 名前は**この行で直接**直す(所持カメラ/レンズと同じ)。以前は下の設定欄に
+            //  「端末識別名」があり、一覧と入力欄の2か所に名前があって分かりにくかった。
+            onRename = { orig, nm -> commitEdgeRename(orig, nm) },
+            addLabel = "＋ 新規エッジ端末", onAdd = { addEdge() },
+            emptyText = "(登録なし。下の「＋ 新規エッジ端末」から追加)"))
+    }
+
+    // 【「＋ 新規エッジ端末」は押した時点で登録する(2026-09-04 UI依頼)】以前は一覧の最下行が
+    //  名前の入力欄で、打ってから「登録だけする」か「設定を送信」で台帳へ入れていた。
+    //  他の一覧(撮影場所/所持カメラ/所持レンズ)は押した時点で作って行で名前を直す形なので
+    //  そちらへ揃えた。できる状態は旧「登録だけする」と同じ(IPは空・ポートは既定値)。
+    //  名前は仮なので、行をタップして実機に合わせて直す。半角英数字だけ(エッジのLCDに出る)。
+    private fun addEdge() {
+        var n = 0
+        var nm = "Edge%02d".format(n)
+        while (edges.any { it.name == nm }) { n++; nm = "Edge%02d".format(n) }
+        edges.add(Edge(nm, "", 50506))
+        selectedEdgeName = nm
+        scannedPop = ""; scannedName = ""
+        edgeApMode = false
+        saveRegisteredEdges(); refreshEdgeSpinner()
+        buildEdgeList(); buildEdgeForm()
     }
 
     // 一覧での名称インライン編集の確定。
@@ -6457,6 +6396,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val d = resources.displayMetrics.density
         val box = findViewById<LinearLayout>(R.id.edge_form)
         box.removeAllViews()
+        // 端末が1台も無いとき(=まだ何も選べない)は設定欄を出さない。出しても送る先が無く、
+        //  送信を押して初めて叱られることになる。先に一覧の「＋ 新規エッジ端末」を押してもらう。
+        if (selectedEdgeName.isEmpty()) {
+            box.addView(TextView(ctx).apply {
+                text = "上の「＋ 新規エッジ端末」で端末を追加してください"
+                setTextColor(Color.GRAY); setPadding(0, dp(16), 0, dp(16))
+            })
+            return
+        }
 
         fun label(t: String): TextView {
             val v = TextView(ctx).apply { text = t; setPadding(0, (10 * d).toInt(), 0, (2 * d).toInt()) }
@@ -6464,17 +6412,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
 
         box.addView(TextView(ctx).apply {
-            text = if (selectedEdgeName.isEmpty()) "新規エッジ端末の登録・設定" else "「" + selectedEdgeName + "」の設定"
+            text = if (selectedEdgeName.isEmpty()) "エッジ端末の設定" else "「" + selectedEdgeName + "」の設定"
             setTypeface(null, Typeface.BOLD)
             textSize = 16f
         })
 
-        // 【名前は一覧で直す(2026-08-29 UI依頼)】登録済みの端末では、ここに入力欄を置かない。
-        //  一覧の行を直接編集する(所持カメラ/レンズと同じ)。同じ名前が2か所にあると
-        //  どちらが本物か分からなくなるため。**新規登録のときだけ**打つ場所が要る。
-        //  新規のときは一覧の最下行が入力欄(=edgeNameEt)なので、ここでは何もしない。
-        //  **上書きしないこと**。呼ばれる順は必ず buildEdgeList → buildEdgeForm で、
-        //  ここで代入すると一覧の欄への参照が失われ、打った名前が読めなくなる。
+        // 【名前は一覧で直す(2026-08-29 UI依頼)】ここには入力欄を置かない。一覧の行を
+        //  直接編集する(所持カメラ/レンズと同じ)。同じ名前が2か所にあると、どちらが
+        //  本物か分からなくなるため。送信処理はこの隠しの欄から名前を読む。
         if (selectedEdgeName.isNotEmpty()) {
             val nameE = EditText(ctx); applyEdgeNameInput(nameE)
             nameE.setText(selectedEdgeName)   // 画面には出さない。送信処理がここから名前を読む
@@ -6623,22 +6568,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             }
         }
 
-        // 新規は「登録だけ」もできる(エッジが手元に無くても計画で選べるようにするため)。
-        box.addView(blueButton("登録だけする(エッジへ送信しない)") { }.apply {
-            setOnClickListener {
-                // 新規は一覧の最下行、登録済みは隠しの欄。どちらも edgeNameEt が指している。
-                val nm = (edgeNameEt?.text?.toString() ?: "").trim()
-                if (nm.isEmpty()) { Toast.makeText(ctx, "端末識別名を入力してください", Toast.LENGTH_SHORT).show(); return@setOnClickListener }
-                if (!isAsciiEdgeName(nm)) { Toast.makeText(ctx, "端末識別名は半角英数字で入力してください", Toast.LENGTH_LONG).show(); return@setOnClickListener }
-                if (edges.none { it.name == nm }) edges.add(Edge(nm, "", 50506))
-                selectedEdgeName = nm; newEdgeName = ""
-                stashEdgeForm()   // 入れた SSID/password をこの端末の設定として残す
-                saveRegisteredEdges(); refreshEdgeSpinner()
-                selectedEdgeName = nm
-                buildEdgeList(); buildEdgeForm()
-                Toast.makeText(ctx, "「" + nm + "」を登録しました", Toast.LENGTH_SHORT).show()
-            }
-        })
+        // 「登録だけする」は廃止(2026-09-04 UI依頼)。「＋ 新規エッジ端末」を押した時点で
+        //  台帳に入るので、この操作でできる状態と同じものが既にできている。
 
         // ── ログ取得(この端末のぶん) ───────────────────────────────
         //
@@ -6724,12 +6655,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     val o = JSONObject(contents)
                     scannedPop = o.optString("pop", "")
                     scannedName = o.optString("n", "")
-                    // QR から読めた名前を入れる。新規のときは一覧の最下行がその欄なので、
-                    //  控え(newEdgeName)も合わせておく。合わせないと画面を組み直した時に消える。
-                    if (scannedName.isNotEmpty() && edgeNameEt?.text.isNullOrEmpty()) {
-                        edgeNameEt?.setText(scannedName)
-                        if (selectedEdgeName.isEmpty()) { newEdgeName = scannedName }
-                    }
+                    // QR に入っているエッジ側の名前は**採用しない**(2026-09-04)。名前は一覧の行が
+                    //  持ち主で、送信すればこちらの名前がエッジへ入る。読んだ名前で上書きすると
+                    //  一覧の表示と食い違う。違う名前にしたければ行で直す。
                     // エッジの現在値を入力欄へ入れる(2026-08-08 UI依頼)。読んだ値をそのまま送れば
                     //  変わらず、書き換えて送れば変えた値が設定される。旧版のQRには m/s/p が
                     //  無いので、その場合は今の入力を触らない(空文字で上書きしない)。
@@ -6768,9 +6696,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val ssid = edgeSsidEt?.text?.toString() ?: ""
         val pass = edgePassEt?.text?.toString() ?: ""
         val mode = if (edgeApMode) "ap" else "sta"
-        // STAのSSIDは「新規登録のとき」だけ必須。登録済みなら空=端末名だけ変更(エッジは接続先を保つ)。
+        // STAのSSIDは「その端末へまだ接続先を送っていないとき」だけ必須。一度送ってあれば
+        //  空=端末名だけ変更(エッジは接続先を保つ)。以前は「新規登録のとき」で見ていたが、
+        //  登録が先に済むようになったので、保存済みの接続先の有無で見る(2026-09-04)。
         // APは空ならエッジ側が既定値(HGC-Edge-<MAC下2桁> / 8桁乱数)を用意する。
-        if (mode == "sta" && ssid.isEmpty() && selectedEdgeName.isEmpty()) {
+        if (mode == "sta" && ssid.isEmpty() && loadEdgeCfg(selectedEdgeName).staSsid.isEmpty()) {
             Toast.makeText(ctx, "SSIDを入力してください(新規登録は接続先が必要です)", Toast.LENGTH_LONG).show(); return
         }
         // 【APは長さを守らせる(2026-08-17)】Wi-FiのAPはパスワード8〜63文字・SSID1〜32文字でないと
