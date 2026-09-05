@@ -39,6 +39,11 @@ public:
 	//  記述XML(認証不要)だけを引くので「カメラに触るのは撮影主体だけ」の原則は保たれる。
 	virtual bool identifyAt(const std::string& host, class device& out) { (void)host; (void)out; return false; }
 
+	// このカメラが「いま居るか」を自分で答えられる探索元はここで答える(2026-09-06)。
+	//  1=居る / 0=居ない / -1=自分のカメラではない(在否監視の表に任せる)。
+	//  端末の中のカメラ(内蔵)は常に居るので探索元が 1 と答え、在否監視は表を持たない。
+	virtual int presence(const hgc::camera& cam) { (void)cam; return -1; }
+
 	// IP 直指定でこの種別のデバイスを1台構築する(SSDP不使用)。
 	//  成功時 out に apiBase 設定済みデバイスを入れて true。非対応/失敗は false。
 	virtual bool makeManualDevice(const std::string& host, class device& out) = 0;

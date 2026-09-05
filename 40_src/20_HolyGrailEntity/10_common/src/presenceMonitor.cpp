@@ -86,12 +86,14 @@ namespace {
 		cameraController::identifyTargets(found);
 		for (auto& d : found)
 		{
-			// 【端末の中のカメラは在否監視の対象にしない(2026-09-05)】
-			//  スマホ内蔵カメラはネットワークの向こうに居ないので「見えるか」を測る意味が無く、
-			//  常に居る。挨拶(初回Wi-Fi参加を成立させるCCAPIアクセス)も相手が居ないので無意味で、
-			//  urlAccess にカメラidを入れてある関係で HTTP を投げると空振りし続ける。
-			//  どのカメラがそうかはカメラ本人(apiBase::networked)が答える(2026-09-06。機種名で判断しない)。
-			if (d.apiBase && !d.apiBase->networked()) { continue; }
+			// 【在否を自分で答える探索元のカメラは表に載せない(2026-09-06)】
+			//  端末の中のカメラ(内蔵)はネットワークの向こうに居ないので「見えるか」を測る意味が無く、
+			//  挨拶も相手が居ない。居るかどうかは探索元(detectBuiltin)が答える(presence() を参照)。
+			//  ここは「探索元が答えるか」を聞くだけで、機種を判断しない。
+			{
+				hgc::camera probe; probe.serial = d.serialno; probe.model = d.model;
+				if (cameraController::presence(probe) >= 0) { continue; }
+			}
 			std::string ip = hostOf(d.urlAccess);
 			if (ip.empty()) { ip = hostOf(d.location); }	// urlAccess が無い機種は記述URLのホストで代用
 			if (d.serialno.empty() || ip.empty()) { continue; }
@@ -389,6 +391,11 @@ void verifyNow(const hgc::camera& cam)
 
 int presence(const hgc::camera& cam)
 {
+	// 探索元が自分で答えるカメラ(内蔵=常に居る)はそちらの答えをそのまま返す(2026-09-06)。
+	{
+		const int r = cameraController::presence(cam);
+		if (r >= 0) { return r; }
+	}
 	if (!g_scanned.load()) { return -1; }	// 未探索=不明
 	std::lock_guard<std::mutex> lk(g_mapMutex);
 	if (!cam.serial.empty())

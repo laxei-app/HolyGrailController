@@ -63,8 +63,6 @@ public:
 	errCode setupShootingModeManual(void) override;
 	// 計画名を受け取る(動画のファイル名に使う)。撮影側が渡すので、再起動後の再開でも抜けない。
 	void setSessionLabel(const std::string& label) override { sessionLabel_ = label; }
-	// 端末の中に居るので在否監視の対象にしない(ネットワークの向こうに居ない)。
-	bool networked(void) const override { return false; }
 	// 所持カメラの記録へ、内蔵カメラの性質(撮影周期の規則)を書く。登録時に一度だけ。
 	void fillCameraProfile(hgc::camera& cam) override
 	{ cam.intervalFactor = kMinIntervalFactor; cam.intervalMargin = kMinIntervalMarginSec; }

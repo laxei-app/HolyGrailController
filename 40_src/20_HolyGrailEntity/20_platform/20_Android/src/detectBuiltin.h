@@ -9,12 +9,16 @@
 // 【対象は物理カメラだけ】CameraManager.getCameraIdList が返す id を1台ずつ扱う。
 //  広角・超広角・望遠がそれぞれ別のカメラとして所持カメラに並ぶ。
 #include "detectBase.h"
+#include "apiBuiltin.h"	// kSerialPrefix(在否の答えは自分の序数だけに限る)
 
 class detectBuiltin : public detectBase
 {
 public:
 	size_t detect(std::vector<class device>& out, const deviceMatch& want = nullptr) override;
 	size_t identify(std::vector<class device>& out) override;
+	// 内蔵カメラは端末そのものなので常に「居る」。自分のカメラ(BUILTIN: の序数)以外は答えない。
+	int presence(const hgc::camera& cam) override
+	{ return (cam.serial.rfind(apiBuiltin::kSerialPrefix, 0) == 0) ? 1 : -1; }
 
 	// IP の概念が無いので、手動接続も IP 直指定の身元確認も持たない。
 	bool makeManualDevice(const std::string& host, class device& out) override

@@ -67,9 +67,6 @@ public:
 	//  例: 撮影周期の下限の規則(intervalFactor/intervalMargin)。ISO/SS の並びやセンサー寸法と同じく
 	//  「カメラが答える諸元」であり、共通部分は書かれた値を使うだけで機種を判断しない。既定は何もしない。
 	virtual void    fillCameraProfile(hgc::camera& cam)			{ (void)cam; }
-	// ネットワークの向こうに居るカメラか(2026-09-06)。在否監視(見えるか・挨拶)の対象はこれが真のものだけ。
-	//  端末の中のカメラ(内蔵)は常に居るので偽を返す。共通部分は機種名で判断しない。
-	virtual bool    networked(void) const						{ return true; }
 	virtual errCode setupShootingModeManual(void)			{ return ERR_HGC_NOT_SUPPORTED; };
 	virtual errCode restoreShootingMode(void)				{ return ERR_HGC_NOT_SUPPORTED; };
 	// 接続維持用の無害なGET。撮影窓まで待機中などに定期送出し、無通信でカメラの

@@ -41,6 +41,16 @@ void cameraController::addBackend(std::unique_ptr<class detectBase> backend)
 // return  : 検出したカメラの数
 // 身元だけを確かめる検出。CCAPI を叩かないので、認証の有無に関係なく安全に呼べる。
 //  detectTarget と違い、発見キャッシュも apiBase も作らない(撮影の経路には一切影響しない)。
+int cameraController::presence(const hgc::camera& cam)
+{
+	for (auto& be : backends())
+	{
+		const int r = be->presence(cam);
+		if (r >= 0) { return r; }
+	}
+	return -1;
+}
+
 size_t cameraController::identifyTargets(std::vector<class device>& devices)
 {
 	static std::mutex identifyMutex;
