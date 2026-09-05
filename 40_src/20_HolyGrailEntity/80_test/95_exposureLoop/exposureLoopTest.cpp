@@ -1104,6 +1104,69 @@ int main()
 		checkNear(expo::ev0LinearFromBv(20.0, cfg), 0.18, 0.0005, "明るい側の目標は18%のまま(日中に影響なし)");
 	}
 
+	// --- 露出を動かす速さの上限[段/秒](2026-09-05 仕様変更) ---
+	//  captureRunner は依存が多く単体で組めないので、算数の部分だけを同じ式でなぞる。
+	//  ここが合っていれば「15秒周期なら従来と同じ」「長い周期ほど速く動ける」が担保される。
+	{
+		constexpr double kRate = (1.0 / 3.0) / 15.0;	// captureRunner::kMaxExposureRateStopsPerSec
+		auto frameAllow = [kRate](double sec) { return kRate * ((sec > 0.0) ? sec : 15.0); };
+
+		checkNear(frameAllow(15.0), 1.0 / 3.0, 1e-9, "15秒周期は従来と同じ 1/3段/コマ");
+		checkNear(frameAllow(60.0), 4.0 / 3.0, 1e-9, "60秒周期は 4/3段/コマまで動ける");
+		checkNear(frameAllow( 9.0), 0.2,       1e-9, "9秒周期は 0.2段/コマ(従来より遅い)");
+
+		// 1目盛りの大きさ。キヤノン機の標準テーブルは 1/3 段。
+		expo::exposureCtl c;
+		hgc::exposure noLim{};
+		const hgc::exposureType pri[hgc::exposureTypeNum] =
+			{ hgc::exposureType::iso, hgc::exposureType::ss, hgc::exposureType::fn };
+		c.init(t, noLim, noLim, pri);
+		hgc::exposure e0; e0.iso = "800"; e0.ss = "1/60"; e0.fn = "4.0";
+		c.setCurrent(e0);
+		checkNear(c.minStepStops(), 1.0 / 3.0, 1e-6, "標準テーブルの1目盛りは 1/3段");
+
+		// 貯金の動き。9秒周期・1/3段刻みでは1コマの許容が1目盛りに満たないので貯めて動く。
+		//  長い目で見た速さが上限どおりになることを、20コマ回して確かめる。
+		{
+			const double step = 1.0 / 3.0, per = frameAllow(9.0);
+			const double cap  = per + step;
+			double budget = 0.0, moved = 0.0;
+			const int frames = 20;
+			for (int i = 0; i < frames; ++i)
+			{
+				budget += per; if (budget > cap) { budget = cap; }
+				const int n = static_cast<int>((budget + 1e-9) / step);
+				if (n > 0) { moved += n * step; budget -= n * step; }
+			}
+			const double rate = moved / (frames * 9.0);
+			char d[128];
+			std::snprintf(d, sizeof(d), "(20コマ180秒で %.3f段 = %.4f段/秒)", moved, rate);
+			check(rate > kRate * 0.85 && rate <= kRate * 1.02, "9秒周期でも長い目で見た速さは上限どおり", d);
+		}
+
+		// 15秒周期・1/3段刻みでは毎コマきっかり1目盛り(従来と同じ)。
+		{
+			const double step = 1.0 / 3.0, per = frameAllow(15.0);
+			const double cap  = per + step;
+			double budget = 0.0; int moves = 0;
+			for (int i = 0; i < 10; ++i)
+			{
+				budget += per; if (budget > cap) { budget = cap; }
+				const int n = static_cast<int>((budget + 1e-9) / step);
+				moves += n; budget -= n * step;
+			}
+			check(moves == 10, "15秒周期は毎コマ1目盛り(従来の挙動と一致)");
+		}
+
+		// 60秒周期・1/12段刻み(内蔵カメラ想定)では1コマに16目盛り踏める。
+		{
+			const double step = 1.0 / 12.0, per = frameAllow(60.0);
+			const int n = static_cast<int>((per + 1e-9) / step);
+			char d[96]; std::snprintf(d, sizeof(d), "(%d目盛り = %.3f段)", n, n * step);
+			check(n == 16, "60秒周期・1/12段刻みは1コマ16目盛り(=4/3段)", d);
+		}
+	}
+
 	std::printf("\n%s (fail=%d)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail);
 	return g_fail == 0 ? 0 : 1;
 }

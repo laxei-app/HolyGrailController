@@ -406,13 +406,27 @@ errCode captureRunner::fireShutter(const hgc::exposure& shotExp, double interval
 	return err;
 }
 
-// 窓の境目の配分を、いまの撮影制御方法の答えへ1目盛りずつ寄せる(説明はヘッダ)。
-bool captureRunner::migrateTowardCcm(expo::exposureCtl& ctl, expo::exposureCtl& want, const hgc::ccmBase* ccm)
+// 窓の境目の配分を、いまの撮影制御方法の答えへ寄せる(説明はヘッダ)。
+//
+// 【速さを露出と揃える(2026-09-05)】明るさは変えないが、iso/ss/fn の配分が変われば
+//  絵の見え方(粒状感・被写界深度・ぶれ)は変わる。露出と同じ「段/秒」で緩やかに寄せる。
+//  短い周期では数コマに1目盛り、長い周期では1コマに複数目盛りになる。
+//  露出そのものとは別枠なので、貯金も別に持つ(migrateBudget_)。
+bool captureRunner::migrateTowardCcm(expo::exposureCtl& ctl, expo::exposureCtl& want,
+                                     const hgc::ccmBase* ccm, double stepStops)
 {
 	if (ccm == nullptr || !validExposure(ccm->initial)) { return false; }
 	// 夜間は固定露出。組み替える自由度が無いので触らない(既存の移行に任せる)。
 	if (ccm->type == hgc::ccmType::night) { return false; }
-	return expo::migrateToward(ctl, want, tables_, ccm->initial);
+	const double step = (stepStops > 0.0) ? stepStops : kExposureStepStops;
+	bool moved = false;
+	while (migrateBudget_ >= step - 1e-9)
+	{
+		if (!expo::migrateToward(ctl, want, tables_, ccm->initial)) { break; }	// もう合っている
+		migrateBudget_ -= step;
+		moved = true;
+	}
+	return moved;
 }
 
 // 測光失敗のログ文を作る。原因を後から特定できるよう、どこでつまずいたかまで残す。
@@ -490,8 +504,9 @@ double captureRunner::sceneNowFromBuf(const std::vector<double>& buf) const
 	return std::pow(2.0, mean + lead);
 }
 
-// ヒステリシス帯の実効値。1歩(1/3段)より狭い帯は構造的に成立しない(どう動かしても帯の
-// 内側へ入れないので、補正するたび必ず反対側へ飛び出す)。よって1歩を下限として扱う。
+// ヒステリシス帯の実効値。狭すぎる帯は構造的に成立しない(どう動かしても帯の内側へ
+// 入れないので、補正するたび必ず反対側へ飛び出す)。下限は kMinHysteresisStops で、
+// 実測から選んだ値である(1歩の大きさから導いたものではない。ヘッダの説明を参照)。
 // 設定そのものは書き換えない(ユーザーの値は保存されたまま、使うときだけ下限を当てる)。
 double captureRunner::effHysteresis(double raw) const
 {
@@ -536,22 +551,49 @@ void captureRunner::resetStepLock(void)
 //  ヒステリシス帯より1歩(1/3段)が大きいと、補正のたびに必ず反対側へ越えて往復し続ける。
 //  夕日/朝日は帯0.3段<歩幅0.333段のため必ず振動していた(日中は帯1.0段なので発動しない)。
 //  need=目標までの差[段], band=ヒステリシス全幅[段]。true=このコマは動かさない。
-bool captureRunner::wouldOvershoot(double needStops, double bandStops) const
+bool captureRunner::wouldOvershoot(double needStops, double bandStops, double stepStops) const
 {
-	const double a = std::fabs(needStops);
-	if (a >= kExposureStepStops) { return false; }	// 1歩以上ずれている→動かすべき
+	const double step = (stepStops > 0.0) ? stepStops : kExposureStepStops;
+	const double a    = std::fabs(needStops);
+	if (a >= step) { return false; }	// 1歩以上ずれている→動かすべき
 	// 1歩動かすと |a - 1歩| だけ反対側へ出る。それが帯の外なら動かさない。
-	return (kExposureStepStops - a) > (bandStops / 2.0);
+	return (step - a) > (bandStops / 2.0);
 }
 
-int captureRunner::stepsToClose(double needStops) const
+// 【1コマぶんの許容を貯める(2026-09-05)】
+//  露出を動かす速さの上限は「段/秒」なので、1コマの許容は撮影周期で決まる。
+//  周期が短いカメラでは1コマの許容が1目盛りに満たないことがあるため、貯めて持ち越す
+//  (9秒周期・1/3段刻みなら 0.20段ずつ貯まり、2コマ目で1目盛り動ける)。
+//  貯めっぱなしにはしない。測光が長く失敗した後などに何段も一度に飛ぶのを防ぐため、
+//  「1コマぶん + 1目盛り」で頭打ちにする。
+void captureRunner::addStepBudget(double intervalSec, double stepStops)
 {
-	const double a = std::fabs(needStops);
-	int n = static_cast<int>(a / kExposureStepStops + 0.5);
-	const int maxN = static_cast<int>(kMaxCatchUpStops / kExposureStepStops + 0.5);
+	const double step  = (stepStops > 0.0) ? stepStops : kExposureStepStops;
+	const double frame = frameAllowanceStops(intervalSec);
+	const double cap   = frame + step * kStepBudgetSlackSteps;
+	stepBudget_    += frame;
+	migrateBudget_ += frame;
+	if (stepBudget_    > cap) { stepBudget_    = cap; }
+	if (migrateBudget_ > cap) { migrateBudget_ = cap; }
+}
+
+void captureRunner::spendStepBudget(double stops)
+{
+	stepBudget_ -= std::fabs(stops);
+	if (stepBudget_ < 0.0) { stepBudget_ = 0.0; }	// 目盛りは段数を跨ぐので少し超えることがある
+}
+
+// 目標との差(段)から、このコマで踏む目盛り数を決める。
+//  上限は貯金(=速さの上限×撮影周期の積み上げ)。貯金が1目盛りに満たなければ 0 を返し、
+//  このコマは動かない。差が小さければ必要なぶんだけで止める。
+int captureRunner::stepsToClose(double needStops, double stepStops) const
+{
+	const double step = (stepStops > 0.0) ? stepStops : kExposureStepStops;
+	int n    = static_cast<int>(std::fabs(needStops) / step + 0.5);	// 差を埋めるのに要る目盛り数
+	int maxN = static_cast<int>((stepBudget_ + 1e-9) / step);			// 貯金で踏める目盛り数
 	if (n < 1)    { n = 1; }
 	if (n > maxN) { n = maxN; }
-	return n;
+	return (n > 0) ? n : 0;
 }
 
 
@@ -1357,6 +1399,17 @@ errCode captureRunner::loop(void)
 		// 直前の窓も自動露出だったか(項目8: 自動露出→自動露出のみ目標evを緩やかに移行する)。
 		const bool prevAuto = (prevWin && prevWin->ccm && isAuto(prevWin->ccm->type));
 
+		// 【このコマぶんの許容を貯める(2026-09-05)】露出を動かす速さは段/秒で決めてあるので、
+		//  1コマで動かしてよい段数は撮影周期で決まる。ここで1コマ1回だけ足す。
+		//  1歩の大きさは制御方法ごとの器(preCtl/postCtl/autoCtl)から採るが、貯金は共通なので
+		//  ここではいま使う器のものを渡す(頭打ちの計算にしか使わない)。
+		{
+			const expo::exposureCtl& useCtl =
+				(ccm && ccm->type == hgc::ccmType::preNight)  ? preCtl  :
+				(ccm && ccm->type == hgc::ccmType::postNight) ? postCtl : autoCtl;
+			this->addStepBudget(interval, useCtl.minStepStops());
+		}
+
 		hgc::exposure target{};
 		double meteredLinear = -1.0;	// 測光したリニア輝度(自動補正時のみ。<0=測光なし)
 		meterMs_  = -1;	// このコマの測光実測msをリセット(測光しないコマは -1 のまま)
@@ -1417,15 +1470,28 @@ errCode captureRunner::loop(void)
 			const int remainFrames  = (interval > 0.0) ? static_cast<int>((winEnd - now) / interval) : 0;
 			const double curB       = expo::brightnessStops(preCtl.current(), tables_);
 			const double nightB     = validExposure(nightExp) ? expo::brightnessStops(nightExp, tables_) : curB;
-			const int needFrames    = static_cast<int>(std::ceil(std::fabs(nightB - curB) / (1.0 / 3.0)));
+			// 【所要フレーム数と寄せ幅は必ず同じ式にする(2026-09-05)】ここがずれると窓の終端で
+			//  夜間露出にきっかり着地しない。1コマで寄せられる段数は速さの上限×撮影周期。
+			const double perFrame   = frameAllowanceStops(interval);
+			const int needFrames    = static_cast<int>(std::ceil(std::fabs(nightB - curB) / perFrame));
 			if (validExposure(nightExp) && remainFrames <= needFrames) { preNightConverge = true; }
 
 			if (preNightConverge && validExposure(nightExp))
 			{
-				// 収束フェーズ: 測光を止め夜間露出へ 1/3 段ずつ寄せる(終端できっかり一致)。
-				const double third = 1.0 / 3.0;
-				if (curB - nightB > third / 2.0)      { preCtl.darken(); }
-				else if (nightB - curB > third / 2.0) { preCtl.brighten(); }
+				// 収束フェーズ: 測光を止め夜間露出へ寄せる(終端できっかり一致)。
+				//  1コマで寄せてよいのは perFrame 段まで。目盛りが細かいカメラでは
+				//  1コマに複数目盛り踏む(合計が perFrame を超えない範囲で)。
+				const double step = preCtl.minStepStops();
+				double       room = perFrame;
+				for (;;)
+				{
+					const double cB = expo::brightnessStops(preCtl.current(), tables_);
+					const double d  = nightB - cB;
+					if (std::fabs(d) <= step / 2.0) { break; }	// 十分近い
+					if (room < step - 1e-9)         { break; }	// このコマの許容を使い切った
+					if (!(d < 0.0 ? preCtl.darken() : preCtl.brighten())) { break; }	// 限界
+					room -= std::fabs(expo::brightnessStops(preCtl.current(), tables_) - cB);
+				}
 				target = preCtl.current();
 			}
 			else
@@ -1465,11 +1531,13 @@ errCode captureRunner::loop(void)
 						const double need   = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;
 						// 帯の反対側へ飛び出すだけなら動かない(振動防止)。反転は抑制期間中は強い証拠が要る。
 						const double band = this->effHysteresis(smooth_.hysteresis);
+						const double step = preCtl.minStepStops();
 						const int    dir  = (need < 0.0) ? -1 : 1;
-						if (this->wouldOvershoot(need, band) || !this->allowStep(dir, need, band)) { meterFailStreak = 0; }
+						if (this->wouldOvershoot(need, band, step) || !this->allowStep(dir, need, band)) { meterFailStreak = 0; }
 						else
 						{
-						const int    steps  = this->stepsToClose(need);
+						const double b0     = expo::brightnessStops(preCtl.current(), tables_);
+						const int    steps  = this->stepsToClose(need, step);
 						int          moves  = 0;
 						for (int s = 0; s < steps; ++s)
 						{
@@ -1480,7 +1548,12 @@ errCode captureRunner::loop(void)
 							if (!moved) { break; }
 							++moves;
 						}
-						if (moves > 0) { this->noteStep(dir); }
+						// 動いたぶんだけ貯金を引く(目盛りは軸ごとに大きさが違うので実測で引く)。
+						if (moves > 0)
+						{
+							this->noteStep(dir);
+							this->spendStepBudget(expo::brightnessStops(preCtl.current(), tables_) - b0);
+						}
 						}
 					}
 					meterFailStreak = 0;
@@ -1568,11 +1641,13 @@ errCode captureRunner::loop(void)
 					const double need   = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;
 					// 帯の反対側へ飛び出すだけなら動かない(振動防止)。反転は抑制期間中は強い証拠が要る。
 					const double band = this->effHysteresis(smooth_.hysteresis);
+					const double step = postCtl.minStepStops();
 					const int    dir  = (need < 0.0) ? -1 : 1;
-					if (this->wouldOvershoot(need, band) || !this->allowStep(dir, need, band)) { meterFailStreak = 0; }
+					if (this->wouldOvershoot(need, band, step) || !this->allowStep(dir, need, band)) { meterFailStreak = 0; }
 					else
 					{
-					const int    steps  = this->stepsToClose(need);
+					const double b0     = expo::brightnessStops(postCtl.current(), tables_);
+					const int    steps  = this->stepsToClose(need, step);
 					int          moves  = 0;
 					for (int s = 0; s < steps; ++s)
 					{
@@ -1583,7 +1658,11 @@ errCode captureRunner::loop(void)
 						if (!moved) { break; }
 						++moves;
 					}
-					if (moves > 0) { this->noteStep(dir); }
+					if (moves > 0)
+					{
+						this->noteStep(dir);
+						this->spendStepBudget(expo::brightnessStops(postCtl.current(), tables_) - b0);
+					}
 					}
 				}
 				meterFailStreak = 0;
@@ -1640,11 +1719,13 @@ errCode captureRunner::loop(void)
 				}
 			}
 
-			// 項目8: 実効目標evを新目標へ 1/3 段ずつ寄せる(自動露出→自動露出の緩やか移行)。
+			// 項目8: 実効目標evを新目標へ緩やかに寄せる(自動露出→自動露出の切替)。
+			//  寄せる速さは露出そのものと同じ上限に合わせる(2026-09-05)。目標だけ速く動いても
+			//  露出が追いつかないし、長い撮影周期では逆に遅すぎて窓の中で寄せ切れない。
 			{
-				const double third = 1.0 / 3.0;
-				if      (curEvT < evTraw - 1e-9) { curEvT = std::min(evTraw, curEvT + third); }
-				else if (curEvT > evTraw + 1e-9) { curEvT = std::max(evTraw, curEvT - third); }
+				const double per = frameAllowanceStops(interval);
+				if      (curEvT < evTraw - 1e-9) { curEvT = std::min(evTraw, curEvT + per); }
+				else if (curEvT > evTraw + 1e-9) { curEvT = std::max(evTraw, curEvT - per); }
 			}
 			const double evT = curEvT;
 
@@ -1687,11 +1768,13 @@ errCode captureRunner::loop(void)
 						const double need   = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;	// +:明るく -:暗く
 						// 帯の反対側へ飛び出すだけなら動かない(振動防止)。反転は抑制期間中は強い証拠が要る。
 						const double band = this->effHysteresis(effHyst);
+						const double step = autoCtl.minStepStops();
 						const int    dir  = (need < 0.0) ? -1 : 1;
-						if (this->wouldOvershoot(need, band) || !this->allowStep(dir, need, band)) { meterFailStreak = 0; }
+						if (this->wouldOvershoot(need, band, step) || !this->allowStep(dir, need, band)) { meterFailStreak = 0; }
 						else
 						{
-						const int    steps  = this->stepsToClose(need);
+						const double b0     = expo::brightnessStops(autoCtl.current(), tables_);
+						const int    steps  = this->stepsToClose(need, step);
 						int          moves  = 0;
 						for (int s = 0; s < steps; ++s)
 						{
@@ -1702,7 +1785,11 @@ errCode captureRunner::loop(void)
 							if (!moved) { break; }	// 限界に到達
 							++moves;
 						}
-						if (moves > 0) { this->noteStep(dir); }
+						if (moves > 0)
+						{
+							this->noteStep(dir);
+							this->spendStepBudget(expo::brightnessStops(autoCtl.current(), tables_) - b0);
+						}
 						}
 					}
 					meterFailStreak = 0;	// 測光成功
@@ -1721,7 +1808,7 @@ errCode captureRunner::loop(void)
 				// 窓の境目で持ち越した配分を、いまの制御方法の答えへ1目盛りだけ寄せる。
 				//  明るい向きと暗い向きを1つずつ動かすので明るさは変わらない(上の自動露出の
 				//  1歩とは別枠)。合っていれば何もしない。
-				this->migrateTowardCcm(autoCtl, migCtl, ccm);
+				this->migrateTowardCcm(autoCtl, migCtl, ccm, autoCtl.minStepStops());
 				target = autoCtl.current();
 			}
 		}

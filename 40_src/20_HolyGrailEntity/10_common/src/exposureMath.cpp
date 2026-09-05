@@ -210,6 +210,29 @@ namespace expo
 		if (!fn_.e.empty())  { cur_.fn  = fn_.e[fn_.idx].value; }
 	}
 
+	// いま踏める最小の段差[段]。宣言のところに理由を書いてある。
+	//  apex は「1目盛りの明るさ」なので、隣との差の絶対値がそのまま段数になる。
+	//  3軸それぞれの前後を見て、動かせる隣のうちいちばん細かい差を返す。
+	double exposureCtl::minStepStops() const
+	{
+		double best = 0.0;
+		auto scan = [&best](const ladder& L)
+		{
+			const int n = static_cast<int>(L.e.size());
+			if (n < 2) { return; }
+			const int i = (L.idx < 0) ? 0 : ((L.idx >= n) ? (n - 1) : L.idx);
+			for (int j : { i - 1, i + 1 })
+			{
+				if (j < 0 || j >= n) { continue; }
+				const double d = std::fabs(L.e[j].apex - L.e[i].apex);
+				// 同じ apex に落ちる重複はテーブルの作り方次第で起きうる。段差 0 は目盛りではない。
+				if (d > 1e-6 && (best <= 0.0 || d < best)) { best = d; }
+			}
+		};
+		scan(iso_); scan(ss_); scan(fn_);
+		return (best > 0.0) ? best : (1.0 / 3.0);
+	}
+
 	void exposureCtl::setCurrent(const hgc::exposure& e)
 	{
 		double ri = parseValue(e.iso, expoKind::iso);

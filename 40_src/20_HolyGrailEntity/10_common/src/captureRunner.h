@@ -250,7 +250,11 @@ public:
 	// (2026-07-20夕方の実機: 1/60→8秒へ8.91段/27コマ=0.33段/コマ、実写は飽和85〜98%)。
 	// → カメラ実装は露出成分を割り戻した「場面の明るさ」(sceneRef)を返し、こちらは撮影露出で
 	//   撮った場合の値へ投影してから比較する。これでループが閉じ、露出を動かすと比較結果も動く。
-	static constexpr double kExposureStepStops   = 1.0 / 3.0;	// 露出制御の1ステップ(段)
+	// 露出制御の1ステップ(段)の**既定値**。実際の1歩はカメラの設定値テーブルから採る
+	//  (expo::exposureCtl::minStepStops)。スマホ内蔵カメラは 1/3 段より細かい刻みで
+	//  テーブルを合成するため、固定値では扱えない(2026-09-05)。
+	//  この定数は、テーブルが無い/読めない場面のよりどころとしてだけ残す。
+	static constexpr double kExposureStepStops   = 1.0 / 3.0;
 
 	// 【窓の境目で画質を段階的に寄せる(2026-08-29 仕様)】
 	//
@@ -272,7 +276,9 @@ public:
 	// 夜間は固定露出(limitBright==limitDark)なので対象外。既存の preNightConverge に任せる。
 	//
 	// 戻り: 組み替えを行ったら true。
-	bool migrateTowardCcm(expo::exposureCtl& ctl, expo::exposureCtl& want, const hgc::ccmBase* ccm);
+	// stepStops = そのカメラの1目盛り[段]。1コマの許容を目盛り数へ直すのに使う。
+	bool migrateTowardCcm(expo::exposureCtl& ctl, expo::exposureCtl& want, const hgc::ccmBase* ccm,
+	                      double stepStops);
 	// ヒステリシス帯の下限[段]。刻み q・測光の応答 γ のループは、デッドバンドが γ×q 以上で
 	// ないと静止点を持たない(1歩動かすと需要が再び帯を超えて必ず引き返す)。
 	//   動き出すしきい値 = max(帯/2, 1歩 - 帯/2)  ← 帯=1歩 がちょうど最小=最も緩い点
@@ -295,13 +301,33 @@ public:
 	// つまりこの上限は「素性の悪いデータで暴走させない」ための保険であって、
 	// 正常な変化を頭打ちにするためのものではない。
 	static constexpr double kSceneLeadMaxStops = 1.5;
+	// 露出の変化速度の貯金[段]。addStepBudget で貯め、動いたぶんを spendStepBudget で引く。
+	//  露出そのものと、窓の境目の配分寄せ(明るさは変えない別枠)で別々に持つ。
+	double stepBudget_    = 0.0;
+	double migrateBudget_ = 0.0;
 	// 反転抑制中でも「本物の急変」は通す差[段]。1歩正しく動かした直後に測光がでっち上げる
 	// 見かけの逆向き需要は最大 γ×1歩 - 帯/2 ≒ 0.47段(実測γ≒1.9)。その約2倍を境にする。
 	static constexpr double kReversalGuardStops = 1.0;
-	// 1コマで詰めてよい上限(段)。撮影中は必ず1ステップ(=1/3段)に留め、撮影計画の境目も含めて
-	// 露出設定を飛ばさず滑らかに動かす(2026-07-24: 境目の多段ジャンプを禁止)。
-	// 大きなズレを速く詰めるのは撮影前の初期収束(initialConverge, シャッター無し)だけの役割とする。
-	static constexpr double kMaxCatchUpStops     = kExposureStepStops;
+	// 【露出を動かす速さの上限[段/秒](2026-09-05 仕様変更)】
+	//
+	// 以前は「1コマあたり最大1ステップ(=1/3段)」だった。撮影周期が変わっても1コマの上限が
+	// 変わらないので、**周期が長いほど露出の追従が遅くなる**。15秒周期でしか試していない
+	// 間は問題にならなかったが、1分周期のような長い周期では場面の変化に追いつけない。
+	//
+	// そこで「1秒あたり何段まで」に改める。1コマの許容 = この値 × 撮影周期[秒]。
+	//  ・15秒周期 → 0.333段/コマ = **従来と完全に同じ**(これまでの検証結果がそのまま生きる)
+	//  ・60秒周期 → 1.33段/コマ (速く追える)
+	//  ・ 9秒周期 → 0.20段/コマ (**従来より遅くなる**。承知のうえで採用。2026-09-05 ユーザー判断)
+	//
+	// 値は天候や太陽の動きという自然現象で決まるので、撮影制御方法ごとには持たせない。
+	// **調整するときはここだけを変える**。
+	static constexpr double kMaxExposureRateStopsPerSec = (1.0 / 3.0) / 15.0;	// 0.0222 段/秒
+
+	// 1コマの許容が1目盛りに満たないときのための貯金の上限。
+	//  9秒周期・1/3段刻みのカメラでは 0.20段 < 0.333段 で、そのままでは永久に動けない。
+	//  許容を貯めて1目盛りぶんたまったら動かす。上限は「1コマぶん + 1目盛り」までとし、
+	//  測光が長く失敗した後などに何段も一度に飛ぶことを防ぐ。
+	static constexpr double kStepBudgetSlackSteps = 1.0;
 
 private:
 	errCode loop(void);								// 撮影ループ本体(別スレッド)
@@ -314,7 +340,7 @@ private:
 	bool    meterFrame(const hgc::exposure& shotExp, apiBase::meterResult& mr, bool haveShot);
 	// カメラ実装が返す「場面の明るさ」(露出非依存)を、その露出で撮ったときのリニア輝度へ投影する。
 	double        linearAtExposure(double sceneRef, const hgc::exposure& e) const;
-	// 目標との差(段)から、このコマで踏む 1/3 段ステップ数を決める(1〜kMaxCatchUpStops相当)。
+	// 目標との差(段)から、このコマで踏む目盛り数を決める(上限は速さの上限×撮影周期の貯金)。
 	// 1歩(1/3段)動かすとヒステリシス帯の反対側へ飛び出すなら true(=このコマは動かさない)。
 	// 帯が歩幅より狭い制御方法(夕日/朝日=0.3段)で必ず起きていた往復振動の防止。
 	// 測光失敗のログ文を作る(待ちのどの通信でつまずいたかを含める。2026-07-30 診断)。
@@ -334,8 +360,16 @@ private:
 	void          resetStepLock(void);	// 抑制状態を捨てる
 	int           lastStepDir_ = 0;	// 直前に動かした向き(-1=暗く +1=明るく 0=なし)
 	int           stepLock_    = 0;	// 反転を抑える残りコマ数(0=抑制なし)
-	bool          wouldOvershoot(double needStops, double bandStops) const;
-	int           stepsToClose(double needStops) const;
+	bool          wouldOvershoot(double needStops, double bandStops, double stepStops) const;
+	// このコマで踏んでよい目盛り数。貯金(stepBudget_)と1目盛りの大きさで決まる。
+	int           stepsToClose(double needStops, double stepStops) const;
+	// 1コマぶんの許容を貯める(露出判断の直前に1コマ1回だけ呼ぶ)。
+	void          addStepBudget(double intervalSec, double stepStops);
+	// 実際に動いた段数を引く(動けなかったぶんは残る)。
+	void          spendStepBudget(double stops);
+	// 1コマで許される段数(= 上限[段/秒] × 撮影周期[秒])。
+	static double frameAllowanceStops(double intervalSec)
+	{ return kMaxExposureRateStopsPerSec * ((intervalSec > 0.0) ? intervalSec : 15.0); }
 	// 実際にカメラへ適用できている露出を返す。lastXxxApplied_ は「その軸の設定が成功したときだけ」
 	// 更新されるので、一部の軸だけ失敗した場合も含めて実機の状態を正しく表す。
 	hgc::exposure appliedExposure(void) const;
