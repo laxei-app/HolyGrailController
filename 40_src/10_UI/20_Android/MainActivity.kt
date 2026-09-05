@@ -5750,6 +5750,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
             return
         }
         pf.edit().putBoolean("placeSeedTried", true).apply()
+        //  この1件を「撮影計画に自動的に挿入する」にする(2026-09-05 UI依頼)。
+        //  初めて使う人にとって場所はこの1件だけなので、新しい計画もここから始まるのが自然。
+        //  位置が取れず Tokyo のまま残ったときも同じで、**先に指定しておく**。
+        //  改名は setPlaceDetailJson が指定ごと付け替えるので、current location へもついていく。
+        dataExec.execute { HgeNative.nativeSetPlaceAutoInsert("Tokyo", 1) }
         //  出荷時の固定計画も同じ場所にする(2026-09-05 UI依頼)。そうしないと計画は Tokyo、
         //  撮影場所リストは current location という食い違った状態で使い始めることになる。
         fillPlaceFromCurrentLocation("Tokyo", kCurrentPlaceName, alsoSetPlan = true)
@@ -5764,8 +5769,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  ・alsoSetPlan=true で、いま編集中の撮影計画の撮影場所にもこの場所を入れる。
     //    **初回起動の種のときだけ**使う(出荷時の固定計画と場所リストを食い違わせないため)。
     //    新しい場所を足したときに勝手に計画の場所が変わってはいけないので、既定は false。
-    //  setPlaceDetailJson は受け取った autoInsert を真値として扱うので、自動挿入に指定済みの
-    //  場所へ使うと指定が外れる。新規の場所は必ず false なので問題にならない。
+    //  setPlaceDetailJson は受け取った autoInsert を真値として扱う。ここではいまの値を
+    //  読んでそのまま戻すので、指定は外れない(種の場所は true で来て current location へ付け替わる)。
     private fun fillPlaceFromCurrentLocation(name: String, newName: String? = null,
                                              alsoSetPlan: Boolean = false) {
         fetchCurrentLocation { la, lo, alt ->
