@@ -241,7 +241,7 @@ errCode apiBuiltin::setupShootingModeManual(void)
 	}
 	opened_ = true;
 	// 【動画をここで開く(2026-09-05)】撮影の区切りと動画の区切りを一致させる。
-	//  出来上がりは Movies/HolyGrail/<計画名>_yymmddhhmmss.mp4。10分ごとに「そこまでの完成品」が
+	//  出来上がりは Movies/HolyGrail/<計画名>_yyyymmddhhmmss.mp4。10分ごとに「そこまでの完成品」が
 	//  置き換わっていく(BuiltinVideo)。名前と置き場は Kotlin 側が決める。
 	{
 		const std::string name = builtinCam::videoStart(30);

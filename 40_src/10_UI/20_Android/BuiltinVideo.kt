@@ -72,7 +72,7 @@ object BuiltinVideo {
     private var segFile: File? = null
     private var fullFile: File? = null
     private var fullFrames = 0          // 完成品に入っているコマ数(つなぐときの時刻の起点)
-    private var displayName = ""        // ギャラリーでの名前 <計画名>_yymmddhhmmss.mp4
+    private var displayName = ""        // ギャラリーでの名前 <計画名>_yyyymmddhhmmss.mp4
     private var planName = ""
 
     // 動画の名前に使う計画名。撮影を始める側が先に渡す(空なら "hgt")。
@@ -97,9 +97,9 @@ object BuiltinVideo {
         if (codec != null) { return displayName }
         val ctx = appCtx ?: return ""
         fps = if (fpsWanted > 0) fpsWanted else 30
-        // 名前は <計画名>_yymmddhhmmss。同じ計画をもう一度撮っても日時で別のファイルになる。
+        // 名前は <計画名>_yyyymmddhhmmss。同じ計画をもう一度撮っても日時で別のファイルになる。
         displayName = safeName(planName) + "_" +
-                      SimpleDateFormat("yyMMddHHmmss", Locale.US).format(Date()) + ".mp4"
+                      SimpleDateFormat("yyyyMMddHHmmss", Locale.US).format(Date()) + ".mp4"
         val dir = File(ctx.getExternalFilesDir(null), "shot").apply { mkdirs() }
         workDir  = dir
         fullFile = File(dir, displayName)
