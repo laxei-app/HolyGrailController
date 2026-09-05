@@ -80,6 +80,11 @@ namespace builtinCam
 		return callString("builtinList", "()Ljava/lang/String;", nullptr, "[]");
 	}
 
+	std::string physicalsJson(void)
+	{
+		return callString("builtinPhysicals", "()Ljava/lang/String;", nullptr, "[]");
+	}
+
 	std::string describeJson(const std::string& id)
 	{
 		attach a;

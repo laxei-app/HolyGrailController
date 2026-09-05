@@ -180,6 +180,10 @@ object HgeNative {
     @JvmStatic
     fun builtinList(): String = BuiltinCamera.listCameras()
 
+    // 論理カメラの配下にぶら下がっている物理カメラ(超広角・望遠など)を調べる。触らない。
+    @JvmStatic
+    fun builtinPhysicals(): String = BuiltinCamera.physicalsJson()
+
     @JvmStatic
     fun builtinDescribe(id: String): String = BuiltinCamera.describe(id)
 

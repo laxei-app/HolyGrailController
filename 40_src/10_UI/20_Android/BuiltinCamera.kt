@@ -87,6 +87,45 @@ object BuiltinCamera {
         return arr.toString()
     }
 
+    // 【束ねられているカメラを調べる(2026-09-05)】getCameraIdList に出てくるのは、
+    //  端末が「アプリが直に開いてよい」と決めたカメラだけである。超広角や望遠は
+    //  **論理カメラ(複数の物理カメラを束ねたもの)の配下**に隠れていて一覧に出てこない。
+    //  ここでは触らずに、何がぶら下がっていて、それぞれ何ができるかだけを見る。
+    @JvmStatic
+    fun physicalsJson(): String {
+        val m = mgr() ?: return "[]"
+        val arr = JSONArray()
+        if (Build.VERSION.SDK_INT < 28) { return "[]" }
+        runCatching {
+            for (id in m.cameraIdList) {
+                val c = runCatching { m.getCameraCharacteristics(id) }.getOrNull() ?: continue
+                val subs = runCatching { c.physicalCameraIds }.getOrNull() ?: emptySet<String>()
+                for (sub in subs) {
+                    val pc = runCatching { m.getCameraCharacteristics(sub) }.getOrNull() ?: continue
+                    val o = JSONObject()
+                    o.put("logical", id)
+                    o.put("id", sub)
+                    val sz = pc.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+                    o.put("sensorW", sz?.width?.toDouble() ?: 0.0)
+                    o.put("sensorH", sz?.height?.toDouble() ?: 0.0)
+                    o.put("focalMm", pc.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                                       ?.firstOrNull()?.toDouble() ?: 0.0)
+                    o.put("fn", pc.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)
+                                  ?.firstOrNull()?.toDouble() ?: 0.0)
+                    val exp = pc.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+                    o.put("expMaxNs", exp?.upper ?: 0L)
+                    val caps = pc.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+                    o.put("manual", caps?.contains(
+                        CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR) ?: false)
+                    // 一覧に出ている id なら、そのまま単体で開ける
+                    o.put("standalone", m.cameraIdList.contains(sub))
+                    arr.put(o)
+                }
+            }
+        }
+        return arr.toString()
+    }
+
     private fun facingName(c: CameraCharacteristics): String =
         when (c.get(CameraCharacteristics.LENS_FACING)) {
             CameraCharacteristics.LENS_FACING_FRONT -> "front"

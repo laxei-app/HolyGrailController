@@ -25,6 +25,8 @@ namespace builtinCam
 
 	// 端末が持つカメラの一覧。JSON 配列 [{"id","name","facing"}]。取れなければ "[]"。
 	std::string listJson(void);
+	// 論理カメラの配下にぶら下がっている物理カメラ(超広角・望遠など)。触らずに素性だけ見る。
+	std::string physicalsJson(void);
 	// 1台の諸元。JSON。取れなければ "{}"。
 	std::string describeJson(const std::string& id);
 	// 開く。"" =成功、それ以外は理由。

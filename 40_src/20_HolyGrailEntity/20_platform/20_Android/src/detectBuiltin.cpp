@@ -31,6 +31,8 @@ size_t detectBuiltin::build(std::vector<class device>& out, const deviceMatch& w
 	{
 		s_logged = true;
 		dataManager::logEvent("CAMERA", ("builtin cameras: " + listed).c_str());
+		// 一覧に出ないカメラ(超広角など)が何台ぶら下がっているかも残す。使うかどうかの判断材料。
+		dataManager::logEvent("CAMERA", ("builtin physicals: " + builtinCam::physicalsJson()).c_str());
 	}
 
 	size_t added = 0;
