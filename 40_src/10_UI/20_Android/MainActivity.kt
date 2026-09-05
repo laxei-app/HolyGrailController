@@ -1987,8 +1987,36 @@ class MainActivity : AppCompatActivity(), HgeListener {
         selected = { selCamera }, setSelected = { selCamera = it },
         onSelect = { selectCamera(it) },
         // エッジが計画を持っているカメラは名前も変えられない。
-        onRename = { orig, nm -> if (!blockedByEdge(orig, "変更")) commitCameraRename(orig, nm) },
+        onRename = { orig, nm ->
+            // 内蔵カメラは名前も変えない(2026-09-05 依頼)。ひな形も撮影計画も名前で結び付いている。
+            if (isBuiltinSerial(ownedCameraSerial(orig))) { Toast.makeText(this, "内蔵カメラは変更できません", Toast.LENGTH_SHORT).show(); buildCameraList() }
+            else if (!blockedByEdge(orig, "変更")) commitCameraRename(orig, nm) },
         addLabel = "＋ 新規カメラ追加", onAdd = { openCameraAdd() }))
+
+    // 所持カメラの名前からシリアルを引く(無ければ空)。
+    private fun ownedCameraSerial(name: String): String {
+        val arr = camArray(HgeNative.nativeGetOwnedCameras())
+        for (i in 0 until arr.length()) {
+            val c = arr.optJSONObject(i)?.optJSONObject("camera") ?: continue
+            if (c.optString("name") == name) return c.optString("serial")
+        }
+        return ""
+    }
+
+    // 内蔵カメラの詳細は表示だけにする(2026-09-05 依頼)。値は端末が答えたもので、直す余地が無い。
+    //  「撮影計画の初期値にする」だけは計画側の好みなので残す。削除は一覧のメニューからできる
+    //  (使わない人には要らない。出荷時設定に戻せば作り直される)。
+    private fun lockBuiltinCameraDetail(root: ViewGroup, keep: View?) {
+        for (i in 0 until root.childCount) {
+            val v = root.getChildAt(i)
+            if (v === keep) continue
+            when (v) {
+                is EditText -> { v.isEnabled = false; v.isFocusable = false }
+                is CheckBox -> v.isEnabled = false
+                is ViewGroup -> lockBuiltinCameraDetail(v, keep)
+            }
+        }
+    }
 
     // マスタに無いカメラを手入力で追加する(レンタル機など)。型番だけ聞き、残りは詳細画面で埋めてもらう。
     private fun promptAddCustomCamera() {
@@ -2128,6 +2156,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         camEditBaseline = camEditSig()
         // 項目2: 「変更の取り消し」を dirty 連動に(未変更=グレー無効、変更で有効、戻すと無効)。
         startDirtyWatch(camCancel) { camDetailSig() }
+        if (isBuiltinSerial(cam.optString("serial"))) {
+            lockBuiltinCameraDetail(box, keep = camAutoInsert)
+            camCancel.visibility = View.GONE
+        }
     }
 
     // 所持カメラ詳細の編集内容シグネチャ(dirty 比較用)。編集欄・初期値チェック・レンズ順序を連結。
