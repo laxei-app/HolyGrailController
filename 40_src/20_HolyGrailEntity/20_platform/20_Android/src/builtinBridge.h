@@ -36,6 +36,13 @@ namespace builtinCam
 	bool capture(const std::string& id, int iso, long long expNs, double aperture, int timeoutMs);
 	// 直前に撮り始めた1枚を受け取る(まだ露光中なら待つ)。
 	bool takeImage(int timeoutMs, std::vector<uint8_t>& out);
+
+	// ── 動画の書き出し ──────────────────────────────────────
+	// 撮ったコマを1枚ずつ足していく。**撮影の終わりに必ず videoFinish を呼ぶこと**
+	//  (MP4 は最後に閉じないと再生できない)。
+	std::string videoStart(const std::string& path, int fps);	// "" =成功
+	bool        videoAddJpeg(const std::vector<uint8_t>& jpeg);
+	std::string videoFinish(void);								// 出来上がりの場所("" =失敗)
 }
 
 #endif // _BUILTIN_BRIDGE_H_

@@ -198,6 +198,18 @@ object HgeNative {
     @JvmStatic
     fun builtinTakeImage(timeoutMs: Int): ByteArray? = BuiltinCamera.takeImage(timeoutMs)
 
+    // ── 動画の書き出し(2026-09-05) ───────────────────────────
+    // 撮ったコマをその場で1枚ずつ足していく。撮影の終わりに必ず finish を呼ぶこと
+    //  (MP4 は閉じないと再生できない)。
+    @JvmStatic
+    fun videoStart(path: String, fps: Int): String = BuiltinVideo.start(path, fps)
+
+    @JvmStatic
+    fun videoAddJpeg(jpeg: ByteArray?): Boolean = BuiltinVideo.addJpeg(jpeg)
+
+    @JvmStatic
+    fun videoFinish(): String = BuiltinVideo.finish()
+
     // ネイティブから呼び返される BLE のエッジ探索。見つかった端末名(HGC- を除く)を返す。
     //  BLE には UDP ブロードキャストが無いので、検索はアドバタイズのスキャンで代える。
     @JvmStatic

@@ -6,6 +6,7 @@
 #include "dataManager.h"
 #include "osFile.h"
 #include "tool.h"
+#include <ctime>
 #include <json/nlohmann/json.hpp>
 #include <cmath>
 #include <cstdio>
@@ -228,6 +229,20 @@ errCode apiBuiltin::setupShootingModeManual(void)
 		return ERR_HGC_NOT_FOUND;
 	}
 	opened_ = true;
+	// 【動画をここで開く(2026-09-05)】撮影の区切りと動画の区切りを一致させる。
+	//  出来上がりは shot と同じ場所へ。撮影のたびに新しいファイルにする。
+	{
+		const std::string dir = osfile::dir("shot");
+		if (!dir.empty())
+		{
+			char name[64];
+			std::snprintf(name, sizeof(name), "/hgc_%lld.mp4",
+			              static_cast<long long>(std::time(nullptr)));
+			const std::string e2 = builtinCam::videoStart(dir + name, 30);
+			if (!e2.empty()) { dataManager::logEvent("CAMERA", ("builtin " + e2).c_str(), true); }
+			else             { dataManager::logEvent("CAMERA", ("builtin video: " + dir + name).c_str()); }
+		}
+	}
 	if (!manual_)
 	{
 		// 露出を指定できない端末では、撮れはするが露出制御が成立しない。黙って進めない。
@@ -238,6 +253,12 @@ errCode apiBuiltin::setupShootingModeManual(void)
 
 errCode apiBuiltin::restoreShootingMode(void)
 {
+	// 【必ず閉じる】MP4 は最後に閉じないと再生できない。撮影の終わりはここを通る。
+	const std::string made = builtinCam::videoFinish();
+	if (!made.empty())
+	{
+		dataManager::logEvent("CAMERA", ("builtin video done: " + made).c_str());
+	}
 	if (opened_) { builtinCam::close(); opened_ = false; }
 	return ERR_HGC_OK;
 }
@@ -286,7 +307,13 @@ void apiBuiltin::collectPending(void)
 {
 	if (!lastJpeg_.empty()) { return; }	// 測光が既に受け取っている
 	std::vector<uint8_t> jpeg;
-	if (this->shootTake(jpeg)) { this->saveShot(jpeg); lastJpeg_.swap(jpeg); }
+	if (this->shootTake(jpeg))
+	{
+		this->saveShot(jpeg);
+		// 受け取ったその場で動画へ1コマ足す。周期が15秒以上あるので符号化は間に合う。
+		builtinCam::videoAddJpeg(jpeg);
+		lastJpeg_.swap(jpeg);
+	}
 }
 
 // ── 測る ────────────────────────────────────────────────────

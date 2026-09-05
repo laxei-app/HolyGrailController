@@ -157,6 +157,64 @@ namespace builtinCam
 		return r == JNI_TRUE;
 	}
 
+	std::string videoStart(const std::string& path, int fps)
+	{
+		attach a;
+		if (!a.ok()) { return "jni not ready"; }
+		jmethodID mid = a.env->GetStaticMethodID(a.cls, "videoStart",
+		                                         "(Ljava/lang/String;I)Ljava/lang/String;");
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); mid = nullptr; }
+		if (mid == nullptr) { return "videoStart not found"; }
+		jstring js = a.env->NewStringUTF(path.c_str());
+		jobject r  = a.env->CallStaticObjectMethod(a.cls, mid, js, static_cast<jint>(fps));
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); r = nullptr; }
+		std::string out = "video start failed";
+		if (r != nullptr)
+		{
+			const char* p = a.env->GetStringUTFChars(static_cast<jstring>(r), nullptr);
+			if (p != nullptr) { out = p; a.env->ReleaseStringUTFChars(static_cast<jstring>(r), p); }
+			a.env->DeleteLocalRef(r);
+		}
+		a.env->DeleteLocalRef(js);
+		return out;
+	}
+
+	bool videoAddJpeg(const std::vector<uint8_t>& jpeg)
+	{
+		if (jpeg.empty()) { return false; }
+		attach a;
+		if (!a.ok()) { return false; }
+		jmethodID mid = a.env->GetStaticMethodID(a.cls, "videoAddJpeg", "([B)Z");
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); mid = nullptr; }
+		if (mid == nullptr) { return false; }
+		jbyteArray ja = a.env->NewByteArray(static_cast<jsize>(jpeg.size()));
+		a.env->SetByteArrayRegion(ja, 0, static_cast<jsize>(jpeg.size()),
+		                          reinterpret_cast<const jbyte*>(jpeg.data()));
+		jboolean r = a.env->CallStaticBooleanMethod(a.cls, mid, ja);
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); r = JNI_FALSE; }
+		a.env->DeleteLocalRef(ja);
+		return r == JNI_TRUE;
+	}
+
+	std::string videoFinish(void)
+	{
+		attach a;
+		if (!a.ok()) { return ""; }
+		jmethodID mid = a.env->GetStaticMethodID(a.cls, "videoFinish", "()Ljava/lang/String;");
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); mid = nullptr; }
+		if (mid == nullptr) { return ""; }
+		jobject r = a.env->CallStaticObjectMethod(a.cls, mid);
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); r = nullptr; }
+		std::string out;
+		if (r != nullptr)
+		{
+			const char* p = a.env->GetStringUTFChars(static_cast<jstring>(r), nullptr);
+			if (p != nullptr) { out = p; a.env->ReleaseStringUTFChars(static_cast<jstring>(r), p); }
+			a.env->DeleteLocalRef(r);
+		}
+		return out;
+	}
+
 	bool takeImage(int timeoutMs, std::vector<uint8_t>& out)
 	{
 		out.clear();
