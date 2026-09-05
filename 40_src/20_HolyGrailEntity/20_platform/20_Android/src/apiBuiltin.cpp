@@ -167,6 +167,18 @@ errCode apiBuiltin::init(class device& device)
 	return ERR_HGC_OK;
 }
 
+errCode apiBuiltin::startShooting(void)
+{
+	const std::string e = builtinCam::open(id_);
+	if (!e.empty())
+	{
+		dataManager::logEvent("CAMERA", ("builtin open failed: " + e).c_str(), true);
+		return ERR_HGC_NOT_FOUND;
+	}
+	opened_ = true;
+	return ERR_HGC_OK;
+}
+
 errCode apiBuiltin::getSettings(cmdt::shotRange& settings)
 {
 	if (ssList_.empty()) { this->buildTables(); }
@@ -223,24 +235,38 @@ errCode apiBuiltin::restoreShootingMode(void)
 }
 
 // ── 撮る ────────────────────────────────────────────────────
-bool apiBuiltin::shoot(std::vector<uint8_t>& out, int timeoutMs)
+double apiBuiltin::curSsSec(void) const
 {
-	const double sec = expo::parseValue(curSs_,  expo::expoKind::ss);
-	const double iso = expo::parseValue(curIso_, expo::expoKind::iso);
-	const double fn  = expo::parseValue(curFn_,  expo::expoKind::fn);
-	const long long ns = (sec > 0.0) ? static_cast<long long>(sec * 1e9 + 0.5) : 0;
-	return builtinCam::capture(id_, (iso > 0.0) ? static_cast<int>(iso + 0.5) : 0,
-	                           ns, (fn > 0.0) ? fn : 0.0, timeoutMs, out);
+	const double sec = expo::parseValue(curSs_, expo::expoKind::ss);
+	return (sec > 0.0) ? sec : 1.0;
 }
 
+bool apiBuiltin::shootStart(void)
+{
+	const double sec = this->curSsSec();
+	const double iso = expo::parseValue(curIso_, expo::expoKind::iso);
+	const double fn  = expo::parseValue(curFn_,  expo::expoKind::fn);
+	const long long ns = static_cast<long long>(sec * 1e9 + 0.5);
+	return builtinCam::capture(id_, (iso > 0.0) ? static_cast<int>(iso + 0.5) : 0,
+	                           ns, (fn > 0.0) ? fn : 0.0, 0);
+}
+
+bool apiBuiltin::shootTake(std::vector<uint8_t>& out)
+{
+	// 露光 + 現像と転送の余裕。長秒でも取りこぼさない長さにする。
+	const int to = static_cast<int>(this->curSsSec() * 1000.0) + 8000;
+	return builtinCam::takeImage(to, out);
+}
+
+// 【シャッターは待たずに戻る(2026-09-05 実機で判明)】
+//  露光の終わりまで待つ作りにしたら、6秒露光の1コマが 11.9秒かかり、呼び出し側の予算
+//  (8秒)を超えて毎コマ失敗した。キヤノンの CCAPI も「シャッターのPOSTは露光を待たずに
+//  戻る」ので、そちらへ合わせる。撮れた画像は測光(meterScene)で受け取る。
+//  露出制御はもともと露光が終わってから測るので、待つ場所としてそちらが正しい。
 errCode apiBuiltin::actShutter(void)
 {
-	// 露光の長さに待ち時間を合わせる。長秒でも取りこぼさないよう、露光+余裕で待つ。
-	const double sec = expo::parseValue(curSs_, expo::expoKind::ss);
-	const int    to  = static_cast<int>((sec > 0.0 ? sec : 1.0) * 1000.0) + 8000;
-	std::vector<uint8_t> jpeg;
-	if (!this->shoot(jpeg, to)) { return ERR_HGC_TAKE_FAIL; }
-	lastJpeg_.swap(jpeg);
+	lastJpeg_.clear();	// 前のコマの画像を次の測光へ使い回さない
+	if (!this->shootStart()) { return ERR_HGC_TAKE_FAIL; }
 	return ERR_HGC_OK;
 }
 
@@ -270,7 +296,9 @@ bool apiBuiltin::measure(const std::vector<uint8_t>& jpeg, meterResult& out) con
 errCode apiBuiltin::meterScene(const hgc::exposure& shotExp, meterResult& out,
                                const std::function<bool()>& keepGoing)
 {
-	(void)keepGoing;	// 待ちが無いので中断の口は要らない
+	(void)keepGoing;
+	// 露光が終わって画像が出てくるのをここで待つ(シャッターは待たずに戻っている)。
+	if (lastJpeg_.empty()) { this->shootTake(lastJpeg_); }
 	if (!this->measure(lastJpeg_, out))
 	{
 		// 直前のコマが撮れていない。上位はこれが続いたら「カメラがオンラインでない」と見る。
@@ -287,9 +315,8 @@ errCode apiBuiltin::meterHere(meterResult& out, const std::function<bool()>& kee
 	(void)keepGoing;
 	if (builtinCam::open(id_).empty()) { opened_ = true; }
 	std::vector<uint8_t> jpeg;
-	const double sec = expo::parseValue(curSs_, expo::expoKind::ss);
-	const int    to  = static_cast<int>((sec > 0.0 ? sec : 1.0) * 1000.0) + 8000;
-	if (!this->shoot(jpeg, to)) { out.ok = false; out.failStage = 20; return ERR_HGC_RDY_METARING; }
+	if (!this->shootStart() || !this->shootTake(jpeg))
+	{ out.ok = false; out.failStage = 20; return ERR_HGC_RDY_METARING; }
 	if (!this->measure(jpeg, out)) { out.ok = false; return ERR_HGC_RDY_METARING; }
 	// いま載せている露出で撮ったので、それが測光露出そのもの。
 	hgc::exposure me; me.iso = curIso_; me.ss = curSs_; me.fn = curFn_;

@@ -220,27 +220,33 @@ object BuiltinCamera {
     }
 
     // ── 撮る ────────────────────────────────────────────────
-    // 露出を指定して1枚撮り、JPEG のバイト列を返す。失敗は null。
-    //  【1回の要求で完結させる】内蔵カメラは要求ごとに露出を載せる作りなので、
-    //   「設定してから切る」という2段構えにする意味が無い。取り違えも起きない。
+    // 【シャッターは待たずに戻る(2026-09-05 実機で判明)】
+    //  露光の終わりまで待つ作りにしたら、6秒露光で1コマ 11.9秒かかり、呼び出し側の
+    //  予算(8秒)を超えて毎コマ失敗した。キヤノンの CCAPI も「シャッターのPOSTは露光を
+    //  待たずに戻る」ので、そちらに合わせる。撮れた画像は takeImage で受け取る
+    //  (露出制御は露光が終わってから測るので、待つ場所はそちらが正しい)。
+    private var pending: CountDownLatch? = null
+    private var pendingJpeg: ByteArray? = null
+
+    // 露出を指定して1枚撮り始める。成功=要求を出せた。画像は takeImage で受け取る。
     @JvmStatic
-    fun capture(id: String, iso: Int, expNs: Long, aperture: Double, timeoutMs: Int): ByteArray? {
+    fun capture(id: String, iso: Int, expNs: Long, aperture: Double, timeoutMs: Int): Boolean {
         val e = open(id)
-        if (e.isNotEmpty()) { return null }
-        val dev = camera ?: return null
-        val s = session ?: return null
-        val rd = reader ?: return null
-        val h = handler ?: return null
+        if (e.isNotEmpty()) { return false }
+        val dev = camera ?: return false
+        val s = session ?: return false
+        val rd = reader ?: return false
+        val h = handler ?: return false
 
         val got = CountDownLatch(1)
-        var jpeg: ByteArray? = null
+        pending = got; pendingJpeg = null
         rd.setOnImageAvailableListener({ r ->
             runCatching {
                 r.acquireLatestImage()?.use { img ->
                     val buf = img.planes[0].buffer
                     val b = ByteArray(buf.remaining())
                     buf.get(b)
-                    jpeg = b
+                    pendingJpeg = b
                 }
             }
             got.countDown()
@@ -261,10 +267,20 @@ object BuiltinCamera {
             req.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF)
             req.set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_DAYLIGHT)
             s.capture(req.build(), null, h)
-        } catch (ex: Exception) { return null }
+        } catch (ex: Exception) { pending = null; return false }
+        return true
+    }
 
+    // 直前に始めた1枚を受け取る。まだ露光中なら終わるまで待つ。取れなければ null。
+    //  一度受け取ったら捨てる(同じ画像を次のコマの測光へ使い回さないため)。
+    @JvmStatic
+    fun takeImage(timeoutMs: Int): ByteArray? {
+        val got = pending ?: return null
         val wait = if (timeoutMs > 0) timeoutMs.toLong() else 15000L
         if (!got.await(wait, TimeUnit.MILLISECONDS)) { return null }
-        return jpeg
+        pending = null
+        val b = pendingJpeg
+        pendingJpeg = null
+        return b
     }
 }

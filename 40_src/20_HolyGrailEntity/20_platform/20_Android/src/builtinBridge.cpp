@@ -138,24 +138,35 @@ namespace builtinCam
 		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); }
 	}
 
-	bool capture(const std::string& id, int iso, long long expNs, double aperture,
-	             int timeoutMs, std::vector<uint8_t>& out)
+	bool capture(const std::string& id, int iso, long long expNs, double aperture, int timeoutMs)
+	{
+		attach a;
+		if (!a.ok()) { return false; }
+		jmethodID mid = a.env->GetStaticMethodID(a.cls, "builtinCapture",
+		                                         "(Ljava/lang/String;IJDI)Z");
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); mid = nullptr; }
+		if (mid == nullptr) { return false; }
+		jstring js = a.env->NewStringUTF(id.c_str());
+		jboolean r = a.env->CallStaticBooleanMethod(a.cls, mid, js,
+		                                            static_cast<jint>(iso),
+		                                            static_cast<jlong>(expNs),
+		                                            static_cast<jdouble>(aperture),
+		                                            static_cast<jint>(timeoutMs));
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); r = JNI_FALSE; }
+		a.env->DeleteLocalRef(js);
+		return r == JNI_TRUE;
+	}
+
+	bool takeImage(int timeoutMs, std::vector<uint8_t>& out)
 	{
 		out.clear();
 		attach a;
 		if (!a.ok()) { return false; }
-		jmethodID mid = a.env->GetStaticMethodID(a.cls, "builtinCapture",
-		                                         "(Ljava/lang/String;IJDI)[B");
+		jmethodID mid = a.env->GetStaticMethodID(a.cls, "builtinTakeImage", "(I)[B");
 		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); mid = nullptr; }
 		if (mid == nullptr) { return false; }
-		jstring js = a.env->NewStringUTF(id.c_str());
-		jobject r  = a.env->CallStaticObjectMethod(a.cls, mid, js,
-		                                           static_cast<jint>(iso),
-		                                           static_cast<jlong>(expNs),
-		                                           static_cast<jdouble>(aperture),
-		                                           static_cast<jint>(timeoutMs));
+		jobject r = a.env->CallStaticObjectMethod(a.cls, mid, static_cast<jint>(timeoutMs));
 		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); r = nullptr; }
-		a.env->DeleteLocalRef(js);
 		if (r == nullptr) { return false; }
 		jbyteArray ba = static_cast<jbyteArray>(r);
 		const jsize n = a.env->GetArrayLength(ba);

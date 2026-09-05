@@ -19,6 +19,10 @@ namespace builtinCam
 	void bindClass(void* env);	// JNIEnv*。JNI に依存させないため void* で受ける
 
 
+	// 端末のカメラを所持カメラへ足す(既にあるものは触らない)。戻り=足した台数。
+	//  実装は builtinRegister.cpp。内蔵カメラは在否監視に乗らないので、ここが唯一の登録経路。
+	int registerAll(void);
+
 	// 端末が持つカメラの一覧。JSON 配列 [{"id","name","facing"}]。取れなければ "[]"。
 	std::string listJson(void);
 	// 1台の諸元。JSON。取れなければ "{}"。
@@ -27,9 +31,11 @@ namespace builtinCam
 	std::string open(const std::string& id);
 	// 閉じる(撮影の終わりに呼ぶ)。
 	void close(void);
-	// 露出を載せて1枚撮り、JPEG を out へ入れる。iso<=0 / expNs<=0 / aperture<=0 は「触らない」。
-	bool capture(const std::string& id, int iso, long long expNs, double aperture,
-	             int timeoutMs, std::vector<uint8_t>& out);
+	// 露出を載せて1枚撮り**始める**。露光の終わりは待たない(キヤノンの CCAPI と同じ振る舞い)。
+	//  iso<=0 / expNs<=0 / aperture<=0 は「触らない」。
+	bool capture(const std::string& id, int iso, long long expNs, double aperture, int timeoutMs);
+	// 直前に撮り始めた1枚を受け取る(まだ露光中なら待つ)。
+	bool takeImage(int timeoutMs, std::vector<uint8_t>& out);
 }
 
 #endif // _BUILTIN_BRIDGE_H_

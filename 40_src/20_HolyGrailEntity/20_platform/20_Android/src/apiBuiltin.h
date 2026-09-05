@@ -35,6 +35,11 @@ public:
 	// 身元だけ。内蔵カメラは認証も締め出しも無いので init と同じで害が無い。
 	errCode identify(class device& device) override { return this->init(device); }
 
+	// 撮影を始める合図。ネットワークのカメラでは接続を張る工程だが、内蔵カメラでは
+	//  カメラを開くことに当たる。ここで開けないと以降どの手も通らないので、早く気づけるよう
+	//  この時点で開いてしまう。
+	errCode startShooting(void) override;
+
 	errCode getSettings(cmdt::shotRange& settings) override;
 	errCode setFNumber(const std::string& fNumber) override;
 	errCode setSS(const std::string& ss) override;
@@ -75,8 +80,12 @@ private:
 	// 範囲から 1/kStepStops 段刻みの並びを作る。両端は必ず含める。
 	void buildTables(void);
 
-	// いま載っている露出で1枚撮る。out へ JPEG。
-	bool shoot(std::vector<uint8_t>& out, int timeoutMs);
+	// いま載っている露出で1枚撮り始める(露光の終わりは待たない)。
+	bool shootStart(void);
+	// 撮り始めた1枚を受け取る。露光の長さから待ち時間を決める。
+	bool shootTake(std::vector<uint8_t>& out);
+	// いまの露出の露光時間[秒](待ち時間の見積もりに使う)。
+	double curSsSec(void) const;
 	// JPEG から輝度の中央値とリニア輝度を出す。
 	bool measure(const std::vector<uint8_t>& jpeg, meterResult& out) const;
 

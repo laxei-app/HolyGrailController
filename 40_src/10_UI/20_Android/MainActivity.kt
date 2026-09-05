@@ -350,6 +350,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // スマホ⇄エッジの通信路(2026-08-14 指示)。選ぶのはスマホだけ。エッジは常に両方で待ち受ける。
         EdgeBleLink.init(this)
         BuiltinCamera.init(this)   // スマホ内蔵カメラ(Camera2)の入口へ Context を渡す
+
+        // 【内蔵カメラは自動で所持カメラへ入れる(2026-09-05)】端末そのものなので
+        //  「登録しますか」と聞く意味が無い。複数のカメラを持つ端末では1台ずつ並ぶ。
+        //  既にあるものは触らない(名前をユーザーが変えていることがある)。
+        //  マスタ読み込みと同じ単一スレッドで行う(所持カメラの書き込み口は1本に保つ)。
+        dataExec.execute {
+            val n = try { HgeNative.nativeRegisterBuiltinCameras() } catch (_: Exception) { 0 }
+            if (n > 0) { runOnUiThread { if (flipper.displayedChild == 6) buildCameraList() } }
+        }
         HgeNative.nativeEdgeSetBle(edgeUseBle())
         HgeNative.nativeSetListener(this)
         // 起動時のログ整理(当日以外が5件以上なら古い順に削除、最新4件まで残す)。端末TZで「当日」を判定。
@@ -2610,6 +2619,23 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .show()
     }
 
+    // 【スマホ内蔵カメラかどうか(2026-09-05)】シリアルの頭で見分ける(apiBuiltin::kSerialPrefix)。
+    //  内蔵カメラはその端末の中にしか無いので、外部端末へ送った計画では使えない。
+    private fun isBuiltinSerial(serial: String): Boolean = serial.startsWith("BUILTIN:")
+
+    // いまの計画のカメラが内蔵カメラか。
+    private fun planUsesBuiltinCamera(): Boolean {
+        val arr = camArray(HgeNative.nativeGetOwnedCameras())
+        val want = try { JSONObject(HgeNative.nativeGetPlanJson()).optJSONObject("camera")?.optString("name") ?: "" }
+                   catch (_: Exception) { "" }
+        if (want.isEmpty()) return false
+        for (i in 0 until arr.length()) {
+            val c = arr.optJSONObject(i)?.optJSONObject("camera") ?: continue
+            if (c.optString("name") == want) { return isBuiltinSerial(c.optString("serial")) }
+        }
+        return false
+    }
+
     private fun choosePlanCamera() {
         val arr = camArray(HgeNative.nativeGetOwnedCameras())
         if (arr.length() == 0) { openCameraList(); return }
@@ -2625,6 +2651,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .setTitle("カメラを選択")
             .setItems(labels.toTypedArray()) { _, which ->
                 val name = names[which]
+                // 【内蔵カメラを選んだら端末はスマホ(2026-09-05 ユーザー判断)】内蔵カメラは
+                //  その端末の中にしか無いので外部端末へは送れない。選べなくして戸惑わせるより、
+                //  黙って正しい組み合わせへ寄せる(何が起きたかはトーストで知らせる)。
+                val builtin = isBuiltinSerial(cams[which].optString("serial"))
+                if (builtin && planEdgeName(currentPlanId).isNotEmpty()) {
+                    setPlanEdgeName(currentPlanId, "")
+                    runOnUiThread {
+                        refreshEdgeSpinner()
+                        Toast.makeText(this, "内蔵カメラはこのスマホでしか使えないので、端末をスマホにしました",
+                                       Toast.LENGTH_LONG).show()
+                    }
+                }
                 planExec.execute {
                     HgeNative.nativeSetPlanCamera(name)
                     val sched = HgeNative.nativeScheduleJson()
@@ -7155,8 +7193,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun refreshEdgeSpinner() {
         val labels = mutableListOf(kPhoneEdgeLabel)
+        // 【内蔵カメラのときは外部端末を出さない(2026-09-05)】内蔵カメラはその端末の中にしか
+        //  無いので、外部端末を選べても必ず失敗する。選択肢から外して起き得ない組み合わせを消す。
+        val builtinCam = try { planUsesBuiltinCamera() } catch (_: Exception) { false }
         // IPは動的なので名称のみ表示。常時スイープの生存状態を ●=オンライン/○=オフライン で付す(不明=無印)。
-        edgeSpinnerEdges = sortedEdges()
+        edgeSpinnerEdges = if (builtinCam) emptyList() else sortedEdges()
         edgeSpinnerEdges.forEach {
             val mark = when (edgeOnline[it.name]) { true -> "● "; false -> "○ "; null -> "" }
             labels.add(mark + it.name)

@@ -97,6 +97,9 @@ object HgeNative {
     // 機材マスタを読み直す(公開リポジトリから取り込んだ直後に呼ぶ)
     external fun nativeReloadMaster()
     external fun nativeAddOwnedCamera(name: String): Int
+    // スマホ内蔵カメラを所持カメラへ足す(まだ無いものだけ)。戻り=足した台数。
+    //  端末そのものなので登録可否は聞かない(外付けカメラのプロンプトとは扱いが違う)。
+    external fun nativeRegisterBuiltinCameras(): Int
     external fun nativeAddOwnedLens(name: String): Int
     external fun nativeRemoveOwnedCamera(name: String): Int
     external fun nativeRemoveOwnedLens(name: String): Int
@@ -186,10 +189,14 @@ object HgeNative {
     @JvmStatic
     fun builtinClose() = BuiltinCamera.close()
 
-    // 露出を載せて1枚撮り、JPEG のバイト列を返す(失敗は null)。
+    // 露出を載せて1枚撮り始める(露光の終わりは待たない)。
     @JvmStatic
-    fun builtinCapture(id: String, iso: Int, expNs: Long, aperture: Double, timeoutMs: Int): ByteArray? =
+    fun builtinCapture(id: String, iso: Int, expNs: Long, aperture: Double, timeoutMs: Int): Boolean =
         BuiltinCamera.capture(id, iso, expNs, aperture, timeoutMs)
+
+    // 直前に撮り始めた1枚を受け取る(まだ露光中なら待つ)。
+    @JvmStatic
+    fun builtinTakeImage(timeoutMs: Int): ByteArray? = BuiltinCamera.takeImage(timeoutMs)
 
     // ネイティブから呼び返される BLE のエッジ探索。見つかった端末名(HGC- を除く)を返す。
     //  BLE には UDP ブロードキャストが無いので、検索はアドバタイズのスキャンで代える。
