@@ -65,6 +65,11 @@ public:
 	// マスタに無いレンズを所持レンズへ足す(同じ名前が既にあれば何もしない)。
 	//  スマホ内蔵カメラのように、レンズが交換できず端末が諸元を答える機材のための口。
 	static bool addOwnedLens(const hgc::lens& lens);
+	// 所持カメラの「組み合わせるレンズ」へ1本だけ割り当てる(既に入っていれば何もしない)。
+	//  レンズを交換できない機材(スマホ内蔵カメラ)のための設定。
+	static bool setOwnedCameraLens(const std::string& camName, const std::string& lensName);
+	// 所持カメラに割り当てられたレンズの先頭(=初期値)を返す。無ければ false。
+	static bool findOwnedCameraDefaultLens(const std::string& camName, hgc::lens& out);
 	// 所持から削除して保存する。return: 成功(削除した)。
 	static bool removeOwnedCamera(const std::string& name);
 	static bool removeOwnedLens(const std::string& name);

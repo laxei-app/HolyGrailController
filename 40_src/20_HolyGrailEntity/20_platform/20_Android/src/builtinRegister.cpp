@@ -89,9 +89,11 @@ namespace builtinCam
 				              ln.name.c_str(), ln.focalLength, ln.fn);
 				dataManager::logEvent("GEAR", lb);
 			}
-			// 既に一覧にあるなら、そちら(利用者が直した値かもしれない)を使う。
+			// 所持カメラの「組み合わせるレンズ」へ割り当てる。これで、計画でこのカメラを
+			//  選んだときにレンズも一緒に付いてくる(hge_setPlanCamera)。
+			dataManager::setOwnedCameraLens(cs.camera.name, ln.name);
 			hgc::lens ol;
-			cs.lens = dataManager::findOwnedLens(ln.name, ol) ? ol : ln;
+			cs.lens = dataManager::findOwnedCameraDefaultLens(cs.camera.name, ol) ? ol : ln;
 
 			expo::expoTables t;
 			t.iso = expo::buildTable(api->isoList(), expo::expoKind::iso);

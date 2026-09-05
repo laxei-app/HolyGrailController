@@ -727,6 +727,35 @@ bool dataManager::addOwnedLens(const hgc::lens& lens)
 	return saveOwnedLenses();
 }
 
+// 所持カメラの「組み合わせるレンズ」へ1本割り当てる。先頭が初期値になる。
+//  レンズを交換できない機材(スマホ内蔵カメラ)で使う。既に入っていれば触らない
+//  (利用者が並べ替えたり別のレンズを足していることがある)。
+bool dataManager::setOwnedCameraLens(const std::string& camName, const std::string& lensName)
+{
+	ensureOwned();
+	hgc::lens l;
+	if (!findOwnedLens(lensName, l)) { return false; }
+	for (auto& oc : g_ownedCameras)
+	{
+		if (oc.cam.name != camName) { continue; }
+		for (const auto& e : oc.lensList) { if (e.name == lensName) { return false; } }	// 既にある
+		oc.lensList.insert(oc.lensList.begin(), l);	// 先頭=初期値
+		return saveOwnedCameras();
+	}
+	return false;
+}
+
+// 所持カメラに割り当てられたレンズの先頭(=初期値)。
+bool dataManager::findOwnedCameraDefaultLens(const std::string& camName, hgc::lens& out)
+{
+	ensureOwned();
+	for (const auto& oc : g_ownedCameras)
+	{
+		if (oc.cam.name == camName && !oc.lensList.empty()) { out = oc.lensList.front(); return true; }
+	}
+	return false;
+}
+
 bool dataManager::removeOwnedCamera(const std::string& name)
 {
 	ensureOwned();
