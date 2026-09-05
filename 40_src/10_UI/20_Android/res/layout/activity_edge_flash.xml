@@ -19,7 +19,7 @@
         <ImageView android:id="@+id/fl_home" android:layout_width="32dp" android:layout_height="32dp"
             android:clickable="true" android:focusable="true" android:src="@drawable/ic_home_r" />
         <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-            android:gravity="center" android:text="エッジ端末書き込み (USB)" android:textColor="#FFFFFF"
+            android:gravity="center" android:text="登録端末書き込み (USB)" android:textColor="#FFFFFF"
             android:textSize="20sp" android:textStyle="bold" />
         <ImageView android:id="@+id/fl_menu" android:layout_width="32dp" android:layout_height="32dp"
             android:clickable="true" android:focusable="true" android:src="@drawable/ic_menu_r" />
@@ -29,7 +29,7 @@
     <TextView android:id="@+id/fl_state"
         android:layout_width="match_parent" android:layout_height="wrap_content"
         android:padding="12dp" android:textSize="16sp"
-        android:text="USB ケーブルでエッジ端末をつないでください。" />
+        android:text="USB ケーブルで登録端末をつないでください。" />
 
     <LinearLayout android:id="@+id/fl_buttons"
         android:layout_width="match_parent" android:layout_height="wrap_content"

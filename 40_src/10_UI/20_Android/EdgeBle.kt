@@ -157,7 +157,7 @@ class EdgeBle(
         // 送信(provision)は、直前に QR を表示させたのと同じエッジへ直接接続する(複数エッジでも取り違えない)。
         if (!startOnly && lastAddress != null) {
             try {
-                log("エッジへ直接接続中...")
+                log("端末へ直接接続中...")
                 connect(adapter.getRemoteDevice(lastAddress))
                 return
             } catch (_: Exception) { /* だめならスキャンにフォールバック */ }
@@ -174,7 +174,7 @@ class EdgeBle(
         scanner = adapter.bluetoothLeScanner
         val filter = ScanFilter.Builder().setServiceUuid(ParcelUuid(SVC)).build()
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
-        log(if (wantName.isEmpty()) "BLEスキャン中 (未設定のエッジ)..." else "BLEスキャン中 (HGC-$wantName)...")
+        log(if (wantName.isEmpty()) "BLEスキャン中 (未設定の端末)..." else "BLEスキャン中 (HGC-$wantName)...")
         scanCb = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, r: ScanResult) {
                 // 名前が一致するものだけ拾う(2026-08-08 UI依頼)。一致しなければスキャンを続ける。
@@ -209,21 +209,21 @@ class EdgeBle(
                 when {
                     fallback != null -> {
                         // 名前を広告しないエッジしか居ない = 旧ファーム。従来動作で接続する。
-                        log("名前を広告しないエッジへ接続します(エッジのファームが古い可能性)")
+                        log("名前を広告しない端末へ接続します(端末のファームが古い可能性)")
                         connect(fallback)
                     }
                     // 焼き直した直後は名前が消えている。1台だけならそれが目当ての機体。
                     wantName.isNotEmpty() && unset.size == 1 -> {
-                        log("「$wantName」は見つかりませんが、名前が未設定のエッジが1台あります。" +
+                        log("「$wantName」は見つかりませんが、名前が未設定の端末が1台あります。" +
                             "ファームを書き直した直後はこうなります。そちらへ接続します")
                         connect(unset[0])
                     }
                     wantName.isNotEmpty() && unset.size > 1 ->
-                        finish(false, "「$wantName」が見つかりません。名前が未設定のエッジが${unset.size}台あるため、" +
+                        finish(false, "「$wantName」が見つかりません。名前が未設定の端末が${unset.size}台あるため、" +
                                       "取り違えを避けて中止しました。1台だけ電源を入れてやり直してください")
                     else ->
-                        finish(false, if (wantName.isEmpty()) "エッジが見つかりません(広告なし)"
-                                      else "エッジ「$wantName」が見つかりません(電源とBluetoothを確認してください)")
+                        finish(false, if (wantName.isEmpty()) "端末が見つかりません(広告なし)"
+                                      else "登録端末「$wantName」が見つかりません(電源とBluetoothを確認してください)")
                 }
             }
         }, 12000)
@@ -253,7 +253,7 @@ class EdgeBle(
             override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) { writeCred(g) }
             override fun onCharacteristicWrite(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
                 if (c.uuid == CTRL) {
-                    if (status == BluetoothGatt.GATT_SUCCESS) finish(true, "エッジにQR表示を要求しました")
+                    if (status == BluetoothGatt.GATT_SUCCESS) finish(true, "端末にQR表示を要求しました")
                     else finish(false, "start書込失敗 status=$status")
                 } else if (c.uuid == CRED) {
                     if (status == BluetoothGatt.GATT_SUCCESS) log("認証情報を送信。応答待ち...")
@@ -271,10 +271,10 @@ class EdgeBle(
     }
 
     private fun handleStat(s: String) {
-        log("エッジ応答: $s")
+        log("端末の応答: $s")
         when {
-            s.startsWith("ok")   -> finish(true, "設定を保存しました(エッジがWiFi再接続)")
-            s.startsWith("fail") -> finish(false, "エッジ側で復号失敗(PoP不一致)")
+            s.startsWith("ok")   -> finish(true, "設定を保存しました(端末がWiFi再接続)")
+            s.startsWith("fail") -> finish(false, "端末側で復号失敗(PoP不一致)")
         }
     }
 
@@ -302,7 +302,7 @@ class EdgeBle(
             @Suppress("DEPRECATION") g.writeCharacteristic(cred)
         }
         // 応答(STAT通知)が来ない実装でも完了扱いにする保険。
-        handler.postDelayed({ if (!done) finish(true, "送信完了(エッジ応答待ちタイムアウト)") }, 7000)
+        handler.postDelayed({ if (!done) finish(true, "送信完了(端末の応答待ちタイムアウト)") }, 7000)
     }
 
     private fun writeDescriptor(g: BluetoothGatt, d: BluetoothGattDescriptor, v: ByteArray) {

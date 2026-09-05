@@ -193,8 +193,8 @@ class EdgeFlashActivity : AppCompatActivity() {
     private fun refreshState() {
         val dev = EspUsb.findDevice(this)
         stateView.text = if (dev == null) {
-            "USB ケーブルでエッジ端末をつないでください。\n" +
-            "エッジ端末側は USB-C です。スマートフォンの端子が違うときは変換ケーブル\n" +
+            "USB ケーブルで登録端末をつないでください。\n" +
+            "登録端末側は USB-C です。スマートフォンの端子が違うときは変換ケーブル\n" +
             "(または OTG アダプタ)を使ってください。充電専用のケーブルでは通信できません。"
         } else {
             "つながっています: %s\n%s".format(dev.deviceName, EspUsb.describe(dev))
@@ -324,7 +324,7 @@ class EdgeFlashActivity : AppCompatActivity() {
         val list = try {
             EdgeFirmware.fetchManifest()
         } catch (e: Exception) {
-            log("目録を取れません。エッジ端末の Wi-Fi につながっていると外に出られません。")
+            log("目録を取れません。登録端末の Wi-Fi につながっていると外に出られません。")
             throw e
         }
         log("目録: ${list.size} 機種")
@@ -456,7 +456,7 @@ class EdgeFlashActivity : AppCompatActivity() {
                 // 【入れ直し方まで書くこと(2026-08-27 実機で詰まった)】名前が消えると、
                 //  エッジ設定の一覧で以前の名前を選んだままでは BLE で見つからない。
                 //  「＋ 新規エッジ端末」を選べば名前を問わず拾う。
-                log("設定は消えています。エッジ端末設定の「＋ 新規エッジ端末」を選んでから")
+                log("設定は消えています。登録端末設定の「＋ 新規端末」を選んでから")
                 log("QR表示を要求し、端末名と Wi-Fi を入れ直してください。")
             }
         }
