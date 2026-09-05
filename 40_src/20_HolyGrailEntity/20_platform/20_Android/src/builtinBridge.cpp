@@ -1,6 +1,7 @@
 ﻿#include "builtinBridge.h"
 #include <jni.h>
 #include "commonAndroid.h"	// hgeJavaVm(JNI_OnLoad が覚えた VM を借りる)
+#include "dataManager.h"	// 入口が無いときの警告をログへ
 
 namespace
 {
@@ -248,7 +249,14 @@ namespace builtinCam
 		if (!a.ok()) { return false; }
 		jmethodID mid = a.env->GetStaticMethodID(a.cls, "builtinTakeImage", "(I)[B");
 		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); mid = nullptr; }
-		if (mid == nullptr) { return false; }
+		if (mid == nullptr)
+		{
+			// 【黙って失敗しない(2026-09-06)】入口が無いと1枚も受け取れないのに、以前はここで
+			//  静かに false を返していた。Kotlin 側の入口を消してしまった一晩、原因が見えなかった。
+			static bool s_warned = false;
+			if (!s_warned) { s_warned = true; dataManager::logEvent("CAMERA", "builtinTakeImage entry not found (HgeNative)", true); }
+			return false;
+		}
 		jobject r = a.env->CallStaticObjectMethod(a.cls, mid, static_cast<jint>(timeoutMs));
 		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); r = nullptr; }
 		if (r == nullptr) { return false; }

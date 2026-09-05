@@ -216,6 +216,16 @@ object HgeNative {
     @JvmStatic
     fun builtinThermal(): Int = BuiltinCamera.thermalStatus()
 
+    // 直前のコマを実際に撮った物理カメラ id(狙いどおりかの確認用)。
+    @JvmStatic
+    fun builtinActivePhysical(): String = BuiltinCamera.activePhysicalId()
+
+    // 直前に撮り始めた1枚を受け取る(まだ露光中なら待つ)。
+    //  【2026-09-06 に一度消えていた】試し撮りの入口を外したとき、隣のこの2つまで一緒に消し、
+    //  一晩の撮影で1枚も受け取れなかった(現像は毎コマ成功していたのに保存 0 枚・測光 stage=1)。
+    @JvmStatic
+    fun builtinTakeImage(timeoutMs: Int): ByteArray? = BuiltinCamera.takeImage(timeoutMs)
+
     // ── 動画の書き出し(2026-09-05) ───────────────────────────
     // 撮ったコマをその場で1枚ずつ足していく。撮影の終わりに必ず finish を呼ぶこと
     //  (MP4 は閉じないと再生できない)。
