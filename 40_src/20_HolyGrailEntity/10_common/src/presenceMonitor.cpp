@@ -90,7 +90,8 @@ namespace {
 			//  スマホ内蔵カメラはネットワークの向こうに居ないので「見えるか」を測る意味が無く、
 			//  常に居る。挨拶(初回Wi-Fi参加を成立させるCCAPIアクセス)も相手が居ないので無意味で、
 			//  urlAccess にカメラidを入れてある関係で HTTP を投げると空振りし続ける。
-			if (d.manufacturer == "builtin") { continue; }
+			//  どのカメラがそうかはカメラ本人(apiBase::networked)が答える(2026-09-06。機種名で判断しない)。
+			if (d.apiBase && !d.apiBase->networked()) { continue; }
 			std::string ip = hostOf(d.urlAccess);
 			if (ip.empty()) { ip = hostOf(d.location); }	// urlAccess が無い機種は記述URLのホストで代用
 			if (d.serialno.empty() || ip.empty()) { continue; }

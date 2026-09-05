@@ -29,6 +29,13 @@ public:
 	//  RAW を線形で足して1枚にする(rawStack)。RAW を出せない端末はセンサーの上限まで。
 	static constexpr double kMaxStackSsSec = 48.0;
 
+	// 【撮影周期の下限の規則(2026-09-06 ユーザー決定)】最小周期 = 最長ss × 1.25(余裕 0 秒)。
+	//  露光の後に加算・現像・JPEG 化(実測 0.6〜0.9 秒)と測光が続くぶん。8.3 秒なら 10.4 秒で
+	//  キヤノン機の規則(ss+2)とほぼ同じ、24 秒なら 30 秒、48 秒なら 60 秒。
+	//  共通部分はこの値を所持カメラの記録から読むだけで、内蔵カメラかどうかを判断しない。
+	static constexpr double kMinIntervalFactor    = 1.25;
+	static constexpr double kMinIntervalMarginSec = 0.0;
+
 	// device.serialno に入れる識別子の頭。所持カメラはこれで一意に管理される。
 	static const char* kSerialPrefix;	// "BUILTIN:"
 
@@ -56,6 +63,11 @@ public:
 	errCode setupShootingModeManual(void) override;
 	// 計画名を受け取る(動画のファイル名に使う)。撮影側が渡すので、再起動後の再開でも抜けない。
 	void setSessionLabel(const std::string& label) override { sessionLabel_ = label; }
+	// 端末の中に居るので在否監視の対象にしない(ネットワークの向こうに居ない)。
+	bool networked(void) const override { return false; }
+	// 所持カメラの記録へ、内蔵カメラの性質(撮影周期の規則)を書く。登録時に一度だけ。
+	void fillCameraProfile(hgc::camera& cam) override
+	{ cam.intervalFactor = kMinIntervalFactor; cam.intervalMargin = kMinIntervalMarginSec; }
 	errCode restoreShootingMode(void) override;
 	errCode keepAlive(void) override { return ERR_HGC_OK; }	// 切れる線が無い
 

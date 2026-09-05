@@ -100,6 +100,7 @@ namespace csjson
 			             {"sensorSize", c.sensorSize}, {"sensorSizeV", c.sensorSizeV},
 			             {"sensorPixel", c.sensorPixel}, {"sensorPixelV", c.sensorPixelV},
 			             {"isoList", c.isoList}, {"ssList", c.ssList},
+			             {"intervalFactor", c.intervalFactor}, {"intervalMargin", c.intervalMargin},
 			             {"meterLv", c.meterLv},
 			             {"authUser", c.authUser},
 			             // パスワードは暗号文で載せる。ファイルにも ETP にも平文は出さない
@@ -120,6 +121,8 @@ namespace csjson
 			c.sensorPixelV = j.value("sensorPixelV", 0u);
 			if (j.contains("isoList")) { c.isoList = j["isoList"].get<std::vector<std::string>>(); }
 			if (j.contains("ssList"))  { c.ssList  = j["ssList"].get<std::vector<std::string>>(); }
+			c.intervalFactor = j.value("intervalFactor", 0.0);
+			c.intervalMargin = j.value("intervalMargin", 0.0);
 			c.meterLv     = j.value("meterLv", false);	// 無い=サムネイルだけ(既定)
 			c.authUser    = getStr(j, "authUser");
 			c.authPass    = secret::decrypt(getStr(j, "authPass"));	// 平文で手書きされていてもそのまま通る

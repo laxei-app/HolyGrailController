@@ -553,12 +553,13 @@ namespace
 			double s = expo::parseValue(w.ccm->limitBright.ss, expo::expoKind::ss);
 			if (s > maxSs) { maxSs = s; }
 		}
-		// 【内蔵カメラは 1.25 倍(2026-09-06 ユーザー決定)】RAW を何コマも足して長秒露光を作るので、
-		//  露光の後に加算・現像・JPEG 化が続く。ss+2 では 48 秒のとき足りない。8.3 秒なら 10.4 秒で
-		//  従来(10.3 秒)とほぼ同じ。序数の頭 "BUILTIN:" は apiBuiltin::kSerialPrefix と同じもの
-		//  (あちらは Android 専用のファイルなので、ここから参照できない)。
-		if (plan.camera.serial.rfind("BUILTIN:", 0) == 0) { return static_cast<int>(std::ceil(maxSs * 1.25)); }
-		return static_cast<int>(std::ceil(maxSs)) + 2;
+		// 規則はカメラの記録が持つ(2026-09-06)。未設定(0)は従来の「最長ss + 2秒」。
+		//  内蔵カメラは RAW 加算の後処理があるので 1.25 倍・余裕 0 を答えている(apiBuiltin)。
+		//  ここでは機種を判断せず、書かれた係数と余裕で計算するだけ。
+		const bool   hasRule = (plan.camera.intervalFactor > 0.0);
+		const double factor  = hasRule ? plan.camera.intervalFactor : 1.0;
+		const double margin  = hasRule ? plan.camera.intervalMargin : 2.0;
+		return static_cast<int>(std::ceil(maxSs * factor + margin));
 	}
 
 	// 計画のカメラの控えで空の項目を所持カメラから引き直す(実体は下)。
@@ -1125,14 +1126,9 @@ namespace
 			if (cam.sensorSizeV <= 0.0 && oc.sensorSizeV > 0.0) { cam.sensorSizeV = oc.sensorSizeV; }
 			if (cam.sensorPixel == 0   && oc.sensorPixel > 0)   { cam.sensorPixel = oc.sensorPixel; }
 			if (cam.sensorPixelV == 0  && oc.sensorPixelV > 0)  { cam.sensorPixelV = oc.sensorPixelV; }
-			// 【内蔵カメラは ISO/SS の並びを常に所持カメラから引き直す(2026-09-06)】並びは端末の実力から
-			//  合成するもので版で変わる(加算で 48 秒まで伸びた。古い控えは 8.3 秒止まり)。ユーザーが
-			//  編集する欄でもない。外付けカメラの控えは従来どおり触らない。
-			if (oc.serial.rfind("BUILTIN:", 0) == 0)
-			{
-				if (!oc.isoList.empty()) { cam.isoList = oc.isoList; }
-				if (!oc.ssList.empty())  { cam.ssList  = oc.ssList;  }
-			}
+			// 撮影周期の規則も同じ扱い(控えが未設定なら所持カメラの値を採る)。
+			if (cam.intervalFactor <= 0.0 && oc.intervalFactor > 0.0)
+			{ cam.intervalFactor = oc.intervalFactor; cam.intervalMargin = oc.intervalMargin; }
 		}
 	}
 
@@ -2870,10 +2866,6 @@ int32_t hge_getExpoValuesJson(char* buf, int32_t* inoutLen)
 {
 	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
 	if (!g_planReady) { loadFixedPlanImpl(); }
-	// 計画のカメラの控えを所持カメラの今の値で引き直してから範囲を出す(2026-09-06)。
-	//  内蔵カメラの並びは起動時に端末の実力から引き直されるが、計画の読み込みがそれより先に
-	//  走ると控えが古いまま(8.3 秒止まり)で、スライダの上端が伸びない。
-	applyOwnedCameraSettings(g_plan.camera);
 	double fmin = (g_plan.lens.fn > 0.0) ? g_plan.lens.fn : 1.0;
 	double fmax = (g_plan.lens.fnMax > 0.0) ? g_plan.lens.fnMax : 32.0;	// レンズのF最大があれば使う
 	// item3: iso/ss はスライダ選択範囲も計画のカメラの設定可能範囲(isoList/ssList)に限定する。

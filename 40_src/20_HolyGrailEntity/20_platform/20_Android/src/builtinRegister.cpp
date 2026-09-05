@@ -168,7 +168,7 @@ namespace builtinCam
 	//  「用意し終えたか(=もう二度としなくてよいか)」を判断する。0 のときは
 	//  カメラの権限がまだ無いなどの理由で列挙できていないので、次の起動でやり直す。
 	//  既にあるものは触らない(名前や値をユーザーが変えていることがある)。
-	int registerAll(bool withTemplates)
+	int registerAll(void)
 	{
 		detectBuiltin det;
 		std::vector<class device> found;
@@ -197,7 +197,7 @@ namespace builtinCam
 			dataManager::logEvent("GEAR",
 				("builtin cameras registered: " + std::to_string(added)).c_str());
 		}
-		if (withTemplates) { makeTemplate(found); }
+		makeTemplate(found);
 		return static_cast<int>(found.size());
 	}
 }

@@ -19,10 +19,11 @@ namespace builtinCam
 	void bindClass(void* env);	// JNIEnv*。JNI に依存させないため void* で受ける
 
 
-	// 端末のカメラを所持カメラへ足す(既にあるものは ISO/SS の並びだけ引き直す)。戻り=見つけた台数。
-	//  withTemplates=所持レンズとひな形も作る(初回だけ。消したものを起動のたびに作り直さない)。
+	// 端末のカメラを所持カメラへ足す(既にあるものは触らない)。戻り=見つけた台数。
+	//  初回起動で一度だけ呼ばれ、所持カメラ・所持レンズ・ひな形を作る。並びや周期の規則は
+	//  このとき apiBuiltin が答えた値で決まり、以後は差し替えない(データを作り直せば新しくなる)。
 	//  実装は builtinRegister.cpp。内蔵カメラは在否監視に乗らないので、ここが唯一の登録経路。
-	int registerAll(bool withTemplates);
+	int registerAll(void);
 
 	// 端末が持つカメラの一覧。JSON 配列 [{"id","name","facing"}]。取れなければ "[]"。
 	std::string listJson(void);

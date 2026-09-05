@@ -79,6 +79,12 @@ namespace hgc
 		uint32_t sensorPixelV = 0;		// センサー縦[pixel]
 		std::vector<std::string> isoList;	// 設定可能iso感度(カメラ設定値の文字列)
 		std::vector<std::string> ssList;	// 設定可能シャッター速度(カメラ設定値の文字列)
+		// 撮影周期の下限の規則(2026-09-06)。最小周期 = 最長ss × intervalFactor + intervalMargin[秒]。
+		//  カメラ本人(apiBase::fillCameraProfile)が答え、所持カメラの登録時に入る。
+		//  0 = 未設定 → 既定の 1.0 と 2.0(=最長ss+2秒。キヤノン機の従来の規則)。
+		//  内蔵カメラは RAW 加算の後処理があるので 1.25 と 0 を答える。共通部分は機種を判断しない。
+		double intervalFactor = 0.0;
+		double intervalMargin = 0.0;
 		// 測光にライブビューを主体で使う機種か。既定(false)は「サムネイルだけ」。
 		//  撮影済みサムネイルの取得は最も正確だが、機種によっては取得回数に上限があり
 		//  (EOS R10 は電源投入あたり 200 回程度で応答しなくなる)一晩持たない。

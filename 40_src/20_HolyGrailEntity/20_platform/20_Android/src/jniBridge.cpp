@@ -84,10 +84,10 @@ Java_app_laxei_holygrail_HgeNative_nativeInit(JNIEnv* env, jobject /*thiz*/)
 // スマホ内蔵カメラを所持カメラへ足す(まだ無いものだけ)。戻り=足した台数。
 //  端末そのものなので登録可否は聞かない(外付けカメラのプロンプトとは扱いが違う)。
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeRegisterBuiltinCameras(JNIEnv* env, jobject /*thiz*/, jboolean seed)
+Java_app_laxei_holygrail_HgeNative_nativeRegisterBuiltinCameras(JNIEnv* env, jobject /*thiz*/)
 {
 	builtinCam::bindClass(env);	// UI スレッドから呼ばれる。ここでも捕まえておく
-	return static_cast<jint>(builtinCam::registerAll(seed == JNI_TRUE));
+	return static_cast<jint>(builtinCam::registerAll());
 }
 
 JNIEXPORT jint JNICALL
