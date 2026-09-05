@@ -419,13 +419,16 @@ bool captureRunner::migrateTowardCcm(expo::exposureCtl& ctl, expo::exposureCtl& 
 	// 夜間は固定露出。組み替える自由度が無いので触らない(既存の移行に任せる)。
 	if (ccm->type == hgc::ccmType::night) { return false; }
 	const double step = (stepStops > 0.0) ? stepStops : kExposureStepStops;
+	double room = (migrateBudget_ < frameLimit_) ? migrateBudget_ : frameLimit_;
 	bool moved = false;
-	while (migrateBudget_ >= step - 1e-9)
+	while (room >= step - 1e-9)
 	{
 		if (!expo::migrateToward(ctl, want, tables_, ccm->initial)) { break; }	// もう合っている
+		room           -= step;
 		migrateBudget_ -= step;
 		moved = true;
 	}
+	if (migrateBudget_ < 0.0) { migrateBudget_ = 0.0; }
 	return moved;
 }
 
@@ -570,7 +573,10 @@ void captureRunner::addStepBudget(double intervalSec, double stepStops)
 {
 	const double step  = (stepStops > 0.0) ? stepStops : kExposureStepStops;
 	const double frame = frameAllowanceStops(intervalSec);
-	const double cap   = frame + step * kStepBudgetSlackSteps;
+	// このコマで動かしてよい上限。1目盛りより細かくは動けないので、最低でも1目盛りは許す
+	//  (許さないと、1コマの許容が1目盛りに満たない短い周期で永久に動けなくなる)。
+	frameLimit_ = (frame > step) ? frame : step;
+	const double cap = frameLimit_ * kStepBudgetCapFrames;
 	stepBudget_    += frame;
 	migrateBudget_ += frame;
 	if (stepBudget_    > cap) { stepBudget_    = cap; }
@@ -589,8 +595,10 @@ void captureRunner::spendStepBudget(double stops)
 int captureRunner::stepsToClose(double needStops, double stepStops) const
 {
 	const double step = (stepStops > 0.0) ? stepStops : kExposureStepStops;
+	// 貯金と「1コマの上限」の**小さい方**まで。貯まっていても1コマの粗さは上限で決まる。
+	const double room = (stepBudget_ < frameLimit_) ? stepBudget_ : frameLimit_;
 	int n    = static_cast<int>(std::fabs(needStops) / step + 0.5);	// 差を埋めるのに要る目盛り数
-	int maxN = static_cast<int>((stepBudget_ + 1e-9) / step);			// 貯金で踏める目盛り数
+	int maxN = static_cast<int>((room + 1e-9) / step);
 	if (n < 1)    { n = 1; }
 	if (n > maxN) { n = maxN; }
 	return (n > 0) ? n : 0;
@@ -1482,7 +1490,7 @@ errCode captureRunner::loop(void)
 				//  1コマで寄せてよいのは perFrame 段まで。目盛りが細かいカメラでは
 				//  1コマに複数目盛り踏む(合計が perFrame を超えない範囲で)。
 				const double step = preCtl.minStepStops();
-				double       room = perFrame;
+				double       room = (stepBudget_ < frameLimit_) ? stepBudget_ : frameLimit_;
 				for (;;)
 				{
 					const double cB = expo::brightnessStops(preCtl.current(), tables_);
@@ -1490,7 +1498,9 @@ errCode captureRunner::loop(void)
 					if (std::fabs(d) <= step / 2.0) { break; }	// 十分近い
 					if (room < step - 1e-9)         { break; }	// このコマの許容を使い切った
 					if (!(d < 0.0 ? preCtl.darken() : preCtl.brighten())) { break; }	// 限界
-					room -= std::fabs(expo::brightnessStops(preCtl.current(), tables_) - cB);
+					const double used = std::fabs(expo::brightnessStops(preCtl.current(), tables_) - cB);
+					room -= used;
+					this->spendStepBudget(used);
 				}
 				target = preCtl.current();
 			}

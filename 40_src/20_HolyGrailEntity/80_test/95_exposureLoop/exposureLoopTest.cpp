@@ -1125,45 +1125,58 @@ int main()
 		c.setCurrent(e0);
 		checkNear(c.minStepStops(), 1.0 / 3.0, 1e-6, "標準テーブルの1目盛りは 1/3段");
 
-		// 貯金の動き。9秒周期・1/3段刻みでは1コマの許容が1目盛りに満たないので貯めて動く。
-		//  長い目で見た速さが上限どおりになることを、20コマ回して確かめる。
+		// captureRunner と同じ手順で回す。貯金と「1コマの上限」は別物である。
+		//  1コマの上限 = max(1目盛り, 1コマの許容) … 動きの粗さはこれで決まる
+		//  貯金        = 長い目で見た速さを保つためのもの。上限の2倍で頭打ち
+		auto run = [&](double cycle, double step, int frames, int quiet, int& maxSteps, double& movedTotal)
 		{
-			const double step = 1.0 / 3.0, per = frameAllow(9.0);
-			const double cap  = per + step;
-			double budget = 0.0, moved = 0.0;
-			const int frames = 20;
+			const double per   = frameAllow(cycle);
+			const double limit = (per > step) ? per : step;
+			const double cap   = limit * 2.0;
+			double budget = 0.0;
+			maxSteps = 0; movedTotal = 0.0;
 			for (int i = 0; i < frames; ++i)
 			{
 				budget += per; if (budget > cap) { budget = cap; }
-				const int n = static_cast<int>((budget + 1e-9) / step);
-				if (n > 0) { moved += n * step; budget -= n * step; }
+				if (i < quiet) { continue; }	// 場面が動かず露出を変えないコマ
+				const double room = (budget < limit) ? budget : limit;
+				const int    n    = static_cast<int>((room + 1e-9) / step);
+				if (n > maxSteps) { maxSteps = n; }
+				movedTotal += n * step; budget -= n * step;
 			}
-			const double rate = moved / (frames * 9.0);
+		};
+
+		int maxN = 0; double moved = 0.0;
+
+		// 15秒周期・1/3段刻み: 毎コマきっかり1目盛り(従来の挙動)。
+		run(15.0, 1.0 / 3.0, 10, 0, maxN, moved);
+		check(maxN == 1, "15秒周期は1コマ1目盛りを超えない(従来の挙動と一致)");
+
+		// 【実機で出た後退の再現(2026-09-05)】静かなコマが続いた後でも1目盛りを超えない。
+		//  直す前は7コマ静止したあと 0.667段(2目盛り)動いていた。
+		run(15.0, 1.0 / 3.0, 12, 7, maxN, moved);
+		{
+			char d[96]; std::snprintf(d, sizeof(d), "(静止7コマの後の最大 %d目盛り)", maxN);
+			check(maxN == 1, "静かな時間の後でも1コマ1目盛りに留まる", d);
+		}
+
+		// 9秒周期・1/3段刻み: 1コマは1目盛りまで。ただし動くコマが間引かれ、
+		//  長い目で見た速さは上限どおりになる。
+		run(9.0, 1.0 / 3.0, 40, 0, maxN, moved);
+		{
+			const double rate = moved / (40 * 9.0);
 			char d[128];
-			std::snprintf(d, sizeof(d), "(20コマ180秒で %.3f段 = %.4f段/秒)", moved, rate);
-			check(rate > kRate * 0.85 && rate <= kRate * 1.02, "9秒周期でも長い目で見た速さは上限どおり", d);
+			std::snprintf(d, sizeof(d), "(40コマ360秒で %.3f段 = %.4f段/秒。1コマ最大%d目盛り)",
+			              moved, rate, maxN);
+			check(maxN == 1, "9秒周期でも1コマ1目盛りを超えない", d);
+			check(rate > kRate * 0.90 && rate <= kRate * 1.02, "9秒周期でも長い目で見た速さは上限どおり", d);
 		}
 
-		// 15秒周期・1/3段刻みでは毎コマきっかり1目盛り(従来と同じ)。
+		// 60秒周期・1/12段刻み(内蔵カメラ想定): 1コマに16目盛り(=4/3段)まで。
+		run(60.0, 1.0 / 12.0, 5, 0, maxN, moved);
 		{
-			const double step = 1.0 / 3.0, per = frameAllow(15.0);
-			const double cap  = per + step;
-			double budget = 0.0; int moves = 0;
-			for (int i = 0; i < 10; ++i)
-			{
-				budget += per; if (budget > cap) { budget = cap; }
-				const int n = static_cast<int>((budget + 1e-9) / step);
-				moves += n; budget -= n * step;
-			}
-			check(moves == 10, "15秒周期は毎コマ1目盛り(従来の挙動と一致)");
-		}
-
-		// 60秒周期・1/12段刻み(内蔵カメラ想定)では1コマに16目盛り踏める。
-		{
-			const double step = 1.0 / 12.0, per = frameAllow(60.0);
-			const int n = static_cast<int>((per + 1e-9) / step);
-			char d[96]; std::snprintf(d, sizeof(d), "(%d目盛り = %.3f段)", n, n * step);
-			check(n == 16, "60秒周期・1/12段刻みは1コマ16目盛り(=4/3段)", d);
+			char d[96]; std::snprintf(d, sizeof(d), "(1コマ %d目盛り = %.3f段)", maxN, maxN / 12.0);
+			check(maxN == 16, "60秒周期・1/12段刻みは1コマ16目盛り(=4/3段)", d);
 		}
 	}
 
