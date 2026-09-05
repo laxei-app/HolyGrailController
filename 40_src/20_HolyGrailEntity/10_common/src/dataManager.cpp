@@ -1475,7 +1475,8 @@ void dataManager::ownedCameraSerials(std::vector<std::string>& out)
 // 撮影画像から読めたセンサー諸元を所持カメラへ入れる。既に値があるものは触らない。
 //  機材マスターに無い機種はセンサー寸法/画素数が空のままで、NPFも撮影シミュレーションも
 //  出せない。カメラのAPIからは取れないが撮影画像のEXIFには入っているので、撮り始めたら埋める。
-bool dataManager::fillOwnedCameraSensor(const std::string& serial, double sensorWmm, double sensorHmm, uint32_t pixelW)
+bool dataManager::fillOwnedCameraSensor(const std::string& serial, double sensorWmm, double sensorHmm,
+                                        uint32_t pixelW, uint32_t pixelH)
 {
 	if (serial.empty() || sensorWmm <= 0.0 || pixelW == 0) { return false; }
 	ensureOwned();
@@ -1486,12 +1487,13 @@ bool dataManager::fillOwnedCameraSensor(const std::string& serial, double sensor
 		if (oc.cam.sensorSize  <= 0.0 && sensorWmm > 0.0) { oc.cam.sensorSize  = sensorWmm; changed = true; }
 		if (oc.cam.sensorSizeV <= 0.0 && sensorHmm > 0.0) { oc.cam.sensorSizeV = sensorHmm; changed = true; }
 		if (oc.cam.sensorPixel == 0   && pixelW    > 0)   { oc.cam.sensorPixel = pixelW;    changed = true; }
+		if (oc.cam.sensorPixelV == 0  && pixelH    > 0)   { oc.cam.sensorPixelV = pixelH;   changed = true; }
 		if (!changed) { return false; }
 		saveOwnedCameras();
 		char msg[160];
-		std::snprintf(msg, sizeof(msg), "%s sensor from captured image %.2f x %.2f mm / %u px (S/N %s)",
+		std::snprintf(msg, sizeof(msg), "%s sensor from captured image %.2f x %.2f mm / %u x %u px (S/N %s)",
 		              oc.cam.model.c_str(), oc.cam.sensorSize, oc.cam.sensorSizeV,
-		              static_cast<unsigned>(oc.cam.sensorPixel), serial.c_str());
+		              static_cast<unsigned>(oc.cam.sensorPixel), static_cast<unsigned>(oc.cam.sensorPixelV), serial.c_str());
 		logEvent("GEAR", msg);
 		return true;
 	}

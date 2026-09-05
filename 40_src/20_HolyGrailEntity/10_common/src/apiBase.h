@@ -48,8 +48,9 @@ public:
 	// 直近に撮れた画像の EXIF からセンサー実寸[mm]と横画素数を読む(2026-08-19)。
 	//  機材マスターに無い機種はこれらが空のままで、NPFも撮影シミュレーションも出せない。
 	//  カメラのAPIは寸法も画素数も返さないが、撮影画像には入っている。撮ってから埋める。
-	virtual errCode readSensorSpec(double& sensorWmm, double& sensorHmm, uint32_t& pixelW)
-	{ (void)sensorWmm; (void)sensorHmm; (void)pixelW; return ERR_HGC_NOT_SUPPORTED; }
+	//  縦の画素数も返す(2026-09-05)。画素ピッチは縦横同じと決めつけず、取れる値をそのまま持つ。
+	virtual errCode readSensorSpec(double& sensorWmm, double& sensorHmm, uint32_t& pixelW, uint32_t& pixelH)
+	{ (void)sensorWmm; (void)sensorHmm; (void)pixelW; (void)pixelH; return ERR_HGC_NOT_SUPPORTED; }
 	virtual errCode rdyShutter(const cmdt::shotSet& shotSet) { return ERR_HGC_NOT_SUPPORTED; }
 	virtual errCode actShutter(void)						{ return ERR_HGC_NOT_SUPPORTED; }
 	// 露出を1項目ずつ設定する(周期正確化のタイマ方式で、変更のあった項目だけを適用するため)。

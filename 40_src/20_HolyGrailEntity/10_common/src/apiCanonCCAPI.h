@@ -140,7 +140,7 @@ public:
 	// 情報を知る
 	errCode getSettings(cmdt::shotRange& settings);		// 設定値を取得する
 	// 撮影画像のEXIFからセンサー実寸[mm]と横画素数を読む(機材マスターに無い機種の穴埋め)。
-	errCode readSensorSpec(double& sensorWmm, double& sensorHmm, uint32_t& pixelW) override;
+	errCode readSensorSpec(double& sensorWmm, double& sensorHmm, uint32_t& pixelW, uint32_t& pixelH) override;
 	// カメラ自身の状態(記録メディア/電池/温度)を読む。
 	errCode readDeviceStatus(deviceStatus& out) override;
 	errCode rdyMetering(void);							// 測光準備

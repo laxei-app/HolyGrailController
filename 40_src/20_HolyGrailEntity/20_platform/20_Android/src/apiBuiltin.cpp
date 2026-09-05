@@ -208,10 +208,10 @@ errCode apiBuiltin::getSettings(cmdt::shotRange& settings)
 	return ERR_HGC_OK;
 }
 
-errCode apiBuiltin::readSensorSpec(double& sensorWmm, double& sensorHmm, uint32_t& pixelW)
+errCode apiBuiltin::readSensorSpec(double& sensorWmm, double& sensorHmm, uint32_t& pixelW, uint32_t& pixelH)
 {
 	if (sensorW_ <= 0.0 || pixelW_ == 0) { return ERR_HGC_NOT_SUPPORTED; }
-	sensorWmm = sensorW_; sensorHmm = sensorH_; pixelW = pixelW_;
+	sensorWmm = sensorW_; sensorHmm = sensorH_; pixelW = pixelW_; pixelH = pixelH_;
 	return ERR_HGC_OK;
 }
 

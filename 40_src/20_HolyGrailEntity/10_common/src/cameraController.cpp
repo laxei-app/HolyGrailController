@@ -232,10 +232,10 @@ errCode cameraController::readDeviceStatus(const class device& device, apiBase::
 // sensorHmm  :センサー縦[mm]
 // pixelW     :センサー横[pixel]
 // return     :ERR_HGC_OK:成功
-errCode cameraController::readSensorSpec(const class device& device, double& sensorWmm, double& sensorHmm, uint32_t& pixelW)
+errCode cameraController::readSensorSpec(const class device& device, double& sensorWmm, double& sensorHmm, uint32_t& pixelW, uint32_t& pixelH)
 {
 	if (device.apiBase == nullptr) { return ERR_HGC_READY; }
-	return device.apiBase->readSensorSpec(sensorWmm, sensorHmm, pixelW);
+	return device.apiBase->readSensorSpec(sensorWmm, sensorHmm, pixelW, pixelH);
 }
 
 // 測光の準備をする

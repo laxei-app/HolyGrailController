@@ -171,10 +171,10 @@ namespace builtinCam
 			//  ここで埋めておく(NPF と撮影シミュレーションがそのまま使える)。
 			if (d.apiBase)
 			{
-				double wmm = 0.0, hmm = 0.0; uint32_t px = 0;
-				if (d.apiBase->readSensorSpec(wmm, hmm, px) == ERR_HGC_OK)
+				double wmm = 0.0, hmm = 0.0; uint32_t px = 0, py = 0;
+				if (d.apiBase->readSensorSpec(wmm, hmm, px, py) == ERR_HGC_OK)
 				{
-					dataManager::fillOwnedCameraSensor(d.serialno, wmm, hmm, px);
+					dataManager::fillOwnedCameraSensor(d.serialno, wmm, hmm, px, py);
 				}
 			}
 		}

@@ -53,7 +53,7 @@ public:
 	errCode keepAlive(void) override { return ERR_HGC_OK; }	// 切れる線が無い
 
 	// 諸元は端末から取れる。撮る前から分かるので EXIF を待たない。
-	errCode readSensorSpec(double& sensorWmm, double& sensorHmm, uint32_t& pixelW) override;
+	errCode readSensorSpec(double& sensorWmm, double& sensorHmm, uint32_t& pixelW, uint32_t& pixelH) override;
 
 	// 直前に撮った1コマから場面の明るさを測る(撮影画像フィードバック)。
 	errCode meterScene(const hgc::exposure& shotExp, meterResult& out,

@@ -631,7 +631,7 @@ std::string apiCanonCCAPI::sendFor(const std::vector<sendMap>& map, double real)
 //  64KB だけ取る(実測: EOS R50 V の CR3 は先頭 64KB に目的のタグが入っていた)。
 //  サムネイルには EXIF が無く、display 画像は解像度が縮小に合わせて書き換えられていて
 //  画素数が縮小後の値になるため、どちらも使えない(実測)。元画像の先頭が要る。
-errCode apiCanonCCAPI::readSensorSpec(double& sensorWmm, double& sensorHmm, uint32_t& pixelW)
+errCode apiCanonCCAPI::readSensorSpec(double& sensorWmm, double& sensorHmm, uint32_t& pixelW, uint32_t& pixelH)
 {
 	if (lastImagePath_.empty()) { return ERR_HGC_NO_ELEMENT; }	// まだ1枚も測光していない
 	const std::string base = apiHostBase();
@@ -648,6 +648,7 @@ errCode apiCanonCCAPI::readSensorSpec(double& sensorWmm, double& sensorHmm, uint
 
 	sensorWmm = s.sensorWmm;
 	sensorHmm = s.sensorHmm;
+	pixelH    = s.pixelH;
 	pixelW    = s.pixelW;
 	return ERR_HGC_OK;
 }

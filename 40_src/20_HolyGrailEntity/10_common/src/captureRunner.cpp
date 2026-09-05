@@ -84,13 +84,16 @@ void captureRunner::setCallbacks(stateCb s, progressCb p, capturedCb c, errorCb 
 void captureRunner::fillSensorFromShot(int frame)
 {
 	if (sensorFillDone_ || frame < 2) { return; }
-	if (plan_.camera.sensorSize > 0.0 && plan_.camera.sensorPixel > 0) { sensorFillDone_ = true; return; }
+	//  縦の画素数(sensorPixelV)は 2026-09-05 に増えた欄。横まで埋まっていて縦だけ空の控えは
+	//  それ以前に登録したものなので、縦だけのために一度は読みに行く。
+	if (plan_.camera.sensorSize > 0.0 && plan_.camera.sensorPixel > 0 && plan_.camera.sensorPixelV > 0)
+	{ sensorFillDone_ = true; return; }
 	if (dev_ == nullptr) { return; }
 
 	sensorFillDone_ = true;	// 試すのは1回だけ(失敗しても繰り返さない)
 	double wmm = 0.0, hmm = 0.0;
-	uint32_t px = 0;
-	const errCode e = cameraController::readSensorSpec(*dev_, wmm, hmm, px);
+	uint32_t px = 0, py = 0;
+	const errCode e = cameraController::readSensorSpec(*dev_, wmm, hmm, px, py);
 	if (e != ERR_HGC_OK || wmm <= 0.0 || px == 0)
 	{
 		dataManager::logEvent("GEAR", "sensor spec not found in captured image (register the body in the gear master)", true);
@@ -100,7 +103,8 @@ void captureRunner::fillSensorFromShot(int frame)
 	if (plan_.camera.sensorSize  <= 0.0) { plan_.camera.sensorSize  = wmm; }
 	if (plan_.camera.sensorSizeV <= 0.0) { plan_.camera.sensorSizeV = hmm; }
 	if (plan_.camera.sensorPixel == 0)   { plan_.camera.sensorPixel = px;  }
-	dataManager::fillOwnedCameraSensor(dev_->serialno, wmm, hmm, px);
+	if (plan_.camera.sensorPixelV == 0 && py > 0) { plan_.camera.sensorPixelV = py; }
+	dataManager::fillOwnedCameraSensor(dev_->serialno, wmm, hmm, px, py);
 }
 
 errCode captureRunner::ready(const hgc::cs& plan, device* dev,

@@ -2113,7 +2113,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
         ocObj?.optJSONArray("lensList")?.let { ll -> for (i in 0 until ll.length()) ll.optJSONObject(i)?.optString("name")?.let { camLensNames.add(it) } }
         val lensBox = LinearLayout(this); lensBox.orientation = LinearLayout.VERTICAL
         box.addView(lensBox); camLensContainer = lensBox
-        renderCamLensReorder()
+        if (isBuiltinSerial(cam.optString("serial"))) {
+            // 内蔵カメラはレンズを交換できない。並べ替え・追加・削除を出さず、名前だけ見せる。
+            for (nm in camLensNames) {
+                val tv = TextView(this); tv.text = nm; tv.textSize = 14f; tv.setPadding(dp(8), dp(4), 0, dp(4))
+                lensBox.addView(tv)
+            }
+        } else {
+            renderCamLensReorder()
+        }
         // ロック中に「本当に変えたか」を見るための基準。**組み合わせレンズを読み込んだ後**に採る
         //  (2026-09-01 修正)。以前は認証欄の直後で採っていて camLensNames が空のままだったため、
         //  レンズを持つカメラは開いて戻るだけで「変更できません」が出ていた。
@@ -2702,6 +2710,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private fun choosePlanLens() {
+        if (planUsesBuiltinCamera()) { return }   // 内蔵カメラはレンズを交換できない
         val arr = camArray(HgeNative.nativeGetOwnedLenses())
         if (arr.length() == 0) { openLensList(); return }
         val names = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("name") }
@@ -4616,8 +4625,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
             suppressLandscape = true
             landscapeCheck.isChecked = o.optBoolean("landscape")
             suppressLandscape = false
+            // 【内蔵カメラでは設定できない項目を出さない(2026-09-05 依頼)】
+            //  同期撮影はカメラを複数つなぐ機能で、端末の中の1台では成り立たない。
+            //  レンズは交換できないので、計画側でも所持カメラ側でも変えさせない。
+            val builtinCam = planUsesBuiltinCamera()
+            (syncShotCheck.parent as? View)?.visibility = if (builtinCam) View.GONE else View.VISIBLE
+            lensText.alpha = if (builtinCam) 0.5f else 1.0f
+            findViewById<TextView>(R.id.plan_lensLabel).alpha = if (builtinCam) 0.5f else 1.0f
             // 同期撮影と追加カメラ(2026-08-25)。
-            val pano = o.optBoolean("syncShot")
+            val pano = o.optBoolean("syncShot") && !builtinCam
             suppressSyncShot = true
             syncShotCheck.isChecked = pano
             suppressSyncShot = false
