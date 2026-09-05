@@ -44,6 +44,12 @@ public:
 	static errCode setSS(const class device& device, const std::string& ss);
 	static errCode setIso(const class device& device, const std::string& iso);
 	static errCode actShutter(const class device& device);
+	// 【バックエンドを外から足す(2026-09-05)】
+	//  スマホ内蔵カメラの検出は Camera2(Android 固有)に依存するので、共通部分から
+	//  そのクラスを include できない(エッジのビルドが壊れる)。役割ごとの初期化から
+	//  ここへ入れてもらう。エッジは呼ばないので、あちらのバイナリには一切入らない。
+	static void addBackend(std::unique_ptr<class detectBase> backend);
+
 	static errCode getSettings(const class device& device, cmdt::shotRange& settings);
 	// カメラ自身の状態(記録メディア/電池/温度)を読む。
 	static errCode readDeviceStatus(const class device& device, apiBase::deviceStatus& out);

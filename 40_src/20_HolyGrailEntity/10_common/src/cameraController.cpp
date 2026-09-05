@@ -28,6 +28,14 @@ std::vector<std::unique_ptr<detectBase>>& cameraController::backends()
 	return b;
 }
 
+// 外から足したバックエンド。呼ぶのは役割ごとの初期化(スマホなら内蔵カメラ)。
+//  同じ物を二度足さないよう、呼ぶ側が1回だけ呼ぶこと。
+void cameraController::addBackend(std::unique_ptr<class detectBase> backend)
+{
+	if (!backend) { return; }
+	backends().push_back(std::move(backend));
+}
+
 // ネットワークに接続されているカメラを検出する
 // devices : 検出したカメラの情報(呼び出し側でクリア済み。各バックエンドが追加する)
 // return  : 検出したカメラの数

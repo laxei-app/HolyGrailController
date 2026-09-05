@@ -9,6 +9,9 @@
 #include "holyGrailEntity.h"
 #include "osFile.h"
 #include "commonAndroid.h"
+#include "cameraController.h"
+#include "detectBuiltin.h"
+#include "builtinBridge.h"
 
 namespace
 {
@@ -59,8 +62,20 @@ Java_app_laxei_holygrail_HgeNative_nativeSetLogDir(JNIEnv* env, jobject /*thiz*/
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeInit(JNIEnv* /*env*/, jobject /*thiz*/)
+Java_app_laxei_holygrail_HgeNative_nativeInit(JNIEnv* env, jobject /*thiz*/)
 {
+	// 内蔵カメラの呼び返し先クラスを、**Java から呼ばれているこの場で**捕まえる。
+	//  探索はネイティブスレッドで走り、そちらからは FindClass でアプリのクラスを引けない。
+	builtinCam::bindClass(env);
+	// 【スマホ内蔵カメラのバックエンドをここで足す(2026-09-05)】
+	//  検出は Camera2(Android 固有)に依存するので、共通部分の backends() には直接書けない。
+	//  スマホの初期化から1回だけ入れる。エッジは呼ばないので、あちらには入らない。
+	static bool s_builtinAdded = false;
+	if (!s_builtinAdded)
+	{
+		s_builtinAdded = true;
+		cameraController::addBackend(std::make_unique<detectBuiltin>());
+	}
 	return hge_init();
 }
 

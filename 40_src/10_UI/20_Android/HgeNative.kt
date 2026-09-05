@@ -171,6 +171,26 @@ object HgeNative {
     @JvmStatic
     fun bleDrop(target: String) = EdgeBleLink.drop(target)
 
+    // ── スマホ内蔵カメラ(2026-09-05) ─────────────────────────
+    // Camera2 は Kotlin にしか無いので、Entity(apiBuiltin/detectBuiltin)から呼び返す。
+    //  ここは素通しにして、判断は一切しない(BLE の bleExchange と同じ役目)。
+    @JvmStatic
+    fun builtinList(): String = BuiltinCamera.listCameras()
+
+    @JvmStatic
+    fun builtinDescribe(id: String): String = BuiltinCamera.describe(id)
+
+    @JvmStatic
+    fun builtinOpen(id: String): String = BuiltinCamera.open(id)
+
+    @JvmStatic
+    fun builtinClose() = BuiltinCamera.close()
+
+    // 露出を載せて1枚撮り、JPEG のバイト列を返す(失敗は null)。
+    @JvmStatic
+    fun builtinCapture(id: String, iso: Int, expNs: Long, aperture: Double, timeoutMs: Int): ByteArray? =
+        BuiltinCamera.capture(id, iso, expNs, aperture, timeoutMs)
+
     // ネイティブから呼び返される BLE のエッジ探索。見つかった端末名(HGC- を除く)を返す。
     //  BLE には UDP ブロードキャストが無いので、検索はアドバタイズのスキャンで代える。
     @JvmStatic
