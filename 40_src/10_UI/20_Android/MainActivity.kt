@@ -350,6 +350,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // スマホ⇄エッジの通信路(2026-08-14 指示)。選ぶのはスマホだけ。エッジは常に両方で待ち受ける。
         EdgeBleLink.init(this)
         BuiltinCamera.init(this)   // スマホ内蔵カメラ(Camera2)の入口へ Context を渡す
+        BuiltinVideo.init(this)    // 動画の書き出し(置き場とギャラリー)に Context が要る
 
         // 【内蔵カメラ一式は初回起動のときだけ用意する(2026-09-05 依頼)】
         //  所持カメラ・所持レンズ・撮影計画ひな形を、その端末の実力から作る。端末そのものなので
@@ -4020,6 +4021,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (name.isEmpty()) {
             // スマホで撮影。撮影開始要求(§7.4): 重なり2件超/受付100件超は受付時にエラー。
             planExec.execute {
+                // 内蔵カメラの動画の名前に計画名を使う(2026-09-05 依頼)。撮影側(C++)は計画名を
+                //  知らないので、始める前にここで渡しておく。
+                BuiltinVideo.setPlanName(try {
+                    JSONObject(HgeNative.nativeGetPlanJsonById(id)).optString("planName") } catch (_: Exception) { "" })
                 // 表示中の計画は動かさない。開始は id 指定でそのまま通る(hge_captureStartPlan)。
                 val r = HgeNative.nativeCaptureStartPlan(id)
                 runOnUiThread {

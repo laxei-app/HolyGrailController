@@ -241,18 +241,12 @@ errCode apiBuiltin::setupShootingModeManual(void)
 	}
 	opened_ = true;
 	// 【動画をここで開く(2026-09-05)】撮影の区切りと動画の区切りを一致させる。
-	//  出来上がりは shot と同じ場所へ。撮影のたびに新しいファイルにする。
+	//  出来上がりは Movies/HolyGrail/<計画名>_yymmddhhmmss.mp4。10分ごとに「そこまでの完成品」が
+	//  置き換わっていく(BuiltinVideo)。名前と置き場は Kotlin 側が決める。
 	{
-		const std::string dir = osfile::dir("shot");
-		if (!dir.empty())
-		{
-			char name[64];
-			std::snprintf(name, sizeof(name), "/hgc_%lld.mp4",
-			              static_cast<long long>(std::time(nullptr)));
-			const std::string e2 = builtinCam::videoStart(dir + name, 30);
-			if (!e2.empty()) { dataManager::logEvent("CAMERA", ("builtin " + e2).c_str(), true); }
-			else             { dataManager::logEvent("CAMERA", ("builtin video: " + dir + name).c_str()); }
-		}
+		const std::string name = builtinCam::videoStart(30);
+		if (name.empty()) { dataManager::logEvent("CAMERA", "builtin video: cannot start", true); }
+		else              { dataManager::logEvent("CAMERA", ("builtin video: " + name).c_str()); }
 	}
 	if (!manual_)
 	{

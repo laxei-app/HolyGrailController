@@ -170,25 +170,22 @@ namespace builtinCam
 		return r == JNI_TRUE;
 	}
 
-	std::string videoStart(const std::string& path, int fps)
+	std::string videoStart(int fps)
 	{
 		attach a;
-		if (!a.ok()) { return "jni not ready"; }
-		jmethodID mid = a.env->GetStaticMethodID(a.cls, "videoStart",
-		                                         "(Ljava/lang/String;I)Ljava/lang/String;");
+		if (!a.ok()) { return ""; }
+		jmethodID mid = a.env->GetStaticMethodID(a.cls, "videoStart", "(I)Ljava/lang/String;");
 		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); mid = nullptr; }
-		if (mid == nullptr) { return "videoStart not found"; }
-		jstring js = a.env->NewStringUTF(path.c_str());
-		jobject r  = a.env->CallStaticObjectMethod(a.cls, mid, js, static_cast<jint>(fps));
+		if (mid == nullptr) { return ""; }
+		jobject r = a.env->CallStaticObjectMethod(a.cls, mid, static_cast<jint>(fps));
 		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); r = nullptr; }
-		std::string out = "video start failed";
+		std::string out;
 		if (r != nullptr)
 		{
 			const char* p = a.env->GetStringUTFChars(static_cast<jstring>(r), nullptr);
 			if (p != nullptr) { out = p; a.env->ReleaseStringUTFChars(static_cast<jstring>(r), p); }
 			a.env->DeleteLocalRef(r);
 		}
-		a.env->DeleteLocalRef(js);
 		return out;
 	}
 

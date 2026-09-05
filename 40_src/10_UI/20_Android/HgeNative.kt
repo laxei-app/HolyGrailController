@@ -215,8 +215,9 @@ object HgeNative {
     // ── 動画の書き出し(2026-09-05) ───────────────────────────
     // 撮ったコマをその場で1枚ずつ足していく。撮影の終わりに必ず finish を呼ぶこと
     //  (MP4 は閉じないと再生できない)。
+    // 戻り=ギャラリーでの名前(hgt_yymmddhhmmss.mp4)。"" =失敗。
     @JvmStatic
-    fun videoStart(path: String, fps: Int): String = BuiltinVideo.start(path, fps)
+    fun videoStart(fps: Int): String = BuiltinVideo.start(fps)
 
     @JvmStatic
     fun videoAddJpeg(jpeg: ByteArray?): Boolean = BuiltinVideo.addJpeg(jpeg)
