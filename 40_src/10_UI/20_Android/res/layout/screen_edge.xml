@@ -18,7 +18,7 @@
         <ImageView android:id="@+id/edge_home" android:layout_width="32dp" android:layout_height="32dp"
             android:clickable="true" android:focusable="true" android:src="@drawable/ic_home_r" />
         <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-            android:gravity="center" android:text="登録端末設定" android:textColor="#FFFFFF"
+            android:gravity="center" android:text="端末設定" android:textColor="#FFFFFF"
             android:textSize="20sp" android:textStyle="bold" />
         <ImageView android:id="@+id/edge_menu" android:layout_width="32dp" android:layout_height="32dp"
             android:clickable="true" android:focusable="true" android:src="@drawable/ic_menu_r" />

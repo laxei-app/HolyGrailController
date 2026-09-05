@@ -223,7 +223,7 @@ class EdgeBle(
                                       "取り違えを避けて中止しました。1台だけ電源を入れてやり直してください")
                     else ->
                         finish(false, if (wantName.isEmpty()) "端末が見つかりません(広告なし)"
-                                      else "登録端末「$wantName」が見つかりません(電源とBluetoothを確認してください)")
+                                      else "外部端末「$wantName」が見つかりません(電源とBluetoothを確認してください)")
                 }
             }
         }, 12000)

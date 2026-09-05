@@ -838,7 +838,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         hgcPrefs().edit().putBoolean("edgeUseBle", on).apply()
         EdgeBleLink.close()                 // 経路を変えるので掴んでいた接続は捨てる
         HgeNative.nativeEdgeSetBle(on)
-        Toast.makeText(this, if (on) "登録端末とはBLEで通信します" else "登録端末とはWi-Fiで通信します",
+        Toast.makeText(this, if (on) "外部端末とはBLEで通信します" else "外部端末とはWi-Fiで通信します",
                        Toast.LENGTH_SHORT).show()
     }
 
@@ -893,21 +893,21 @@ class MainActivity : AppCompatActivity(), HgeListener {
         gearBand(box, "所持機材")
         gearItem(box, "所持カメラ") { openCameraList() }
         gearItem(box, "所持レンズ") { openLensList() }
-        gearBand(box, "登録端末")
+        gearBand(box, "外部端末")
         // 2026-08-08 UI依頼: 「登録」と「設定」を1画面へ統合した(登録は画面内の
         // 「＋ 新規エッジ端末」から行う)。
-        gearItem(box, "登録端末設定") { openEdgeSettings() }
+        gearItem(box, "端末設定") { openEdgeSettings() }
         // 買ってきたばかりの端末には自分たちのファームが入っていない。OTA も STA での自己更新も
         //  「今動いているファームが受け取って書く」仕組みなので最初の1回には使えず、
         //  USB で焼くここだけが「開封した端末を使える状態にする」道になる(2026-08-26)。
-        gearItem(box, "登録端末書き込み(USB)") {
+        gearItem(box, "ファームウェア書き換え(USB)") {
             startActivity(Intent(this, EdgeFlashActivity::class.java))
         }
         // 通信路の切替。エッジは常に Wi-Fi と BLE の両方で待ち受けているので、
         // ここを倒すだけで切り替わる(エッジへ知らせる必要は無い)。
         //  ・屋外でエッジが AP のときは BLE にすると SSID を切り替えずに全台と話せる
         //  ・エッジ側にモードを持たせないので、戻せなくなって現地へ行く経路は無い
-        gearSwitchItem(box, "登録端末とBLEで通信する", edgeUseBle()) { on -> setEdgeUseBle(on) }
+        gearSwitchItem(box, "外部端末とBLEで通信する", edgeUseBle()) { on -> setEdgeUseBle(on) }
         gearBand(box, "ログ")
         // 撮影中/開始要求中はグレー表示で不可(コピー処理が撮影と競合しないように)。
         // 【撮影中でも開ける(2026-08-29 実機で気づいた)】この画面には性質の違う2つが同居する。
@@ -959,10 +959,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 "・撮影場所\n" +
                 "・所持カメラ / 所持レンズ\n" +
                 "・撮影制御方法の初期値と全体設定\n" +
-                "・登録端末の一覧とネットワーク設定\n" +
+                "・外部端末の一覧とネットワーク設定\n" +
                 "・撮影ログ / 撮影レポート / 操作履歴\n\n" +
                 "機材マスタ(カメラ・レンズの一覧)は残します。\n" +
-                "登録端末本体の設定と、そこにある撮影計画は消えません。\n\n" +
+                "外部端末本体の設定と、そこにある撮影計画は消えません。\n\n" +
                 "元に戻せません。消したあとアプリを開き直します。")
             .setPositiveButton("消して開き直す") { _, _ -> doFactoryReset() }
             .setNegativeButton("やめる", null)
@@ -1118,7 +1118,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         ops.addView(TextView(this).apply {
             // エッジのぶんはエッジ端末設定にある。ここに全部置くと「どの端末の話か」が
             //  分からなくなるため、持ち主のところへ置く(2026-08-29 UI依頼)。
-            text = "次の撮影から効きます。登録端末のログは登録端末設定で端末ごとに指定します。"
+            text = "次の撮影から効きます。外部端末のログは端末設定で端末ごとに指定します。"
             textSize = 12f; setTextColor(Color.GRAY); setPadding(0, 0, 0, dp(4))
         })
         val shotCb = CheckBox(this).apply {
@@ -1153,7 +1153,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         if (online.isEmpty()) {
             ops.addView(TextView(this).apply {
-                text = "(オンラインの登録端末はありません)"
+                text = "(オンラインの外部端末はありません)"
                 textSize = 12f; setTextColor(Color.GRAY); setPadding(dp(8), 0, 0, 0)
             })
         }
@@ -1243,7 +1243,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 setDlogEnabled(true)
                 val head = if (stopped) "中断しました。" else "完了しました。"
                 val tail = if (errors.isEmpty()) "" else "\n取れなかったもの: $errors"
-                say(head + "$n 件を Download/hgclog(スマホ)・hgclog-<端末名>(登録端末) へ保存しました。" + tail)
+                say(head + "$n 件を Download/hgclog(スマホ)・hgclog-<端末名>(外部端末) へ保存しました。" + tail)
             }
         }.start()
     }
@@ -2284,11 +2284,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (edges.isEmpty()) return false
         AlertDialog.Builder(this)
             .setTitle("${what}できません")
-            .setMessage("このカメラを使用する撮影計画が、すでに登録端末「" +
+            .setMessage("このカメラを使用する撮影計画が、すでに外部端末「" +
                         edges.joinToString("」「") + "」に送られています。\n\n" +
-                        "登録端末は受け取った計画をそのまま使うため、ここで${what}すると" +
+                        "外部端末は受け取った計画をそのまま使うため、ここで${what}すると" +
                         "実際に撮影される内容と食い違います。\n\n" +
-                        "先に計画一覧からその計画を登録端末から削除してください。" +
+                        "先に計画一覧からその計画を外部端末から削除してください。" +
                         "撮影が終われば自動的に解除されます。")
             .setPositiveButton("OK", null)
             .show()
@@ -2301,8 +2301,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         runOnUiThread {
             AlertDialog.Builder(this)
                 .setTitle("認証情報を変更しました")
-                .setMessage("このカメラを使う撮影計画が登録端末「" + edges.joinToString("」「") + "」に置かれています。\n\n" +
-                            "登録端末が持っている計画は変更前のままです。次回の撮影開始で送り直され、そのときに反映されます。")
+                .setMessage("このカメラを使う撮影計画が外部端末「" + edges.joinToString("」「") + "」に置かれています。\n\n" +
+                            "外部端末が持っている計画は変更前のままです。次回の撮影開始で送り直され、そのときに反映されます。")
                 .setPositiveButton("OK", null)
                 .show()
         }
@@ -3784,7 +3784,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  isPlanOnEdge は「今カメラを使っている」だけでも true になるので、それだけでは
         //  スマホ直結の撮影中にもこの項目が出てしまう。エッジが持ち主のときだけ出す。
         val heldByEdge = planEdgeName(id).isNotEmpty() || edgeHeldByEdge.values.any { it.contains(id) }
-        if (onEdge && !capturingNow && heldByEdge) menu.add("登録端末から削除" to { confirmRemoveFromEdge(id, name) })
+        if (onEdge && !capturingNow && heldByEdge) menu.add("外部端末から削除" to { confirmRemoveFromEdge(id, name) })
         menu.add("過去の計画削除" to { confirmDeletePastPlans() })   // 終了日が過去の計画を一括削除(エッジ保有分は対象外)
         return menu
     }
@@ -3993,8 +3993,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 if (e == null) {
                     waitingPlans.remove(id); startingPlans.remove(id); refreshPlanList(); updateReadOnly()   // タップ時の即時反映を取り消す
                     AlertDialog.Builder(this)
-                        .setTitle("登録端末が見つかりません")
-                        .setMessage("登録端末「${name}」が見つからないため撮影を開始できません。\n端末の電源・ネットワーク接続を確認してください。")
+                        .setTitle("外部端末が見つかりません")
+                        .setMessage("外部端末「${name}」が見つからないため撮影を開始できません。\n端末の電源・ネットワーク接続を確認してください。")
                         .setPositiveButton("OK", null)
                         .show()
                     return@runOnUiThread
@@ -4061,7 +4061,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (!::captureStatus.isInitialized) return
         val id = currentPlanId
         val onEdge = id.isNotEmpty() && planEdgeName(id).isNotEmpty()
-        val sfx = if (onEdge) "(登録端末)" else ""
+        val sfx = if (onEdge) "(外部端末)" else ""
         fun show(text: String, color: Int) {
             captureStatus.text = text; captureStatus.setTextColor(color)
         }
@@ -4069,7 +4069,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             id.isEmpty() -> captureStatus.text = ""
             disconnectedPlans.contains(id) -> show("● カメラが見つかりません$sfx", 0xFFD32F2F.toInt())
             capturingPlans.contains(id)    -> {
-                val head = if (onEdge) "● 登録端末で撮影中" else "● 撮影中"
+                val head = if (onEdge) "● 外部端末で撮影中" else "● 撮影中"
                 val p = planProgress[id]
                 show(if (p != null) "$head  ${p.frame}/${p.total}枚  残り${p.remainSec}秒" else head, 0xFF2E7D32.toInt())
             }
@@ -4163,14 +4163,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
         beginStop(id) {
             val e = discoverEdgeByName(name)
             if (e == null) {
-                runOnUiThread { onEdgeStopFailed(id, "登録端末「${name}」が見つかりません。") }
+                runOnUiThread { onEdgeStopFailed(id, "外部端末「${name}」が見つかりません。") }
                 return@beginStop
             }
             runOnUiThread { updateEdgeIp(name, e.ip, e.port) }
             // #4: 停止は撮影を止めるだけ。エッジからは削除せず、計画のエッジ選択も勝手に変えない。
             //  → エッジは計画を保有し続ける=ロック維持。編集したいときは「エッジ端末から削除」(#2)で明示的に外す。
             val r = HgeNative.nativeEdgeStop(e.addr(), e.port, id)
-            if (r != 0) { runOnUiThread { onEdgeStopFailed(id, "停止を登録端末へ送れませんでした (code=${r})。") } }
+            if (r != 0) { runOnUiThread { onEdgeStopFailed(id, "停止を外部端末へ送れませんでした (code=${r})。") } }
         }
     }
 
@@ -4183,7 +4183,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (activeEdgePlans().isNotEmpty()) ensureEdgePoll()
         AlertDialog.Builder(this)
             .setTitle("停止できませんでした")
-            .setMessage("${why}\n登録端末では撮影が続いている可能性があります。端末の電源とネットワークを確認して、もう一度お試しください。")
+            .setMessage("${why}\n外部端末では撮影が続いている可能性があります。端末の電源とネットワークを確認して、もう一度お試しください。")
             .setPositiveButton("OK", null)
             .show()
     }
@@ -4201,7 +4201,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 runOnUiThread {
                     AlertDialog.Builder(this)
                         .setTitle("削除できませんでした")
-                        .setMessage("登録端末「${name}」が見つかりません。\n端末の電源とネットワークを確認して、もう一度お試しください。")
+                        .setMessage("外部端末「${name}」が見つかりません。\n端末の電源とネットワークを確認して、もう一度お試しください。")
                         .setPositiveButton("OK", null).show()
                     refreshPlanList(); updateReadOnly()   // 楽観的に外したロックを実状態へ戻す
                 }
@@ -4218,13 +4218,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         startingPlans.remove(id); waitingPlans.remove(id); disconnectedPlans.remove(id); stoppingPlans.remove(id); clearNoCam(id)
         nocamShownWaiting.remove(id)   // 項目11: エッジから外したら「待機中1回だけ」もリセット
         refreshPlanList(); updateReadOnly()
-        Toast.makeText(this, "登録端末から削除しました(編集できます)", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "外部端末から削除しました(編集できます)", Toast.LENGTH_SHORT).show()
     }
 
     private fun confirmRemoveFromEdge(id: String, name: String) {
         androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("登録端末から削除")
-            .setMessage("「$name」を登録端末から削除しますか？\n(待機中なら停止し、編集できるようになります。計画自体は残ります)")
+            .setTitle("外部端末から削除")
+            .setMessage("「$name」を外部端末から削除しますか？\n(待機中なら停止し、編集できるようになります。計画自体は残ります)")
             .setPositiveButton("削除") { _, _ -> removeFromEdge(id) }
             .setNegativeButton("キャンセル", null)
             .show()
@@ -4495,7 +4495,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         20 -> "カメラの電池が残りわずかです"
         21 -> "カメラが高温になっています"
         22 -> "カメラが高温のため撮影できません。冷めるまで待ってください"
-        40 -> "登録端末に保存できません。SDカードが入っているか確認してください"
+        40 -> "外部端末に保存できません。SDカードが入っているか確認してください"
         30 -> "カメラの状態が元に戻りました"
         50 -> "カメラの撮影が復帰しました"
         51 -> "カメラが撮影を完了しません(シャッターは通るのに画像が記録されません)。オフラインとして表示します"
@@ -5263,7 +5263,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             got++
         }
         if (got > 0) runOnUiThread {
-            Toast.makeText(this, "登録端末「${edge.name}」の撮影レポート ${got}件を取得しました", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "外部端末「${edge.name}」の撮影レポート ${got}件を取得しました", Toast.LENGTH_SHORT).show()
             if (flipper.displayedChild == 15) { buildReportList(); buildReportDetail() }   // 開いていれば即反映
         }
     }
@@ -6638,7 +6638,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val nm = newName.trim()
         if (nm.isEmpty() || nm == orig) { buildEdgeList(); return }
         if (!isAsciiEdgeName(nm)) {
-            Toast.makeText(this, "端末識別名は半角英数字で入力してください(登録端末で日本語は表示できません)", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "端末識別名は半角英数字で入力してください(外部端末で日本語は表示できません)", Toast.LENGTH_LONG).show()
             buildEdgeList(); return
         }
         if (edges.any { it.name == nm }) { showNameInUse(nm); buildEdgeList(); return }
@@ -6651,7 +6651,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 登録から1台外す。**エッジ本体の設定は変えない**(こちらの台帳から消すだけ)。
     private fun confirmRemoveEdge(e: Edge) {
         AlertDialog.Builder(this)
-            .setTitle("登録端末の削除")
+            .setTitle("外部端末の削除")
             .setMessage("「" + e.name + "」を登録から削除しますか？(端末本体の設定は変わりません)")
             .setPositiveButton("削除する") { _, _ ->
                 edges.remove(e); saveRegisteredEdges(); refreshEdgeSpinner()
@@ -6724,7 +6724,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
 
         box.addView(TextView(ctx).apply {
-            text = if (selectedEdgeName.isEmpty()) "登録端末の設定" else "「" + selectedEdgeName + "」の設定"
+            text = if (selectedEdgeName.isEmpty()) "端末の設定" else "「" + selectedEdgeName + "」の設定"
             setTypeface(null, Typeface.BOLD)
             textSize = 16f
         })
@@ -7003,7 +7003,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (scannedPop.isEmpty()) { Toast.makeText(ctx, "先にQRスキャンでPoPを取得してください", Toast.LENGTH_SHORT).show(); return }
         val name = (edgeNameEt?.text?.toString() ?: "").trim()
         if (name.isEmpty() || !isAsciiEdgeName(name)) {
-            Toast.makeText(ctx, "端末識別名は半角英数字で入力してください(登録端末で日本語は表示できません)", Toast.LENGTH_LONG).show(); return
+            Toast.makeText(ctx, "端末識別名は半角英数字で入力してください(外部端末で日本語は表示できません)", Toast.LENGTH_LONG).show(); return
         }
         val ssid = edgeSsidEt?.text?.toString() ?: ""
         val pass = edgePassEt?.text?.toString() ?: ""
@@ -7143,7 +7143,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                   else edgeSpinnerEdges.indexOfFirst { it.name == stored }.let { if (it >= 0) it + 1 else 0 }
         if (edgeSpinner.selectedItemPosition != idx) { try { edgeSpinner.setSelection(idx) } catch (_: Exception) {} }
         if (chosen != null && chosen != stored) {
-            Toast.makeText(this, "登録端末を変更できませんでした。もう一度選んでください", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "外部端末を変更できませんでした。もう一度選んでください", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -7438,7 +7438,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val tzNg = (edgeTzOff != nowOffMin())
         if (skew <= kClockSkewSec && !tzNg) { edgeClockWarned.remove(name); return }   // 直った
         if (!edgeClockWarned.add(name)) { return }                                     // 既に知らせた
-        val sb = StringBuilder("登録端末「").append(name).append("」の時計がずれています")
+        val sb = StringBuilder("外部端末「").append(name).append("」の時計がずれています")
         if (skew > kClockSkewSec) { sb.append("(").append(skew / 60).append("分").append(skew % 60).append("秒)") }
         if (tzNg) { sb.append("(タイムゾーンが違います)") }
         sb.append("。撮影中・待機中は直せません。計画を止めると次の同期で直ります")
@@ -7773,7 +7773,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     //  送信が成功した=エッジが持っている、は我々が確実に知っている事実なので待つ必要がない。
                     edgeHeldByEdge.getOrPut(e.name) { mutableSetOf() }.add(planId)
                     // waitingPlans には startPlan で追加済み。以降は edgePoll(全エッジ計画対象)が各計画の状態を反映する。
-                    if (currentPlanId == planId) { captureStatus.text = "● 登録端末へ転送・撮影開始" }
+                    if (currentPlanId == planId) { captureStatus.text = "● 外部端末へ転送・撮影開始" }
                     ensureEdgePoll()
                 } else {
                     capturingPlans.remove(planId); waitingPlans.remove(planId); disconnectedPlans.remove(planId)
@@ -7782,7 +7782,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     //  (実際にSDカードの挿し忘れで気づけなかった。2026-08-20)。
                     val nt = try { HgeNative.nativeLastEdgeNotice() } catch (_: Exception) { 0 }
                     val n1 = try { HgeNative.nativeLastEdgeNoticeN1() } catch (_: Exception) { 0 }
-                    val why = if (nt != 0) noticeText(nt, n1.toLong()) else "登録端末 開始できませんでした (code=$r)"
+                    val why = if (nt != 0) noticeText(nt, n1.toLong()) else "外部端末 開始できませんでした (code=$r)"
                     Toast.makeText(this, why, Toast.LENGTH_LONG).show()
                 }
             }
