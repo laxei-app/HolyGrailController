@@ -40,6 +40,13 @@ object BuiltinCamera {
     private var thread: HandlerThread? = null
     private var handler: Handler? = null
 
+    // 【星を消す工程を切る(2026-09-05)】暗い星はノイズリダクションに「ノイズ」と見なされて
+    //  消される。輪郭強調も点光源を不自然にする。どちらも切れる端末では切る。
+    //  切れるかは端末が答える。**対応していない値を要求すると撮影要求ごと弾かれる**ので、
+    //  開くときに確かめて覚えておき、使えるときだけ載せる。
+    private var canNrOff = false
+    private var canEdgeOff = false
+
     private var openId: String? = null
     private var camera: CameraDevice? = null
     private var session: CameraCaptureSession? = null
@@ -138,10 +145,27 @@ object BuiltinCamera {
         o.put("name", displayName(id, c))
         // マニュアル露出が使えるか。使えない端末では露出を指定しても効かない。
         val caps = c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+        val map  = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         o.put("manual", caps?.contains(
             CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR) ?: false)
+        // 【ノイズリダクションを切れるか(2026-09-05)】星は暗い点なので、端末の
+        //  ノイズリダクションに「ノイズ」と見なされて消される。切れるなら、端末の映像処理の
+        //  良いところ(デモザイクと色)はそのまま使い、星を消す工程だけ外せる。
+        //  切れない端末では RAW から自前で作るしかないので、その判断材料としてここで返す。
+        val nrModes = c.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES)
+        o.put("nrOff",     nrModes?.contains(CameraMetadata.NOISE_REDUCTION_MODE_OFF) ?: false)
+        o.put("nrMinimal", nrModes?.contains(CameraMetadata.NOISE_REDUCTION_MODE_MINIMAL) ?: false)
+        val edModes = c.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES)
+        o.put("edgeOff",   edModes?.contains(CameraMetadata.EDGE_MODE_OFF) ?: false)
+        o.put("postProc",  caps?.contains(
+            CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING) ?: false)
+        // RAW(DNG)が撮れるか。切れない端末の逃げ道になる。
+        o.put("raw", (caps?.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW) ?: false) &&
+                     (map?.getOutputSizes(ImageFormat.RAW_SENSOR)?.isNotEmpty() ?: false))
+        // 端末の映像処理の水準。LEGACY はマニュアル露出そのものが使えない。
+        o.put("hwLevel", c.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL) ?: -1)
+
         // 出せる JPEG のうち最大のもの(撮影に使う)
-        val map = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         val best = map?.getOutputSizes(ImageFormat.JPEG)?.maxByOrNull { it.width.toLong() * it.height }
         o.put("jpegW", best?.width ?: 0)
         o.put("jpegH", best?.height ?: 0)
@@ -161,6 +185,11 @@ object BuiltinCamera {
         val size: Size = map?.getOutputSizes(ImageFormat.JPEG)
             ?.maxByOrNull { it.width.toLong() * it.height }
             ?: return "no jpeg output size"
+        val nrModes = c.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES)
+        canNrOff = nrModes?.contains(CameraMetadata.NOISE_REDUCTION_MODE_OFF) ?: false
+        val edModes = c.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES)
+        canEdgeOff = edModes?.contains(CameraMetadata.EDGE_MODE_OFF) ?: false
+
         val h = ensureThread()
         val rd = ImageReader.newInstance(size.width, size.height, ImageFormat.JPEG, 2)
         reader = rd
@@ -266,6 +295,9 @@ object BuiltinCamera {
             // 星を撮るので、ぶれ補正と手ぶれ補正は切る(三脚前提)。無い端末では黙って無視される。
             req.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF)
             req.set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_DAYLIGHT)
+            // 星を消さないための2行。端末が対応しているときだけ載せる(上の canNrOff/canEdgeOff)。
+            if (canNrOff)   { req.set(CaptureRequest.NOISE_REDUCTION_MODE, CameraMetadata.NOISE_REDUCTION_MODE_OFF) }
+            if (canEdgeOff) { req.set(CaptureRequest.EDGE_MODE, CameraMetadata.EDGE_MODE_OFF) }
             s.capture(req.build(), null, h)
         } catch (ex: Exception) { pending = null; return false }
         return true

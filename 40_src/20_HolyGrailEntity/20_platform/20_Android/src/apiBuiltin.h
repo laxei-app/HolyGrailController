@@ -98,6 +98,8 @@ private:
 	long long expMinNs_ = 0, expMaxNs_ = 0;
 	std::vector<double> apertures_;
 	bool     manual_  = false;	// マニュアル露出が使える端末か
+	// 星を消すノイズリダクションを切れるか(切れれば端末の映像処理をそのまま使える)。
+	bool     nrOff_ = false, nrMinimal_ = false, edgeOff_ = false, rawOk_ = false;
 
 	// 合成した設定可能値と、その APEX テーブル。
 	//  テーブルは測光値を「露出非依存の場面の明るさ」へ割り戻すのに要る(apiBase には無い)。
@@ -106,6 +108,17 @@ private:
 
 	// いま載せている露出(要求ごとに渡すので、ここが唯一の状態)
 	std::string curSs_, curIso_, curFn_;
+
+	// 撮った画像を残す(2026-09-05)。キヤノン機はカメラ側のSDに残るが、内蔵カメラには
+	//  「カメラ側」が無いので、自分で書かないと何も残らない。
+	//  【将来】最終的な成果物は端末上で作る動画なので、1コマずつの画像は中間物になる。
+	//   動画の書き出しが入ったら、ここは既定で切る(確認したいときだけ残す)想定。
+	void saveShot(const std::vector<uint8_t>& jpeg);
+	// 撮り始めた1枚をまだ受け取っていなければ受け取って保存する。
+	//  【必ず毎コマ呼ぶ】固定露出の窓では測光が呼ばれないので、測光に任せると誰も回収せず、
+	//   受け取り口(ImageReader)の枠が埋まって撮れなくなる。
+	void collectPending(void);
+	int  shotSeq_ = 0;
 
 	std::vector<uint8_t> lastJpeg_;	// 直前に撮った JPEG(測光の材料)
 	bool opened_ = false;

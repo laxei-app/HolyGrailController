@@ -4,6 +4,7 @@
 #include "exposureMath.h"
 #include "jpegLuma.h"
 #include "dataManager.h"
+#include "osFile.h"
 #include "tool.h"
 #include <json/nlohmann/json.hpp>
 #include <cmath>
@@ -139,6 +140,10 @@ errCode apiBuiltin::init(class device& device)
 	expMinNs_ = j.value("expMinNs", static_cast<long long>(0));
 	expMaxNs_ = j.value("expMaxNs", static_cast<long long>(0));
 	manual_  = j.value("manual", false);
+	nrOff_     = j.value("nrOff", false);
+	nrMinimal_ = j.value("nrMinimal", false);
+	edgeOff_   = j.value("edgeOff", false);
+	rawOk_     = j.value("raw", false);
 	name_    = j.value("name", std::string("Built-in camera"));
 	apertures_.clear();
 	if (j.contains("apertures") && j["apertures"].is_array())
@@ -157,6 +162,9 @@ errCode apiBuiltin::init(class device& device)
 		              id_.c_str(), sensorW_, sensorH_, pixelW_, pixelH_, isoMin_, isoMax_,
 		              (expMinNs_ > 0 ? expMinNs_ / 1e9 : 0.0), (expMaxNs_ > 0 ? expMaxNs_ / 1e9 : 0.0),
 		              manual_ ? 1 : 0, isoList_.size(), ssList_.size(), fnList_.size());
+		dataManager::logEvent("CAMERA", b);
+		std::snprintf(b, sizeof(b), "builtin %s: nrOff=%d nrMinimal=%d edgeOff=%d raw=%d",
+		              id_.c_str(), nrOff_ ? 1 : 0, nrMinimal_ ? 1 : 0, edgeOff_ ? 1 : 0, rawOk_ ? 1 : 0);
 		dataManager::logEvent("CAMERA", b);
 	}
 
@@ -265,9 +273,20 @@ bool apiBuiltin::shootTake(std::vector<uint8_t>& out)
 //  露出制御はもともと露光が終わってから測るので、待つ場所としてそちらが正しい。
 errCode apiBuiltin::actShutter(void)
 {
+	// 前のコマの画像がまだ残っていれば、ここで回収して残す。露光はとっくに終わっているので待たない。
+	//  夜間のような固定露出の窓では測光が呼ばれないため、回収の口をここにも置かないと
+	//  受け取り口が詰まる(2026-09-05 実機で1枚も保存されずに判明)。
+	this->collectPending();
 	lastJpeg_.clear();	// 前のコマの画像を次の測光へ使い回さない
 	if (!this->shootStart()) { return ERR_HGC_TAKE_FAIL; }
 	return ERR_HGC_OK;
+}
+
+void apiBuiltin::collectPending(void)
+{
+	if (!lastJpeg_.empty()) { return; }	// 測光が既に受け取っている
+	std::vector<uint8_t> jpeg;
+	if (this->shootTake(jpeg)) { this->saveShot(jpeg); lastJpeg_.swap(jpeg); }
 }
 
 // ── 測る ────────────────────────────────────────────────────
@@ -293,12 +312,30 @@ bool apiBuiltin::measure(const std::vector<uint8_t>& jpeg, meterResult& out) con
 	return true;
 }
 
+// 撮った画像を残す。連番で書くだけの素朴な作り。
+//  置き場所はログや計画と同じアプリの領域(osfile の下)。撮影のたびに増えるので、
+//  動画の書き出しが入ったらここは既定で切る。
+void apiBuiltin::saveShot(const std::vector<uint8_t>& jpeg)
+{
+	if (jpeg.empty()) { return; }
+	const std::string dir = osfile::dir("shot");
+	if (dir.empty()) { return; }
+	char name[64];
+	std::snprintf(name, sizeof(name), "/hgc_%05d.jpg", ++shotSeq_);
+	if (!osfile::writeAll(dir + name, reinterpret_cast<const char*>(jpeg.data()), jpeg.size()))
+	{
+		// 書けないときは残量不足が疑わしい。毎コマ言っても仕方ないので最初の1回だけ。
+		if (shotSeq_ == 1) { dataManager::logEvent("CAMERA", "builtin: cannot save shot", true); }
+	}
+}
+
 errCode apiBuiltin::meterScene(const hgc::exposure& shotExp, meterResult& out,
                                const std::function<bool()>& keepGoing)
 {
 	(void)keepGoing;
 	// 露光が終わって画像が出てくるのをここで待つ(シャッターは待たずに戻っている)。
-	if (lastJpeg_.empty()) { this->shootTake(lastJpeg_); }
+	//  受け取った時点で残す。測光と保存で同じ1枚を使う(撮り直さない)。
+	this->collectPending();
 	if (!this->measure(lastJpeg_, out))
 	{
 		// 直前のコマが撮れていない。上位はこれが続いたら「カメラがオンラインでない」と見る。
