@@ -223,6 +223,27 @@ class EdgeFlashActivity : AppCompatActivity() {
         EspUsb.requestPermission(this, dev)
     }
 
+    /**
+     * 書き込みの途中で人に問う。**書き込みの手順は別スレッドで動いている**ので、
+     * ダイアログは画面のスレッドへ出し、答えが来るまでこちらは待つ。
+     * 画面が既に無いなど出せないときは「やめる」とみなす(勝手に書かない)。
+     */
+    private fun confirm(title: String, msg: String): Boolean {
+        val answer = java.util.concurrent.ArrayBlockingQueue<Boolean>(1)
+        ui.post {
+            runCatching {
+                androidx.appcompat.app.AlertDialog.Builder(this)
+                    .setTitle(title)
+                    .setMessage(msg)
+                    .setCancelable(false)
+                    .setPositiveButton("書き込む") { _, _ -> answer.offer(true) }
+                    .setNegativeButton("やめる") { _, _ -> answer.offer(false) }
+                    .show()
+            }.onFailure { answer.offer(false) }
+        }
+        return answer.take()
+    }
+
     private fun runOffUi(body: () -> Unit) {
         if (busy) return
         busy = true
@@ -347,7 +368,28 @@ class EdgeFlashActivity : AppCompatActivity() {
                                                   FlashMap.PART_TABLE + FlashMap.PART_TABLE_LEN))
             }.getOrElse { false }
 
-            val action = EdgeFirmware.decide(devId, imgId, sameBase)
+            // 【同じ版数・古い版へ戻すときは人に聞く(2026-09-05 ユーザー依頼)】
+            //  以前は同じ版数だと黙って飛ばしていた。焼き直したいときに手立てが無く、
+            //  古い版へ戻すときも黙って書いていたので、どちらも確かめてから進める。
+            val ask = EdgeFirmware.askBefore(devId, imgId)
+            if (ask != FlashAsk.NONE) {
+                val body = if (ask == FlashAsk.SAME_VERSION)
+                    "端末には同じ版数 ${devId.version} が入っています。\n書き込みますか?"
+                else
+                    "端末の版数 ${devId.version} より古い ${imgId.version} を書きます。\n古い版へ戻しますか?"
+                val extra = if (sameBase) "\n\n設定は残ります。"
+                            else "\n\n土台が違うのでまるごと書きます。設定は消えます。"
+                if (!confirm(if (ask == FlashAsk.SAME_VERSION) "同じ版数です" else "古い版へ戻します",
+                             body + extra)) {
+                    log("取りやめました。")
+                    log("--- 何もせずに終わります ---")
+                    f.watchdogReset()
+                    return@use
+                }
+            }
+
+            val action = EdgeFirmware.decide(devId, imgId, sameBase,
+                                             approvedSame = (ask == FlashAsk.SAME_VERSION))
             val plan = EdgeFirmware.planWrite(image, action)
             if (plan == null) {
                 log("同じ版数が入っています。書き込む必要はありません。")

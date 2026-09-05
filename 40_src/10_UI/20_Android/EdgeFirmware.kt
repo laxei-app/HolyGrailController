@@ -56,6 +56,21 @@ enum class FlashAction {
 }
 
 /**
+ * 書く前に人へ聞くこと(2026-09-05 ユーザー依頼)。
+ *
+ * 【なぜ聞くか】版数が同じときは黙って飛ばしていたが、それだと
+ *  「同じ版数を焼き直して直したい」ときに手立てが無い(公開物を差し替えても版数が
+ *  同じなら永遠に書けない)。古い版へ戻したいこともある。どちらも**やりたくて
+ *  やる**ことなので、止めるのではなく確かめてから進める。
+ *  版数が上がるときは今までどおり黙って書く。
+ */
+enum class FlashAsk {
+    NONE,           // 聞かずに書く(版数が上がる/素性が読めない など)
+    SAME_VERSION,   // 同じ版数が入っている
+    DOWNGRADE       // 端末の方が新しい(古い版へ戻す)
+}
+
+/**
  * 結合イメージの中の区切り。0 番地から順に、ブートローダ / パーティション表 /
  * NVS(設定) / otadata / アプリ本体 が並んでいる。
  *
@@ -170,13 +185,48 @@ object EdgeFirmware {
      *  ・**版数が同じ**       → 書く必要が無いので何もしない
      *  ・**版数が違う**       → 書いてよい。土台が同じなら本体だけ(設定が残る)
      */
-    fun decide(dev: FwIdentity, img: FwIdentity, sameBase: Boolean): FlashAction = when {
+    /**
+     * 版数を数の並びとして比べる。"0.1.592" と "0.1.435" のように、点で区切った数を
+     * 上の桁から見る。桁数が違うときは足りない方を 0 とみなす。
+     * 数として読めない部分があれば 0 として扱う(比べられないより、そろえて比べる)。
+     * 戻り値は a<b で負、a==b で 0、a>b で正。
+     */
+    fun compareVersion(a: String, b: String): Int {
+        val x = a.split("."); val y = b.split(".")
+        for (i in 0 until maxOf(x.size, y.size)) {
+            val u = x.getOrNull(i)?.trim()?.toIntOrNull() ?: 0
+            val v = y.getOrNull(i)?.trim()?.toIntOrNull() ?: 0
+            if (u != v) return if (u < v) -1 else 1
+        }
+        return 0
+    }
+
+    /**
+     * 書く前に人へ確かめるかどうか。素性が読めないときや別のアプリが入っているときは
+     * 版数を比べようが無いので聞かない(今までどおり土台ごと書く)。
+     */
+    fun askBefore(dev: FwIdentity, img: FwIdentity): FlashAsk = when {
+        !dev.valid || !img.valid -> FlashAsk.NONE
+        dev.name != img.name -> FlashAsk.NONE
+        dev.version == img.version -> FlashAsk.SAME_VERSION
+        compareVersion(img.version, dev.version) < 0 -> FlashAsk.DOWNGRADE
+        else -> FlashAsk.NONE
+    }
+
+    /**
+     * approvedSame … 「同じ版数だが書く」と人が答えたか。答えていれば SKIP をやめて書く。
+     *                書き方(本体だけ/まるごと)は版数が違うときと同じ決め方にする。
+     */
+    fun decide(dev: FwIdentity, img: FwIdentity, sameBase: Boolean,
+               approvedSame: Boolean = false): FlashAction = when {
         !dev.valid -> FlashAction.FULL
         // 焼く側に素性が無い(まだ刻んでいない古い公開物)ときは版数を比べようが無いので、
         //  「同じかもしれない」で飛ばさず必ず書く。安全側に倒す。
         !img.valid -> if (sameBase) FlashAction.APP_ONLY else FlashAction.FULL
         dev.name != img.name -> FlashAction.FULL          // 別のアプリが入っている
-        dev.version == img.version -> FlashAction.SKIP
+        dev.version == img.version ->
+            if (!approvedSame) FlashAction.SKIP
+            else if (sameBase) FlashAction.APP_ONLY else FlashAction.FULL
         sameBase -> FlashAction.APP_ONLY
         else -> FlashAction.FULL
     }

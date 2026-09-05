@@ -116,6 +116,52 @@ class EdgeFirmwareTest {
         assertNull("SKIP なのに書く段取りができている", EdgeFirmware.planWrite(ByteArray(0x30000), a))
     }
 
+    // ── 書く前に人へ聞くか(2026-09-05) ──────────────────────
+
+    @Test
+    fun 版数が上がるときは聞かない() {
+        assertEquals(FlashAsk.NONE, EdgeFirmware.askBefore(id("HolyGrailEdge", "0.1.400"), ours))
+    }
+
+    @Test
+    fun 同じ版数なら聞く() {
+        assertEquals(FlashAsk.SAME_VERSION,
+                     EdgeFirmware.askBefore(id("HolyGrailEdge", "0.1.427"), ours))
+    }
+
+    @Test
+    fun 古い版へ戻すときは聞く() {
+        assertEquals(FlashAsk.DOWNGRADE,
+                     EdgeFirmware.askBefore(id("HolyGrailEdge", "0.1.500"), ours))
+    }
+
+    @Test
+    fun 素性が読めなければ聞かない() {
+        // 比べようが無い。今までどおり土台ごと書く
+        assertEquals(FlashAsk.NONE, EdgeFirmware.askBefore(id("", "", valid = false), ours))
+        assertEquals(FlashAsk.NONE, EdgeFirmware.askBefore(ours, id("", "", valid = false)))
+        assertEquals(FlashAsk.NONE, EdgeFirmware.askBefore(id("SomethingElse", "0.1.400"), ours))
+    }
+
+    @Test
+    fun 版数は桁ごとに数で比べる() {
+        // 文字の並びで比べると "0.1.9" > "0.1.10" になってしまう
+        assertTrue(EdgeFirmware.compareVersion("0.1.9", "0.1.10") < 0)
+        assertTrue(EdgeFirmware.compareVersion("0.2.0", "0.1.999") > 0)
+        assertEquals(0, EdgeFirmware.compareVersion("0.1.435", "0.1.435"))
+        assertEquals(0, EdgeFirmware.compareVersion("0.1", "0.1.0"))   // 足りない桁は 0
+    }
+
+    @Test
+    fun 同じ版数でも承諾すれば書く() {
+        val same = id("HolyGrailEdge", "0.1.427")
+        assertEquals(FlashAction.APP_ONLY,
+                     EdgeFirmware.decide(same, ours, sameBase = true, approvedSame = true))
+        // 土台が違えば承諾してもまるごと(そうしないと起動しない)
+        assertEquals(FlashAction.FULL,
+                     EdgeFirmware.decide(same, ours, sameBase = false, approvedSame = true))
+    }
+
     @Test
     fun 版数が違えば本体だけ書く() {
         val a = EdgeFirmware.decide(id("HolyGrailEdge", "0.1.400"), ours, sameBase = true)
