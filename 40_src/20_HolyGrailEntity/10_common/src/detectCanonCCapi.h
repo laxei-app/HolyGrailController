@@ -14,6 +14,8 @@ public:
 	bool identifyAt(const std::string& host, class device& out) override;
 	// IP 直指定で CCAPI カメラを構築する(http://<host>:8080/ccapi)。
 	bool makeManualDevice(const std::string& host, class device& out) override;
+	// 挨拶: CCAPI へ 200 が返る GET を1回(deviceinformation)。401/403 の意味づけもここ。
+	greetResult greet(const class device& d) override;
 
 protected:
 	const std::vector<deviceDiscovery::definitionIntereface>& interfaces() const override;

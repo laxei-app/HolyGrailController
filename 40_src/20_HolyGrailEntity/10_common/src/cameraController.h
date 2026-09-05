@@ -25,6 +25,8 @@ public:
 	static size_t identifyTargets(std::vector<class device>& device);
 	// カメラの在否を探索元に聞く。1=居る / 0=居ない / -1=どの探索元も答えない(在否監視の表で決める)。
 	static int presence(const hgc::camera& cam);
+	// 挨拶を、その device を見つけた探索元(device.origin)に頼む。探索元が無ければ「要らない」。
+	static detectBase::greetResult greet(const class device& d);
 
 	// IP直指定でカメラに接続する(SSDPを使わない。エミュレータ等での手動接続用)。
 	//  host : カメラのIPアドレス(例 "192.168.1.4")。対応バックエンドが接続を試みる。

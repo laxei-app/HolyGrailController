@@ -90,6 +90,7 @@ size_t detectSsdpBase::discover(std::vector<class device>& out, bool identifyOnl
 	{	// api の初期化をおこなう。このバックエンドが対応する種別のみ生成できる。
 		std::shared_ptr<class apiBase> api(makeApi());	// makeApi は raw new を返す→shared_ptr が所有
 		if (!api) { continue; }							// 生成失敗(このバックエンド非対応)
+		device.origin = this;							// 見つけた探索元(挨拶などの宛先)
 
 		if (identifyOnly)
 		{	// 身元だけ。デバイス記述(認証不要)で機種名/シリアル/愛称を埋め、apiBase は作らない。

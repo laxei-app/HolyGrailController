@@ -44,6 +44,15 @@ public:
 	//  端末の中のカメラ(内蔵)は常に居るので探索元が 1 と答え、在否監視は表を持たない。
 	virtual int presence(const hgc::camera& cam) { (void)cam; return -1; }
 
+	// 【挨拶(2026-09-06)】見つけたカメラに「繋がった」と知らせる必要がある機種は、ここで一往復する。
+	//  (キヤノン機は Wi-Fi 参加の直後、成功したやり取りが一度無いと「接続してください」のまま止まる)
+	//  done   = 済んだ(もう要らない) / giveUp = 投げ直すと悪化する(締め出し等)ので、もう頼まない
+	//  detail = ログに添える一行(実装が作る。空でもよい)
+	//  何度・どの間隔で頼み直すかは在否監視が決め、URL や応答の解釈は探索元が持つ。
+	//  挨拶が要らない機種(内蔵など)は既定のまま(done=true)。
+	struct greetResult { bool done = false; bool giveUp = false; std::string detail; };
+	virtual greetResult greet(const class device& d) { (void)d; greetResult r; r.done = true; return r; }
+
 	// IP 直指定でこの種別のデバイスを1台構築する(SSDP不使用)。
 	//  成功時 out に apiBase 設定済みデバイスを入れて true。非対応/失敗は false。
 	virtual bool makeManualDevice(const std::string& host, class device& out) = 0;

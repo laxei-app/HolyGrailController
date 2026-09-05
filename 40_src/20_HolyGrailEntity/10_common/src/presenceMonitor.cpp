@@ -1,7 +1,6 @@
 ﻿#include "presenceMonitor.h"
 #include "cameraController.h"
 #include "dataManager.h"	// 挨拶を送ったことをログへ(飛んだかどうかを追えるように)
-#include "httpAuth.h"		// 401 の内訳をログへ(資格情報が無いのか nc なのか)
 #include "netThread.h"
 #include "osSystemCall.h"
 #include <json/nlohmann/json.hpp>
@@ -22,7 +21,8 @@ namespace {
 	struct pcam { std::string serial; std::string model; std::string assignedName; std::string ip; bool online = false; long long lastSeen = 0;
 	              bool verify = false;		// #1: 次tickで即疎通確認し、失敗ならTTLを待たずオフラインへ
 	              std::string location;	// SSDP のデバイス記述URL(認証不要)。生死確認はこれを引く
-	              std::string access;		// CCAPI の入口(挨拶を送る先)
+	              std::string access;		// カメラへの宛先(探索元が入れたもの。中身は探索元だけが読む)
+	              class detectBase* origin = nullptr;	// 見つけた探索元(挨拶を頼む先)
 	              int  greetLeft = 0;		// 挨拶の残り試行回数(0=済み/不要)。失敗しても捨てない
 	              long long greetAt = 0;	// 直近に挨拶を試した時刻(間隔をあけるため)
 	              bool missed = false; };	// 直近の生死確認で返事が無かった(短い離脱の検知)
@@ -51,16 +51,6 @@ namespace {
 		size_t s = p + 3, e = s;
 		while (e < url.size() && url[e] != ':' && url[e] != '/') { ++e; }
 		return url.substr(s, e - s);
-	}
-
-	// httpAuth が host を覚えるときの鍵と同じ形("http://ip:port")。
-	//  net.cpp の endpointOf と揃えること。ここがずれると診断が always known=0 になる。
-	std::string endpointOf(const std::string& url)
-	{
-		const size_t p = url.find("://");
-		if (p == std::string::npos) { return url; }
-		const size_t s = url.find('/', p + 3);
-		return url.substr(0, (s == std::string::npos) ? url.size() : s);
 	}
 
 	// 挨拶を仕掛ける。1回で終わりにしない理由は greetLocked の説明を参照。
@@ -102,7 +92,7 @@ namespace {
 			{
 				if (c.serial != d.serialno) { continue; }
 				c.model = d.model; c.assignedName = d.assignedName; c.ip = ip; c.location = d.location;
-				c.access = d.urlAccess;
+				c.access = d.urlAccess; c.origin = d.origin;
 				// 居なかったものが見えた = ネットワークに入り直した。挨拶を送る(greetLocked を参照)。
 				//  【TTL を待たない】オフライン確定には kTtlSec(150秒)かかる。カメラ側で手動で
 				//   切って繋ぎ直す操作はそれより短いことが多く、online のままなので以前は
@@ -116,7 +106,7 @@ namespace {
 			{
 				pcam n{ d.serialno, d.model, d.assignedName, ip, true, now };
 				n.location = d.location;
-				n.access = d.urlAccess;
+				n.access = d.urlAccess; n.origin = d.origin;
 				armGreet(n);		// 初めて見えた
 				g_map.push_back(n);
 			}
@@ -182,43 +172,20 @@ namespace {
 	//
 	// 【なぜ要るか】カメラを Wi-Fi に参加させるとき、カメラは接続先のIPを表示して待ち続ける。
 	//  この状態で電源を切ると Wi-Fi の設定がやり直しになる。**一度きちんと繋がれば覚える。**
-	//
-	// 【何が必要か(実機 EOS R50 V で確定)】
-	//  ・SSDP や UPnP の記述子(:49152)では**足りない**。記述子を出しているのは別のサービス
-	//  ・CCAPI(:8080)へ**届くだけでも足りない**。認証なしで叩いて 401 を貰っても変わらなかった
-	//  ・**200 が返る CCAPI アクセス**で「接続が完了しました」に変わった
-	//  つまりカメラが見ているのは「成功したやり取り」であって、到達ではない。
+	//  何をもって「繋がった」とするかは機種で違うので、**やり方は探索元(detectBase::greet)が持つ**。
+	//  ここは「いつ・何回・どの間隔で頼むか」だけを決める(2026-09-06 に URL と応答の解釈を移した)。
 	//
 	// 【いつ送るか】所持カメラに載っているかは関係ない。ネットワークに入り直すたびに要る。
 	//  電源の入り切りだけでなく、カメラ側で手動で切断して繋ぎ直したときも同じ。
 	//  なので「見えていなかったものが見えた」瞬間を合図にする(初回・復帰の両方)。
 	//
 	// 【1回で終わりにしない(2026-08-28 実機のログで判明)】
-	//  以前は合図が立った1回だけ投げ、失敗したらそれきりだった。実機ではこれが効かず、
-	//  カメラが2分以上「接続してください」のまま止まった(Edge00 のログに greet failed が
-	//  1行だけ残り、以後は何も起きない)。うまくいかない理由が2つあり、どちらも
-	//  「もう一度投げれば直る」種類のものだった。
-	//   (a) 見つけた直後はカメラ側の CCAPI がまだ応じないことがある
-	//   (b) ダイジェスト認証の nc が前回の続きに追いつくのに2往復要る。net の GET は
-	//       401 を受けて認証を付け直すのを**1度しかやらない**ので、1回の呼び出しでは
-	//       nc を大きく飛ばす手当て(httpAuth::learn の bump)まで届かない
-	//  そこで成功するまで間隔をあけて投げ直す。ただし回数は必ず区切る。資格情報が違う
-	//  相手へ延々と失敗を投げると、カメラが 403 で締め出して本体設定を入れ直すまで
-	//  戻らなくなる(EOS R50 V 実測)。
+	//  見つけた直後はカメラ側がまだ応じないことがあり、認証の同期にも往復が要る。
+	//  成功するまで間隔をあけて投げ直す。ただし回数は必ず区切り、探索元が「もう頼むな」
+	//  (giveUp)と答えたら即やめる(締め出しを避けるため)。
 	//
-	// 【まず素で投げる(2026-09-05 ユーザー指示)】CCAPI の認証を使わない設定のカメラでは、
-	//  認証なしの GET がそのまま 200 になり、それだけで挨拶が成立する。以前は資格情報の
-	//  候補が1つも無いと投げない作りだったため、**認証を使わないカメラは永久に挨拶できず**、
-	//  「このカメラに接続してください」の画面から進めなかった(実機で発生)。
-	//  net の GET は素で投げ、401 を受けたときだけ認証を付けて1度だけ投げ直す。つまり
-	//  「認証なし → 駄目なら認証」の順は 通信の層で既にできている。
-	//  締め出しの歯止めは残す: 401 が返ったのに候補が1つも無ければ、そのカメラは認証が要ると
-	//  分かるので**1回でやめる**(下の greetLeft=0)。素の401を繰り返さない。
-	//
-	// 【撮影中の個体には送らない】成功させるには認証が要り、認証は nc(ノンスカウンタ)を進める。
-	//  カメラは nc を一本で覚えているので、撮る側は次の要求で 401 を受けて認証をやり直す羽目に
-	//  なる(実測では時刻から種を作り直して回復するが、撮影の最中に往復を増やす意味は無い)。
-	//  撮影中の個体は「ずっと見えている」ので、そもそもこの合図は立たない。念のため明示で弾く。
+	// 【撮影中の個体には送らない】撮る側と認証の状態を取り合う意味が無い。撮影中の個体は
+	//  「ずっと見えている」ので、そもそもこの合図は立たない。念のため明示で弾く。
 	void greetLocked(long long now)
 	{
 		for (auto& c : g_map)
@@ -226,37 +193,23 @@ namespace {
 			if (c.greetLeft <= 0) { continue; }
 			if (!c.online)        { continue; }	// 見えていないなら投げない(見えたときに再開する)
 			if (inUseNow(c.serial)) { c.greetLeft = 0; continue; }	// 撮っている個体には触らない
-			if (c.access.empty())
-			{	// 入口が分からない。**ここが空だと挨拶は永久に飛ばない**ので残す。
-				c.greetLeft = 0;
-				dataManager::logEvent("CAMERA", ("greet skipped (no access url): " + c.serial).c_str());
-				continue;
-			}
 			if (c.greetAt != 0 && now - c.greetAt < kGreetGapSec) { continue; }	// 間をあける
 			c.greetAt = now;
 			--c.greetLeft;
-			// 機器情報を1回読むだけ。軽く、どの機種にもあり、こちらにも有用な内容が返る。
-			std::string resp;
-			const bool ok = netThread::httpGet(c.access + "/ver100/deviceinformation", resp);
-			if (ok) { c.greetLeft = 0; dataManager::logEvent("CAMERA", ("greet ok " + c.access).c_str()); }
+			class device d;
+			d.serialno = c.serial; d.model = c.model; d.assignedName = c.assignedName;
+			d.location = c.location; d.urlAccess = c.access; d.origin = c.origin;
+			const detectBase::greetResult r = cameraController::greet(d);
+			if (r.done)
+			{
+				c.greetLeft = 0;
+				if (!c.access.empty()) { dataManager::logEvent("CAMERA", ("greet ok " + c.access).c_str()); }
+			}
 			else
-			{	// 何で断られたかを残す。401 なら資格情報か nc、0 なら届いていない。
-				//  401 は外から見ると全部同じ顔をしているので、認証側の内訳も添える
-				//  (資格情報が無い/打ち止め/nonce を毎回作り直されている、の区別)。
-				int st = 0; std::string body;
-				netThread::lastHttpFailure(st, body);
-				// 403 = カメラが締め出した。投げ直すほど悪くなるので即やめる。
-				//  戻すにはカメラ本体の接続設定を入れ直すしかない(EOS R50 V 実測)。
-				if (st == 403) { c.greetLeft = 0; }
-				// 401 なのに手持ちの資格情報が1つも無い = このカメラは認証が要るのに、
-				//  こちらは何も持っていない。投げ直しても素の 401 が増えるだけで、
-				//  続けると 403 で締め出される。**1回でやめる**。
-				//  所持カメラへ ID/パスワードを入れれば候補ができ、次に見つけたときに改めて挨拶する。
-				else if (st == 401 && !httpAuth::hasCandidates()) { c.greetLeft = 0; }
+			{
+				if (r.giveUp) { c.greetLeft = 0; }
 				char b[256];
-				std::snprintf(b, sizeof(b), "greet failed http=%d left=%d %s [%s]",
-				              st, c.greetLeft, c.access.c_str(),
-				              httpAuth::diagnose(endpointOf(c.access)).c_str());
+				std::snprintf(b, sizeof(b), "greet failed left=%d %s", c.greetLeft, r.detail.c_str());
 				dataManager::logEvent("CAMERA", b, c.greetLeft == 0);	// 打ち止めのときだけ ERR
 			}
 		}

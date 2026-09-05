@@ -51,6 +51,12 @@ int cameraController::presence(const hgc::camera& cam)
 	return -1;
 }
 
+detectBase::greetResult cameraController::greet(const class device& d)
+{
+	if (d.origin == nullptr) { detectBase::greetResult r; r.done = true; return r; }
+	return d.origin->greet(d);
+}
+
 size_t cameraController::identifyTargets(std::vector<class device>& devices)
 {
 	static std::mutex identifyMutex;
