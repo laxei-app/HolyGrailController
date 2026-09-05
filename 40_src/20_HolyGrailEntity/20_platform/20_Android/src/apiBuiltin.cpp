@@ -322,6 +322,15 @@ bool apiBuiltin::shootStart(void)
 	const int    frames = this->stackFrames(sec);
 	const double sub    = sec / frames;
 	const long long ns  = static_cast<long long>(sub * 1e9 + 0.5);
+	// 加算の内訳をファイルのログにも残す(コマ数が変わったときだけ。毎コマ言わない)。
+	//  logcat の HGC-RAW には毎回出るが、PC を外して撮ると残らないため。
+	if (frames != lastFrames_)
+	{
+		lastFrames_ = frames;
+		char b[96];
+		std::snprintf(b, sizeof(b), "builtin stack: ss %.1fs = %d x %.2fs", sec, frames, sub);
+		dataManager::logEvent("CAMERA", b);
+	}
 	return builtinCam::capture(logicalId_, id_, (iso > 0.0) ? static_cast<int>(iso + 0.5) : 0,
 	                           ns, (fn > 0.0) ? fn : 0.0, 0, frames, rawOk_);
 }

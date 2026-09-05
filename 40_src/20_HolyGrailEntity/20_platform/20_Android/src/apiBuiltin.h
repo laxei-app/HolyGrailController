@@ -167,6 +167,7 @@ private:
 	bool opened_ = false;
 	bool physWarned_ = false;	// 狙いと違うセンサーで撮れた警告を出したか(1回だけ)
 	int  lastThermal_ = -1;		// 直前に記録した熱の状態(変わったときだけログに残す)
+	int  lastFrames_  = 0;		// 直前の加算コマ数(変わったときだけログに残す)
 	std::string sessionLabel_;	// 計画名(動画のファイル名の頭)
 };
 
