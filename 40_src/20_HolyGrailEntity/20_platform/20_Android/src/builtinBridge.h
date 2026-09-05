@@ -1,4 +1,4 @@
-#ifndef _BUILTIN_BRIDGE_H_
+﻿#ifndef _BUILTIN_BRIDGE_H_
 #define _BUILTIN_BRIDGE_H_
 // スマホ内蔵カメラ(Camera2)への呼び返し。Camera2 は Kotlin にしか無いので、
 // HgeNative の静的メソッドへ JNI で渡す(BLE の edgeClient.cpp と同じ形)。
@@ -30,13 +30,17 @@ namespace builtinCam
 	// 1台の諸元。JSON。取れなければ "{}"。
 	std::string describeJson(const std::string& id);
 	// 開く。logicalId=入口の論理カメラ / physId=実際に使う物理カメラ。"" =成功。
-	std::string open(const std::string& logicalId, const std::string& physId);
+	//  raw=RAW で受け取って自前で現像する(足し合わせができる)。端末が RAW を出せなければ JPEG に落ちる。
+	std::string open(const std::string& logicalId, const std::string& physId, bool raw);
 	// 閉じる(撮影の終わりに呼ぶ)。
 	void close(void);
 	// 露出を載せて1枚撮り**始める**。露光の終わりは待たない(キヤノンの CCAPI と同じ振る舞い)。
 	//  iso<=0 / expNs<=0 / aperture<=0 は「触らない」。
+	//  frames>1 は expNs のコマをその数だけ続けて撮り、線形で足して1枚にする(RAW のときだけ)。
 	bool capture(const std::string& logicalId, const std::string& physId,
-	             int iso, long long expNs, double aperture, int timeoutMs);
+	             int iso, long long expNs, double aperture, int timeoutMs, int frames, bool raw);
+	// 端末の熱の状態(PowerManager の THERMAL_STATUS_*。0=平常 … 6=停止直前)。-1=分からない。
+	int thermalStatus(void);
 	// 直前のコマを実際に撮った物理カメラ id(端末の申告。空=分からない)。
 	std::string activePhysicalId(void);
 	// 直前に撮り始めた1枚を受け取る(まだ露光中なら待つ)。
@@ -45,7 +49,8 @@ namespace builtinCam
 	// ── 動画の書き出し ──────────────────────────────────────
 	// 撮ったコマを1枚ずつ足していく。**撮影の終わりに必ず videoFinish を呼ぶこと**
 	//  (MP4 は最後に閉じないと再生できない)。
-	std::string videoStart(int fps);	// 戻り=ギャラリーでの名前。"" =失敗
+	//  planName=ファイル名の頭に使う計画名(撮影側から渡す。UI に頼ると再起動後の再開で抜ける)。
+	std::string videoStart(int fps, const std::string& planName);	// 戻り=ギャラリーでの名前。"" =失敗
 	bool        videoAddJpeg(const std::vector<uint8_t>& jpeg);
 	std::string videoFinish(void);								// 出来上がりの場所("" =失敗)
 }

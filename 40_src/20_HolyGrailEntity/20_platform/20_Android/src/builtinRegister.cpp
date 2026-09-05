@@ -103,10 +103,24 @@ namespace builtinCam
 			// 【夜間の固定露出はカメラの実力で決める】ここを空のままにすると撮影制御方法の
 			//  初期値(キヤノン機向けの 8秒など)が入る。前面カメラのように最長1秒しか無い
 			//  個体では届かないので、**そのカメラで出せる中から選ぶ**。
-			//   ・シャッターは出せる中でいちばん長いもの(暗い空にはこれが要る)
+			//   ・シャッターは出せる中で 24 秒に近いもの(2026-09-06: 加算で 48 秒まで出せるように
+			//     なったが、暗い空の目安は 24秒 F1.9 ISO1600 ≒ 一眼の 20秒 F2.8 ISO3200。
+			//     周期 30 秒 = 1.25×24 とも合う。48 秒は明るい空では飛ぶので初期値にはしない)
 			//   ・ISO は 1600 に近いもの(粒状感と明るさの兼ね合いの目安)
 			//   ・F値は固定なのでその値
-			if (!api->ssList().empty())  { cs.nightFixedExposure.ss  = api->ssList().back(); }
+			if (!api->ssList().empty())
+			{
+				std::string best = api->ssList().back();
+				double bestDiff = -1.0;
+				for (const auto& v : api->ssList())
+				{
+					const double s = expo::parseValue(v, expo::expoKind::ss);
+					if (s <= 0.0) { continue; }
+					const double diff = std::fabs(std::log2(s / 24.0));
+					if (bestDiff < 0.0 || diff < bestDiff) { bestDiff = diff; best = v; }
+				}
+				cs.nightFixedExposure.ss = best;
+			}
 			if (!api->fnList().empty())  { cs.nightFixedExposure.fn  = api->fnList().front(); }
 			if (!api->isoList().empty())
 			{

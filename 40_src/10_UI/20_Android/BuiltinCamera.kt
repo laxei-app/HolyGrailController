@@ -10,11 +10,18 @@ import android.hardware.camera2.CameraMetadata
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.params.OutputConfiguration
 import android.hardware.camera2.params.SessionConfiguration
+import android.hardware.camera2.CaptureResult
+import android.hardware.camera2.TotalCaptureResult
+import android.graphics.Bitmap
 import android.media.ImageReader
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.PowerManager
+import android.os.SystemClock
+import android.util.Log
 import android.util.Size
+import java.io.ByteArrayOutputStream
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.CountDownLatch
@@ -54,6 +61,38 @@ object BuiltinCamera {
     private var camera: CameraDevice? = null
     private var session: CameraCaptureSession? = null
     private var reader: ImageReader? = null
+
+    // ── RAW 加算(2026-09-06) ─────────────────────────────────
+    // 【なぜ RAW か】1コマの露光には上限がある(Pixel 6 広角 8.3秒)。星空には 20〜48 秒が欲しいので、
+    //  上限以下のコマを続けて撮って**線形の画素値で足す**。JPEG は階調カーブ済みの 8bit で暗部が
+    //  潰れているので足せない。足すのも現像も C++(rawStack)で行い、ここは受け渡しだけ。
+    //  1コマで足りる露光でも同じ道を通す(コマ数で色や階調が変わると動画に段差が出る)。
+    //  RAW を出せない端末(または Bayer でない端末)は従来の JPEG に落ちる(足せないので上限はセンサーのまま)。
+    private var openRaw = false          // open に頼まれた形(RAW を望んだか)
+    private var useRaw = false           // 実際に RAW で動いているか
+    private var rawW = 0; private var rawH = 0
+    private var cfa = 0                  // Bayer の並び(SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
+    private var whiteLevel = 1023
+    private var blackPos = floatArrayOf(64f, 64f, 64f, 64f)   // 黒レベル。位置順(左上,右上,左下,右下)
+    private var canShadingMap = false    // 周辺減光の地図を撮影結果に付けられるか
+    @Volatile var lastStackMs = 0        // 直前の現像にかかった時間[ms](実測用)
+
+    private fun rawSupported(c: CameraCharacteristics): Boolean {
+        val caps = c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: return false
+        if (!caps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)) return false
+        val map = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return false
+        if (map.getOutputSizes(ImageFormat.RAW_SENSOR).isNullOrEmpty()) return false
+        val f = c.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT) ?: return false
+        return f in 0..3   // Bayer 以外(モノクロ/近赤外)は足し方が違うので JPEG へ
+    }
+
+    // 端末の熱の状態。PowerManager の THERMAL_STATUS_*(0=平常 … 6=停止直前)。取れない端末は -1。
+    @JvmStatic
+    fun thermalStatus(): Int {
+        if (Build.VERSION.SDK_INT < 29) return -1
+        val pm = appCtx?.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return -1
+        return runCatching { pm.currentThermalStatus }.getOrDefault(-1)
+    }
 
     private fun mgr(): CameraManager? =
         appCtx?.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
@@ -357,24 +396,44 @@ object BuiltinCamera {
     //  logicalId = 入口になる論理カメラ / physId = 実際に使う物理カメラ。
     //  同じなら普通に開く(配下を持たない端末)。違えば**物理カメラを名指しして**開く。
     @JvmStatic
-    fun open(logicalId: String, physId: String): String {
-        if (openId == physId && openLogical == logicalId && camera != null && session != null) { return "" }
+    fun open(logicalId: String, physId: String, raw: Boolean): String {
+        if (openId == physId && openLogical == logicalId && openRaw == raw && camera != null && session != null) { return "" }
         close()
         val m = mgr() ?: return "camera service not available"
         // 諸元も出力の大きさも**物理カメラ本人**から取る(論理カメラのものとは違う)。
         val c = runCatching { m.getCameraCharacteristics(physId) }.getOrNull()
             ?: return "unknown camera id: $physId"
         val map = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-        val size: Size = map?.getOutputSizes(ImageFormat.JPEG)
-            ?.maxByOrNull { it.width.toLong() * it.height }
-            ?: return "no jpeg output size"
         val nrModes = c.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES)
         canNrOff = nrModes?.contains(CameraMetadata.NOISE_REDUCTION_MODE_OFF) ?: false
         val edModes = c.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES)
         canEdgeOff = edModes?.contains(CameraMetadata.EDGE_MODE_OFF) ?: false
 
         val h = ensureThread()
-        val rd = ImageReader.newInstance(size.width, size.height, ImageFormat.JPEG, 2)
+        openRaw = raw
+        useRaw = raw && rawSupported(c)
+        val rd: ImageReader
+        if (useRaw) {
+            val size: Size = map?.getOutputSizes(ImageFormat.RAW_SENSOR)
+                ?.maxByOrNull { it.width.toLong() * it.height }
+                ?: return "no raw output size"
+            rawW = size.width; rawH = size.height
+            cfa = c.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT) ?: 0
+            whiteLevel = c.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL) ?: 1023
+            c.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)?.let { bp ->
+                blackPos = floatArrayOf(bp.getOffsetForIndex(0, 0).toFloat(), bp.getOffsetForIndex(1, 0).toFloat(),
+                                        bp.getOffsetForIndex(0, 1).toFloat(), bp.getOffsetForIndex(1, 1).toFloat())
+            }
+            canShadingMap = c.get(CameraCharacteristics.STATISTICS_INFO_AVAILABLE_LENS_SHADING_MAP_MODES)
+                ?.contains(CameraMetadata.STATISTICS_LENS_SHADING_MAP_MODE_ON) ?: false
+            // 足す最中に次のコマが届くので、受け取り口は数枚ぶん持つ(1枚 25MB)。
+            rd = ImageReader.newInstance(size.width, size.height, ImageFormat.RAW_SENSOR, 4)
+        } else {
+            val size: Size = map?.getOutputSizes(ImageFormat.JPEG)
+                ?.maxByOrNull { it.width.toLong() * it.height }
+                ?: return "no jpeg output size"
+            rd = ImageReader.newInstance(size.width, size.height, ImageFormat.JPEG, 2)
+        }
         reader = rd
 
         val opened = CountDownLatch(1)
@@ -445,8 +504,8 @@ object BuiltinCamera {
     // 露出を指定して1枚撮り始める。成功=要求を出せた。画像は takeImage で受け取る。
     @JvmStatic
     fun capture(logicalId: String, physId: String, iso: Int, expNs: Long,
-                aperture: Double, timeoutMs: Int): Boolean {
-        val e = open(logicalId, physId)
+                aperture: Double, timeoutMs: Int, frames: Int, raw: Boolean): Boolean {
+        val e = open(logicalId, physId, raw)
         if (e.isNotEmpty()) { return false }
         val dev = camera ?: return false
         val s = session ?: return false
@@ -455,17 +514,43 @@ object BuiltinCamera {
 
         val got = CountDownLatch(1)
         pending = got; pendingJpeg = null
-        rd.setOnImageAvailableListener({ r ->
-            runCatching {
-                r.acquireLatestImage()?.use { img ->
-                    val buf = img.planes[0].buffer
-                    val b = ByteArray(buf.remaining())
-                    buf.get(b)
-                    pendingJpeg = b
-                }
+        // 【足す】RAW は届いたそばから足す(足すのは C++)。露光中に前のコマを足せるので、
+        //  最後のコマの後に残るのは現像と JPEG 化だけ。
+        val n = if (useRaw) frames.coerceAtLeast(1) else 1
+        var images = 0; var results = 0
+        var lastRes: TotalCaptureResult? = null
+        val finish = {
+            if (images >= n && results >= n) {
+                pendingJpeg = developStack(lastRes, n)
+                got.countDown()
             }
-            got.countDown()
-        }, h)
+        }
+        if (useRaw) {
+            HgeNative.nativeRawStackBegin(rawW, rawH, cfa)
+            rd.setOnImageAvailableListener({ r ->
+                runCatching {
+                    r.acquireNextImage()?.use { img ->
+                        val pl = img.planes[0]
+                        if (!HgeNative.nativeRawStackAdd(pl.buffer, pl.rowStride)) {
+                            Log.w("HGC-RAW", "stack add failed ${img.width}x${img.height} stride ${pl.rowStride}")
+                        }
+                    }
+                }
+                images++; finish()
+            }, h)
+        } else {
+            rd.setOnImageAvailableListener({ r ->
+                runCatching {
+                    r.acquireLatestImage()?.use { img ->
+                        val buf = img.planes[0].buffer
+                        val b = ByteArray(buf.remaining())
+                        buf.get(b)
+                        pendingJpeg = b
+                    }
+                }
+                got.countDown()
+            }, h)
+        }
 
         try {
             // 露出を**その物理カメラ宛て**に送れるよう、要求の宛先に加える(2026-09-05 実機で確認)。
@@ -494,21 +579,73 @@ object BuiltinCamera {
                     if (expNs > 0L) { req.setPhysicalCameraKey(CaptureRequest.SENSOR_EXPOSURE_TIME, expNs, physId) }
                 }
             }
+            // RAW は自前で現像するので、周辺減光の地図を撮影結果に付けてもらう(掛け戻しに使う)。
+            if (useRaw && canShadingMap) {
+                req.set(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE, CameraMetadata.STATISTICS_LENS_SHADING_MAP_MODE_ON)
+            }
             // 【狙ったセンサーで撮れたかを毎コマ確かめる】端末が勝手に切り替えていないかは
             //  推測できないので、撮影結果の申告を控えて上位が見られるようにする。
-            s.capture(req.build(), object : CameraCaptureSession.CaptureCallback() {
+            val cb = object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(ss: CameraCaptureSession, rq: CaptureRequest,
-                                                res: android.hardware.camera2.TotalCaptureResult) {
+                                                res: TotalCaptureResult) {
                     if (Build.VERSION.SDK_INT >= 29) {
                         activePhys = runCatching {
-                            res.get(android.hardware.camera2.CaptureResult
-                                       .LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID) ?: ""
+                            res.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID) ?: ""
                         }.getOrDefault("")
                     }
+                    if (useRaw) { lastRes = res; results++; finish() }
                 }
-            }, h)
+                override fun onCaptureFailed(ss: CameraCaptureSession, rq: CaptureRequest,
+                                             f: android.hardware.camera2.CaptureFailure) {
+                    // 1コマでも落ちたら足しても正しい明るさにならない。この1枚は無しにして戻す。
+                    Log.w("HGC-RAW", "capture failed reason=${f.reason}")
+                    if (useRaw) { pendingJpeg = null; got.countDown() }
+                }
+            }
+            val built = req.build()
+            if (n > 1) {
+                // 続けて撮る。要求をまとめて渡すので、読み出しの隙間は端末の最小で済む。
+                s.captureBurst(List(n) { built }, cb, h)
+            } else {
+                s.capture(built, cb, h)
+            }
         } catch (ex: Exception) { pending = null; return false }
         return true
+    }
+
+    // 足したものを現像して JPEG にする。ホワイトバランス・色行列・黒レベル・周辺減光は
+    //  撮影結果(端末の映像処理が使った値)をそのまま使う。
+    private fun developStack(res: TotalCaptureResult?, frames: Int): ByteArray? {
+        val t0 = SystemClock.elapsedRealtime()
+        val black = blackPos.copyOf()
+        res?.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)?.let { if (it.size >= 4) for (i in 0..3) black[i] = it[i] }
+        val gains = floatArrayOf(1f, 1f, 1f, 1f)
+        res?.get(CaptureResult.COLOR_CORRECTION_GAINS)?.let {
+            gains[0] = it.red; gains[1] = it.greenEven; gains[2] = it.greenOdd; gains[3] = it.blue
+        }
+        val ccm = floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
+        res?.get(CaptureResult.COLOR_CORRECTION_TRANSFORM)?.let { t ->
+            for (r in 0..2) for (c in 0..2) ccm[r * 3 + c] = t.getElement(c, r).toFloat()
+        }
+        var shading: FloatArray? = null; var cols = 0; var rows = 0
+        res?.get(CaptureResult.STATISTICS_LENS_SHADING_CORRECTION_MAP)?.let { m ->
+            cols = m.columnCount; rows = m.rowCount
+            val a = FloatArray(4 * cols * rows)
+            for (ch in 0..3) for (y in 0 until rows) for (x in 0 until cols) {
+                a[ch * cols * rows + y * cols + x] = m.getGainFactor(ch, x, y)
+            }
+            shading = a
+        }
+        val bmp = Bitmap.createBitmap(rawW / 2, rawH / 2, Bitmap.Config.ARGB_8888)
+        val ok = HgeNative.nativeRawStackDevelop(bmp, whiteLevel, black, gains, ccm, shading, cols, rows)
+        if (!ok) { bmp.recycle(); Log.w("HGC-RAW", "develop failed"); return null }
+        val bos = ByteArrayOutputStream(2 shl 20)
+        bmp.compress(Bitmap.CompressFormat.JPEG, 92, bos)
+        bmp.recycle()
+        lastStackMs = (SystemClock.elapsedRealtime() - t0).toInt()
+        Log.i("HGC-RAW", "stack $frames frames -> ${rawW / 2}x${rawH / 2} in ${lastStackMs}ms " +
+                         "wb=${gains.toList()} black=${black.toList()} white=$whiteLevel shading=${cols}x$rows")
+        return bos.toByteArray()
     }
 
     // 直前に始めた1枚を受け取る。まだ露光中なら終わるまで待つ。取れなければ null。

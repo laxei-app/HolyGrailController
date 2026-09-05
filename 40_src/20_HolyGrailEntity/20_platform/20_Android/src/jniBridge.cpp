@@ -12,6 +12,8 @@
 #include "cameraController.h"
 #include "detectBuiltin.h"
 #include "builtinBridge.h"
+#include "rawStack.h"
+#include <android/bitmap.h>
 
 namespace
 {
@@ -843,6 +845,86 @@ Java_app_laxei_holygrail_HgeNative_nativeSetListener(JNIEnv* env, jobject /*thiz
 	{
 		hge_setNotify(nullptr, nullptr);
 	}
+}
+
+// ── RAW 加算(2026-09-06) ─────────────────────────────────
+//  Kotlin は Camera2 から RAW を受け取って渡すだけで、足すのも現像もここ(C++ の rawStack)。
+//  12M 画素のループを Kotlin で回すと遅く、撮影の周期に食い込む。
+//  同時に開く内蔵カメラは1台なので、足し込み先はひとつでよい。
+namespace { rawStack::accumulator g_stack; }
+
+JNIEXPORT void JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeRawStackBegin(JNIEnv* /*env*/, jobject /*thiz*/, jint w, jint h, jint cfa)
+{
+	g_stack.begin(static_cast<int>(w), static_cast<int>(h), static_cast<int>(cfa));
+}
+
+JNIEXPORT jboolean JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeRawStackAdd(JNIEnv* env, jobject /*thiz*/, jobject buf, jint rowStride)
+{
+	if (buf == nullptr) { return JNI_FALSE; }
+	const uint8_t* p = static_cast<const uint8_t*>(env->GetDirectBufferAddress(buf));
+	const jlong n = env->GetDirectBufferCapacity(buf);
+	if (p == nullptr || n <= 0) { return JNI_FALSE; }
+	return g_stack.add(p, static_cast<size_t>(n), static_cast<int>(rowStride)) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeRawStackFrames(JNIEnv* /*env*/, jobject /*thiz*/)
+{
+	return static_cast<jint>(g_stack.frames());
+}
+
+// 足したものを現像して Bitmap(ARGB_8888、幅=RAW幅/2、高さ=RAW高さ/2)へ書く。
+//  black=黒レベル4つ(位置順) gains=WB4つ(R,Gr,Gb,B) ccm=3×3 行優先 shading=周辺減光(4面、無ければ null)。
+JNIEXPORT jboolean JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeRawStackDevelop(JNIEnv* env, jobject /*thiz*/, jobject bitmap,
+                                                          jint whiteLevel, jfloatArray black, jfloatArray gains,
+                                                          jfloatArray ccm, jfloatArray shading, jint cols, jint rows)
+{
+	if (bitmap == nullptr) { return JNI_FALSE; }
+	AndroidBitmapInfo info;
+	if (AndroidBitmap_getInfo(env, bitmap, &info) < 0) { return JNI_FALSE; }
+	if (info.format != ANDROID_BITMAP_FORMAT_RGBA_8888) { return JNI_FALSE; }
+	if (static_cast<int>(info.width) != g_stack.outWidth() || static_cast<int>(info.height) != g_stack.outHeight()) { return JNI_FALSE; }
+
+	rawStack::developParams p;
+	p.frames     = g_stack.frames();
+	p.whiteLevel = static_cast<int>(whiteLevel);
+	if (black != nullptr && env->GetArrayLength(black) >= 4) { env->GetFloatArrayRegion(black, 0, 4, p.black); }
+	if (gains != nullptr && env->GetArrayLength(gains) >= 4) { env->GetFloatArrayRegion(gains, 0, 4, p.gains); }
+	if (ccm   != nullptr && env->GetArrayLength(ccm)   >= 9) { env->GetFloatArrayRegion(ccm,   0, 9, p.ccm);   }
+	std::vector<float> sh;
+	if (shading != nullptr && cols >= 2 && rows >= 2 && env->GetArrayLength(shading) >= 4 * cols * rows)
+	{
+		sh.resize(static_cast<size_t>(4) * cols * rows);
+		env->GetFloatArrayRegion(shading, 0, static_cast<jsize>(sh.size()), sh.data());
+		p.shading = sh.data(); p.shadingCols = static_cast<int>(cols); p.shadingRows = static_cast<int>(rows);
+	}
+
+	void* px = nullptr;
+	if (AndroidBitmap_lockPixels(env, bitmap, &px) < 0 || px == nullptr) { return JNI_FALSE; }
+	bool ok;
+	if (info.stride == info.width * 4)
+	{
+		ok = g_stack.develop(p, static_cast<uint8_t*>(px), static_cast<size_t>(info.stride) * info.height);
+	}
+	else
+	{
+		// 行の詰め物がある Bitmap には一度まとめて書いてから行ごとに写す(稀)。
+		std::vector<uint8_t> tmp(static_cast<size_t>(info.width) * info.height * 4);
+		ok = g_stack.develop(p, tmp.data(), tmp.size());
+		if (ok)
+		{
+			for (uint32_t y = 0; y < info.height; ++y)
+			{
+				std::memcpy(static_cast<uint8_t*>(px) + static_cast<size_t>(y) * info.stride,
+				            tmp.data() + static_cast<size_t>(y) * info.width * 4, static_cast<size_t>(info.width) * 4);
+			}
+		}
+	}
+	AndroidBitmap_unlockPixels(env, bitmap);
+	return ok ? JNI_TRUE : JNI_FALSE;
 }
 
 } // extern "C"

@@ -61,6 +61,8 @@ public:
 	virtual errCode rdyMetering(void)						{ return ERR_HGC_NOT_SUPPORTED; };
 	virtual errCode alzMetering(cmdt::HISTOGRAM& hist)		{ return ERR_HGC_NOT_SUPPORTED; };
 	// 撮影開始時にカメラを当アプリ都合(マニュアル露出)に設定し、終了時に元へ戻す(仕様8/CCAPI)。
+	// 撮影セッションの名札(計画名)。成果物に名前を付ける実装(内蔵カメラの動画)が使う。既定は何もしない。
+	virtual void    setSessionLabel(const std::string& label)	{ (void)label; }
 	virtual errCode setupShootingModeManual(void)			{ return ERR_HGC_NOT_SUPPORTED; };
 	virtual errCode restoreShootingMode(void)				{ return ERR_HGC_NOT_SUPPORTED; };
 	// 接続維持用の無害なGET。撮影窓まで待機中などに定期送出し、無通信でカメラの

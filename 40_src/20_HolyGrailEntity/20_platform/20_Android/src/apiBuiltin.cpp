@@ -1,4 +1,4 @@
-#include "apiBuiltin.h"
+﻿#include "apiBuiltin.h"
 #include "builtinBridge.h"
 #include "device.h"
 #include "exposureMath.h"
@@ -72,9 +72,12 @@ void apiBuiltin::buildTables(void)
 	ssList_.clear(); isoList_.clear(); fnList_.clear();
 
 	// --- ss(短い=暗い側 から 長い=明るい側 へ。apex 昇順は上位が作る) ---
+	//  上端はセンサーの上限ではなく「加算込みで設定できる上限」(RAW が出せれば 48 秒)。
+	//  上位から見れば単に長い ss があるだけで、分割して足すのは shootStart の中の話。
 	{
 		double lo = (expMinNs_ > 0) ? (static_cast<double>(expMinNs_) / 1e9) : kFallbackSsMin;
-		double hi = (expMaxNs_ > 0) ? (static_cast<double>(expMaxNs_) / 1e9) : kFallbackSsMax;
+		double hi = this->maxSettableSsSec();
+		if (hi <= 0.0) { hi = kFallbackSsMax; }
 		if (hi < lo) { std::swap(lo, hi); }
 		const double span = std::log2(hi / lo);
 		const int    n    = static_cast<int>(span / kStepStops + 0.5);
@@ -187,9 +190,43 @@ errCode apiBuiltin::init(class device& device)
 	return ERR_HGC_OK;
 }
 
+// ── 加算で作る長秒露光 ──────────────────────────────────────
+double apiBuiltin::maxSettableSsSec(void) const
+{
+	const double hw = this->maxSsSec();
+	if (!rawOk_) { return hw; }
+	return (hw > kMaxStackSsSec) ? hw : kMaxStackSsSec;
+}
+
+int apiBuiltin::stackFrames(double sec) const
+{
+	const double hw = this->maxSsSec();
+	if (!rawOk_ || hw <= 0.0 || sec <= hw + 1e-6) { return 1; }
+	return static_cast<int>(std::ceil(sec / hw - 1e-9));
+}
+
+errCode apiBuiltin::readDeviceStatus(deviceStatus& out)
+{
+	const int t = builtinCam::thermalStatus();
+	if (t < 0) { return ERR_HGC_NOT_SUPPORTED; }
+	// PowerManager の段階: 0=NONE 1=LIGHT 2=MODERATE 3=SEVERE 4=CRITICAL 5=EMERGENCY 6=SHUTDOWN。
+	//  SEVERE から「高温警告」、EMERGENCY から「撮影できない」と扱う(端末が落とす直前)。
+	out.tempValid   = true;
+	out.tempWarning = (t >= 3);
+	out.tempStopped = (t >= 5);
+	if (t != lastThermal_)
+	{
+		lastThermal_ = t;
+		char b[64];
+		std::snprintf(b, sizeof(b), "builtin thermal status %d", t);
+		dataManager::logEvent("CAMERA", b, t >= 3);
+	}
+	return ERR_HGC_OK;
+}
+
 errCode apiBuiltin::startShooting(void)
 {
-	const std::string e = builtinCam::open(logicalId_, id_);
+	const std::string e = builtinCam::open(logicalId_, id_, rawOk_);
 	if (!e.empty())
 	{
 		dataManager::logEvent("CAMERA", ("builtin open failed: " + e).c_str(), true);
@@ -233,7 +270,7 @@ errCode apiBuiltin::rdyShutter(const cmdt::shotSet& shotSet)
 
 errCode apiBuiltin::setupShootingModeManual(void)
 {
-	const std::string e = builtinCam::open(logicalId_, id_);
+	const std::string e = builtinCam::open(logicalId_, id_, rawOk_);
 	if (!e.empty())
 	{
 		dataManager::logEvent("CAMERA", ("builtin open failed: " + e).c_str(), true);
@@ -244,7 +281,7 @@ errCode apiBuiltin::setupShootingModeManual(void)
 	//  出来上がりは Movies/HolyGrail/<計画名>_yyyymmddhhmmss.mp4。10分ごとに「そこまでの完成品」が
 	//  置き換わっていく(BuiltinVideo)。名前と置き場は Kotlin 側が決める。
 	{
-		const std::string name = builtinCam::videoStart(30);
+		const std::string name = builtinCam::videoStart(30, sessionLabel_);
 		if (name.empty()) { dataManager::logEvent("CAMERA", "builtin video: cannot start", true); }
 		else              { dataManager::logEvent("CAMERA", ("builtin video: " + name).c_str()); }
 	}
@@ -280,9 +317,13 @@ bool apiBuiltin::shootStart(void)
 	const double sec = this->curSsSec();
 	const double iso = expo::parseValue(curIso_, expo::expoKind::iso);
 	const double fn  = expo::parseValue(curFn_,  expo::expoKind::fn);
-	const long long ns = static_cast<long long>(sec * 1e9 + 0.5);
+	// 【センサーの上限を超える ss は分けて撮って足す(2026-09-06)】24 秒なら 8 秒×3 コマ。
+	//  1コマの長さは等分にする(最後だけ短い、より読み出しの隙間が揃う)。
+	const int    frames = this->stackFrames(sec);
+	const double sub    = sec / frames;
+	const long long ns  = static_cast<long long>(sub * 1e9 + 0.5);
 	return builtinCam::capture(logicalId_, id_, (iso > 0.0) ? static_cast<int>(iso + 0.5) : 0,
-	                           ns, (fn > 0.0) ? fn : 0.0, 0);
+	                           ns, (fn > 0.0) ? fn : 0.0, 0, frames, rawOk_);
 }
 
 bool apiBuiltin::shootTake(std::vector<uint8_t>& out)
@@ -391,7 +432,7 @@ errCode apiBuiltin::meterScene(const hgc::exposure& shotExp, meterResult& out,
 errCode apiBuiltin::meterHere(meterResult& out, const std::function<bool()>& keepGoing)
 {
 	(void)keepGoing;
-	if (builtinCam::open(logicalId_, id_).empty()) { opened_ = true; }
+	if (builtinCam::open(logicalId_, id_, rawOk_).empty()) { opened_ = true; }
 	std::vector<uint8_t> jpeg;
 	if (!this->shootStart() || !this->shootTake(jpeg))
 	{ out.ok = false; out.failStage = 20; return ERR_HGC_RDY_METARING; }

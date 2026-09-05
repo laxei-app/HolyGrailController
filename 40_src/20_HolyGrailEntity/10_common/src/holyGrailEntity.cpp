@@ -553,6 +553,11 @@ namespace
 			double s = expo::parseValue(w.ccm->limitBright.ss, expo::expoKind::ss);
 			if (s > maxSs) { maxSs = s; }
 		}
+		// 【内蔵カメラは 1.25 倍(2026-09-06 ユーザー決定)】RAW を何コマも足して長秒露光を作るので、
+		//  露光の後に加算・現像・JPEG 化が続く。ss+2 では 48 秒のとき足りない。8.3 秒なら 10.4 秒で
+		//  従来(10.3 秒)とほぼ同じ。序数の頭 "BUILTIN:" は apiBuiltin::kSerialPrefix と同じもの
+		//  (あちらは Android 専用のファイルなので、ここから参照できない)。
+		if (plan.camera.serial.rfind("BUILTIN:", 0) == 0) { return static_cast<int>(std::ceil(maxSs * 1.25)); }
 		return static_cast<int>(std::ceil(maxSs)) + 2;
 	}
 

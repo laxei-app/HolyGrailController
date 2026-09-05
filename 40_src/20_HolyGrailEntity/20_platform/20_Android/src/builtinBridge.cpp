@@ -1,4 +1,4 @@
-#include "builtinBridge.h"
+﻿#include "builtinBridge.h"
 #include <jni.h>
 #include "commonAndroid.h"	// hgeJavaVm(JNI_OnLoad が覚えた VM を借りる)
 
@@ -110,17 +110,17 @@ namespace builtinCam
 		return out;
 	}
 
-	std::string open(const std::string& logicalId, const std::string& physId)
+	std::string open(const std::string& logicalId, const std::string& physId, bool raw)
 	{
 		attach a;
 		if (!a.ok()) { return "jni not ready"; }
 		jmethodID mid = a.env->GetStaticMethodID(a.cls, "builtinOpen",
-		                 "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+		                 "(Ljava/lang/String;Ljava/lang/String;Z)Ljava/lang/String;");
 		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); mid = nullptr; }
 		if (mid == nullptr) { return "builtinOpen not found"; }
 		jstring jl = a.env->NewStringUTF(logicalId.c_str());
 		jstring jp = a.env->NewStringUTF(physId.c_str());
-		jobject r  = a.env->CallStaticObjectMethod(a.cls, mid, jl, jp);
+		jobject r  = a.env->CallStaticObjectMethod(a.cls, mid, jl, jp, static_cast<jboolean>(raw ? JNI_TRUE : JNI_FALSE));
 		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); r = nullptr; }
 		std::string out = "open failed";
 		if (r != nullptr)
@@ -150,12 +150,12 @@ namespace builtinCam
 	}
 
 	bool capture(const std::string& logicalId, const std::string& physId,
-	             int iso, long long expNs, double aperture, int timeoutMs)
+	             int iso, long long expNs, double aperture, int timeoutMs, int frames, bool raw)
 	{
 		attach a;
 		if (!a.ok()) { return false; }
 		jmethodID mid = a.env->GetStaticMethodID(a.cls, "builtinCapture",
-		                 "(Ljava/lang/String;Ljava/lang/String;IJDI)Z");
+		                 "(Ljava/lang/String;Ljava/lang/String;IJDIIZ)Z");
 		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); mid = nullptr; }
 		if (mid == nullptr) { return false; }
 		jstring jl = a.env->NewStringUTF(logicalId.c_str());
@@ -164,21 +164,37 @@ namespace builtinCam
 		                                            static_cast<jint>(iso),
 		                                            static_cast<jlong>(expNs),
 		                                            static_cast<jdouble>(aperture),
-		                                            static_cast<jint>(timeoutMs));
+		                                            static_cast<jint>(timeoutMs),
+		                                            static_cast<jint>(frames),
+		                                            static_cast<jboolean>(raw ? JNI_TRUE : JNI_FALSE));
 		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); r = JNI_FALSE; }
 		a.env->DeleteLocalRef(jl); a.env->DeleteLocalRef(jp);
 		return r == JNI_TRUE;
 	}
 
-	std::string videoStart(int fps)
+	int thermalStatus(void)
+	{
+		attach a;
+		if (!a.ok()) { return -1; }
+		jmethodID mid = a.env->GetStaticMethodID(a.cls, "builtinThermal", "()I");
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); mid = nullptr; }
+		if (mid == nullptr) { return -1; }
+		jint r = a.env->CallStaticIntMethod(a.cls, mid);
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); r = -1; }
+		return static_cast<int>(r);
+	}
+
+	std::string videoStart(int fps, const std::string& planName)
 	{
 		attach a;
 		if (!a.ok()) { return ""; }
-		jmethodID mid = a.env->GetStaticMethodID(a.cls, "videoStart", "(I)Ljava/lang/String;");
+		jmethodID mid = a.env->GetStaticMethodID(a.cls, "videoStart", "(ILjava/lang/String;)Ljava/lang/String;");
 		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); mid = nullptr; }
 		if (mid == nullptr) { return ""; }
-		jobject r = a.env->CallStaticObjectMethod(a.cls, mid, static_cast<jint>(fps));
+		jstring jn = a.env->NewStringUTF(planName.c_str());
+		jobject r = a.env->CallStaticObjectMethod(a.cls, mid, static_cast<jint>(fps), jn);
 		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); r = nullptr; }
+		a.env->DeleteLocalRef(jn);
 		std::string out;
 		if (r != nullptr)
 		{

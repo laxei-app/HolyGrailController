@@ -369,23 +369,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
             }
         }
 
-        // 【物理カメラを名指しできるかの実験(2026-09-05)】論理カメラの配下にある
-        //  超広角などを使えるかは端末の実装による。1回だけ試して結果をログへ残す。
-        //  通常の撮影には影響しない。確かめ終わったら消してよい。
-        if (!hgcPrefs().getBoolean("physProbeDone", false)) {
-            hgcPrefs().edit().putBoolean("physProbeDone", true).apply()
-            dataExec.execute {
-                try {
-                    val arr = org.json.JSONArray(HgeNative.builtinPhysicals())
-                    for (i in 0 until arr.length()) {
-                        val o = arr.optJSONObject(i) ?: continue
-                        if (o.optString("facing") != "back") continue
-                        val r = HgeNative.builtinProbePhysical(o.optString("logical"), o.optString("id"))
-                        android.util.Log.i("HGC-PHYS", r)
-                    }
-                } catch (e: Exception) { android.util.Log.i("HGC-PHYS", "probe failed: " + e) }
-            }
-        }
         HgeNative.nativeEdgeSetBle(edgeUseBle())
         HgeNative.nativeSetListener(this)
         // 起動時のログ整理(当日以外が5件以上なら古い順に削除、最新4件まで残す)。端末TZで「当日」を判定。
@@ -4062,10 +4045,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (name.isEmpty()) {
             // スマホで撮影。撮影開始要求(§7.4): 重なり2件超/受付100件超は受付時にエラー。
             planExec.execute {
-                // 内蔵カメラの動画の名前に計画名を使う(2026-09-05 依頼)。撮影側(C++)は計画名を
-                //  知らないので、始める前にここで渡しておく。
-                BuiltinVideo.setPlanName(try {
-                    JSONObject(HgeNative.nativeGetPlanJsonById(id)).optString("planName") } catch (_: Exception) { "" })
                 // 表示中の計画は動かさない。開始は id 指定でそのまま通る(hge_captureStartPlan)。
                 val r = HgeNative.nativeCaptureStartPlan(id)
                 runOnUiThread {

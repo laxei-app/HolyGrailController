@@ -1,4 +1,4 @@
-#ifndef _API_BUILTIN_H_
+﻿#ifndef _API_BUILTIN_H_
 #define _API_BUILTIN_H_
 // スマホ内蔵カメラの apiBase 実装(2026-09-05)。
 //
@@ -23,6 +23,11 @@ public:
 	// 合成する目盛りの刻み[段]。**ここだけ変えれば粗さが変わる**(2026-09-05 ユーザー指示)。
 	//  スマホは連続に設定できるので、キヤノン機の 1/3 段より細かくして性能を引き出す。
 	static constexpr double kStepStops = 1.0 / 12.0;
+
+	// 【加算で作る長秒露光の上限[秒](2026-09-06 ユーザー決定)】センサーの1コマの上限が何秒でも、
+	//  内蔵カメラはここまで設定できる。上限を超える ss は、上限以下のコマを続けて撮って
+	//  RAW を線形で足して1枚にする(rawStack)。RAW を出せない端末はセンサーの上限まで。
+	static constexpr double kMaxStackSsSec = 48.0;
 
 	// device.serialno に入れる識別子の頭。所持カメラはこれで一意に管理される。
 	static const char* kSerialPrefix;	// "BUILTIN:"
@@ -49,11 +54,16 @@ public:
 
 	// 撮影モードの概念が無い(要求ごとにマニュアル露出を載せる)。開け閉めだけ受け持つ。
 	errCode setupShootingModeManual(void) override;
+	// 計画名を受け取る(動画のファイル名に使う)。撮影側が渡すので、再起動後の再開でも抜けない。
+	void setSessionLabel(const std::string& label) override { sessionLabel_ = label; }
 	errCode restoreShootingMode(void) override;
 	errCode keepAlive(void) override { return ERR_HGC_OK; }	// 切れる線が無い
 
 	// 諸元は端末から取れる。撮る前から分かるので EXIF を待たない。
 	errCode readSensorSpec(double& sensorWmm, double& sensorHmm, uint32_t& pixelW, uint32_t& pixelH) override;
+	// 端末の熱の状態を「カメラの温度」として返す(2026-09-06)。長秒の加算は熱が心配なので、
+	//  5分ごとの状態確認に乗せてログと通知へ出す。
+	errCode readDeviceStatus(deviceStatus& out) override;
 
 	// 直前に撮った1コマから場面の明るさを測る(撮影画像フィードバック)。
 	errCode meterScene(const hgc::exposure& shotExp, meterResult& out,
@@ -77,8 +87,12 @@ public:
 	// センサーの面積[mm2]。どのカメラが星向きかを機種名に頼らず選ぶのに使う。
 	double sensorArea(void) const { return sensorW_ * sensorH_; }
 	double aperture(void) const { return apertures_.empty() ? 0.0 : apertures_.front(); }
-	// 最長の露光[秒]。夜間の固定露出をこの範囲へ収めるのに使う。
+	// センサー1コマの最長露光[秒](端末の申告)。これを超える ss は加算で作る。
 	double maxSsSec(void) const { return (expMaxNs_ > 0) ? (static_cast<double>(expMaxNs_) / 1e9) : 0.0; }
+	// 設定できる最長の ss[秒](加算込み)。RAW が出せれば kMaxStackSsSec、出せなければセンサーの上限。
+	double maxSettableSsSec(void) const;
+	// ss[秒] を撮るのに要るコマ数(1=足さない)。
+	int stackFrames(double sec) const;
 	// 設定可能値(ひな形の露出をこの並びへ吸着させる)。
 	const std::vector<std::string>& isoList(void) const { return isoList_; }
 	const std::vector<std::string>& ssList(void)  const { return ssList_; }
@@ -140,6 +154,8 @@ private:
 	std::vector<uint8_t> lastJpeg_;	// 直前に撮った JPEG(測光の材料)
 	bool opened_ = false;
 	bool physWarned_ = false;	// 狙いと違うセンサーで撮れた警告を出したか(1回だけ)
+	int  lastThermal_ = -1;		// 直前に記録した熱の状態(変わったときだけログに残す)
+	std::string sessionLabel_;	// 計画名(動画のファイル名の頭)
 };
 
 #endif // _API_BUILTIN_H_

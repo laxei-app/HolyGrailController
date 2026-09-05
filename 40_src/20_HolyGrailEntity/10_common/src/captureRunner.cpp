@@ -940,6 +940,8 @@ bool captureRunner::establishSession(void)
 	// 作れないため、Mにしてから設定可能値を取得する。終了時に restoreShootingMode で元へ戻す。
 	{
 		ramMark("before shootMode");
+		// 成果物に名前を付ける実装(内蔵カメラの動画)へ計画名を渡す。UI に頼ると再起動後の再開で抜ける。
+		if (dev_->apiBase) { dev_->apiBase->setSessionLabel(plan_.name); }
 		errCode me = cameraController::setupShootingModeManual(*dev_);
 		if (me == ERR_HGC_OK)            { interruptibleSleep(800); }	// モード変更/ability更新の反映待ち(初回rdyShutterの取りこぼし防止)
 		else if (me == ERR_HGC_NOT_SUPPORTED) { /* モード変更非対応機。そのまま続行 */ }

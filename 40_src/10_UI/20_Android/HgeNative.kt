@@ -100,6 +100,13 @@ object HgeNative {
     // スマホ内蔵カメラを所持カメラへ足す(まだ無いものだけ)。戻り=足した台数。
     //  端末そのものなので登録可否は聞かない(外付けカメラのプロンプトとは扱いが違う)。
     external fun nativeRegisterBuiltinCameras(): Int
+    // RAW 加算(2026-09-06)。Camera2 から受け取った RAW を足して現像する。ループは C++(rawStack)。
+    external fun nativeRawStackBegin(width: Int, height: Int, cfa: Int)
+    external fun nativeRawStackAdd(buf: java.nio.ByteBuffer, rowStride: Int): Boolean
+    external fun nativeRawStackFrames(): Int
+    external fun nativeRawStackDevelop(bitmap: android.graphics.Bitmap, whiteLevel: Int, black: FloatArray,
+                                       gains: FloatArray, ccm: FloatArray, shading: FloatArray?,
+                                       shadingCols: Int, shadingRows: Int): Boolean
     external fun nativeAddOwnedLens(name: String): Int
     external fun nativeRemoveOwnedCamera(name: String): Int
     external fun nativeRemoveOwnedLens(name: String): Int
@@ -193,31 +200,28 @@ object HgeNative {
     fun builtinDescribe(id: String): String = BuiltinCamera.describe(id)
 
     @JvmStatic
-    fun builtinOpen(logicalId: String, physId: String): String = BuiltinCamera.open(logicalId, physId)
+    fun builtinOpen(logicalId: String, physId: String, raw: Boolean): String =
+        BuiltinCamera.open(logicalId, physId, raw)
 
     @JvmStatic
     fun builtinClose() = BuiltinCamera.close()
 
-    // 露出を載せて1枚撮り始める(露光の終わりは待たない)。
+    // 露出を載せて1枚撮り始める(露光の終わりは待たない)。frames>1 は RAW を足して1枚にする。
     @JvmStatic
     fun builtinCapture(logicalId: String, physId: String, iso: Int, expNs: Long,
-                       aperture: Double, timeoutMs: Int): Boolean =
-        BuiltinCamera.capture(logicalId, physId, iso, expNs, aperture, timeoutMs)
+                       aperture: Double, timeoutMs: Int, frames: Int, raw: Boolean): Boolean =
+        BuiltinCamera.capture(logicalId, physId, iso, expNs, aperture, timeoutMs, frames, raw)
 
-    // 直前のコマを実際に撮った物理カメラ id(狙いどおりかの確認用)。
+    // 端末の熱の状態(PowerManager の THERMAL_STATUS_*)。-1=取れない端末。
     @JvmStatic
-    fun builtinActivePhysical(): String = BuiltinCamera.activePhysicalId()
-
-    // 直前に撮り始めた1枚を受け取る(まだ露光中なら待つ)。
-    @JvmStatic
-    fun builtinTakeImage(timeoutMs: Int): ByteArray? = BuiltinCamera.takeImage(timeoutMs)
+    fun builtinThermal(): Int = BuiltinCamera.thermalStatus()
 
     // ── 動画の書き出し(2026-09-05) ───────────────────────────
     // 撮ったコマをその場で1枚ずつ足していく。撮影の終わりに必ず finish を呼ぶこと
     //  (MP4 は閉じないと再生できない)。
     // 戻り=ギャラリーでの名前(hgt_yymmddhhmmss.mp4)。"" =失敗。
     @JvmStatic
-    fun videoStart(fps: Int): String = BuiltinVideo.start(fps)
+    fun videoStart(fps: Int, planName: String): String { BuiltinVideo.setPlanName(planName); return BuiltinVideo.start(fps) }
 
     @JvmStatic
     fun videoAddJpeg(jpeg: ByteArray?): Boolean = BuiltinVideo.addJpeg(jpeg)
