@@ -71,6 +71,19 @@ public:
 	// カメラ id("0","1",…)。detectBuiltin が作った device から取る。
 	const std::string& cameraId(void) const { return id_; }
 
+	// スマホ用のひな形を組み立てるための諸元。レンズが交換できないので、
+	//  焦点距離と開放F値は「カメラの一部」として端末が答える。
+	double focalMm(void) const { return focalMm_; }
+	// センサーの面積[mm2]。どのカメラが星向きかを機種名に頼らず選ぶのに使う。
+	double sensorArea(void) const { return sensorW_ * sensorH_; }
+	double aperture(void) const { return apertures_.empty() ? 0.0 : apertures_.front(); }
+	// 最長の露光[秒]。夜間の固定露出をこの範囲へ収めるのに使う。
+	double maxSsSec(void) const { return (expMaxNs_ > 0) ? (static_cast<double>(expMaxNs_) / 1e9) : 0.0; }
+	// 設定可能値(ひな形の露出をこの並びへ吸着させる)。
+	const std::vector<std::string>& isoList(void) const { return isoList_; }
+	const std::vector<std::string>& ssList(void)  const { return ssList_; }
+	const std::vector<std::string>& fnList(void)  const { return fnList_; }
+
 private:
 	// 値の文字列と、カメラへ渡す実数の対応。文字列は上位(テーブル/ログ/計画)が使う形。
 	static std::string ssText(double sec);
@@ -92,7 +105,7 @@ private:
 	std::string id_;			// Camera2 のカメラ id
 	std::string name_;			// 表示名
 	// 諸元(取れなければ 0)
-	double   sensorW_ = 0.0, sensorH_ = 0.0;
+	double   sensorW_ = 0.0, sensorH_ = 0.0, focalMm_ = 0.0;
 	uint32_t pixelW_  = 0,   pixelH_  = 0;
 	int      isoMin_  = 0,   isoMax_  = 0;
 	long long expMinNs_ = 0, expMaxNs_ = 0;

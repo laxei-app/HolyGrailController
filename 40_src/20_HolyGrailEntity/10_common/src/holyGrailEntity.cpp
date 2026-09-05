@@ -2446,6 +2446,17 @@ int32_t hge_selectTemplate(const char* id)
 
 // 今の計画をひな形として保存する。**編集対象は動かさない**(計画を編集したまま控えを取る)。
 //  name が空なら計画名を使う。同名のひな形があれば連番を付ける(夕焼け → 夕焼け2)。
+int32_t hge_saveTemplateJsonIfAbsent(const char* csJson)
+{
+	if (csJson == nullptr || csJson[0] == 0) { return ERR_HGC_INVALID_ARG; }
+	hgc::cs cs;
+	if (!csjson::fromJson(std::string(csJson), cs)) { return ERR_HGC_JSON_PARSE; }
+	if (cs.name.empty()) { return ERR_HGC_INVALID_ARG; }
+	// 同じ名前が既にある = 作る必要が無い(利用者が消したものを作り直さない)。
+	for (const auto& n : collectTplNames("")) { if (n == cs.name) { return ERR_HGC_OK; } }
+	return dataManager::saveTplFile(makeTplId(), csjson::toJson(cs)) ? ERR_HGC_OK : ERR_HGC_INVALID_STATE;
+}
+
 int32_t hge_saveTemplateFromPlan(const char* name)
 {
 	if (!g_planReady) { loadFixedPlanImpl(); }

@@ -141,6 +141,7 @@ errCode apiBuiltin::init(class device& device)
 	expMinNs_ = j.value("expMinNs", static_cast<long long>(0));
 	expMaxNs_ = j.value("expMaxNs", static_cast<long long>(0));
 	manual_  = j.value("manual", false);
+	focalMm_ = j.value("focalMm", 0.0);
 	nrOff_     = j.value("nrOff", false);
 	nrMinimal_ = j.value("nrMinimal", false);
 	edgeOff_   = j.value("edgeOff", false);
