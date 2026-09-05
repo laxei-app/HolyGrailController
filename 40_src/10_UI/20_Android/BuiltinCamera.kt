@@ -47,7 +47,10 @@ object BuiltinCamera {
     private var canNrOff = false
     private var canEdgeOff = false
 
-    private var openId: String? = null
+    private var openId: String? = null      // いま開いている物理カメラ id
+    private var openLogical: String? = null // その入口になっている論理カメラ id
+    // 直前のコマを実際に撮った物理カメラ id(端末の申告)。狙いどおりか確かめるために持つ。
+    @Volatile private var activePhys: String = ""
     private var camera: CameraDevice? = null
     private var session: CameraCaptureSession? = null
     private var reader: ImageReader? = null
@@ -66,10 +69,13 @@ object BuiltinCamera {
     }
 
     // ── 列挙 ────────────────────────────────────────────────
-    // 【物理カメラをそのまま並べる】論理カメラの配下にある物理カメラは getCameraIdList に
-    //  出てこないので、論理カメラを開いて physicalCameraIds を辿る…という手もあるが、
-    //  端末によって「物理カメラ単体では開けない」ものがある(実装依存)。まずは
-    //  getCameraIdList が返す id をそのまま1台ずつ扱う(これは必ず開ける)。
+    // 【背面の物理カメラだけを並べる(2026-09-05 ユーザー指示)】
+    //  ・前面カメラは星景に使えないので出さない
+    //  ・超広角などは論理カメラ(複数を束ねたもの)の配下に隠れていて getCameraIdList に
+    //    出てこない。配下まで辿って**物理カメラを1台ずつ**出す
+    //  ・物理カメラは単体で開けないことが多いが、論理カメラを入口にして名指しすれば使える
+    //    (2026-09-05 実機で確認。狙ったセンサーで撮れ、露出も指定どおり乗る)
+    //  配下を持たない端末では、その論理カメラ自身を1台として扱う。
     @JvmStatic
     fun listCameras(): String {
         val m = mgr() ?: return "[]"
@@ -77,11 +83,20 @@ object BuiltinCamera {
         runCatching {
             for (id in m.cameraIdList) {
                 val c = runCatching { m.getCameraCharacteristics(id) }.getOrNull() ?: continue
-                val o = JSONObject()
-                o.put("id", id)
-                o.put("name", displayName(id, c))
-                o.put("facing", facingName(c))
-                arr.put(o)
+                val subs = if (Build.VERSION.SDK_INT >= 28)
+                    (runCatching { c.physicalCameraIds }.getOrNull() ?: emptySet()) else emptySet()
+                if (subs.isEmpty()) {
+                    if (facingName(c) != "back") { continue }
+                    arr.put(JSONObject().put("id", id).put("logical", id)
+                                        .put("name", displayName(id, c)).put("facing", "back"))
+                    continue
+                }
+                for (sub in subs) {
+                    val pc = runCatching { m.getCameraCharacteristics(sub) }.getOrNull() ?: continue
+                    if (facingName(pc) != "back") { continue }
+                    arr.put(JSONObject().put("id", sub).put("logical", id)
+                                        .put("name", displayName(sub, pc)).put("facing", "back"))
+                }
             }
         }
         return arr.toString()
@@ -114,6 +129,19 @@ object BuiltinCamera {
                                   ?.firstOrNull()?.toDouble() ?: 0.0)
                     val exp = pc.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
                     o.put("expMaxNs", exp?.upper ?: 0L)
+                    o.put("expMinNs", exp?.lower ?: 0L)
+                    val ppx = pc.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
+                    o.put("pixelW", ppx?.width ?: 0)
+                    o.put("pixelH", ppx?.height ?: 0)
+                    val piso = pc.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+                    o.put("isoMin", piso?.lower ?: 0)
+                    o.put("isoMax", piso?.upper ?: 0)
+                    o.put("facing", facingName(pc))
+                    val pmap = pc.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                    val pbest = pmap?.getOutputSizes(ImageFormat.JPEG)
+                                    ?.maxByOrNull { it.width.toLong() * it.height }
+                    o.put("jpegW", pbest?.width ?: 0)
+                    o.put("jpegH", pbest?.height ?: 0)
                     val caps = pc.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
                     o.put("manual", caps?.contains(
                         CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR) ?: false)
@@ -137,7 +165,6 @@ object BuiltinCamera {
     //  換算値が出せない端末では素の焦点距離を出す(それでも区別は付く)。
     private fun displayName(id: String, c: CameraCharacteristics): String {
         val model = Build.MODEL ?: "Phone"
-        val face = if (facingName(c) == "front") "前" else "後"
         val f = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()
         val sz = c.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
         var kind = ""
@@ -154,7 +181,7 @@ object BuiltinCamera {
             }
         }
         if (kind.isEmpty()) { kind = "cam$id" }
-        return "$model $face$kind"
+        return "$model $kind"
     }
 
     // ── 諸元 ────────────────────────────────────────────────
@@ -211,15 +238,132 @@ object BuiltinCamera {
         return o.toString()
     }
 
+    // ── 物理カメラを名指しできるかの実験(2026-09-05) ────────
+    // 【なぜ確かめるか】論理カメラを普通に開くと、どの物理センサーで撮るかは端末側の
+    //  制御ソフトが決める。露出制御を成り立たせるには「狙ったセンサーで、指定した露出で
+    //  撮れている」ことが要る。仕様上は名指しできるが、守るかどうかは端末の実装による。
+    //  ここでは1枚だけ撮って、**撮影結果が申告する物理カメラ id と露出**を読み取る。
+    //  返すのは JSON。使うかどうかの判断材料にするだけで、通常の撮影には影響しない。
+    @JvmStatic
+    fun probePhysical(logicalId: String, physId: String): String {
+        val o = JSONObject()
+        o.put("logical", logicalId); o.put("want", physId)
+        val m = mgr() ?: return o.put("error", "no camera service").toString()
+        if (Build.VERSION.SDK_INT < 28) { return o.put("error", "needs Android 9").toString() }
+        val c = runCatching { m.getCameraCharacteristics(physId) }.getOrNull()
+            ?: return o.put("error", "no characteristics").toString()
+        val map = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        val size = map?.getOutputSizes(ImageFormat.JPEG)?.maxByOrNull { it.width.toLong() * it.height }
+            ?: return o.put("error", "no jpeg size").toString()
+
+        val h = ensureThread()
+        var dev: CameraDevice? = null
+        var ses: CameraCaptureSession? = null
+        var rd: ImageReader? = null
+        try {
+            rd = ImageReader.newInstance(size.width, size.height, ImageFormat.JPEG, 2)
+            val opened = CountDownLatch(1)
+            m.openCamera(logicalId, object : CameraDevice.StateCallback() {
+                override fun onOpened(d: CameraDevice) { dev = d; opened.countDown() }
+                override fun onDisconnected(d: CameraDevice) { d.close(); opened.countDown() }
+                override fun onError(d: CameraDevice, e: Int) {
+                    o.put("error", "open error $e"); d.close(); opened.countDown() }
+            }, h)
+            if (!opened.await(8, TimeUnit.SECONDS) || dev == null) {
+                return o.put("error", o.optString("error", "open timeout")).toString()
+            }
+
+            // 【ここが本題】出力を物理カメラに結び付ける。
+            val oc = OutputConfiguration(rd.surface)
+            oc.setPhysicalCameraId(physId)
+            val cfg = CountDownLatch(1)
+            dev!!.createCaptureSession(SessionConfiguration(
+                SessionConfiguration.SESSION_REGULAR, listOf(oc), { r -> h.post(r) },
+                object : CameraCaptureSession.StateCallback() {
+                    override fun onConfigured(s: CameraCaptureSession) { ses = s; cfg.countDown() }
+                    override fun onConfigureFailed(s: CameraCaptureSession) {
+                        o.put("error", "session configure failed"); cfg.countDown() }
+                }))
+            if (!cfg.await(8, TimeUnit.SECONDS) || ses == null) {
+                return o.put("error", o.optString("error", "session timeout")).toString()
+            }
+
+            val wantNs = 1_000_000_000L / 30   // 1/30秒
+            val wantIso = 800
+            // 物理カメラ宛てに露出を送れるか。送れない端末では論理側に載せる。
+            // 物理カメラ宛てに送れる項目の数(0 なら名指しの設定は受け付けない端末)
+            val lc = runCatching { m.getCameraCharacteristics(logicalId) }.getOrNull()
+            val physKeys = if (Build.VERSION.SDK_INT >= 28)
+                runCatching { lc?.availablePhysicalCameraRequestKeys }.getOrNull() else null
+            o.put("physKeys", physKeys?.size ?: -1)
+            val req = dev!!.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE, setOf(physId))
+            req.addTarget(rd.surface)
+            req.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_OFF)
+            req.set(CaptureRequest.SENSOR_SENSITIVITY, wantIso)
+            req.set(CaptureRequest.SENSOR_EXPOSURE_TIME, wantNs)
+            runCatching {
+                req.setPhysicalCameraKey(CaptureRequest.SENSOR_SENSITIVITY, wantIso, physId)
+                req.setPhysicalCameraKey(CaptureRequest.SENSOR_EXPOSURE_TIME, wantNs, physId)
+                o.put("perPhysicalSet", true)
+            }.onFailure { o.put("perPhysicalSet", false) }
+
+            val got = CountDownLatch(2)   // 画像と撮影結果の両方
+            var bytes = 0
+            rd.setOnImageAvailableListener({ r ->
+                runCatching { r.acquireLatestImage()?.use { bytes = it.planes[0].buffer.remaining() } }
+                got.countDown()
+            }, h)
+            ses!!.capture(req.build(), object : CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureCompleted(s: CameraCaptureSession, rq: CaptureRequest,
+                                                res: android.hardware.camera2.TotalCaptureResult) {
+                    runCatching {
+                        if (Build.VERSION.SDK_INT >= 29) {
+                            o.put("activePhysicalId", res.get(
+                                android.hardware.camera2.CaptureResult
+                                    .LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID) ?: "(none)")
+                            val per = res.physicalCameraTotalResults
+                            o.put("perPhysicalResults", per.keys.joinToString(","))
+                            per[physId]?.let { pr ->
+                                o.put("physExposureNs", pr.get(android.hardware.camera2.CaptureResult.SENSOR_EXPOSURE_TIME) ?: -1L)
+                                o.put("physIso", pr.get(android.hardware.camera2.CaptureResult.SENSOR_SENSITIVITY) ?: -1)
+                            }
+                        }
+                        o.put("exposureNs", res.get(android.hardware.camera2.CaptureResult.SENSOR_EXPOSURE_TIME) ?: -1L)
+                        o.put("iso", res.get(android.hardware.camera2.CaptureResult.SENSOR_SENSITIVITY) ?: -1)
+                    }
+                    got.countDown()
+                }
+                override fun onCaptureFailed(s: CameraCaptureSession, rq: CaptureRequest,
+                                             f: android.hardware.camera2.CaptureFailure) {
+                    o.put("error", "capture failed reason=" + f.reason); got.countDown(); got.countDown()
+                }
+            }, h)
+            val done = got.await(15, TimeUnit.SECONDS)
+            o.put("ok", done && bytes > 0 && !o.has("error"))
+            o.put("jpegBytes", bytes)
+            o.put("size", "${size.width}x${size.height}")
+        } catch (e: Exception) {
+            o.put("error", (e.javaClass.simpleName + ": " + e.message))
+        } finally {
+            runCatching { ses?.close() }
+            runCatching { dev?.close() }
+            runCatching { rd?.close() }
+        }
+        return o.toString()
+    }
+
     // ── 開く / 閉じる ───────────────────────────────────────
     // 撮るたびに開き直すと1コマに数秒かかる。撮影の間は開いたままにする。
+    //  logicalId = 入口になる論理カメラ / physId = 実際に使う物理カメラ。
+    //  同じなら普通に開く(配下を持たない端末)。違えば**物理カメラを名指しして**開く。
     @JvmStatic
-    fun open(id: String): String {
-        if (openId == id && camera != null && session != null) { return "" }
+    fun open(logicalId: String, physId: String): String {
+        if (openId == physId && openLogical == logicalId && camera != null && session != null) { return "" }
         close()
         val m = mgr() ?: return "camera service not available"
-        val c = runCatching { m.getCameraCharacteristics(id) }.getOrNull()
-            ?: return "unknown camera id: $id"
+        // 諸元も出力の大きさも**物理カメラ本人**から取る(論理カメラのものとは違う)。
+        val c = runCatching { m.getCameraCharacteristics(physId) }.getOrNull()
+            ?: return "unknown camera id: $physId"
         val map = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         val size: Size = map?.getOutputSizes(ImageFormat.JPEG)
             ?.maxByOrNull { it.width.toLong() * it.height }
@@ -236,7 +380,7 @@ object BuiltinCamera {
         val opened = CountDownLatch(1)
         var err: String = ""
         try {
-            m.openCamera(id, object : CameraDevice.StateCallback() {
+            m.openCamera(logicalId, object : CameraDevice.StateCallback() {
                 override fun onOpened(dev: CameraDevice) { camera = dev; opened.countDown() }
                 override fun onDisconnected(dev: CameraDevice) {
                     err = "camera disconnected"; dev.close(); camera = null; opened.countDown()
@@ -263,10 +407,12 @@ object BuiltinCamera {
         }
         try {
             if (Build.VERSION.SDK_INT >= 28) {
+                val oc = OutputConfiguration(rd.surface)
+                // 【ここで物理カメラに結び付ける】これをしないと、どのセンサーで撮るかは
+                //  端末側の制御ソフトが決めてしまう(途中で切り替わることもある)。
+                if (physId != logicalId) { oc.setPhysicalCameraId(physId) }
                 dev.createCaptureSession(SessionConfiguration(
-                    SessionConfiguration.SESSION_REGULAR,
-                    listOf(OutputConfiguration(rd.surface)),
-                    { r -> h.post(r) }, cb))
+                    SessionConfiguration.SESSION_REGULAR, listOf(oc), { r -> h.post(r) }, cb))
             } else {
                 @Suppress("DEPRECATION")
                 dev.createCaptureSession(listOf(rd.surface), cb, h)
@@ -275,7 +421,7 @@ object BuiltinCamera {
         if (!configured.await(8, TimeUnit.SECONDS) || session == null) {
             close(); return if (serr.isEmpty()) "session timeout" else serr
         }
-        openId = id
+        openId = physId; openLogical = logicalId
         return ""
     }
 
@@ -284,7 +430,7 @@ object BuiltinCamera {
         runCatching { session?.close() }
         runCatching { camera?.close() }
         runCatching { reader?.close() }
-        session = null; camera = null; reader = null; openId = null
+        session = null; camera = null; reader = null; openId = null; openLogical = null
     }
 
     // ── 撮る ────────────────────────────────────────────────
@@ -298,8 +444,9 @@ object BuiltinCamera {
 
     // 露出を指定して1枚撮り始める。成功=要求を出せた。画像は takeImage で受け取る。
     @JvmStatic
-    fun capture(id: String, iso: Int, expNs: Long, aperture: Double, timeoutMs: Int): Boolean {
-        val e = open(id)
+    fun capture(logicalId: String, physId: String, iso: Int, expNs: Long,
+                aperture: Double, timeoutMs: Int): Boolean {
+        val e = open(logicalId, physId)
         if (e.isNotEmpty()) { return false }
         val dev = camera ?: return false
         val s = session ?: return false
@@ -321,7 +468,10 @@ object BuiltinCamera {
         }, h)
 
         try {
-            val req = dev.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
+            // 露出を**その物理カメラ宛て**に送れるよう、要求の宛先に加える(2026-09-05 実機で確認)。
+            val req = if (Build.VERSION.SDK_INT >= 28 && physId != logicalId)
+                dev.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE, setOf(physId))
+            else dev.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
             req.addTarget(rd.surface)
             // マニュアル露出。AE を切らないと指定した ISO / 露光時間が無視される。
             req.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_OFF)
@@ -337,13 +487,36 @@ object BuiltinCamera {
             // 星を消さないための2行。端末が対応しているときだけ載せる(上の canNrOff/canEdgeOff)。
             if (canNrOff)   { req.set(CaptureRequest.NOISE_REDUCTION_MODE, CameraMetadata.NOISE_REDUCTION_MODE_OFF) }
             if (canEdgeOff) { req.set(CaptureRequest.EDGE_MODE, CameraMetadata.EDGE_MODE_OFF) }
-            s.capture(req.build(), null, h)
+            // 物理カメラ宛てにも同じ露出を載せる。受け付けない端末では黙って無視される。
+            if (Build.VERSION.SDK_INT >= 28 && physId != logicalId) {
+                runCatching {
+                    if (iso > 0)    { req.setPhysicalCameraKey(CaptureRequest.SENSOR_SENSITIVITY, iso, physId) }
+                    if (expNs > 0L) { req.setPhysicalCameraKey(CaptureRequest.SENSOR_EXPOSURE_TIME, expNs, physId) }
+                }
+            }
+            // 【狙ったセンサーで撮れたかを毎コマ確かめる】端末が勝手に切り替えていないかは
+            //  推測できないので、撮影結果の申告を控えて上位が見られるようにする。
+            s.capture(req.build(), object : CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureCompleted(ss: CameraCaptureSession, rq: CaptureRequest,
+                                                res: android.hardware.camera2.TotalCaptureResult) {
+                    if (Build.VERSION.SDK_INT >= 29) {
+                        activePhys = runCatching {
+                            res.get(android.hardware.camera2.CaptureResult
+                                       .LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID) ?: ""
+                        }.getOrDefault("")
+                    }
+                }
+            }, h)
         } catch (ex: Exception) { pending = null; return false }
         return true
     }
 
     // 直前に始めた1枚を受け取る。まだ露光中なら終わるまで待つ。取れなければ null。
     //  一度受け取ったら捨てる(同じ画像を次のコマの測光へ使い回さないため)。
+    // 直前のコマを実際に撮った物理カメラ id(端末の申告)。空=分からない端末。
+    @JvmStatic
+    fun activePhysicalId(): String = activePhys
+
     @JvmStatic
     fun takeImage(timeoutMs: Int): ByteArray? {
         val got = pending ?: return null

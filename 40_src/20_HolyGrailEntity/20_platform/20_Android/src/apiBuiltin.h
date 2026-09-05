@@ -102,7 +102,11 @@ private:
 	// JPEG から輝度の中央値とリニア輝度を出す。
 	bool measure(const std::vector<uint8_t>& jpeg, meterResult& out) const;
 
-	std::string id_;			// Camera2 のカメラ id
+	// 【入口と実体を分けて持つ(2026-09-05)】超広角などは論理カメラの配下にいて単体では
+	//  開けない。論理カメラを入口にして物理カメラを名指しする。device.urlAccess には
+	//  "論理/物理" の形で入っている(detectBuiltin が作る)。
+	std::string logicalId_;		// 入口になる論理カメラ id
+	std::string id_;			// 実際に使う物理カメラ id
 	std::string name_;			// 表示名
 	// 諸元(取れなければ 0)
 	double   sensorW_ = 0.0, sensorH_ = 0.0, focalMm_ = 0.0;
@@ -135,6 +139,7 @@ private:
 
 	std::vector<uint8_t> lastJpeg_;	// 直前に撮った JPEG(測光の材料)
 	bool opened_ = false;
+	bool physWarned_ = false;	// 狙いと違うセンサーで撮れた警告を出したか(1回だけ)
 };
 
 #endif // _API_BUILTIN_H_

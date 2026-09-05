@@ -129,8 +129,14 @@ void apiBuiltin::buildTables(void)
 // ── 素性 ────────────────────────────────────────────────────
 errCode apiBuiltin::init(class device& device)
 {
-	// device.urlAccess には detectBuiltin がカメラ id を入れてある(IP の代わり)。
-	id_ = device.urlAccess;
+	// device.urlAccess には detectBuiltin が "論理/物理" を入れてある(IP の代わり)。
+	//  配下を持たない端末では両方同じ id になる。
+	{
+		const std::string& u = device.urlAccess;
+		const size_t sl = u.find('/');
+		logicalId_ = (sl == std::string::npos) ? u : u.substr(0, sl);
+		id_        = (sl == std::string::npos) ? u : u.substr(sl + 1);
+	}
 	if (id_.empty()) { return ERR_HGC_INVALID_ARG; }
 
 	nlohmann::json j = nlohmann::json::parse(builtinCam::describeJson(id_), nullptr, false);
@@ -183,7 +189,7 @@ errCode apiBuiltin::init(class device& device)
 
 errCode apiBuiltin::startShooting(void)
 {
-	const std::string e = builtinCam::open(id_);
+	const std::string e = builtinCam::open(logicalId_, id_);
 	if (!e.empty())
 	{
 		dataManager::logEvent("CAMERA", ("builtin open failed: " + e).c_str(), true);
@@ -227,7 +233,7 @@ errCode apiBuiltin::rdyShutter(const cmdt::shotSet& shotSet)
 
 errCode apiBuiltin::setupShootingModeManual(void)
 {
-	const std::string e = builtinCam::open(id_);
+	const std::string e = builtinCam::open(logicalId_, id_);
 	if (!e.empty())
 	{
 		dataManager::logEvent("CAMERA", ("builtin open failed: " + e).c_str(), true);
@@ -281,7 +287,7 @@ bool apiBuiltin::shootStart(void)
 	const double iso = expo::parseValue(curIso_, expo::expoKind::iso);
 	const double fn  = expo::parseValue(curFn_,  expo::expoKind::fn);
 	const long long ns = static_cast<long long>(sec * 1e9 + 0.5);
-	return builtinCam::capture(id_, (iso > 0.0) ? static_cast<int>(iso + 0.5) : 0,
+	return builtinCam::capture(logicalId_, id_, (iso > 0.0) ? static_cast<int>(iso + 0.5) : 0,
 	                           ns, (fn > 0.0) ? fn : 0.0, 0);
 }
 
@@ -314,6 +320,15 @@ void apiBuiltin::collectPending(void)
 	std::vector<uint8_t> jpeg;
 	if (this->shootTake(jpeg))
 	{
+		// 【狙ったセンサーで撮れたか(2026-09-05)】端末が勝手に切り替えると露出制御の土台が
+		//  崩れる。推測できないので申告を見る。違っていたら一度だけ残す(毎コマ言わない)。
+		const std::string act = builtinCam::activePhysicalId();
+		if (!act.empty() && act != id_ && !physWarned_)
+		{
+			physWarned_ = true;
+			dataManager::logEvent("CAMERA",
+				("builtin: wanted physical " + id_ + " but got " + act).c_str(), true);
+		}
 		this->saveShot(jpeg);
 		// 受け取ったその場で動画へ1コマ足す。周期が15秒以上あるので符号化は間に合う。
 		builtinCam::videoAddJpeg(jpeg);
@@ -382,7 +397,7 @@ errCode apiBuiltin::meterScene(const hgc::exposure& shotExp, meterResult& out,
 errCode apiBuiltin::meterHere(meterResult& out, const std::function<bool()>& keepGoing)
 {
 	(void)keepGoing;
-	if (builtinCam::open(id_).empty()) { opened_ = true; }
+	if (builtinCam::open(logicalId_, id_).empty()) { opened_ = true; }
 	std::vector<uint8_t> jpeg;
 	if (!this->shootStart() || !this->shootTake(jpeg))
 	{ out.ok = false; out.failStage = 20; return ERR_HGC_RDY_METARING; }

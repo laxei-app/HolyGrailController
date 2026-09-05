@@ -110,16 +110,17 @@ namespace builtinCam
 		return out;
 	}
 
-	std::string open(const std::string& id)
+	std::string open(const std::string& logicalId, const std::string& physId)
 	{
 		attach a;
 		if (!a.ok()) { return "jni not ready"; }
 		jmethodID mid = a.env->GetStaticMethodID(a.cls, "builtinOpen",
-		                                         "(Ljava/lang/String;)Ljava/lang/String;");
+		                 "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
 		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); mid = nullptr; }
 		if (mid == nullptr) { return "builtinOpen not found"; }
-		jstring js = a.env->NewStringUTF(id.c_str());
-		jobject r  = a.env->CallStaticObjectMethod(a.cls, mid, js);
+		jstring jl = a.env->NewStringUTF(logicalId.c_str());
+		jstring jp = a.env->NewStringUTF(physId.c_str());
+		jobject r  = a.env->CallStaticObjectMethod(a.cls, mid, jl, jp);
 		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); r = nullptr; }
 		std::string out = "open failed";
 		if (r != nullptr)
@@ -128,8 +129,13 @@ namespace builtinCam
 			if (p != nullptr) { out = p; a.env->ReleaseStringUTFChars(static_cast<jstring>(r), p); }
 			a.env->DeleteLocalRef(r);
 		}
-		a.env->DeleteLocalRef(js);
+		a.env->DeleteLocalRef(jl); a.env->DeleteLocalRef(jp);
 		return out;
+	}
+
+	std::string activePhysicalId(void)
+	{
+		return callString("builtinActivePhysical", "()Ljava/lang/String;", nullptr, "");
 	}
 
 	void close(void)
@@ -143,22 +149,24 @@ namespace builtinCam
 		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); }
 	}
 
-	bool capture(const std::string& id, int iso, long long expNs, double aperture, int timeoutMs)
+	bool capture(const std::string& logicalId, const std::string& physId,
+	             int iso, long long expNs, double aperture, int timeoutMs)
 	{
 		attach a;
 		if (!a.ok()) { return false; }
 		jmethodID mid = a.env->GetStaticMethodID(a.cls, "builtinCapture",
-		                                         "(Ljava/lang/String;IJDI)Z");
+		                 "(Ljava/lang/String;Ljava/lang/String;IJDI)Z");
 		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); mid = nullptr; }
 		if (mid == nullptr) { return false; }
-		jstring js = a.env->NewStringUTF(id.c_str());
-		jboolean r = a.env->CallStaticBooleanMethod(a.cls, mid, js,
+		jstring jl = a.env->NewStringUTF(logicalId.c_str());
+		jstring jp = a.env->NewStringUTF(physId.c_str());
+		jboolean r = a.env->CallStaticBooleanMethod(a.cls, mid, jl, jp,
 		                                            static_cast<jint>(iso),
 		                                            static_cast<jlong>(expNs),
 		                                            static_cast<jdouble>(aperture),
 		                                            static_cast<jint>(timeoutMs));
 		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); r = JNI_FALSE; }
-		a.env->DeleteLocalRef(js);
+		a.env->DeleteLocalRef(jl); a.env->DeleteLocalRef(jp);
 		return r == JNI_TRUE;
 	}
 

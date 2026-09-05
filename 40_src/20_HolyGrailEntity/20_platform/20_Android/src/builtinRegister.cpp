@@ -71,15 +71,27 @@ namespace builtinCam
 			if (dataManager::findOwnedCamera(d.model, oc)) { cs.camera = oc; }
 			else { cs.camera.name = d.model; cs.camera.model = d.model; }
 
-			// レンズは交換できないので、カメラの一部として端末の値を入れる。
-			//  ここが空だと NPF も撮影シミュレーションも出せない。
-			cs.lens = hgc::lens{};
-			cs.lens.maker       = "builtin";
-			cs.lens.name        = d.model;
-			cs.lens.focalLength = api->focalMm();
-			cs.lens.fn          = api->aperture();
-			cs.lens.fnMax       = api->aperture();	// 絞りは固定
-			cs.lens.hasContact  = false;
+			// 【レンズも所持レンズとして登録する(2026-09-05 ユーザー指示)】
+			//  内蔵カメラのレンズは交換できず機材マスタにも載らないが、諸元は端末が答える。
+			//  計画に値を埋めるだけだと、所持レンズの一覧には別機種のレンズしか無く、
+			//  画面で選び直したときに合わない値になる。**一覧にも実体を置いて割り当てる**。
+			hgc::lens ln{};
+			ln.maker       = "builtin";
+			ln.name        = d.model;	// カメラと1対1なので同じ名前でよい
+			ln.focalLength = api->focalMm();
+			ln.fn          = api->aperture();
+			ln.fnMax       = api->aperture();	// 絞りは固定
+			ln.hasContact  = false;
+			if (dataManager::addOwnedLens(ln))
+			{
+				char lb[160];
+				std::snprintf(lb, sizeof(lb), "builtin lens registered: %s (%.2fmm F%.1f)",
+				              ln.name.c_str(), ln.focalLength, ln.fn);
+				dataManager::logEvent("GEAR", lb);
+			}
+			// 既に一覧にあるなら、そちら(利用者が直した値かもしれない)を使う。
+			hgc::lens ol;
+			cs.lens = dataManager::findOwnedLens(ln.name, ol) ? ol : ln;
 
 			expo::expoTables t;
 			t.iso = expo::buildTable(api->isoList(), expo::expoKind::iso);

@@ -715,6 +715,18 @@ bool dataManager::addOwnedLensFromMaster(const std::string& name)
 	return saveOwnedLenses();
 }
 
+// マスタに無いレンズを所持レンズへ足す。スマホ内蔵カメラのようにレンズが交換できず、
+//  機材マスタにも載らない機材のために使う(諸元は端末が答える)。
+//  同じ名前が既にあれば何もしない(利用者が値を直していることがある)。
+bool dataManager::addOwnedLens(const hgc::lens& lens)
+{
+	if (lens.name.empty()) { return false; }
+	ensureOwned();
+	for (const auto& l : g_ownedLenses) { if (l.name == lens.name) { return false; } }
+	g_ownedLenses.push_back(lens);
+	return saveOwnedLenses();
+}
+
 bool dataManager::removeOwnedCamera(const std::string& name)
 {
 	ensureOwned();

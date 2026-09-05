@@ -39,12 +39,14 @@ size_t detectBuiltin::build(std::vector<class device>& out, const deviceMatch& w
 	for (const auto& e : j)
 	{
 		if (!e.is_object()) { continue; }
-		const std::string id = e.value("id", std::string());
+		const std::string id  = e.value("id", std::string());
+		const std::string lg  = e.value("logical", id);
 		if (id.empty()) { continue; }
 
 		class device d;
 		d.apiClass     = device::apiClass::NON;	// 内蔵カメラは既存のどれでもない
-		d.urlAccess    = id;					// 宛先=カメラ id
+		// 宛先は "論理/物理"。超広角などは単体で開けないので、入口の論理カメラも要る。
+		d.urlAccess    = lg + "/" + id;
 		d.manufacturer = "builtin";
 		d.model        = e.value("name", std::string("Built-in camera"));
 		d.assignedName = d.model;

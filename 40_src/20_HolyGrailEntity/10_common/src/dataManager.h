@@ -62,6 +62,9 @@ public:
 	// マスタ(名称一致)から所持へ追加して保存する。return: 成功(追加 or 既存)。
 	static bool addOwnedCameraFromMaster(const std::string& name);
 	static bool addOwnedLensFromMaster(const std::string& name);
+	// マスタに無いレンズを所持レンズへ足す(同じ名前が既にあれば何もしない)。
+	//  スマホ内蔵カメラのように、レンズが交換できず端末が諸元を答える機材のための口。
+	static bool addOwnedLens(const hgc::lens& lens);
 	// 所持から削除して保存する。return: 成功(削除した)。
 	static bool removeOwnedCamera(const std::string& name);
 	static bool removeOwnedLens(const std::string& name);

@@ -29,13 +29,16 @@ namespace builtinCam
 	std::string physicalsJson(void);
 	// 1台の諸元。JSON。取れなければ "{}"。
 	std::string describeJson(const std::string& id);
-	// 開く。"" =成功、それ以外は理由。
-	std::string open(const std::string& id);
+	// 開く。logicalId=入口の論理カメラ / physId=実際に使う物理カメラ。"" =成功。
+	std::string open(const std::string& logicalId, const std::string& physId);
 	// 閉じる(撮影の終わりに呼ぶ)。
 	void close(void);
 	// 露出を載せて1枚撮り**始める**。露光の終わりは待たない(キヤノンの CCAPI と同じ振る舞い)。
 	//  iso<=0 / expNs<=0 / aperture<=0 は「触らない」。
-	bool capture(const std::string& id, int iso, long long expNs, double aperture, int timeoutMs);
+	bool capture(const std::string& logicalId, const std::string& physId,
+	             int iso, long long expNs, double aperture, int timeoutMs);
+	// 直前のコマを実際に撮った物理カメラ id(端末の申告。空=分からない)。
+	std::string activePhysicalId(void);
 	// 直前に撮り始めた1枚を受け取る(まだ露光中なら待つ)。
 	bool takeImage(int timeoutMs, std::vector<uint8_t>& out);
 

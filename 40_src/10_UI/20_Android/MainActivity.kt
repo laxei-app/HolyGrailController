@@ -359,6 +359,24 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val n = try { HgeNative.nativeRegisterBuiltinCameras() } catch (_: Exception) { 0 }
             if (n > 0) { runOnUiThread { if (flipper.displayedChild == 6) buildCameraList() } }
         }
+
+        // 【物理カメラを名指しできるかの実験(2026-09-05)】論理カメラの配下にある
+        //  超広角などを使えるかは端末の実装による。1回だけ試して結果をログへ残す。
+        //  通常の撮影には影響しない。確かめ終わったら消してよい。
+        if (!hgcPrefs().getBoolean("physProbeDone", false)) {
+            hgcPrefs().edit().putBoolean("physProbeDone", true).apply()
+            dataExec.execute {
+                try {
+                    val arr = org.json.JSONArray(HgeNative.builtinPhysicals())
+                    for (i in 0 until arr.length()) {
+                        val o = arr.optJSONObject(i) ?: continue
+                        if (o.optString("facing") != "back") continue
+                        val r = HgeNative.builtinProbePhysical(o.optString("logical"), o.optString("id"))
+                        android.util.Log.i("HGC-PHYS", r)
+                    }
+                } catch (e: Exception) { android.util.Log.i("HGC-PHYS", "probe failed: " + e) }
+            }
+        }
         HgeNative.nativeEdgeSetBle(edgeUseBle())
         HgeNative.nativeSetListener(this)
         // 起動時のログ整理(当日以外が5件以上なら古い順に削除、最新4件まで残す)。端末TZで「当日」を判定。

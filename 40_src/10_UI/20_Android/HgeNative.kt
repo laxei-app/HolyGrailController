@@ -184,19 +184,29 @@ object HgeNative {
     @JvmStatic
     fun builtinPhysicals(): String = BuiltinCamera.physicalsJson()
 
+    // 物理カメラを名指しして撮れるかの実験(1枚だけ撮って撮影結果を読む)。
+    @JvmStatic
+    fun builtinProbePhysical(logicalId: String, physId: String): String =
+        BuiltinCamera.probePhysical(logicalId, physId)
+
     @JvmStatic
     fun builtinDescribe(id: String): String = BuiltinCamera.describe(id)
 
     @JvmStatic
-    fun builtinOpen(id: String): String = BuiltinCamera.open(id)
+    fun builtinOpen(logicalId: String, physId: String): String = BuiltinCamera.open(logicalId, physId)
 
     @JvmStatic
     fun builtinClose() = BuiltinCamera.close()
 
     // 露出を載せて1枚撮り始める(露光の終わりは待たない)。
     @JvmStatic
-    fun builtinCapture(id: String, iso: Int, expNs: Long, aperture: Double, timeoutMs: Int): Boolean =
-        BuiltinCamera.capture(id, iso, expNs, aperture, timeoutMs)
+    fun builtinCapture(logicalId: String, physId: String, iso: Int, expNs: Long,
+                       aperture: Double, timeoutMs: Int): Boolean =
+        BuiltinCamera.capture(logicalId, physId, iso, expNs, aperture, timeoutMs)
+
+    // 直前のコマを実際に撮った物理カメラ id(狙いどおりかの確認用)。
+    @JvmStatic
+    fun builtinActivePhysical(): String = BuiltinCamera.activePhysicalId()
 
     // 直前に撮り始めた1枚を受け取る(まだ露光中なら待つ)。
     @JvmStatic
