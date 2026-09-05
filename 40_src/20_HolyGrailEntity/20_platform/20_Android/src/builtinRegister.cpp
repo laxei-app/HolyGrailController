@@ -147,8 +147,11 @@ namespace builtinCam
 		}
 	}
 
-	// 端末のカメラを一通り見て、まだ所持カメラに無いものを足す。戻り=足した台数。
-	//  既にあるものは触らない(名前をユーザーが変えていることがある)。
+	// 端末のカメラを一通り見て、所持カメラ・所持レンズ・ひな形を用意する。
+	//  **戻り=見つかったカメラの台数**(足した数ではない)。呼ぶ側はこれで
+	//  「用意し終えたか(=もう二度としなくてよいか)」を判断する。0 のときは
+	//  カメラの権限がまだ無いなどの理由で列挙できていないので、次の起動でやり直す。
+	//  既にあるものは触らない(名前や値をユーザーが変えていることがある)。
 	int registerAll(void)
 	{
 		detectBuiltin det;
@@ -179,6 +182,6 @@ namespace builtinCam
 				("builtin cameras registered: " + std::to_string(added)).c_str());
 		}
 		makeTemplate(found);
-		return added;
+		return static_cast<int>(found.size());
 	}
 }

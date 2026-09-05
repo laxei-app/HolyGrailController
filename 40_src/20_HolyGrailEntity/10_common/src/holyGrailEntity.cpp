@@ -3006,6 +3006,16 @@ int32_t hge_setPlanCamera(const char* name)
 	hgc::camera c;
 	if (!dataManager::findOwnedCamera(std::string(name), c)) { return ERR_HGC_NO_ELEMENT; }
 	g_plan.camera = c;
+	// 【レンズが一体のカメラは、レンズも一緒に付け替える(2026-09-05 依頼)】
+	//  スマホ内蔵カメラのようにレンズを交換できない機材は、所持レンズにカメラと**同じ名前**で
+	//  登録してある(builtinRegister)。名前が一致するレンズがあれば、それがそのカメラ専用の
+	//  レンズなので計画へ載せる。載せないと前のレンズの焦点距離のまま NPF を計算してしまい、
+	//  星が流れない上限が大きく外れる。
+	//  交換式のカメラは名前の一致が起きないので、この判定に引っかからない。
+	{
+		hgc::lens paired;
+		if (dataManager::findOwnedLens(c.name, paired)) { g_plan.lens = paired; }
+	}
 	clampPlanCcmToGear();	// item3: 新しいカメラの上下限へccm露出をクランプ
 	// センサーサイズ/画角が変わると太陽の画角侵入時刻が変わるためスケジュールを再生成する。
 	errCode e = astro::buildSchedule(g_plan);

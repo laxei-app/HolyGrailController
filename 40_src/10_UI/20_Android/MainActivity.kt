@@ -351,13 +351,21 @@ class MainActivity : AppCompatActivity(), HgeListener {
         EdgeBleLink.init(this)
         BuiltinCamera.init(this)   // スマホ内蔵カメラ(Camera2)の入口へ Context を渡す
 
-        // 【内蔵カメラは自動で所持カメラへ入れる(2026-09-05)】端末そのものなので
+        // 【内蔵カメラ一式は初回起動のときだけ用意する(2026-09-05 依頼)】
+        //  所持カメラ・所持レンズ・撮影計画ひな形を、その端末の実力から作る。端末そのものなので
         //  「登録しますか」と聞く意味が無い。複数のカメラを持つ端末では1台ずつ並ぶ。
-        //  既にあるものは触らない(名前をユーザーが変えていることがある)。
-        //  マスタ読み込みと同じ単一スレッドで行う(所持カメラの書き込み口は1本に保つ)。
-        dataExec.execute {
-            val n = try { HgeNative.nativeRegisterBuiltinCameras() } catch (_: Exception) { 0 }
-            if (n > 0) { runOnUiThread { if (flipper.displayedChild == 6) buildCameraList() } }
+        //  **一度きり**にするのは、利用者が消したものを起動のたびに作り直さないため
+        //  (撮影場所の種と同じ考え方)。出荷時設定に戻せばまた作られる。
+        //  カメラを列挙できなかったとき(権限がまだ無い等)は印を付けず、次の起動でやり直す。
+        //  マスタ読み込みと同じ単一スレッドで行う(所持機材の書き込み口は1本に保つ)。
+        if (!hgcPrefs().getBoolean("builtinSeedDone", false)) {
+            dataExec.execute {
+                val found = try { HgeNative.nativeRegisterBuiltinCameras() } catch (_: Exception) { 0 }
+                if (found > 0) {
+                    hgcPrefs().edit().putBoolean("builtinSeedDone", true).apply()
+                    runOnUiThread { if (flipper.displayedChild == 6) buildCameraList() }
+                }
+            }
         }
 
         // 【物理カメラを名指しできるかの実験(2026-09-05)】論理カメラの配下にある
