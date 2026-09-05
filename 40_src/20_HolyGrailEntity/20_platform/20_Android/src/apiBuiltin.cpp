@@ -30,7 +30,12 @@ namespace
 std::string apiBuiltin::ssText(double sec)
 {
 	char b[32];
-	if (sec >= 1.0)
+	// 【分母で場合分けする(2026-09-05 実機で判明)】「1秒以上か」で分けると、1秒をほんの少し
+	//  下回る値(0.9999秒)が "1/1" になり、1秒ちょうどの "1" と**同じ値が2通りの綴り**で
+	//  並ぶ。並びに同じ値が入ると、その間の1目盛りが 0段 になり露出制御が空回りする。
+	//  丸めた分母が 1 になるものは秒の書き方へ寄せて、綴りを1つに保つ。
+	const int denom = static_cast<int>(1.0 / sec + 0.5);
+	if (denom <= 1)
 	{
 		// 1秒以上は小数1桁まで。きりのよい値は整数で書く(ログが読みやすい)。
 		if (std::fabs(sec - std::floor(sec + 0.5)) < 0.05) { std::snprintf(b, sizeof(b), "%d", static_cast<int>(sec + 0.5)); }
@@ -39,8 +44,7 @@ std::string apiBuiltin::ssText(double sec)
 	else
 	{
 		// 1秒未満は分数。分母は整数へ丸める(カメラの表記に合わせる)。
-		const double denom = 1.0 / sec;
-		std::snprintf(b, sizeof(b), "1/%d", static_cast<int>(denom + 0.5));
+		std::snprintf(b, sizeof(b), "1/%d", denom);
 	}
 	return std::string(b);
 }
