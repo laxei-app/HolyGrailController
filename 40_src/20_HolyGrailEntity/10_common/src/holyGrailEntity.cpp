@@ -1124,6 +1124,15 @@ namespace
 			if (cam.sensorSize  <= 0.0 && oc.sensorSize  > 0.0) { cam.sensorSize  = oc.sensorSize;  }
 			if (cam.sensorSizeV <= 0.0 && oc.sensorSizeV > 0.0) { cam.sensorSizeV = oc.sensorSizeV; }
 			if (cam.sensorPixel == 0   && oc.sensorPixel > 0)   { cam.sensorPixel = oc.sensorPixel; }
+			if (cam.sensorPixelV == 0  && oc.sensorPixelV > 0)  { cam.sensorPixelV = oc.sensorPixelV; }
+			// 【内蔵カメラは ISO/SS の並びを常に所持カメラから引き直す(2026-09-06)】並びは端末の実力から
+			//  合成するもので版で変わる(加算で 48 秒まで伸びた。古い控えは 8.3 秒止まり)。ユーザーが
+			//  編集する欄でもない。外付けカメラの控えは従来どおり触らない。
+			if (oc.serial.rfind("BUILTIN:", 0) == 0)
+			{
+				if (!oc.isoList.empty()) { cam.isoList = oc.isoList; }
+				if (!oc.ssList.empty())  { cam.ssList  = oc.ssList;  }
+			}
 		}
 	}
 
@@ -2861,6 +2870,10 @@ int32_t hge_getExpoValuesJson(char* buf, int32_t* inoutLen)
 {
 	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
 	if (!g_planReady) { loadFixedPlanImpl(); }
+	// 計画のカメラの控えを所持カメラの今の値で引き直してから範囲を出す(2026-09-06)。
+	//  内蔵カメラの並びは起動時に端末の実力から引き直されるが、計画の読み込みがそれより先に
+	//  走ると控えが古いまま(8.3 秒止まり)で、スライダの上端が伸びない。
+	applyOwnedCameraSettings(g_plan.camera);
 	double fmin = (g_plan.lens.fn > 0.0) ? g_plan.lens.fn : 1.0;
 	double fmax = (g_plan.lens.fnMax > 0.0) ? g_plan.lens.fnMax : 32.0;	// レンズのF最大があれば使う
 	// item3: iso/ss はスライダ選択範囲も計画のカメラの設定可能範囲(isoList/ssList)に限定する。

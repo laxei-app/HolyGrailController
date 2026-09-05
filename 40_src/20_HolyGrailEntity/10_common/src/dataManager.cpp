@@ -1393,6 +1393,19 @@ int dataManager::recordConnectedCameraStatus(const device& dev, bool allowAdd)
 					logEvent("GEAR", (oc.cam.model + " iso/ss taken from camera (S/N " + dev.serialno + ")").c_str());
 					changed = true;
 				}
+				// 【内蔵カメラは並びを毎回引き直す(2026-09-06)】並びは端末の実力から合成するもので、
+				//  版で変わる(加算で 48 秒まで伸びた。以前の登録は 8.3 秒止まり)。ユーザーが直す欄でも
+				//  ないので、カメラの申告を常に正とする。外付けカメラは従来どおり空のときだけ。
+				if (dev.manufacturer == "builtin")
+				{
+					hgc::camera fresh = oc.cam;
+					if (fillListsFromCamera(dev, fresh) &&
+					    (fresh.isoList != oc.cam.isoList || fresh.ssList != oc.cam.ssList))
+					{
+						oc.cam.isoList = fresh.isoList; oc.cam.ssList = fresh.ssList; changed = true;
+						logEvent("GEAR", (oc.cam.model + " iso/ss refreshed from device (S/N " + dev.serialno + ")").c_str());
+					}
+				}
 				if (changed) { saveOwnedCameras(); }
 				return static_cast<int>(camApply::updated);
 			}

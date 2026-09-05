@@ -99,7 +99,8 @@ object HgeNative {
     external fun nativeAddOwnedCamera(name: String): Int
     // スマホ内蔵カメラを所持カメラへ足す(まだ無いものだけ)。戻り=足した台数。
     //  端末そのものなので登録可否は聞かない(外付けカメラのプロンプトとは扱いが違う)。
-    external fun nativeRegisterBuiltinCameras(): Int
+    //  seed=所持レンズとひな形も作る(初回だけ)。2回目からは所持カメラの ISO/SS の並びを引き直すだけ。
+    external fun nativeRegisterBuiltinCameras(seed: Boolean): Int
     // RAW 加算(2026-09-06)。Camera2 から受け取った RAW を足して現像する。ループは C++(rawStack)。
     external fun nativeRawStackBegin(width: Int, height: Int, cfa: Int)
     external fun nativeRawStackAdd(buf: java.nio.ByteBuffer, rowStride: Int): Boolean

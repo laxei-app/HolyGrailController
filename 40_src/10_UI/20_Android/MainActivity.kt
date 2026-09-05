@@ -359,10 +359,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  (撮影場所の種と同じ考え方)。出荷時設定に戻せばまた作られる。
         //  カメラを列挙できなかったとき(権限がまだ無い等)は印を付けず、次の起動でやり直す。
         //  マスタ読み込みと同じ単一スレッドで行う(所持機材の書き込み口は1本に保つ)。
-        if (!hgcPrefs().getBoolean("builtinSeedDone", false)) {
+        //  2回目からも毎回呼ぶ(2026-09-06)。所持カメラの ISO/SS の並びは端末の実力から合成するもので、
+        //  版で変わる(加算で 48 秒まで伸びた)。ひな形やレンズは作り直さない(seed=false)。
+        run {
+            val seeded = hgcPrefs().getBoolean("builtinSeedDone", false)
             dataExec.execute {
-                val found = try { HgeNative.nativeRegisterBuiltinCameras() } catch (_: Exception) { 0 }
-                if (found > 0) {
+                val found = try { HgeNative.nativeRegisterBuiltinCameras(!seeded) } catch (_: Exception) { 0 }
+                if (!seeded && found > 0) {
                     hgcPrefs().edit().putBoolean("builtinSeedDone", true).apply()
                     runOnUiThread { if (flipper.displayedChild == 6) buildCameraList() }
                 }
