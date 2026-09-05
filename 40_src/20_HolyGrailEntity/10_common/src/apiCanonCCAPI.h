@@ -127,6 +127,8 @@ public:
 	// 動作を指示する
 	errCode rdyShutter(const cmdt::shotSet& shotSet);	// シャッター設定
 	errCode actShutter(void);							// シャッターを切る動作
+	// 直前の HTTP 失敗を CCAPI の意味へ翻訳する(503 の本文で理由を言う仕様)。
+	failInfo lastFailure(void) const override;
 	errCode startShooting(void);						// 撮影開始
 	errCode stopLiveView(void) override;				// ライブビュー停止(撮影ループ中は掴まない)
 	// 撮影ループ中にライブビューが要るか。サムネ測光では不要(初期収束のときだけ使う)が、

@@ -53,6 +53,20 @@ public:
 	{ (void)sensorWmm; (void)sensorHmm; (void)pixelW; (void)pixelH; return ERR_HGC_NOT_SUPPORTED; }
 	virtual errCode rdyShutter(const cmdt::shotSet& shotSet) { return ERR_HGC_NOT_SUPPORTED; }
 	virtual errCode actShutter(void)						{ return ERR_HGC_NOT_SUPPORTED; }
+
+	// 【直前の失敗の内訳(2026-09-06)】通信の状態や応答本文を知っているのはカメラ実装だけ。
+	//  上位(撮影ループ)は HTTP の状態番号や本文の文言を見ず、ここが答える**意味**だけで動く。
+	//   mediaBlocked : 記録メディア起因で断られた(カード満杯/未挿入)。通信は成立している
+	//   noReply      : 相手に届いていない/返事が無い(接続断の疑い)
+	//   detail       : ログに添える一行(実装が人に読める形で作る。空でもよい)
+	//  HTTP を使わない実装は既定のまま(全部偽・空)でよい。
+	struct failInfo
+	{
+		bool        mediaBlocked = false;
+		bool        noReply      = false;
+		std::string detail;
+	};
+	virtual failInfo lastFailure(void) const { return failInfo{}; }
 	// 露出を1項目ずつ設定する(周期正確化のタイマ方式で、変更のあった項目だけを適用するため)。
 	virtual errCode setFNumber(const std::string& fNumber)	{ (void)fNumber; return ERR_HGC_NOT_SUPPORTED; }
 	virtual errCode setSS(const std::string& ss)			{ (void)ss;      return ERR_HGC_NOT_SUPPORTED; }

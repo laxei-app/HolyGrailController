@@ -216,6 +216,12 @@ errCode cameraController::actShutter(const class device& device)
 	return device.apiBase->actShutter();
 }
 
+apiBase::failInfo cameraController::lastFailure(const class device& device)
+{
+	if (device.apiBase == nullptr) { return apiBase::failInfo{}; }
+	return device.apiBase->lastFailure();
+}
+
 // 設定を取得する
 // device   :対象デバイス
 // settings :取得した設定

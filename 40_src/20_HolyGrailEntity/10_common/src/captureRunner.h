@@ -387,11 +387,11 @@ private:
 	// 1枚目の適用が失敗したときに「撮ったつもりの露出」ではなく実機の状態を使うため。
 	hgc::exposure appliedOrConverge(void) const;
 	hgc::exposure convergeLastApplied_{};	// 初期収束が最後に適用できた露出(=失敗時のカメラの状態)
-	// HTTPを伴うカメラ操作の失敗メッセージに、直近のHTTPステータスと応答本文を添える。
-	//  "actShutter http=503 During shooting or recording" / "actShutter http=応答なし"
+	// カメラ操作の失敗メッセージに、カメラ実装が答える内訳(apiBase::lastFailure().detail)を添える。
+	//  何を添えるか(HTTP の状態など)は実装の都合で、ここは文字列を繋ぐだけ。
 	// 撮影ループ中はライブビューを掴まない(不要な方式のときだけ離す)。
 	void          releaseLiveView(void);
-	std::string   withHttpDetail(const char* what) const;
+	std::string   withFailDetail(const char* what) const;
 	errCode applyExposureChanged(const hgc::exposure& exp);	// 変更のあった ss/iso/fn だけを適用
 	// 露出設定を budgetMs まで kApplyRetryMs 間隔でリトライ。tries=試行回数を返す。
 	errCode applyWithRetry(const hgc::exposure& exp, int& tries, int budgetMs = kApplyMaxMs);

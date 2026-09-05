@@ -4,7 +4,6 @@
 #include "osSystemCall.h"
 #include "debugOut.h"
 #include "astroSched.h"		// ② 太陽高度(sunHoriz)から ev0 中心bmを算出
-#include "netThread.h"		// 失敗した HTTP のステータス/応答をログへ添えるため
 #include "dataManager.h"		// 初期収束の診断ログ(CONV)を残すため
 #include "linkDown.h"		// APから抜けた相手を待たない(タイムアウト待ちの短縮)
 #include <algorithm>
@@ -247,20 +246,13 @@ void captureRunner::releaseLiveView(void)
 	cameraController::stopLiveView(*dev_);	// 失敗しても撮影は続ける(次コマで測光できる方式なので)
 }
 
-std::string captureRunner::withHttpDetail(const char* what) const
+std::string captureRunner::withFailDetail(const char* what) const
 {
-	int status = 0;
-	std::string body;
-	netThread::lastHttpFailure(status, body);
-	for (auto& c : body) { if (c == '\r' || c == '\n' || c == '\t') { c = ' '; } }	// ログは1行
-	char buf[220];
-	// status==0(応答なし)のときこそ理由が要る。従来はここで body を捨てていたため、
-	// 「TCPが繋がらない(こちら側)」のか「繋がったがカメラが返さない(カメラ側)」のかを
-	// 区別できなかった(2026-08-05)。プラットフォーム層が body に理由を載せる。
-	if (status > 0)        { std::snprintf(buf, sizeof(buf), "%s http=%d %s", what, status, body.c_str()); }
-	else if (!body.empty()){ std::snprintf(buf, sizeof(buf), "%s http=noreply %s", what, body.c_str()); }
-	else                   { std::snprintf(buf, sizeof(buf), "%s http=noreply", what); }
-	return std::string(buf);
+	// 内訳はカメラ実装が作る(HTTP なら状態と本文、内蔵カメラなら無し)。ここは繋ぐだけ。
+	if (dev_ == nullptr) { return std::string(what); }
+	const apiBase::failInfo f = cameraController::lastFailure(*dev_);
+	if (f.detail.empty()) { return std::string(what); }
+	return std::string(what) + " " + f.detail;
 }
 
 // 実際にカメラへ適用できている露出。lastXxxApplied_ は各軸の設定が成功したときだけ更新されるので、
@@ -377,23 +369,17 @@ errCode captureRunner::fireShutter(const hgc::exposure& shotExp, double interval
 
 	void*   t0     = tool::startElapse();
 	errCode err    = ERR_HGC_OK;
-	int     status = 0;
 	int     tries  = 0;
-	std::string body;
+	apiBase::failInfo last;
 	for (;;)
 	{
 		++tries;
 		err = cameraController::actShutter(*dev_);
 		if (err == ERR_HGC_OK) { failStreak = 0; mediaBlocked_ = false; mediaReported_ = false; return err; }
-		netThread::lastHttpFailure(status, body);
-		// 【カード起因かを見分ける(2026-08-19)】カメラは 503 の本文で理由を言う。
-		//  実測(EOS R50 V, カード満杯): {"message":"Can not write to card"}
-		//  仕様上の意味は「撮影中にメディアへ記録できなかった」(CCAPI Reference 3-40)。
-		//  カードが無い/入れ替え待ちのときは "Card not available" が来る。
-		//  どちらも**通信は成立している**ので、未検出や接続断として扱ってはいけない。
-		if (status == 503 && (body.find("Can not write to card") != std::string::npos ||
-		                      body.find("Card not available")   != std::string::npos))
-		{ mediaBlocked_ = true; }
+		// 失敗の意味はカメラ実装に聞く(2026-09-06)。ここは HTTP の状態も本文も見ない。
+		//  メディア起因(カード満杯/未挿入)は通信が成立しているので、未検出や接続断として扱わない。
+		last = cameraController::lastFailure(*dev_);
+		if (last.mediaBlocked) { mediaBlocked_ = true; }
 		if (!running_.load())                                 { break; }
 		if (static_cast<int>(tool::getElapse(t0)) >= budgetMs) { break; }
 		this->interruptibleSleep(kShutterRetryMs);
@@ -402,11 +388,11 @@ errCode captureRunner::fireShutter(const hgc::exposure& shotExp, double interval
 	{
 		char eb[240];
 		std::snprintf(eb, sizeof(eb), "%s (try=%d %dms budget=%dms)",
-		              this->withHttpDetail("actShutter").c_str(), tries,
+		              this->withFailDetail("actShutter").c_str(), tries,
 		              static_cast<int>(tool::getElapse(t0)), budgetMs);
 		onError_(err, eb);
 	}
-	if (status <= 0) { ++failStreak; }	// 応答なし=本当に届いていない。503等は接続断ではない
+	if (last.noReply) { ++failStreak; }	// 届いていない=本当の接続断の疑い。断られただけなら数えない
 	return err;
 }
 
@@ -880,8 +866,8 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 
 	// 結果を1行残す。**収束できたなら異常ではないので INFO** にする。onError_ は ERR ログに加えて
 	//  UI へも通知(HGE_EV_ERROR)が飛ぶので、正常な収束で呼んではいけない。
-	//  また、HTTP の状態は「取得そのものが失敗した」(stage=22)ときしか意味を持たない。従来は
-	//  無条件に withHttpDetail を通していたため、通信は正常なのに "http=応答なし" と書かれていた。
+	//  また、失敗の内訳は「取得そのものが失敗した」(stage=22)ときしか意味を持たない。従来は
+	//  無条件に添えていたため、通信は正常なのに "http=応答なし" と書かれていた。
 	{
 		// 数値の内訳はログにだけ残す。画面へはコード1つ(convergeFailed)しか送らない。
 		//  内訳は applyNg/meterNg/stage/HTTP応答など6項目あり、ユーザーが見ても打つ手が無い。
@@ -896,7 +882,7 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 			msg += " (applyNg=" + std::to_string(applyNg) + " meterNg=" + std::to_string(meterNg) +
 			       " lastStage=" + std::to_string(lastFailStage) +
 			       " err=" + std::to_string(static_cast<unsigned>(lastErr)) + ")";
-			if (lastFailStage == 22) { msg += " " + this->withHttpDetail("lastHttp"); }
+			if (lastFailStage == 22) { msg += " " + this->withFailDetail("lastFail"); }
 		}
 		dataManager::logEvent(bad ? "ERR" : "CONV", msg.c_str(), bad);
 		if (bad && onNotice_) { onNotice_(static_cast<int>(hgc::notice::convergeFailed), 0); }
@@ -931,7 +917,7 @@ bool captureRunner::establishSession(void)
 	if (err == ERR_HGC_OK) { this->releaseLiveView(); }	// 初期収束が要るときは中で張り直す
 	if (err != ERR_HGC_OK)
 	{
-		if (onError_) { onError_(err, this->withHttpDetail("startShooting")); }
+		if (onError_) { onError_(err, this->withFailDetail("startShooting")); }
 		return false;
 	}
 
@@ -945,7 +931,7 @@ bool captureRunner::establishSession(void)
 		errCode me = cameraController::setupShootingModeManual(*dev_);
 		if (me == ERR_HGC_OK)            { interruptibleSleep(800); }	// モード変更/ability更新の反映待ち(初回rdyShutterの取りこぼし防止)
 		else if (me == ERR_HGC_NOT_SUPPORTED) { /* モード変更非対応機。そのまま続行 */ }
-		else if (onError_)               { onError_(me, this->withHttpDetail("setupShootingModeManual")); }
+		else if (onError_)               { onError_(me, this->withFailDetail("setupShootingModeManual")); }
 	}
 
 	// 設定可能値を取得して設定可能値テーブルを作る(仕様 4.2)
@@ -1861,7 +1847,7 @@ errCode captureRunner::loop(void)
 					{	// 内訳(HTTP応答・試行回数)はログへ。画面へはコードだけ。
 						char eb[240];
 						std::snprintf(eb, sizeof(eb), "%s (try=%d %dms err=%u)",
-						              this->withHttpDetail("first exposure apply failed").c_str(),
+						              this->withFailDetail("first exposure apply failed").c_str(),
 						              t1, kFirstApplyMaxMs, static_cast<unsigned>(ae));
 						dataManager::logEvent("ERR", eb, true);
 					}
@@ -1911,7 +1897,7 @@ errCode captureRunner::loop(void)
 			if (applyErr != ERR_HGC_OK && onError_)
 			{	// リトライしても設定できなかった。放置するとカメラは古い露出のまま撮り続け、
 				// アプリの露出モデルと実機がズレる(白飛び/黒潰れの原因)。必ずログへ出して気付けるようにする。
-				onError_(applyErr, this->withHttpDetail("setExposure failed after retry"));
+				onError_(applyErr, this->withFailDetail("setExposure failed after retry"));
 			}
 		}
 		const int prepMs = (prep != nullptr) ? static_cast<int>(tool::getElapse(prep)) : -1;
@@ -2064,7 +2050,7 @@ errCode captureRunner::loop(void)
 			{	// establishでキャッシュclear済 → 次シャッター前に露出を再適用しカメラ状態を合わせる。
 				int t2 = 0;
 				const errCode ae = applyWithRetry(pending, t2);
-				if (ae != ERR_HGC_OK && onError_) { onError_(ae, this->withHttpDetail("setExposure failed after retry (reconnect)")); }
+				if (ae != ERR_HGC_OK && onError_) { onError_(ae, this->withFailDetail("setExposure failed after retry (reconnect)")); }
 			}
 			// 届いていない側は再接続で時間を食っているので、次コマは即[A]起点にする。
 			// 撮れていない側は通信できているので周期を崩さない(復帰したらそのまま定刻へ戻る)。

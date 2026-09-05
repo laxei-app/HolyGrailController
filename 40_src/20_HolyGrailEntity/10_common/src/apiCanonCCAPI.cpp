@@ -557,6 +557,31 @@ errCode apiCanonCCAPI::rdyShutter(const cmdt::shotSet& shotSet)
     return err;
 }
 // シャッターを切る
+// 【カード起因かを見分ける(2026-08-19 の知見をここへ移動)】カメラは 503 の本文で理由を言う。
+//  実測(EOS R50 V, カード満杯): {"message":"Can not write to card"}
+//  仕様上の意味は「撮影中にメディアへ記録できなかった」(CCAPI Reference 3-40)。
+//  カードが無い/入れ替え待ちのときは "Card not available" が来る。
+//  どちらも**通信は成立している**ので、未検出や接続断として扱ってはいけない。
+//  応答なし(status<=0)は本当に届いていない。503 等は接続断ではない。
+apiBase::failInfo apiCanonCCAPI::lastFailure(void) const
+{
+	failInfo f;
+	int status = 0;
+	std::string body;
+	netThread::lastHttpFailure(status, body);
+	for (auto& c : body) { if (c == '\r' || c == '\n' || c == '\t') { c = ' '; } }	// ログは1行
+	f.noReply      = (status <= 0);
+	f.mediaBlocked = (status == 503 &&
+	                  (body.find("Can not write to card") != std::string::npos ||
+	                   body.find("Card not available")   != std::string::npos));
+	char buf[200];
+	if (status > 0)         { std::snprintf(buf, sizeof(buf), "http=%d %s", status, body.c_str()); }
+	else if (!body.empty()) { std::snprintf(buf, sizeof(buf), "http=noreply %s", body.c_str()); }
+	else                    { std::snprintf(buf, sizeof(buf), "http=noreply"); }
+	f.detail = buf;
+	return f;
+}
+
 errCode apiCanonCCAPI::actShutter(void)
 {
     if (!(funcList[funcNum::SHOT].verb == verb::POS)) { return ERR_HGC_NOT_SUPPORTED; }
