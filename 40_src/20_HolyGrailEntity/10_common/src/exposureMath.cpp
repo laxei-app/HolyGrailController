@@ -1,5 +1,7 @@
 ﻿#include "exposureMath.h"
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
 #include <cstdlib>
 
 namespace expo
@@ -139,6 +141,83 @@ namespace expo
 		}
 		if (out.empty()) { out = all; }	// 範囲外なら全部
 		return out;
+	}
+
+	namespace
+	{
+		// 目盛りの文字列。expo::parseValue が読み戻せる書き方(apiBuiltin の並びと同じ流儀)。
+		std::string gridText(expoKind k, double v)
+		{
+			char b[32];
+			if (k == expoKind::iso) { std::snprintf(b, sizeof(b), "%d", static_cast<int>(std::floor(v + 0.5))); return b; }
+			if (k == expoKind::fn)
+			{
+				std::snprintf(b, sizeof(b), "%.2f", v);		// 1/12 段は "1.54" のように 2 桁が要る
+				std::string s = b;
+				if (s.size() > 2 && s.back() == '0') { s.pop_back(); }	// "1.50"→"1.5"、"2.00"→"2.0"
+				return s;
+			}
+			const int denom = static_cast<int>(1.0 / v + 0.5);
+			if (denom <= 1)
+			{
+				// 20 秒以上は整数で十分(1/12 段でも 1 秒以上離れる)。"48" が "47.9" と出ないように。
+				if (v >= 20.0 || std::fabs(v - std::floor(v + 0.5)) < 0.05) { std::snprintf(b, sizeof(b), "%.0f", v); }
+				else                                                         { std::snprintf(b, sizeof(b), "%.1f", v); }
+			}
+			else { std::snprintf(b, sizeof(b), "1/%d", denom); }
+			return b;
+		}
+		// base × 2^(n/perStop) を lo〜hi(3% の余裕)で並べる。同じ綴りは1つにする。
+		std::vector<std::string> grid(expoKind k, int stepsPerStop, double lo, double hi)
+		{
+			const double base    = (k == expoKind::iso) ? 100.0 : 1.0;
+			const double perStop = (k == expoKind::fn) ? 2.0 * stepsPerStop : static_cast<double>(stepsPerStop);	// F は 1段=比√2
+			std::vector<std::string> out;
+			for (int n = -600; n <= 600; ++n)
+			{
+				const double v = base * std::pow(2.0, n / perStop);
+				if (v < lo / 1.03) { continue; }
+				if (v > hi * 1.03) { break; }
+				const std::string s = gridText(k, v);
+				if (out.empty() || out.back() != s) { out.push_back(s); }
+			}
+			return out;
+		}
+		// 慣用の表記の一覧を範囲(1/6 段の余裕)で絞る。
+		std::vector<std::string> clip(const std::vector<std::string>& all, expoKind k, double lo, double hi)
+		{
+			std::vector<std::string> out;
+			const double tol = std::pow(2.0, 1.0 / 6.0);
+			for (const auto& s : all)
+			{
+				const double r = parseValue(s, k);
+				if (r <= 0.0) { continue; }
+				const double rr = (k == expoKind::fn) ? r * r : r;		// F は 2 乗が明るさ比
+				const double lo2 = (k == expoKind::fn) ? lo * lo : lo, hi2 = (k == expoKind::fn) ? hi * hi : hi;
+				if (rr >= lo2 / tol && rr <= hi2 * tol) { out.push_back(s); }
+			}
+			return out;
+		}
+	}
+
+	std::vector<std::string> presetValues(expoKind k, bool forPhone)
+	{
+		if (forPhone)
+		{
+			if (k == expoKind::iso) { return grid(k, 12, 20.0, 12800.0); }
+			if (k == expoKind::ss)  { return grid(k, 12, 1.0 / 50000.0, 48.0); }
+			return grid(k, 12, 1.5, 3.5);
+		}
+		if (k == expoKind::iso) { return clip(standardValues(k), k, 100.0, 24000.0); }
+		if (k == expoKind::ss)
+		{
+			std::vector<std::string> all = { "1/16000", "1/12800", "1/10000" };
+			for (const auto& s : standardValues(k)) { all.push_back(s); }
+			return clip(all, k, 1.0 / 16000.0, 30.0);
+		}
+		std::vector<std::string> all = { "0.5", "0.6", "0.7", "0.8", "0.9" };
+		for (const auto& s : standardFn(1.0, 32.0)) { all.push_back(s); }
+		return clip(all, k, 0.5, 24.0);
 	}
 
 	expoTables standardTables(double fnMin, double fnMax)

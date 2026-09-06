@@ -1,12 +1,18 @@
 // スマホ内蔵カメラを所持カメラへ自動で登録する(2026-09-05)。
 //
-// 【なぜ自動なのか】外付けのカメラは「その個体を持っているか」が分からないので、見つけたら
+// 【なぜ自動なのか】外付けのカメラは「その個体を持っているか」が分からないので、
 //  登録してよいか人に聞く。内蔵カメラは端末そのものなので聞く意味が無い。複数のカメラを
 //  持つ端末では、それぞれを別のカメラとして並べる(ユーザー指示 2026-09-05)。
 //
 // 【在否監視には乗せない】内蔵カメラはネットワークの向こうに居ないので、
 //  presenceMonitor は "builtin" を弾く。そのため未登録カメラの登録プロンプト
 //  (reconcileDiscoveredCameras)にも乗らない。ここが唯一の登録経路になる。
+//
+// 【スマホ用の撮影制御方法の初期値もここで作る(2026-09-06 仕様)】
+//  初期値(プリセット)は「外部カメラ用」(出荷時のコード生成)と「スマホ用」の2組を用意する。
+//  スマホ用はカメラの実力(設定可能な iso/ss/F の並び・NPF)から組み立てるので、
+//  端末に依る=ここ(内蔵カメラの登録)でしか作れない。名前は UI から受け取る
+//  (将来の言語対応を UI 側だけで済ませるため)。
 #include "detectBuiltin.h"
 #include "apiBuiltin.h"
 #include "device.h"
@@ -14,6 +20,7 @@
 #include "holyGrailEntity.h"
 #include "csJson.h"
 #include "exposureMath.h"
+#include <json/nlohmann/json.hpp>
 #include <string>
 #include <vector>
 #include <cmath>
@@ -22,6 +29,8 @@
 
 namespace
 {
+	using json = nlohmann::json;
+
 	// 露出をカメラの設定可能値へ吸着させる。ひな形の初期値や限界が、そのカメラに
 	//  存在しない値のままだと、撮影開始時にいちばん近い値へ飛んで意図とずれる。
 	void snapExposure(hgc::exposure& e, const expo::expoTables& t)
@@ -34,6 +43,163 @@ namespace
 		ctl.init(t, noLim, noLim, pri);
 		ctl.setCurrent(e);	// いちばん近い目盛りへ吸着する
 		e = ctl.current();
+	}
+
+	// ── 設定可能値の並び(カメラが答えた文字列)から値を選ぶ ──────────────
+	// 段の差(log2 比)が最小のもの。空なら "" 。
+	std::string nearestIn(const std::vector<std::string>& list, double target, expo::expoKind k)
+	{
+		const std::string* best = nullptr; double bestDiff = 1e300;
+		for (const auto& s : list)
+		{
+			const double r = expo::parseValue(s, k);
+			if (r <= 0.0 || target <= 0.0) { continue; }
+			const double d = std::fabs(std::log2(r / target));
+			if (d < bestDiff) { bestDiff = d; best = &s; }
+		}
+		return best ? *best : std::string();
+	}
+	// limit 未満で最大のもの。無ければ最小のもの。
+	std::string maxBelow(const std::vector<std::string>& list, double limit, expo::expoKind k)
+	{
+		const std::string* best = nullptr; double bestR = -1.0;
+		const std::string* lo = nullptr;   double loR = 1e300;
+		for (const auto& s : list)
+		{
+			const double r = expo::parseValue(s, k);
+			if (r <= 0.0) { continue; }
+			if (r < loR) { loR = r; lo = &s; }
+			if (r < limit && r > bestR) { bestR = r; best = &s; }
+		}
+		if (best) { return *best; }
+		return lo ? *lo : std::string();
+	}
+	std::string minOf(const std::vector<std::string>& list, expo::expoKind k)
+	{
+		const std::string* lo = nullptr; double loR = 1e300;
+		for (const auto& s : list) { const double r = expo::parseValue(s, k); if (r > 0.0 && r < loR) { loR = r; lo = &s; } }
+		return lo ? *lo : std::string();
+	}
+	std::string maxOf(const std::vector<std::string>& list, expo::expoKind k)
+	{
+		const std::string* hi = nullptr; double hiR = -1.0;
+		for (const auto& s : list) { const double r = expo::parseValue(s, k); if (r > 0.0 && r > hiR) { hiR = r; hi = &s; } }
+		return hi ? *hi : std::string();
+	}
+
+	// UI から受け取る名前(型ごと)。無ければ英語の既定。
+	struct phoneNames
+	{
+		std::string night = "Night phone", sunrise = "Sunrise phone";
+		std::string sunset = "Sunset phone", day = "Daylight phone";
+	};
+	phoneNames parseNames(const std::string& namesJson)
+	{
+		phoneNames n;
+		json j = json::parse(namesJson, nullptr, false);
+		if (j.is_discarded() || !j.is_object()) { return n; }
+		if (j.value("night",   std::string()).size()) { n.night   = j["night"]; }
+		if (j.value("sunrise", std::string()).size()) { n.sunrise = j["sunrise"]; }
+		if (j.value("sunset",  std::string()).size()) { n.sunset  = j["sunset"]; }
+		if (j.value("day",     std::string()).size()) { n.day     = j["day"]; }
+		return n;
+	}
+
+	// ── スマホ用の撮影制御方法一式を、そのカメラの実力から組み立てる(2026-09-06 仕様) ──
+	//  夜間      : ss=算出した NPF 未満の最大値 / F=設定できる最小値 / ISO=1600(に最寄り)
+	//  朝日・夕日: 暗所限界=夜間の値、基準=暗所限界、明所限界= ISO100 / 1/16000(カメラがそこまで
+	//              速くなければ最速) / 最大F。順は iso→ss→F。ev -3.0、平滑化 0.5ev・3コマ
+	//  日中      : 朝日と同じ限界、ev 0.0
+	//  ss の暗所限界は api の上限に関わらず 48 秒まで(apiBuiltin の並びが加算で 48 秒まで持つ)。
+	hgc::exposure nightExposureFor(const apiBuiltin& api, double sensorWmm, uint32_t pixelW)
+	{
+		hgc::exposure e;
+		const double npf = expo::npfShutterSec(sensorWmm, static_cast<double>(pixelW), api.focalMm(), api.aperture());
+		e.ss  = (npf > 0.0) ? maxBelow(api.ssList(), npf, expo::expoKind::ss)
+		                    : nearestIn(api.ssList(), 24.0, expo::expoKind::ss);
+		e.fn  = minOf(api.fnList(), expo::expoKind::fn);
+		e.iso = nearestIn(api.isoList(), 1600.0, expo::expoKind::iso);
+		return e;
+	}
+	hgc::exposure brightLimitFor(const apiBuiltin& api)
+	{
+		hgc::exposure e;
+		e.iso = nearestIn(api.isoList(), 100.0, expo::expoKind::iso);
+		const std::string fastest = minOf(api.ssList(), expo::expoKind::ss);
+		const double camMin = expo::parseValue(fastest, expo::expoKind::ss);
+		const double want   = 1.0 / 16000.0;
+		e.ss = (camMin > want) ? fastest : nearestIn(api.ssList(), want, expo::expoKind::ss);
+		e.fn = maxOf(api.fnList(), expo::expoKind::fn);
+		return e;
+	}
+	void buildPhoneSet(const apiBuiltin& api, double sensorWmm, uint32_t pixelW,
+	                   const phoneNames& nm, astro::ccmSet& set)
+	{
+		const hgc::exposure dark   = nightExposureFor(api, sensorWmm, pixelW);
+		const hgc::exposure bright = brightLimitFor(api);
+
+		auto night = std::make_shared<hgc::ccmNight>();
+		night->name = nm.night; night->forPhone = true;
+		night->limitBright = night->limitDark = night->initial = dark;
+		set.night = night;
+
+		auto sunrise = std::make_shared<hgc::ccmSunrise>();
+		sunrise->name = nm.sunrise; sunrise->forPhone = true;
+		sunrise->limitBright = dark; sunrise->limitDark = bright; sunrise->initial = dark;
+		sunrise->ev = -3.0; sunrise->hysteresis = 0.5; sunrise->movingAverage = 3;
+		set.sunrise = sunrise;
+
+		auto sunset = std::make_shared<hgc::ccmSunset>();
+		sunset->name = nm.sunset; sunset->forPhone = true;
+		sunset->limitBright = dark; sunset->limitDark = bright; sunset->initial = dark;
+		sunset->ev = -3.0; sunset->hysteresis = 0.5; sunset->movingAverage = 3;
+		set.sunset = sunset;
+
+		auto day = std::make_shared<hgc::ccmDay>();
+		day->name = nm.day; day->forPhone = true;
+		day->limitBright = dark; day->limitDark = bright; day->initial = dark;
+		day->ev = 0.0;
+		set.day = day;
+	}
+
+	// 見つかったカメラのうち、焦点距離がいちばん短いもの(スマホ用初期値の元にする)。
+	const apiBuiltin* shortestLens(const std::vector<class device>& cams, const class device** dev)
+	{
+		const apiBuiltin* best = nullptr;
+		for (const auto& d : cams)
+		{
+			const apiBuiltin* api = dynamic_cast<const apiBuiltin*>(d.apiBase.get());
+			if (api == nullptr || api->focalMm() <= 0.0) { continue; }
+			if (best == nullptr || api->focalMm() < best->focalMm()) { best = api; *dev = &d; }
+		}
+		return best;
+	}
+
+	// スマホ用の初期値(プリセット)を型ごとに1件ずつ作り、すべて「優先的な初期値」にする。
+	void makePhonePresets(const std::vector<class device>& cams, const phoneNames& nm)
+	{
+		const class device* dev = nullptr;
+		const apiBuiltin* api = shortestLens(cams, &dev);
+		if (api == nullptr || dev == nullptr) { return; }
+		double wmm = 0.0, hmm = 0.0; uint32_t px = 0, py = 0;
+		dev->apiBase->readSensorSpec(wmm, hmm, px, py);
+
+		astro::ccmSet set;
+		buildPhoneSet(*api, wmm, px, nm, set);
+		struct one { const char* key; std::shared_ptr<hgc::ccmBase> c; } list[4] = {
+			{ "night", set.night }, { "sunrise", set.sunrise }, { "sunset", set.sunset }, { "day", set.day } };
+		for (const auto& o : list)
+		{
+			if (!o.c) { continue; }
+			dataManager::setCcmPresetJson(o.key, o.c->name, csjson::ccmToJson(*o.c));
+			dataManager::setPreferredCcm(o.key, o.c->name);
+		}
+		char b[224];
+		std::snprintf(b, sizeof(b), "phone presets ready from %s (%.1fmm): night %s %s %s / bright %s %s %s",
+		              dev->model.c_str(), api->focalMm(),
+		              set.night->limitBright.iso.c_str(), set.night->limitBright.ss.c_str(), set.night->limitBright.fn.c_str(),
+		              set.day->limitDark.iso.c_str(), set.day->limitDark.ss.c_str(), set.day->limitDark.fn.c_str());
+		dataManager::logEvent("GEAR", b);
 	}
 }
 
@@ -51,7 +217,11 @@ namespace builtinCam
 	// 【端末ごとに中身が変わる】名前も焦点距離も露出の実力も端末で違うので、資産として
 	//  同梱できない。登録の直後にその端末の実力から組み立てる。
 	//  同じ名前が既にあれば何もしない(消したものを起動のたびに作り直さない)。
-	void makeTemplate(const std::vector<class device>& cams)
+	//
+	// 【撮影制御方法はスマホ用の初期値と同じ作りで、そのカメラに最適化する(2026-09-06 仕様)】
+	//  NPF・設定可能範囲・刻みはカメラごとに違うので、初期値をそのまま写さず同じ規則で
+	//  そのカメラの実力から組み立てる(=初期値を取り込んでカメラに応じて最適化したもの)。
+	void makeTemplate(const std::vector<class device>& cams, const phoneNames& nm)
 	{
 		for (const auto& d : cams)
 		{
@@ -63,7 +233,6 @@ namespace builtinCam
 			// 【頭は英語(2026-08-22 の決まり)】Entity と通信路に日本語を置かない。
 			//  後ろに付くカメラ名は端末が答えた「持ち物の名前」なので、そのまま使う。
 			cs.name     = "Phone night sky - " + d.model;
-			cs.interval = 30.0;	// 熱の都合。スマホは30秒以上(2026-09-05 ユーザー判断)
 			// 【窓を持たせる(2026-09-06)】出荷時の固定計画は開始/終了が 0 で、そのまま保存すると
 			//  ひな形を選んだときのスケジュール生成が失敗し(終了≦開始)、選べない。
 			//  夜空のひな形なので今日 20:00 〜 翌 04:00 にする(計画を作るときは日付だけ今日へ寄る)。
@@ -106,68 +275,19 @@ namespace builtinCam
 			hgc::lens ol;
 			cs.lens = dataManager::findOwnedCameraDefaultLens(cs.camera.name, ol) ? ol : ln;
 
+			// 撮影制御方法: このカメラの実力(NPF・並び)で組み立てる。
+			double wmm = 0.0, hmm = 0.0; uint32_t px = 0, py = 0;
+			d.apiBase->readSensorSpec(wmm, hmm, px, py);
+			astro::ccmSet set;
+			buildPhoneSet(*api, wmm, px, nm, set);
+			cs.ccm.night = set.night; cs.ccm.sunrise = set.sunrise;
+			cs.ccm.sunset = set.sunset; cs.ccm.day = set.day;
+
+			// 値は並びから選んでいるので目盛りに乗っているが、念のため吸着させておく。
 			expo::expoTables t;
 			t.iso = expo::buildTable(api->isoList(), expo::expoKind::iso);
 			t.ss  = expo::buildTable(api->ssList(),  expo::expoKind::ss);
 			t.fn  = expo::buildTable(api->fnList(),  expo::expoKind::fn);
-
-			// 【夜間の固定露出はカメラの実力で決める】ここを空のままにすると撮影制御方法の
-			//  初期値(キヤノン機向けの 8秒など)が入る。前面カメラのように最長1秒しか無い
-			//  個体では届かないので、**そのカメラで出せる中から選ぶ**。
-			//   ・シャッターは出せる中で 24 秒に近いもの(2026-09-06: 加算で 48 秒まで出せるように
-			//     なったが、暗い空の目安は 24秒 F1.9 ISO1600 ≒ 一眼の 20秒 F2.8 ISO3200。
-			//     周期 30 秒 = 1.25×24 とも合う。48 秒は明るい空では飛ぶので初期値にはしない)
-			//   ・ISO は 1600 に近いもの(粒状感と明るさの兼ね合いの目安)
-			//   ・F値は固定なのでその値
-			if (!api->ssList().empty())
-			{
-				std::string best = api->ssList().back();
-				double bestDiff = -1.0;
-				for (const auto& v : api->ssList())
-				{
-					const double s = expo::parseValue(v, expo::expoKind::ss);
-					if (s <= 0.0) { continue; }
-					const double diff = std::fabs(std::log2(s / 24.0));
-					if (bestDiff < 0.0 || diff < bestDiff) { bestDiff = diff; best = v; }
-				}
-				cs.nightFixedExposure.ss = best;
-			}
-			if (!api->fnList().empty())  { cs.nightFixedExposure.fn  = api->fnList().front(); }
-			if (!api->isoList().empty())
-			{
-				std::string bestIso = api->isoList().front();
-				double bestDiff = -1.0;
-				for (const auto& v : api->isoList())
-				{
-					const double r = expo::parseValue(v, expo::expoKind::iso);
-					if (r <= 0.0) { continue; }
-					const double diff = std::fabs(std::log2(r / 1600.0));
-					if (bestDiff < 0.0 || diff < bestDiff) { bestDiff = diff; bestIso = v; }
-				}
-				cs.nightFixedExposure.iso = bestIso;
-			}
-
-			snapExposure(cs.nightFixedExposure, t);
-
-			// 【ひな形は撮影制御方法の実体を持つ(2026-09-06 ユーザー指示)】
-			//  以前は出荷時の固定計画のまま実体を持たず、読み込むたびに初期値(プリセット)から
-			//  入れ直していた。そのため上で決めた夜間 24 秒がスケジュール生成で 8 秒に戻り、
-			//  初期値のエディタが内蔵カメラの目盛りを借りる事故の温床にもなった。
-			//  保存したひな形と同じく、作るときに初期値を取り込み、このカメラの目盛りへ寄せる。
-			//  夜間の固定露出だけは上で選んだ 24 秒相当(このカメラで出せる値)に置き換える。
-			{
-				astro::ccmSet set;
-				if (!dataManager::parseCcmSetJson(dataManager::preferredCcmSetJson(), set))
-				{ dataManager::parseCcmSetJson(dataManager::ccmDefaultsJson(), set); }
-				cs.ccm.night = set.night; cs.ccm.sunrise = set.sunrise;
-				cs.ccm.sunset = set.sunset; cs.ccm.day = set.day;
-				if (cs.ccm.night)
-				{
-					cs.ccm.night->limitBright = cs.nightFixedExposure;
-					cs.ccm.night->limitDark   = cs.nightFixedExposure;
-					cs.ccm.night->initial     = cs.nightFixedExposure;
-				}
-			}
 			for (const hgc::ccmType ty : { hgc::ccmType::night, hgc::ccmType::sunrise,
 			                               hgc::ccmType::sunset, hgc::ccmType::day })
 			{
@@ -176,6 +296,17 @@ namespace builtinCam
 				snapExposure(c->initial,     t);
 				snapExposure(c->limitBright, t);
 				snapExposure(c->limitDark,   t);
+			}
+			cs.nightFixedExposure = set.night->limitBright;
+
+			// 撮影周期: 熱の都合で 30 秒以上(2026-09-05 ユーザー判断)。加算で長い ss を使うときは
+			//  カメラの規則(最長 ss × 係数 + 余裕)がそれを超えるので、大きいほうを採る。
+			{
+				const double maxSs  = expo::parseValue(cs.nightFixedExposure.ss, expo::expoKind::ss);
+				const double factor = (cs.camera.intervalFactor > 0.0) ? cs.camera.intervalFactor : 1.0;
+				const double margin = (cs.camera.intervalFactor > 0.0) ? cs.camera.intervalMargin : 2.0;
+				const double need   = (maxSs > 0.0) ? std::ceil(maxSs * factor + margin) : 0.0;
+				cs.interval = (need > 30.0) ? need : 30.0;
 			}
 
 			if (hge_saveTemplateJsonIfAbsent(csjson::toJson(cs).c_str()) == ERR_HGC_OK)
@@ -191,12 +322,13 @@ namespace builtinCam
 		}
 	}
 
-	// 端末のカメラを一通り見て、所持カメラ・所持レンズ・ひな形を用意する。
+	// 端末のカメラを一通り見て、所持カメラ・所持レンズ・スマホ用初期値・ひな形を用意する。
 	//  **戻り=見つかったカメラの台数**(足した数ではない)。呼ぶ側はこれで
 	//  「用意し終えたか(=もう二度としなくてよいか)」を判断する。0 のときは
 	//  カメラの権限がまだ無いなどの理由で列挙できていないので、次の起動でやり直す。
 	//  既にあるものは触らない(名前や値をユーザーが変えていることがある)。
-	int registerAll(void)
+	//  namesJson: 初期値の名前 {"night":..,"sunrise":..,"sunset":..,"day":..}(UI の言語で)。
+	int registerAll(const std::string& namesJson)
 	{
 		detectBuiltin det;
 		std::vector<class device> found;
@@ -225,7 +357,9 @@ namespace builtinCam
 			dataManager::logEvent("GEAR",
 				("builtin cameras registered: " + std::to_string(added)).c_str());
 		}
-		makeTemplate(found);
+		const phoneNames nm = parseNames(namesJson);
+		makePhonePresets(found, nm);
+		makeTemplate(found, nm);
 		return static_cast<int>(found.size());
 	}
 }

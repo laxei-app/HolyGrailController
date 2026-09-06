@@ -904,6 +904,9 @@ namespace
 		g_plan.end   = endDt;
 		seedPlanCcmFromDefaults(g_plan);	// 新規作成: ここでだけ4種すべてを初期値から取り込む
 		astro::buildSchedule(g_plan);
+		// 取り込んだ露出(長い ss)で最小周期を割っていたら伸ばす(スマホ用の初期値は 48 秒まで持つ)。
+		//  最小周期は窓(ccmList)の ss から出すので、スケジュールを組んだ後に見る。
+		{ const int mn = minIntervalSec(g_plan); if (g_plan.interval < static_cast<double>(mn)) { g_plan.interval = mn; } }
 		buildScheduleJson();
 	}
 
@@ -2563,6 +2566,7 @@ int32_t hge_newPlanFromTemplate(const char* id)
 	g_plan = cs;
 	const errCode be = astro::buildSchedule(g_plan);
 	if (be != ERR_HGC_OK) { return be; }
+	{ const int mn = minIntervalSec(g_plan); if (g_plan.interval < static_cast<double>(mn)) { g_plan.interval = mn; } }
 	buildScheduleJson();
 	g_editId    = makePlanId();
 	g_editIsTpl = false;
@@ -2596,12 +2600,14 @@ int32_t hge_updatePlanFromTemplate(const char* planId, const char* tplId)
 		g_plan = cur;
 		const errCode be = astro::buildSchedule(g_plan);
 		if (be != ERR_HGC_OK) { return be; }
+		{ const int mn = minIntervalSec(g_plan); if (g_plan.interval < static_cast<double>(mn)) { g_plan.interval = mn; } }
 		buildScheduleJson();
 		const errCode se = saveCurrentPlan();
 		notify(HGE_EV_SCHEDULE, g_schedJson);
 		return se;
 	}
 	astro::buildSchedule(cur);
+	{ const int mn = minIntervalSec(cur); if (cur.interval < static_cast<double>(mn)) { cur.interval = mn; } }
 	return dataManager::savePlanFile(std::string(planId), csjson::toJson(cur))
 	           ? ERR_HGC_OK : ERR_HGC_INVALID_STATE;
 }
@@ -2880,12 +2886,14 @@ int32_t hge_getCcmDefaultsJson(char* buf, int32_t* inoutLen)
 //  以前は初期値の編集でも計画のカメラの目盛り(hge_getExpoValuesJson)を借りていた。
 //  内蔵カメラの実測目盛りに "1600" や "8" は無く、位置を見失った初期値が
 //  ISO 11377 / 48 秒へ化けて保存された。初期値はどのカメラのものでもないので標準 1/3 段で示す。
-int32_t hge_getStandardExpoValuesJson(char* buf, int32_t* inoutLen)
+//  スマホ向け(forPhone)なら 1/12 段の細かい目盛り、外部カメラ向けなら慣用の 1/3 段(2026-09-06 仕様)。
+int32_t hge_getPresetExpoValuesJson(int32_t forPhone, char* buf, int32_t* inoutLen)
 {
 	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
-	const std::vector<std::string> iso = expo::standardValues(expo::expoKind::iso);
-	const std::vector<std::string> ss  = expo::standardValues(expo::expoKind::ss);
-	const std::vector<std::string> fn  = expo::standardFn(1.0, 32.0);
+	const bool ph = (forPhone != 0);
+	const std::vector<std::string> iso = expo::presetValues(expo::expoKind::iso, ph);
+	const std::vector<std::string> ss  = expo::presetValues(expo::expoKind::ss,  ph);
+	const std::vector<std::string> fn  = expo::presetValues(expo::expoKind::fn,  ph);
 	auto arr = [](const std::vector<std::string>& v) {
 		std::string s = "[";
 		for (size_t i = 0; i < v.size(); ++i) { if (i) { s += ","; } s += "\"" + v[i] + "\""; }

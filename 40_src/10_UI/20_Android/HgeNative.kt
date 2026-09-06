@@ -83,7 +83,7 @@ object HgeNative {
     external fun nativeGetPlanCcm(): String          // 計画固有ccm(初期値とは別)
     external fun nativeSetPlanCcm(json: String): Int
     external fun nativeGetExpoValues(): String
-    external fun nativeGetStandardExpoValues(): String   // 初期値のエディタ用(カメラに依らない標準目盛り)
+    external fun nativeGetPresetExpoValues(forPhone: Boolean): String   // 初期値のエディタ用(スマホ向け=1/12段 / 外部=1/3段)
     external fun nativeSunAltitudeTimes(altitudeDeg: Int): String   // {"start":"MM/dd HH:mm","end":...}
     external fun nativeSetListener(listener: HgeListener?)
 
@@ -100,7 +100,7 @@ object HgeNative {
     external fun nativeAddOwnedCamera(name: String): Int
     // スマホ内蔵カメラを所持カメラへ足す(まだ無いものだけ)。戻り=足した台数。
     //  端末そのものなので登録可否は聞かない(外付けカメラのプロンプトとは扱いが違う)。
-    external fun nativeRegisterBuiltinCameras(): Int
+    external fun nativeRegisterBuiltinCameras(namesJson: String): Int   // namesJson=スマホ用初期値の名前(型ごと)
     // RAW 加算(2026-09-06)。Camera2 から受け取った RAW を足して現像する。ループは C++(rawStack)。
     external fun nativeRawStackBegin(width: Int, height: Int, cfa: Int)
     external fun nativeRawStackAdd(buf: java.nio.ByteBuffer, rowStride: Int): Boolean

@@ -83,11 +83,15 @@ Java_app_laxei_holygrail_HgeNative_nativeInit(JNIEnv* env, jobject /*thiz*/)
 
 // スマホ内蔵カメラを所持カメラへ足す(まだ無いものだけ)。戻り=足した台数。
 //  端末そのものなので登録可否は聞かない(外付けカメラのプロンプトとは扱いが違う)。
+//  namesJson: スマホ用の撮影制御方法初期値の名前(型ごと。UI の言語で)。
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeRegisterBuiltinCameras(JNIEnv* env, jobject /*thiz*/)
+Java_app_laxei_holygrail_HgeNative_nativeRegisterBuiltinCameras(JNIEnv* env, jobject /*thiz*/, jstring namesJson_)
 {
 	builtinCam::bindClass(env);	// UI スレッドから呼ばれる。ここでも捕まえておく
-	return static_cast<jint>(builtinCam::registerAll());
+	const char* j = namesJson_ ? env->GetStringUTFChars(namesJson_, nullptr) : nullptr;
+	const std::string names = j ? j : "";
+	if (j) { env->ReleaseStringUTFChars(namesJson_, j); }
+	return static_cast<jint>(builtinCam::registerAll(names));
 }
 
 JNIEXPORT jint JNICALL
@@ -429,15 +433,16 @@ Java_app_laxei_holygrail_HgeNative_nativeGetExpoValues(JNIEnv* env, jobject /*th
 	return env->NewStringUTF(buf.data());
 }
 
-// 初期値のエディタ用(カメラに依らない標準目盛り)。
+// 初期値のエディタ用(カメラに依らない目盛り。forPhone で 1/12 段・1/3 段を切り替える)。
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeGetStandardExpoValues(JNIEnv* env, jobject /*thiz*/)
+Java_app_laxei_holygrail_HgeNative_nativeGetPresetExpoValues(JNIEnv* env, jobject /*thiz*/, jboolean forPhone)
 {
 	int32_t len = 0;
-	hge_getStandardExpoValuesJson(nullptr, &len);
+	const int32_t ph = forPhone ? 1 : 0;
+	hge_getPresetExpoValuesJson(ph, nullptr, &len);
 	if (len <= 0) { return env->NewStringUTF("{}"); }
 	std::vector<char> buf(static_cast<size_t>(len));
-	if (hge_getStandardExpoValuesJson(buf.data(), &len) != 0) { return env->NewStringUTF("{}"); }
+	if (hge_getPresetExpoValuesJson(ph, buf.data(), &len) != 0) { return env->NewStringUTF("{}"); }
 	return env->NewStringUTF(buf.data());
 }
 

@@ -264,9 +264,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private var isoDisp = listOf<String>()
     private var ssDisp = listOf<String>()
     private var fnDisp = listOf<String>()
-    // 今の目盛りが「標準(初期値の編集用)」か「計画のカメラのもの」か。エディタは目盛りを
-    //  構築時に取り込むので、編集対象(初期値/計画)が変わったら作り直す(2026-09-06)。
-    private var expoListsStandard = false
+    // 今の目盛りの出所: 0=計画のカメラ / 1=初期値(外部カメラ向け 1/3 段) / 2=初期値(スマホ向け 1/12 段)。
+    //  エディタは目盛りを構築時に取り込むので、編集対象が変わったら作り直す(2026-09-06)。
+    private var expoListsMode = -1
     private lateinit var fixEditor: ExposureEditor      // 夜間 固定露出(単一)
     private lateinit var editLimit: LimitEditor         // 自動露出 露出限界(優先度+明暗を一体化)
 
@@ -366,7 +366,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  apiBuiltin が答えた値で決まる。新しくしたければ出荷時設定に戻して作り直す。
         if (!hgcPrefs().getBoolean("builtinSeedDone", false)) {
             dataExec.execute {
-                val found = try { HgeNative.nativeRegisterBuiltinCameras() } catch (_: Exception) { 0 }
+                // スマホ用の撮影制御方法初期値の名前(型ごと)。UI の言語で渡す(将来の言語対応は UI だけで済ませる)。
+                val names = JSONObject().put("night", "夜間スマホ").put("sunrise", "朝日スマホ")
+                                        .put("sunset", "夕日スマホ").put("day", "日中スマホ").toString()
+                val found = try { HgeNative.nativeRegisterBuiltinCameras(names) } catch (_: Exception) { 0 }
                 if (found > 0) {
                     hgcPrefs().edit().putBoolean("builtinSeedDone", true).apply()
                     runOnUiThread { if (flipper.displayedChild == 6) buildCameraList() }
@@ -1550,11 +1553,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (!editingPlanCcm) {
             val cb = CheckBox(this); cb.text = "優先的な初期値にする"
             cb.isChecked = selPresetName == HgeNative.nativeGetPreferredCcm(presetType)
-            cb.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            cb.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             cb.setOnCheckedChangeListener { _, c ->
                 if (c) { selPresetName?.let { HgeNative.nativeSetPreferredCcm(presetType, it) }; rebuildPresetList() } else cb.isChecked = true
             }
             row.addView(cb); presetPreferCheck = cb
+            // 【スマホ向け(2026-09-06 仕様)】刻みと範囲を切り替える(on: 1/12 段 ss 48〜1/50000・F1.5〜3.5・
+            //  ISO20〜12800 / off: 1/3 段 ss 30〜1/16000・F0.5〜24・ISO100〜24000)。印はその初期値に保存する。
+            val ph = CheckBox(this); ph.text = "スマホ向け"
+            ph.isChecked = ccmJson?.optJSONObject(editingKey)?.optBoolean("forPhone") ?: false
+            ph.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            ph.setOnCheckedChangeListener { _, c -> togglePresetPhone(c) }
+            row.addView(ph)
+            // 残りの幅は空けて、取り消しボタンと重ならないようにする。
+            val sp = View(this); sp.layoutParams = LinearLayout.LayoutParams(0, 1, 1f); row.addView(sp)
         } else {
             val sp = View(this); sp.layoutParams = LinearLayout.LayoutParams(0, 1, 1f); row.addView(sp)
         }
@@ -1631,6 +1643,21 @@ class MainActivity : AppCompatActivity(), HgeListener {
         btn.setOnClickListener { onCancel() }
         if (atTop) box.addView(btn, 0) else box.addView(btn)
         return btn
+    }
+
+    // 「スマホ向け」を切り替える。今の編集内容ごと印を付けて保存し、目盛りを替えて開き直す
+    //  (値は新しい目盛りのいちばん近い位置に乗る)。
+    private fun togglePresetPhone(on: Boolean) {
+        val all = ccmJson ?: return
+        val cur = buildCcmEditJson() ?: return
+        // 触っていなければ保存済みの値をそのまま持つ(スライダーの位置は目盛りに寄せた表示に過ぎず、
+        //  それで保存すると 48 秒が 1/3 段の上限 30 秒に潰れて戻らない)。触っていればその値を採る。
+        val src = all.optJSONObject(editingKey)
+        val o = if (cur.toString() != dirtyBaseline || src == null) cur else JSONObject(src.toString())
+        o.put("forPhone", on)
+        all.put(editingKey, o)
+        savePresetFromEditor(o)
+        openCcmEdit(editingKey)
     }
 
     // エディタ内容をプリセットとして保存する(初期値編集時)。名称は一覧側で編集する。
@@ -2931,8 +2958,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 【初期値の編集はカメラに依らない標準目盛りで(2026-09-06)】計画のカメラの目盛りを
         //  借りると、内蔵カメラの実測目盛りに無い "1600" や "8" が位置を見失って化け、
         //  そのまま初期値へ保存されていた(ISO 11377 / 48 秒)。計画の編集はそのカメラの目盛り。
-        if (!editingPlanCcm && !expoListsStandard) { loadExpoValues(standard = true); buildExposureEditors() }
-        else if (editingPlanCcm && expoListsStandard) { reloadExpoEditors() }
+        //  初期値は「スマホ向け」の印で 1/12 段と 1/3 段を切り替える(2026-09-06 仕様)。
+        val wantMode = if (editingPlanCcm) 0 else if (o.optBoolean("forPhone")) 2 else 1
+        if (wantMode != expoListsMode) { loadExpoValues(wantMode); buildExposureEditors() }
         // 計画固有の編集で、その計画がロックされていれば読取専用(初期値の編集は常に可)。
         ccmReadOnly = editingPlanCcm && planReadOnly
         val title = mapOf("night" to "夜間撮影", "sunrise" to "朝日撮影", "sunset" to "夕日撮影", "day" to "日中撮影")[key]
@@ -3125,11 +3153,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // 設定可能な露出値(カメラ設定値の文字列)を Entity から取得して保持する。
-    private fun loadExpoValues(standard: Boolean = false) {
-        expoListsStandard = standard
+    private fun loadExpoValues(mode: Int = 0) {
+        expoListsMode = mode
         try {
-            val o = JSONObject(if (standard) HgeNative.nativeGetStandardExpoValues()
-                               else HgeNative.nativeGetExpoValues())
+            val o = JSONObject(when (mode) {
+                1 -> HgeNative.nativeGetPresetExpoValues(false)
+                2 -> HgeNative.nativeGetPresetExpoValues(true)
+                else -> HgeNative.nativeGetExpoValues()
+            })
             isoValues = jsonToList(o.optJSONArray("iso"))
             ssValues = jsonToList(o.optJSONArray("ss"))
             fnValues = jsonToList(o.optJSONArray("fn"))

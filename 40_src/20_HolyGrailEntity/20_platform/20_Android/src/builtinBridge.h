@@ -23,7 +23,8 @@ namespace builtinCam
 	//  初回起動で一度だけ呼ばれ、所持カメラ・所持レンズ・ひな形を作る。並びや周期の規則は
 	//  このとき apiBuiltin が答えた値で決まり、以後は差し替えない(データを作り直せば新しくなる)。
 	//  実装は builtinRegister.cpp。内蔵カメラは在否監視に乗らないので、ここが唯一の登録経路。
-	int registerAll(void);
+	//  namesJson: スマホ用の撮影制御方法初期値の名前(型ごと。UI の言語で)。
+	int registerAll(const std::string& namesJson);
 
 	// 端末が持つカメラの一覧。JSON 配列 [{"id","name","facing"}]。取れなければ "[]"。
 	std::string listJson(void);

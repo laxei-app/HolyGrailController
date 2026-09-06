@@ -134,6 +134,12 @@ namespace expo
 	std::vector<std::string> standardValues(expoKind k);			// iso/ss(fnは下記)
 	std::vector<std::string> standardFn(double fnMin, double fnMax);	// レンズf範囲の1/3段F値
 
+	// 初期値(プリセット)のエディタ用の目盛り(2026-09-06 仕様)。カメラに依らない。
+	//  forPhone=真: 1/12 段。ss 48〜1/50000、F1.5〜3.5、ISO20〜12800(数値から作る)
+	//  forPhone=偽: 1/3 段。ss 30〜1/16000、F0.5〜24、ISO100〜24000(慣用の表記を範囲で絞る)
+	//  並びは実数の昇順(ss は速→遅)。
+	std::vector<std::string> presetValues(expoKind k, bool forPhone);
+
 	// iso/ss/fn 三つ分のテーブル。
 	struct expoTables
 	{
