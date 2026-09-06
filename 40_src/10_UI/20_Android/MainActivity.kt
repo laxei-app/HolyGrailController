@@ -2123,6 +2123,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         if (cam == null) { val tv = TextView(this); tv.text = "(データなし)"; box.addView(tv); return }
         val camCancel = addCancelButton(box, atTop = true) { buildCameraDetail() }   // 分割バー直下に右寄せ(取消=保存内容から作り直し)
+        // 【外部端末が計画を持っているカメラは最初から編集不可(2026-09-07 ユーザー指示)】
+        //  以前は入力させてから保存時に「変更できません」と断っていた。開いた時点で欄を閉じ、理由を出す。
+        //  撮影が終わって外部端末の計画が解除されれば、開き直したときに編集できる。
+        val heldBy = edgesHoldingCamera(sel)
+        if (heldBy.isNotEmpty()) {
+            val note = TextView(this)
+            note.text = "このカメラを使う撮影計画が外部端末「" + heldBy.joinToString("」「") + "」に送られているため変更できません。" +
+                        "撮影が終わるか、計画一覧からその計画を外部端末から削除すると編集できます。"
+            note.textSize = 13f; note.setTextColor(0xFFB71C1C.toInt()); note.setPadding(dp(4), dp(4), dp(4), dp(8))
+            box.addView(note)
+        }
         box.addView(editRow("メーカー", "maker", cam.optString("maker")))
         box.addView(editRow("モデル", "model", cam.optString("model")))
         // 名称はリストの行でインライン編集する(分割バー画面共通の動作)。詳細からは除外。
@@ -2170,8 +2181,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         ocObj?.optJSONArray("lensList")?.let { ll -> for (i in 0 until ll.length()) ll.optJSONObject(i)?.optString("name")?.let { camLensNames.add(it) } }
         val lensBox = LinearLayout(this); lensBox.orientation = LinearLayout.VERTICAL
         box.addView(lensBox); camLensContainer = lensBox
-        if (cam.optBoolean("lensFixed", false)) {
-            // レンズ固定のカメラ。並べ替え・追加・削除を出さず、名前だけ見せる。
+        if (cam.optBoolean("lensFixed", false) || heldBy.isNotEmpty()) {
+            // レンズ固定のカメラ(または外部端末が計画を持っていて変更不可)。並べ替え・追加・削除を出さず、名前だけ見せる。
             for (nm in camLensNames) {
                 val tv = TextView(this); tv.text = nm; tv.textSize = 14f; tv.setPadding(dp(8), dp(4), 0, dp(4))
                 lensBox.addView(tv)
@@ -2187,6 +2198,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         startDirtyWatch(camCancel) { camDetailSig() }
         if (readOnly) {
             lockCameraDetail(box, keep = camAutoInsert)
+            camCancel.visibility = View.GONE
+        } else if (heldBy.isNotEmpty()) {
+            // 保存時の判定(camEditSig)は「撮影計画の初期値にする」も変更に数えるので、欄はすべて閉じる。
+            lockCameraDetail(box, keep = null)
             camCancel.visibility = View.GONE
         }
     }
