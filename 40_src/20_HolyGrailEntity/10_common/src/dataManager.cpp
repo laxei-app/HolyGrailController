@@ -1307,6 +1307,7 @@ bool dataManager::setOwnedLensDetailJson(const std::string& origName, const std:
 	//  追加は addOwnedLens が行うので、ここで作る必要はない。
 	//  ※所持カメラの方は手入力の追加でこの経路を使っているので、あちらは作れるままにする。
 	if (!lp) { return false; }
+	if (lp->readOnly) { return false; }	// 編集不可(内蔵カメラのレンズ等)。削除は removeOwnedLens で可
 
 	lp->maker       = j.value("maker", lp->maker);
 	lp->name        = j.value("name", lp->name);

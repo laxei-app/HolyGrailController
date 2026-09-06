@@ -116,6 +116,7 @@ namespace hgc
 		double fnMax = 0.0;			// 最小絞り(F最大)。0=未設定
 		bool   hasContact = true;	// 電子接点有無
 		bool   fisheye = false;		// 魚眼レンズ(投影方式=等距離)。マスタ lenses_list.json の "fisheye" 由来
+		bool   readOnly = false;	// 利用者が欄を編集できない(端末が答えた値。削除は可)。登録時に api 実装が立てる
 	};
 
 	// 5.5 所持カメラ(camera + 組み合わせるレンズ + 自動挿入)

@@ -262,6 +262,7 @@ namespace builtinCam
 			ln.fn          = api->aperture();
 			ln.fnMax       = api->aperture();	// 絞りは固定
 			ln.hasContact  = false;
+			ln.readOnly    = true;				// 端末が答えた値。直す余地が無い(削除は可。2026-09-06 ユーザー指示)
 			if (dataManager::addOwnedLens(ln))
 			{
 				char lb[160];

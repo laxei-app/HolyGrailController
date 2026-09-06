@@ -2465,8 +2465,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
         },
         selected = { selLens }, setSelected = { selLens = it },
         onSelect = { selectLens(it) },
-        onRename = { orig, nm -> commitLensRename(orig, nm) },
+        onRename = { orig, nm ->
+            // 編集不可のレンズ(内蔵カメラのもの)は名前も変えない。所持カメラの割り当てと名前で結び付いている。
+            if (ownedLens(orig)?.optBoolean("readOnly") == true) { Toast.makeText(this, "このレンズの情報は変更できません", Toast.LENGTH_SHORT).show(); buildLensList() }
+            else commitLensRename(orig, nm) },
         addLabel = "＋ 新規レンズ追加", onAdd = { openLensAdd() }))
+
+    private fun ownedLens(name: String): JSONObject? {
+        val arr = camArray(HgeNative.nativeGetOwnedLenses())
+        for (i in 0 until arr.length()) { val o = arr.optJSONObject(i) ?: continue; if (o.optString("name") == name) return o }
+        return null
+    }
 
     private fun buildLensDetail() {
         val box = findViewById<LinearLayout>(R.id.lenslist_detail)
@@ -2488,6 +2497,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         note.textSize = 12f; note.setTextColor(Color.GRAY); note.setPadding(0, dp(8), 0, dp(8)); box.addView(note)
         // 項目2: 「変更の取り消し」を dirty 連動に。
         startDirtyWatch(lensCancel) { lensDetailSig() }
+        // 編集不可(readOnly)のレンズは表示だけにする(内蔵カメラのレンズ。値は端末が答えたもの。削除は一覧から可)。
+        if (l.optBoolean("readOnly", false)) {
+            lockCameraDetail(box, keep = null)
+            lensCancel.visibility = View.GONE
+        }
     }
 
     private fun lensDetailSig(): String {
@@ -2516,6 +2530,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (origName == null) { commitListNameEdit(R.id.lenslist_container) }   // 名前を宛先にする前に先に確定させる
         val orig = origName ?: selLens ?: return
         if (lensFields.isEmpty()) return
+        if (ownedLens(orig)?.optBoolean("readOnly") == true) return   // 編集不可のレンズは書き戻さない(Entity 側でも拒否する)
         val o = JSONObject()
         for ((k, et) in lensFields) {
             when (k) {
