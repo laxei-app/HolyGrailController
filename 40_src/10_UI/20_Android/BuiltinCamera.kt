@@ -202,11 +202,15 @@ object BuiltinCamera {
 
     // 人が見分けられる名前を焦点距離から作る。35mm換算に直してから広角/標準/望遠を当てる。
     //  換算値が出せない端末では素の焦点距離を出す(それでも区別は付く)。
+    // 【名前に 35mm 判換算の焦点距離を付ける(2026-09-06 ユーザー指示)】
+    //  "Pixel 6 広角 25mm" のように焦点距離まで入れると、知らない端末で同じ区分のカメラが
+    //  複数あっても(広角が2つ等)名前で見分けられる。区分(超広角/広角/望遠)は換算値で決める。
     private fun displayName(id: String, c: CameraCharacteristics): String {
         val model = Build.MODEL ?: "Phone"
         val f = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()
         val sz = c.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
         var kind = ""
+        var mm = ""
         if (f != null && sz != null && sz.width > 0f) {
             // 35mm判の対角 43.27mm に対する比で換算する
             val diag = Math.hypot(sz.width.toDouble(), sz.height.toDouble())
@@ -217,10 +221,11 @@ object BuiltinCamera {
                     eq < 45.0 -> "広角"
                     else      -> "望遠"
                 }
+                mm = " " + Math.round(eq).toString() + "mm"
             }
         }
         if (kind.isEmpty()) { kind = "cam$id" }
-        return "$model $kind"
+        return "$model $kind$mm"
     }
 
     // ── 諸元 ────────────────────────────────────────────────
