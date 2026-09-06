@@ -3053,8 +3053,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val onPick: (() -> Unit)? = if (editingPlanCcm) ({
             showPresetPicker(editingKey) { preset ->
                 val all = ccmJson ?: return@showPresetPicker
+                val before = dirtyBaseline   // 取り込む前の内容(=保存済み)
                 val merged = JSONObject(preset.toString()); merged.put("type", keyType(editingKey))
                 all.put(editingKey, merged); openCcmEdit(editingKey)   // プリセット値を読み込む(以後変更可)
+                // 【取り込みは「変更」(2026-09-06)】開き直すと基準が取り込んだ内容になり、離脱時の
+                //  「変わっていなければ書かない」に引っかかって保存されなかった。基準は取り込む前のままにする。
+                dirtyBaseline = before
+                dirtyBtn?.let { setCancelEnabled(it, true) }
             }
         }) else null
         if (ccmReadOnly) {
