@@ -370,7 +370,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  (カメラの列挙は権限が無くてもでき、1 秒かからない)。
         //  撮影場所の種(出荷時の Tokyo を現在地に差し替える)も同じときに済ませてファイルへ保存する
         //  (2026-09-06 ユーザー指示)。後回しにすると、表示した後で計画の場所が差し替わり「変更あり」になる。
-        if (!hgcPrefs().getBoolean("builtinSeedDone", false) || !hgcPrefs().getBoolean("placeSeedTried", false)) {
+        if (!hgcPrefs().getBoolean("builtinSeedDone", false) || !hgcPrefs().getBoolean("placeSeedTried", false) ||
+            !hgcPrefs().getBoolean("factoryTplDone", false)) {
             val seed = dataExec.submit {
                 // 場所の種が先。内蔵カメラのひな形は「撮影計画に自動的に挿入する」場所(=現在地)で作る(2026-09-06 ユーザー指示)。
                 seedFirstPlaceBlocking()
@@ -380,6 +381,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
                                             .put("sunset", "夕日スマホ").put("day", "日中スマホ").toString()
                     val found = try { HgeNative.nativeRegisterBuiltinCameras(names) } catch (_: Exception) { 0 }
                     if (found > 0) { hgcPrefs().edit().putBoolean("builtinSeedDone", true).commit() }
+                }
+                // 出荷時のひな形(EOS-R3 night sky)もここで(場所の種の後。2026-09-06 ユーザー指示)。
+                if (!hgcPrefs().getBoolean("factoryTplDone", false)) {
+                    val r = try { HgeNative.nativeSeedFactoryTemplates() } catch (_: Exception) { -1 }
+                    if (r == 0) { hgcPrefs().edit().putBoolean("factoryTplDone", true).commit() }
                 }
             }
             try { seed.get(20, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}

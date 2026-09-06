@@ -277,6 +277,8 @@ int32_t hge_updatePlanFromTemplate(const char* planId, const char* tplId); // �
 //  端末ごとに中身が変わるひな形(スマホ内蔵カメラ用など)を、役割側から作るための口。
 //  一度作った後に利用者が消したものを、起動のたびに作り直さないための「あれば何もしない」。
 int32_t hge_saveTemplateJsonIfAbsent(const char* csJson);
+// 出荷時のひな形("EOS-R3 night sky")をコードから作る(初回起動用。同名があれば何もしない)。
+int32_t hge_seedFactoryTemplates(void);
 int32_t hge_removePlace(const char* name);
 int32_t hge_setPlaceAutoInsert(const char* name, int32_t autoInsert);
 // 場所詳細(name/memo/latitude/longitude/altitude/autoInsert)を JSON で更新/新規作成。origName 一致を置換。

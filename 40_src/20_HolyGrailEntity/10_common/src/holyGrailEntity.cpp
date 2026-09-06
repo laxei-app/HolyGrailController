@@ -2496,6 +2496,68 @@ int32_t hge_saveTemplateJsonIfAbsent(const char* csJson)
 	return dataManager::saveTplFile(makeTplId(), csjson::toJson(cs)) ? ERR_HGC_OK : ERR_HGC_INVALID_STATE;
 }
 
+// 【出荷時のひな形(2026-09-06 ユーザー指示)】ミラーレス機向けの星景ひな形 "EOS-R3 night sky" を初回起動で
+//  コードから1件作る。中身は利用者が作った「ミラーレス星景」と同じ: EOS R3 + RF28mm F2.8 STM、
+//  次の 03:00〜06:30、周期 12 秒、夜間と日中を使う、撮影制御方法は外部カメラ用の初期値(レンズの範囲へ寄せる)。
+//  撮影場所は「撮影計画に自動的に挿入する」場所(初回起動で現在地に差し替えた1件)。
+//  同じ名前が既にあれば作らない(利用者が消したものを作り直さない)。機材マスタに無ければ出荷時の機材のまま。
+int32_t hge_seedFactoryTemplates(void)
+{
+	static const char* kName = "EOS-R3 night sky";
+	for (const auto& n : collectTplNames("")) { if (n == kName) { return ERR_HGC_OK; } }
+
+	hgc::cs cs;
+	dataManager::factoryFixedPlan(cs);
+	cs.name = kName;
+	{ hgc::place ap; if (dataManager::autoInsertPlace(ap)) { cs.place = ap; } }
+	{ hgc::camera c; if (dataManager::masterCameraByName("EOS R3", c)) { cs.camera = c; } }
+	{ hgc::lens l;   if (dataManager::masterLensByName("RF28mm F2.8 STM", l)) { cs.lens = l; } }
+	cs.interval = 12.0;
+
+	// 窓: 次に来る 03:00 から 3 時間 30 分(端末のローカル時刻)。
+	{
+		const time_t now = std::time(nullptr);
+		hgc::dateTime d; int off = 0;
+		localFromTime(now, d, off);
+		hgc::dateTime st = d; st.hour = 3; st.min = 0; st.sec = 0;
+		long long stUt = hgc::toUnixUtc(st, off);
+		if (stUt <= static_cast<long long>(now)) { stUt += 24 * 3600; }
+		cs.start = hgc::fromUnixUtc(stUt, off);
+		cs.end   = hgc::fromUnixUtc(stUt + 3 * 3600 + 30 * 60, off);
+	}
+
+	// 撮影制御方法: 外部カメラ用の初期値(型ごとに、スマホ向けでない最初の1件)。無ければ出荷時のコード生成。
+	{
+		astro::ccmSet set;
+		dataManager::parseCcmSetJson(dataManager::ccmDefaultsJson(), set);
+		auto pick = [](const char* type) -> std::shared_ptr<hgc::ccmBase>
+		{
+			nlohmann::json arr = nlohmann::json::parse(dataManager::ccmPresetsJson(type), nullptr, false);
+			if (arr.is_discarded() || !arr.is_array()) { return nullptr; }
+			for (const auto& e : arr)
+			{
+				if (!e.is_object() || e.value("forPhone", false)) { continue; }
+				return csjson::ccmFromJson(e.dump());
+			}
+			return nullptr;
+		};
+		auto put = [&](hgc::ccmType t, const char* key, std::shared_ptr<hgc::ccmBase> fallback)
+		{
+			std::shared_ptr<hgc::ccmBase> c = pick(key);
+			cs.ccm.set(t, (c && c->type == t) ? c : fallback);
+		};
+		put(hgc::ccmType::night,   "night",   set.night);
+		put(hgc::ccmType::sunrise, "sunrise", set.sunrise);
+		put(hgc::ccmType::sunset,  "sunset",  set.sunset);
+		put(hgc::ccmType::day,     "day",     set.day);
+	}
+	clampOwnedToGear(cs.ccm, cs.camera, cs.lens);	// F1.4 はレンズの開放 F2.8 へ(控えは fnWish)
+	astro::buildSchedule(cs);
+	const bool ok = dataManager::saveTplFile(makeTplId(), csjson::toJson(cs));
+	if (ok) { dataManager::logEvent("GEAR", ("factory template ready: " + std::string(kName)).c_str()); }
+	return ok ? ERR_HGC_OK : ERR_HGC_INVALID_STATE;
+}
+
 int32_t hge_saveTemplateFromPlan(const char* name)
 {
 	if (!g_planReady) { loadFixedPlanImpl(); }

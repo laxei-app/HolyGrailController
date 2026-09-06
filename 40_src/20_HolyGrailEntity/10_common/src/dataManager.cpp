@@ -1318,6 +1318,21 @@ bool dataManager::setOwnedLensDetailJson(const std::string& origName, const std:
 	return saveOwnedLenses();
 }
 
+bool dataManager::masterCameraByName(const std::string& name, hgc::camera& out)
+{
+	ensureMaster();
+	for (const auto& c : g_masterCameras) { if (c.name == name) { out = c; return true; } }
+	return false;
+}
+
+bool dataManager::masterLensByName(const std::string& name, hgc::lens& out)
+{
+	const hgc::lens* l = findMasterLens(name);
+	if (l == nullptr) { return false; }
+	out = *l;
+	return true;
+}
+
 bool dataManager::findOwnedCamera(const std::string& name, hgc::camera& out)
 {
 	ensureOwned();
