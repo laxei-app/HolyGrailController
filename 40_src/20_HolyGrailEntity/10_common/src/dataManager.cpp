@@ -748,10 +748,21 @@ bool dataManager::removeOwnedLens(const std::string& name)
 bool dataManager::setOwnedCameraAutoInsert(const std::string& name, bool autoInsert)
 {
 	ensureOwned();
+	bool found = false;
 	for (auto& oc : g_ownedCameras)
 	{
-		if (oc.cam.name == name) { oc.autoInsert = autoInsert; return saveOwnedCameras(); }
+		if (oc.cam.name == name) { oc.autoInsert = autoInsert; found = true; }
+		else if (autoInsert)     { oc.autoInsert = false; }		// 初期値は1台だけ(場所と同じ考え方)
 	}
+	return found ? saveOwnedCameras() : false;
+}
+
+// 【新規計画のカメラ(2026-09-06)】「撮影計画の初期値にする」は保存されるだけで、計画を作るときに
+//  読む側が無かった(場所の自動挿入だけ読んでいた)。ここで答えて makeFactoryCurrent が使う。
+bool dataManager::autoInsertCamera(hgc::camera& out)
+{
+	ensureOwned();
+	for (const auto& oc : g_ownedCameras) { if (oc.autoInsert) { out = oc.cam; return true; } }
 	return false;
 }
 
@@ -944,6 +955,7 @@ bool dataManager::setOwnedCameraDetailJson(const std::string& origName, const st
 	}
 
 	oc->autoInsert = j.value("autoInsert", oc->autoInsert);
+	if (oc->autoInsert) { for (auto& other : g_ownedCameras) { if (&other != oc) { other.autoInsert = false; } } }	// 1台だけ
 
 	// 組み合わせるレンズ(先頭が初期値)。所持レンズ名から順に解決する。
 	if (j.contains("lensNames") && j["lensNames"].is_array())

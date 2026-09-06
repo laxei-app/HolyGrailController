@@ -360,6 +360,17 @@ namespace builtinCam
 		const phoneNames nm = parseNames(namesJson);
 		makePhonePresets(found, nm);
 		makeTemplate(found, nm);
+		// 【新規計画の初期カメラ(2026-09-06 ユーザー指示)】スマホ用初期値の元にした(焦点距離が最短の)
+		//  内蔵カメラに「撮影計画の初期値にする」を入れる。利用者が既に別のカメラを選んでいれば触らない。
+		{
+			hgc::camera cur;
+			const class device* dev = nullptr;
+			if (!dataManager::autoInsertCamera(cur) && shortestLens(found, &dev) != nullptr && dev != nullptr)
+			{
+				dataManager::setOwnedCameraAutoInsert(dev->model, true);
+				dataManager::logEvent("GEAR", ("plan default camera: " + dev->model).c_str());
+			}
+		}
 		return static_cast<int>(found.size());
 	}
 }

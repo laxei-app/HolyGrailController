@@ -83,8 +83,10 @@ public:
 	//  この経路が要る。見つからない/未設定なら空文字。
 	static std::string ownedCameraAuthPass(const std::string& name);
 
-	// 所持カメラの撮影計画への自動挿入フラグを設定して保存する。
+	// 所持カメラの「撮影計画の初期値にする」を設定して保存する。真にした1台だけが残る(他は外れる)。
 	static bool setOwnedCameraAutoInsert(const std::string& name, bool autoInsert);
+	// 「撮影計画の初期値にする」の所持カメラ(最初の1台)。無ければ false。
+	static bool autoInsertCamera(hgc::camera& out);
 
 	// --- 撮影場所(ユーザー資産。/asset/places.json。§5.1/§7.9) ---
 	static std::string placesJson(void);                 // 登録済み場所の配列 JSON

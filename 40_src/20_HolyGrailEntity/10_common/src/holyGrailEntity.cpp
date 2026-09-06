@@ -897,6 +897,17 @@ namespace
 		time_t now = std::time(nullptr);
 		g_plan = hgc::cs{};
 		dataManager::factoryFixedPlan(g_plan);
+		// 「撮影計画の初期値にする」の所持カメラがあれば、そのカメラと組み合わせレンズ(先頭)で作る。
+		//  無ければ出荷時のカメラ(EOS R10)のまま。撮影制御方法はこの後で取り込み、このカメラの目盛りへ寄る。
+		{
+			hgc::camera ac;
+			if (dataManager::autoInsertCamera(ac))
+			{
+				g_plan.camera = ac;
+				hgc::lens pl;
+				if (dataManager::findOwnedCameraDefaultLens(ac.name, pl)) { g_plan.lens = pl; }
+			}
+		}
 		if (name) { g_plan.name = name; }
 		hgc::dateTime startDt; int o1 = 0; localFromTime(now - 60, startDt, o1);
 		hgc::dateTime endDt;   int o2 = 0; localFromTime(now + 2 * 3600, endDt, o2);
