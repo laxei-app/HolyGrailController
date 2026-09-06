@@ -368,15 +368,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  触ったときに作られ、そのとき「撮影計画の初期値にする」カメラを採る。内蔵の登録が後回しだと
         //  FixedPlan が出荷時の EOS R10 で出来てしまう。初回だけなので、終わるまでここで待つ
         //  (カメラの列挙は権限が無くてもでき、1 秒かからない)。
-        if (!hgcPrefs().getBoolean("builtinSeedDone", false)) {
+        //  撮影場所の種(出荷時の Tokyo を現在地に差し替える)も同じときに済ませてファイルへ保存する
+        //  (2026-09-06 ユーザー指示)。後回しにすると、表示した後で計画の場所が差し替わり「変更あり」になる。
+        if (!hgcPrefs().getBoolean("builtinSeedDone", false) || !hgcPrefs().getBoolean("placeSeedTried", false)) {
             val seed = dataExec.submit {
-                // スマホ用の撮影制御方法初期値の名前(型ごと)。UI の言語で渡す(将来の言語対応は UI だけで済ませる)。
-                val names = JSONObject().put("night", "夜間スマホ").put("sunrise", "朝日スマホ")
-                                        .put("sunset", "夕日スマホ").put("day", "日中スマホ").toString()
-                val found = try { HgeNative.nativeRegisterBuiltinCameras(names) } catch (_: Exception) { 0 }
-                if (found > 0) { hgcPrefs().edit().putBoolean("builtinSeedDone", true).commit() }
+                if (!hgcPrefs().getBoolean("builtinSeedDone", false)) {
+                    // スマホ用の撮影制御方法初期値の名前(型ごと)。UI の言語で渡す(将来の言語対応は UI だけで済ませる)。
+                    val names = JSONObject().put("night", "夜間スマホ").put("sunrise", "朝日スマホ")
+                                            .put("sunset", "夕日スマホ").put("day", "日中スマホ").toString()
+                    val found = try { HgeNative.nativeRegisterBuiltinCameras(names) } catch (_: Exception) { 0 }
+                    if (found > 0) { hgcPrefs().edit().putBoolean("builtinSeedDone", true).commit() }
+                }
+                seedFirstPlaceBlocking()
             }
-            try { seed.get(10, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}
+            try { seed.get(20, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}
         }
 
         HgeNative.nativeEdgeSetBle(edgeUseBle())
@@ -5912,6 +5917,40 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //   ・標高は標高API→取れなければ測位値。座標さえ取れれば現在地を使う
     //  一度試したら二度としない(prefs)。ユーザーが消した場所を毎回作り直さないため。
     //  出荷時のまま(1件・名前が Tokyo)のときだけ触る。使い始めた後のデータは書き換えない。
+    // 【初回起動の場所の種を計画より先に(2026-09-06 ユーザー指示)】位置情報の権限が既にあるときは、
+    //  内蔵カメラの登録と同じタイミング(計画へ触る前)で出荷時の Tokyo を現在地に差し替えてファイルへ
+    //  保存する。こうすると出荷時の固定計画は最初からその場所で作られ、表示後に差し替わることが無い。
+    //  権限がまだ無いときは何もせず、従来どおり seedFirstPlaceFromLocation が権限を求めて後で行う。
+    //  座標は端末が覚えている最新の測位(getLastKnownLocation)。標高は標高 API(6 秒まで)、駄目なら測位値。
+    //  dataExec(所持機材と同じ単一スレッド)で呼ぶ。画面には触らない。
+    private fun seedFirstPlaceBlocking() {
+        val pf = hgcPrefs()
+        if (pf.getBoolean("placeSeedTried", false)) return
+        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                      ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (!granted) return
+        val arr = placeArray(HgeNative.nativeGetPlaces())
+        if (arr.length() != 1 || arr.optJSONObject(0)?.optString("name") != "Tokyo") {
+            pf.edit().putBoolean("placeSeedTried", true).commit()   // 既に使われている → 触らない
+            return
+        }
+        pf.edit().putBoolean("placeSeedTried", true).commit()
+        HgeNative.nativeSetPlaceAutoInsert("Tokyo", 1)   // この1件を「撮影計画に自動的に挿入する」に(改名にもついていく)
+        val loc = try {
+            val lm = getSystemService(LOCATION_SERVICE) as android.location.LocationManager
+            lm.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER)
+                ?: lm.getLastKnownLocation(android.location.LocationManager.NETWORK_PROVIDER)
+                ?: lm.getLastKnownLocation(android.location.LocationManager.PASSIVE_PROVIDER)
+        } catch (_: SecurityException) { null } ?: return
+        val elev = fetchElevationOrNull(loc.latitude, loc.longitude) ?: (if (loc.hasAltitude()) loc.altitude else 0.0)
+        val cur = findPlaceJson("Tokyo") ?: return
+        val o = JSONObject(cur.toString()).apply {
+            put("name", kCurrentPlaceName)
+            put("latitude", loc.latitude); put("longitude", loc.longitude); put("altitude", elev)
+        }.toString()
+        HgeNative.nativeSetPlaceDetail("Tokyo", o)
+    }
+
     private fun seedFirstPlaceFromLocation() {
         val pf = hgcPrefs()
         if (pf.getBoolean("placeSeedTried", false)) { return }

@@ -897,6 +897,8 @@ namespace
 		time_t now = std::time(nullptr);
 		g_plan = hgc::cs{};
 		dataManager::factoryFixedPlan(g_plan);
+		// 「撮影計画に自動的に挿入する」場所があればそれを使う(出荷時の固定計画も同じ。2026-09-06)。
+		{ hgc::place ap; if (dataManager::autoInsertPlace(ap)) { g_plan.place = ap; } }
 		// 「撮影計画の初期値にする」の所持カメラがあれば、そのカメラと組み合わせレンズ(先頭)で作る。
 		//  無ければ出荷時のカメラ(EOS R10)のまま。撮影制御方法はこの後で取り込み、このカメラの目盛りへ寄る。
 		{
