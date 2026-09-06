@@ -230,6 +230,8 @@ namespace builtinCam
 
 			hgc::cs cs;
 			dataManager::factoryFixedPlan(cs);
+			// 撮影場所は「撮影計画に自動的に挿入する」場所(初回起動で現在地に差し替えた1件)。無ければ出荷時のまま。
+			{ hgc::place ap; if (dataManager::autoInsertPlace(ap)) { cs.place = ap; } }
 			// 【頭は英語(2026-08-22 の決まり)】Entity と通信路に日本語を置かない。
 			//  後ろに付くカメラ名は端末が答えた「持ち物の名前」なので、そのまま使う。
 			cs.name     = "Phone night sky - " + d.model;

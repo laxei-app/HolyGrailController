@@ -372,6 +372,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  (2026-09-06 ユーザー指示)。後回しにすると、表示した後で計画の場所が差し替わり「変更あり」になる。
         if (!hgcPrefs().getBoolean("builtinSeedDone", false) || !hgcPrefs().getBoolean("placeSeedTried", false)) {
             val seed = dataExec.submit {
+                // 場所の種が先。内蔵カメラのひな形は「撮影計画に自動的に挿入する」場所(=現在地)で作る(2026-09-06 ユーザー指示)。
+                seedFirstPlaceBlocking()
                 if (!hgcPrefs().getBoolean("builtinSeedDone", false)) {
                     // スマホ用の撮影制御方法初期値の名前(型ごと)。UI の言語で渡す(将来の言語対応は UI だけで済ませる)。
                     val names = JSONObject().put("night", "夜間スマホ").put("sunrise", "朝日スマホ")
@@ -379,7 +381,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     val found = try { HgeNative.nativeRegisterBuiltinCameras(names) } catch (_: Exception) { 0 }
                     if (found > 0) { hgcPrefs().edit().putBoolean("builtinSeedDone", true).commit() }
                 }
-                seedFirstPlaceBlocking()
             }
             try { seed.get(20, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}
         }
