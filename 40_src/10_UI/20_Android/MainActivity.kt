@@ -985,7 +985,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 "・所持カメラ / 所持レンズ\n" +
                 "・撮影制御方法の初期値と全体設定\n" +
                 "・外部端末の一覧とネットワーク設定\n" +
-                "・撮影ログ / 撮影レポート / 操作履歴\n\n" +
+                "・撮影ログ / 撮影レポート / 操作履歴(初期化した記録だけ残ります)\n\n" +
                 "機材マスタ(カメラ・レンズの一覧)は残します。\n" +
                 "外部端末本体の設定と、そこにある撮影計画は消えません。\n\n" +
                 "元に戻せません。消したあとアプリを開き直します。")
@@ -1004,6 +1004,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
             // **commit を使う**。apply は非同期で、書き終わる前にプロセスを落とすと消えない。
             hgcPrefs().edit().clear().commit()
             getSharedPreferences("gearMaster", MODE_PRIVATE).edit().clear().commit()
+            // 【初期化したことは操作履歴に残す(2026-09-06 依頼)】履歴ごと消した直後に、この1件だけを
+            //  書いて新しい履歴の先頭にする。計画・端末・カメラは無いので空。
+            histFile().writeText(JSONArray().put(JSONObject().apply {
+                put("t", System.currentTimeMillis())
+                put("op", "factory reset"); put("plan", ""); put("edge", ""); put("cam", "")
+            }).toString())
         } catch (_: Exception) {
             // 消せなかったものがあっても、残りは消して終了する(中途半端でも次の起動で作り直される)
         }
@@ -5191,6 +5197,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //   auto end       … 終了時刻になり自動的に停止した
     //   lost camera    … カメラがオフラインになった(撮影が止まった)
     //   connect camera … カメラがオンラインになった
+    //   factory reset  … 出荷時設定に戻した(履歴ごと消した直後に、この1件だけ書く)
     private val histFmt = SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.JAPAN)
     private val histLastState = HashMap<String, Int>()   // planId → 直近の状態(遷移の判定用)
     private val histUserStop = HashSet<String>()          // ユーザー中止済み(後続のIDLEを auto end にしない)
