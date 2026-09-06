@@ -85,6 +85,13 @@ namespace hgc
 		//  内蔵カメラは RAW 加算の後処理があるので 1.25 と 0 を答える。共通部分は機種を判断しない。
 		double intervalFactor = 0.0;
 		double intervalMargin = 0.0;
+		// 【カメラの性質(2026-09-06)】UI と Entity は「内蔵かどうか」ではなく、この欄で振る舞いを決める。
+		//  出所は2つ: 機材として決まっている性質はマスタ(lens_fixed)、接続・実装の性質は
+		//  api 実装(apiBase::fillCameraProfile)。どちらも所持カメラの登録時に入る。
+		bool lensFixed  = false;	// レンズ交換不可(計画・所持カメラでレンズを変えない)
+		bool localOnly  = false;	// この端末でしか撮れない(外部端末へ送れない)
+		bool noSyncShot = false;	// 同期撮影に参加できない
+		bool readOnly   = false;	// 利用者が所持カメラの欄を編集できない(端末が答える値だから)
 		// 測光にライブビューを主体で使う機種か。既定(false)は「サムネイルだけ」。
 		//  撮影済みサムネイルの取得は最も正確だが、機種によっては取得回数に上限があり
 		//  (EOS R10 は電源投入あたり 200 回程度で応答しなくなる)一晩持たない。

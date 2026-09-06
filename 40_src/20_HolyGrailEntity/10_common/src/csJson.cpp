@@ -101,6 +101,8 @@ namespace csjson
 			             {"sensorPixel", c.sensorPixel}, {"sensorPixelV", c.sensorPixelV},
 			             {"isoList", c.isoList}, {"ssList", c.ssList},
 			             {"intervalFactor", c.intervalFactor}, {"intervalMargin", c.intervalMargin},
+			             {"lensFixed", c.lensFixed}, {"localOnly", c.localOnly},
+			             {"noSyncShot", c.noSyncShot}, {"readOnly", c.readOnly},
 			             {"meterLv", c.meterLv},
 			             {"authUser", c.authUser},
 			             // パスワードは暗号文で載せる。ファイルにも ETP にも平文は出さない
@@ -123,6 +125,10 @@ namespace csjson
 			if (j.contains("ssList"))  { c.ssList  = j["ssList"].get<std::vector<std::string>>(); }
 			c.intervalFactor = j.value("intervalFactor", 0.0);
 			c.intervalMargin = j.value("intervalMargin", 0.0);
+			c.lensFixed  = j.value("lensFixed",  false);
+			c.localOnly  = j.value("localOnly",  false);
+			c.noSyncShot = j.value("noSyncShot", false);
+			c.readOnly   = j.value("readOnly",   false);
 			c.meterLv     = j.value("meterLv", false);	// 無い=サムネイルだけ(既定)
 			c.authUser    = getStr(j, "authUser");
 			c.authPass    = secret::decrypt(getStr(j, "authPass"));	// 平文で手書きされていてもそのまま通る
@@ -549,6 +555,7 @@ namespace csjson
 			c.sensorPixel = m.value("pixel_w", 0u);		// 横[pixel]
 			c.sensorPixelV = m.value("pixel_h", 0u);	// 縦[pixel]
 			c.meterLv     = m.value("meter_lv", false);	// 測光方式(無い=サムネイルだけ)
+			c.lensFixed   = m.value("lens_fixed", false);	// レンズ固定の機種(コンデジ等。無い=交換式)
 			if (m.contains("iso") && m["iso"].is_array())
 			{
 				for (const auto& v : m["iso"])

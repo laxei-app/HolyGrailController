@@ -1973,32 +1973,23 @@ class MainActivity : AppCompatActivity(), HgeListener {
         onSelect = { selectCamera(it) },
         // エッジが計画を持っているカメラは名前も変えられない。
         onRename = { orig, nm ->
-            // 内蔵カメラは名前も変えない(2026-09-05 依頼)。ひな形も撮影計画も名前で結び付いている。
-            if (isBuiltinSerial(ownedCameraSerial(orig))) { Toast.makeText(this, "内蔵カメラは変更できません", Toast.LENGTH_SHORT).show(); buildCameraList() }
+            // 編集不可のカメラは名前も変えない。ひな形も撮影計画も名前で結び付いている。
+            if (ownedCamera(orig)?.optBoolean("readOnly") == true) { Toast.makeText(this, "このカメラの情報は変更できません", Toast.LENGTH_SHORT).show(); buildCameraList() }
             else if (!blockedByEdge(orig, "変更")) commitCameraRename(orig, nm) },
         addLabel = "＋ 新規カメラ追加", onAdd = { openCameraAdd() }))
 
-    // 所持カメラの名前からシリアルを引く(無ければ空)。
-    private fun ownedCameraSerial(name: String): String {
-        val arr = camArray(HgeNative.nativeGetOwnedCameras())
-        for (i in 0 until arr.length()) {
-            val c = arr.optJSONObject(i)?.optJSONObject("camera") ?: continue
-            if (c.optString("name") == name) return c.optString("serial")
-        }
-        return ""
-    }
 
-    // 内蔵カメラの詳細は表示だけにする(2026-09-05 依頼)。値は端末が答えたもので、直す余地が無い。
+    // 編集不可(readOnly)のカメラの詳細は表示だけにする。値は端末が答えたもので、直す余地が無い。
     //  「撮影計画の初期値にする」だけは計画側の好みなので残す。削除は一覧のメニューからできる
     //  (使わない人には要らない。出荷時設定に戻せば作り直される)。
-    private fun lockBuiltinCameraDetail(root: ViewGroup, keep: View?) {
+    private fun lockCameraDetail(root: ViewGroup, keep: View?) {
         for (i in 0 until root.childCount) {
             val v = root.getChildAt(i)
             if (v === keep) continue
             when (v) {
                 is EditText -> { v.isEnabled = false; v.isFocusable = false }
                 is CheckBox -> v.isEnabled = false
-                is ViewGroup -> lockBuiltinCameraDetail(v, keep)
+                is ViewGroup -> lockCameraDetail(v, keep)
             }
         }
     }
@@ -2041,7 +2032,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val o = JSONObject()
                 .put("name", nm)
                 .put("model", rawName)
-                .put("maker", "Canon")        // 現状の対応はCCAPI(Canon)のみ。違うなら詳細画面で直す
+                .put("maker", "")             // メーカーは詳細画面で入れる(既定を決め打たない 2026-09-06)
                 .put("sensorSize", 0.0)
                 .put("sensorSizeV", 0.0)
                 .put("sensorPixel", 0)
@@ -2107,16 +2098,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
         camAutoInsert = cb; box.addView(cb)
         // 測光方式。既定はサムネイルだけ(最も正確)。撮影済みサムネイルの取得回数に上限がある
         //  機種(EOS R10)だけこれを入れ、普段はライブビューで測って足りないときだけサムネイルへ落ちる。
-        val cbLv = CheckBox(this); cbLv.text = "ライブビューで測光する"; cbLv.isChecked = cam.optBoolean("meterLv", false)
-        camMeterLv = cbLv; box.addView(cbLv)
-        // ダイジェスト認証。カメラ側の設定で有効にすると、CCAPI の全要求が 401 で弾かれる。
-        //  空のままなら認証なしの機体として扱う(要求は 401 を受けてから作るので、事前設定は不要)。
-        box.addView(thinDivider())
-        val ahdr = TextView(this); ahdr.text = "カメラの認証(設定している機体のみ)"; ahdr.textSize = 13f
-        ahdr.setTextColor(Color.GRAY); ahdr.setPadding(0, dp(8), 0, dp(4)); box.addView(ahdr)
-        box.addView(editRow("ユーザーID", "authUser", cam.optString("authUser")))
-        // パスワードは JSON では暗号文なので、平文はネイティブから別途もらう。
-        box.addView(editRowPass("パスワード", "authPass", HgeNative.nativeOwnedCameraAuthPass(sel)))
+        val readOnly = cam.optBoolean("readOnly", false)
+        if (!readOnly) {
+            val cbLv = CheckBox(this); cbLv.text = "ライブビューで測光する"; cbLv.isChecked = cam.optBoolean("meterLv", false)
+            camMeterLv = cbLv; box.addView(cbLv)
+            // ダイジェスト認証。カメラ側の設定で有効にすると、CCAPI の全要求が 401 で弾かれる。
+            //  空のままなら認証なしの機体として扱う(要求は 401 を受けてから作るので、事前設定は不要)。
+            box.addView(thinDivider())
+            val ahdr = TextView(this); ahdr.text = "カメラの認証(設定している機体のみ)"; ahdr.textSize = 13f
+            ahdr.setTextColor(Color.GRAY); ahdr.setPadding(0, dp(8), 0, dp(4)); box.addView(ahdr)
+            box.addView(editRow("ユーザーID", "authUser", cam.optString("authUser")))
+            // パスワードは JSON では暗号文なので、平文はネイティブから別途もらう。
+            box.addView(editRowPass("パスワード", "authPass", HgeNative.nativeOwnedCameraAuthPass(sel)))
+        }
         camAuthBaseline = camAuthSig()      // ここからの変化だけを「変更」とみなす
 
         // 組み合わせるレンズ(先頭=初期値)。並べ替えはハンドルをドラッグ(ss/iso/fnと同じ)。
@@ -2126,8 +2120,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         ocObj?.optJSONArray("lensList")?.let { ll -> for (i in 0 until ll.length()) ll.optJSONObject(i)?.optString("name")?.let { camLensNames.add(it) } }
         val lensBox = LinearLayout(this); lensBox.orientation = LinearLayout.VERTICAL
         box.addView(lensBox); camLensContainer = lensBox
-        if (isBuiltinSerial(cam.optString("serial"))) {
-            // 内蔵カメラはレンズを交換できない。並べ替え・追加・削除を出さず、名前だけ見せる。
+        if (cam.optBoolean("lensFixed", false)) {
+            // レンズ固定のカメラ。並べ替え・追加・削除を出さず、名前だけ見せる。
             for (nm in camLensNames) {
                 val tv = TextView(this); tv.text = nm; tv.textSize = 14f; tv.setPadding(dp(8), dp(4), 0, dp(4))
                 lensBox.addView(tv)
@@ -2141,8 +2135,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         camEditBaseline = camEditSig()
         // 項目2: 「変更の取り消し」を dirty 連動に(未変更=グレー無効、変更で有効、戻すと無効)。
         startDirtyWatch(camCancel) { camDetailSig() }
-        if (isBuiltinSerial(cam.optString("serial"))) {
-            lockBuiltinCameraDetail(box, keep = camAutoInsert)
+        if (readOnly) {
+            lockCameraDetail(box, keep = camAutoInsert)
             camCancel.visibility = View.GONE
         }
     }
@@ -2671,21 +2665,23 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .show()
     }
 
-    // 【スマホ内蔵カメラかどうか(2026-09-05)】シリアルの頭で見分ける(apiBuiltin::kSerialPrefix)。
-    //  内蔵カメラはその端末の中にしか無いので、外部端末へ送った計画では使えない。
-    private fun isBuiltinSerial(serial: String): Boolean = serial.startsWith("BUILTIN:")
-
-    // いまの計画のカメラが内蔵カメラか。
-    private fun planUsesBuiltinCamera(): Boolean {
+    // 【カメラの性質は所持カメラの欄で見る(2026-09-06)】UI は「内蔵かどうか」を判断しない。
+    //  lensFixed / localOnly / noSyncShot / readOnly は登録時にマスタと api 実装が書いたもの。
+    private fun ownedCamera(name: String): JSONObject? {
+        if (name.isEmpty()) return null
         val arr = camArray(HgeNative.nativeGetOwnedCameras())
-        val want = try { JSONObject(HgeNative.nativeGetPlanJson()).optJSONObject("camera")?.optString("name") ?: "" }
-                   catch (_: Exception) { "" }
-        if (want.isEmpty()) return false
         for (i in 0 until arr.length()) {
             val c = arr.optJSONObject(i)?.optJSONObject("camera") ?: continue
-            if (c.optString("name") == want) { return isBuiltinSerial(c.optString("serial")) }
+            if (c.optString("name") == name) return c
         }
-        return false
+        return null
+    }
+
+    // いまの計画のカメラ(所持カメラの記録)。無ければ null。
+    private fun planCamera(): JSONObject? {
+        val want = try { JSONObject(HgeNative.nativeGetPlanJson()).optJSONObject("camera")?.optString("name") ?: "" }
+                   catch (_: Exception) { "" }
+        return ownedCamera(want)
     }
 
     private fun choosePlanCamera() {
@@ -2703,15 +2699,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .setTitle("カメラを選択")
             .setItems(labels.toTypedArray()) { _, which ->
                 val name = names[which]
-                // 【内蔵カメラを選んだら端末はスマホ(2026-09-05 ユーザー判断)】内蔵カメラは
-                //  その端末の中にしか無いので外部端末へは送れない。選べなくして戸惑わせるより、
-                //  黙って正しい組み合わせへ寄せる(何が起きたかはトーストで知らせる)。
-                val builtin = isBuiltinSerial(cams[which].optString("serial"))
-                if (builtin && planEdgeName(currentPlanId).isNotEmpty()) {
+                // 【この端末でしか撮れないカメラを選んだら端末はスマホ(2026-09-05 ユーザー判断)】
+                //  外部端末へは送れない。選べなくして戸惑わせるより、黙って正しい組み合わせへ寄せる
+                //  (何が起きたかはトーストで知らせる)。性質はカメラの記録(localOnly)で見る。
+                val localOnly = cams[which].optBoolean("localOnly", false)
+                if (localOnly && planEdgeName(currentPlanId).isNotEmpty()) {
                     setPlanEdgeName(currentPlanId, "")
                     runOnUiThread {
                         refreshEdgeSpinner()
-                        Toast.makeText(this, "内蔵カメラはこのスマホでしか使えないので、端末をスマホにしました",
+                        Toast.makeText(this, "このカメラはこのスマホでしか使えないので、端末をスマホにしました",
                                        Toast.LENGTH_LONG).show()
                     }
                 }
@@ -2727,7 +2723,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private fun choosePlanLens() {
-        if (planUsesBuiltinCamera()) { return }   // 内蔵カメラはレンズを交換できない
+        if (planCamera()?.optBoolean("lensFixed") == true) { return }   // レンズ固定のカメラ
         val arr = camArray(HgeNative.nativeGetOwnedLenses())
         if (arr.length() == 0) { openLensList(); return }
         val names = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("name") }
@@ -4638,15 +4634,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
             suppressLandscape = true
             landscapeCheck.isChecked = o.optBoolean("landscape")
             suppressLandscape = false
-            // 【内蔵カメラでは設定できない項目を出さない(2026-09-05 依頼)】
-            //  同期撮影はカメラを複数つなぐ機能で、端末の中の1台では成り立たない。
-            //  レンズは交換できないので、計画側でも所持カメラ側でも変えさせない。
-            val builtinCam = planUsesBuiltinCamera()
-            (syncShotCheck.parent as? View)?.visibility = if (builtinCam) View.GONE else View.VISIBLE
-            lensText.alpha = if (builtinCam) 0.5f else 1.0f
-            findViewById<TextView>(R.id.plan_lensLabel).alpha = if (builtinCam) 0.5f else 1.0f
+            // 【カメラの性質で設定できない項目を出さない(2026-09-05 依頼 / 2026-09-06 欄で判断)】
+            //  同期撮影に参加できないカメラでは行を隠す。レンズ固定のカメラではレンズを変えさせない。
+            val pc = planCamera()
+            val noSync    = pc?.optBoolean("noSyncShot", false) == true
+            val lensFixed = pc?.optBoolean("lensFixed", false) == true
+            (syncShotCheck.parent as? View)?.visibility = if (noSync) View.GONE else View.VISIBLE
+            lensText.alpha = if (lensFixed) 0.5f else 1.0f
+            findViewById<TextView>(R.id.plan_lensLabel).alpha = if (lensFixed) 0.5f else 1.0f
             // 同期撮影と追加カメラ(2026-08-25)。
-            val pano = o.optBoolean("syncShot") && !builtinCam
+            val pano = o.optBoolean("syncShot") && !noSync
             suppressSyncShot = true
             syncShotCheck.isChecked = pano
             suppressSyncShot = false
@@ -7253,11 +7250,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun refreshEdgeSpinner() {
         val labels = mutableListOf(kPhoneEdgeLabel)
-        // 【内蔵カメラのときは外部端末を出さない(2026-09-05)】内蔵カメラはその端末の中にしか
-        //  無いので、外部端末を選べても必ず失敗する。選択肢から外して起き得ない組み合わせを消す。
-        val builtinCam = try { planUsesBuiltinCamera() } catch (_: Exception) { false }
+        // 【この端末でしか撮れないカメラのときは外部端末を出さない(2026-09-05)】外部端末を選べても
+        //  必ず失敗する。選択肢から外して起き得ない組み合わせを消す。性質はカメラの記録(localOnly)で見る。
+        val localOnly = try { planCamera()?.optBoolean("localOnly", false) == true } catch (_: Exception) { false }
         // IPは動的なので名称のみ表示。常時スイープの生存状態を ●=オンライン/○=オフライン で付す(不明=無印)。
-        edgeSpinnerEdges = if (builtinCam) emptyList() else sortedEdges()
+        edgeSpinnerEdges = if (localOnly) emptyList() else sortedEdges()
         edgeSpinnerEdges.forEach {
             val mark = when (edgeOnline[it.name]) { true -> "● "; false -> "○ "; null -> "" }
             labels.add(mark + it.name)

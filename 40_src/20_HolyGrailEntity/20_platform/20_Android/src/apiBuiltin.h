@@ -63,9 +63,14 @@ public:
 	errCode setupShootingModeManual(void) override;
 	// 計画名を受け取る(動画のファイル名に使う)。撮影側が渡すので、再起動後の再開でも抜けない。
 	void setSessionLabel(const std::string& label) override { sessionLabel_ = label; }
-	// 所持カメラの記録へ、内蔵カメラの性質(撮影周期の規則)を書く。登録時に一度だけ。
+	// 所持カメラの記録へ、内蔵カメラの性質を書く。登録時に一度だけ。
+	//  周期の規則のほか、UI が振る舞いを決める4つの性質(レンズ固定・この端末でしか撮れない・
+	//  同期撮影不可・編集不可)。UI は序数の頭("BUILTIN:")を見ず、この欄だけを見る(2026-09-06)。
 	void fillCameraProfile(hgc::camera& cam) override
-	{ cam.intervalFactor = kMinIntervalFactor; cam.intervalMargin = kMinIntervalMarginSec; }
+	{
+		cam.intervalFactor = kMinIntervalFactor; cam.intervalMargin = kMinIntervalMarginSec;
+		cam.lensFixed = true; cam.localOnly = true; cam.noSyncShot = true; cam.readOnly = true;
+	}
 	errCode restoreShootingMode(void) override;
 	errCode keepAlive(void) override { return ERR_HGC_OK; }	// 切れる線が無い
 
