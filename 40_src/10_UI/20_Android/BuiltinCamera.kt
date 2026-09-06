@@ -506,6 +506,31 @@ object BuiltinCamera {
     private var pending: CountDownLatch? = null
     private var pendingJpeg: ByteArray? = null
 
+    // 【1コマの経過(2026-09-07 調査用)】どこで画像が来なくなるかがファイルのログに残らず、
+    //  夜の失敗(60 コマ中 18 コマ欠け)の原因を追えなかった。要求から受け取りまでの経過を
+    //  控えておき、C++ が受け取りのたびに1行で記録する。
+    @Volatile private var capT0 = 0L            // capture() を呼んだ時刻(elapsedRealtime)
+    @Volatile private var capFrames = 0         // 要求した枚数
+    @Volatile private var capExpNs = 0L         // 要求した1枚の露光
+    @Volatile private var capImages = 0         // 届いた画像
+    @Volatile private var capResults = 0        // 届いた撮影結果
+    @Volatile private var capFail = -1          // onCaptureFailed の reason(-1=無し)
+    @Volatile private var capBufLost = 0        // onCaptureBufferLost の回数(結果は来たのに画像が来ない)
+    @Volatile private var capAddFail = 0        // 加算に失敗した枚数
+    @Volatile private var capDevMs = -1         // 現像時間(-1=未到達)
+    private val capMarks = StringBuilder()      // "+1.2s/15.40" 撮影結果ごとの到着時刻と実露光
+    private fun capMark(tag: String) {
+        val t = (SystemClock.elapsedRealtime() - capT0) / 1000.0
+        synchronized(capMarks) { if (capMarks.length < 400) capMarks.append(String.format(java.util.Locale.US, " %s@%.1fs", tag, t)) }
+    }
+    // 直近の1コマの経過(1行)。C++ がログへ載せる。
+    @JvmStatic
+    fun captureReport(): String {
+        val m = synchronized(capMarks) { capMarks.toString() }
+        return String.format(java.util.Locale.US, "req=%dx%.2fs imgs=%d res=%d fail=%d bufLost=%d addFail=%d dev=%dms marks:%s",
+            capFrames, capExpNs / 1e9, capImages, capResults, capFail, capBufLost, capAddFail, capDevMs, m)
+    }
+
     // 露出を指定して1枚撮り始める。成功=要求を出せた。画像は takeImage で受け取る。
     @JvmStatic
     fun capture(logicalId: String, physId: String, iso: Int, expNs: Long,
@@ -522,26 +547,45 @@ object BuiltinCamera {
         // 【足す】RAW は届いたそばから足す(足すのは C++)。露光中に前のコマを足せるので、
         //  最後のコマの後に残るのは現像と JPEG 化だけ。
         val n = if (useRaw) frames.coerceAtLeast(1) else 1
+        capT0 = SystemClock.elapsedRealtime(); capFrames = n; capExpNs = expNs
+        capImages = 0; capResults = 0; capFail = -1; capAddFail = 0; capDevMs = -1; capBufLost = 0
+        synchronized(capMarks) { capMarks.setLength(0) }
         var images = 0; var results = 0
         var lastRes: TotalCaptureResult? = null
         val finish = {
             if (images >= n && results >= n) {
+                val td = SystemClock.elapsedRealtime()
                 pendingJpeg = developStack(lastRes, n)
+                capDevMs = (SystemClock.elapsedRealtime() - td).toInt()
                 got.countDown()
             }
         }
+        // 【前の残りは捨てて枠を空ける(2026-09-07)】受け取り損ねた画像がリーダーに残ると枠(maxImages)が
+        //  埋まり、次の要求にバッファが無くて HAL が要求ごと落とす(bufLost が要求直後 0.1 秒に出る型)。
+        run {
+            var stale = 0
+            while (true) { val im = runCatching { rd.acquireNextImage() }.getOrNull() ?: break; runCatching { im.close() }; stale++ }
+            if (stale > 0) { capMark("stale$stale") }
+        }
+        var replaced = 0    // 落ちたコマの撮り直し回数
         if (useRaw) {
             HgeNative.nativeRawStackBegin(rawW, rawH, cfa)
             rd.setOnImageAvailableListener({ r ->
-                runCatching {
-                    r.acquireNextImage()?.use { img ->
-                        val pl = img.planes[0]
-                        if (!HgeNative.nativeRawStackAdd(pl.buffer, pl.rowStride)) {
-                            Log.w("HGC-RAW", "stack add failed ${img.width}x${img.height} stride ${pl.rowStride}")
+                // 通知 1 回に画像が複数あることがある。全部取る(取り残すと上の「枠が埋まる」になる)。
+                while (true) {
+                    val img = runCatching { r.acquireNextImage() }.getOrNull() ?: break
+                    runCatching {
+                        img.use { im ->
+                            val pl = im.planes[0]
+                            if (!HgeNative.nativeRawStackAdd(pl.buffer, pl.rowStride)) {
+                                capAddFail++
+                                Log.w("HGC-RAW", "stack add failed ${im.width}x${im.height} stride ${pl.rowStride}")
+                            }
                         }
-                    }
+                    }.onFailure { capAddFail++; runCatching { img.close() } }
+                    images++; capImages = images; capMark("img")
                 }
-                images++; finish()
+                finish()
             }, h)
         } else {
             rd.setOnImageAvailableListener({ r ->
@@ -570,7 +614,10 @@ object BuiltinCamera {
             if (aperture > 0.0) { req.set(CaptureRequest.LENS_APERTURE, aperture.toFloat()) }
             // 【フレーム時間も伸ばす(長秒の露光が切り詰められないように)】
             //  SENSOR_FRAME_DURATION が露光より短いと、端末によっては露光が縮む。
-            if (expNs > 0L) { req.set(CaptureRequest.SENSOR_FRAME_DURATION, expNs) }
+            //  【読み出しの余裕を足す(2026-09-07)】露光ぴったりのフレーム時間は下限で、HAL が
+            //   バッファを落とすことがある(2×15.4 秒で 10 コマに 1 コマ、結果だけ来て画像が来ない)。
+            //   1 コマぶんの読み出し(33ms)+α を足しておく。露光そのものは変わらない。
+            if (expNs > 0L) { req.set(CaptureRequest.SENSOR_FRAME_DURATION, expNs + 50_000_000L) }
             // 星を撮るので、ぶれ補正と手ぶれ補正は切る(三脚前提)。無い端末では黙って無視される。
             req.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF)
             req.set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_DAYLIGHT)
@@ -598,12 +645,31 @@ object BuiltinCamera {
                             res.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID) ?: ""
                         }.getOrDefault("")
                     }
-                    if (useRaw) { lastRes = res; results++; finish() }
+                    if (useRaw) {
+                        lastRes = res; results++; capResults = results
+                        val ae = runCatching { res.get(CaptureResult.SENSOR_EXPOSURE_TIME) }.getOrNull()
+                        capMark(if (ae != null) String.format(java.util.Locale.US, "res/%.2fs", ae / 1e9) else "res")
+                        finish()
+                    }
+                }
+                override fun onCaptureBufferLost(ss: CameraCaptureSession, rq: CaptureRequest,
+                                                 target: android.view.Surface, frameNumber: Long) {
+                    // 結果は来るのに画像が来ない(HAL がバッファを落とした)。この1枚はもう揃わないので、
+                    //  予算いっぱい待たずに「無し」で戻す(待った分だけ次のコマが遅れる)。
+                    Log.w("HGC-RAW", "capture buffer lost frame=$frameNumber")
+                    capBufLost++; capMark("bufLost")
+                    // 【落ちたぶんは撮り直す(2026-09-07)】同じ要求を 1 枚足す。足りない画像が届けば finish が
+                    //  締める。撮り直しも落ちたら諦める(予算切れで LOST になる)。
+                    if (useRaw && replaced < n) {
+                        replaced++; capMark("retry")
+                        runCatching { ss.capture(rq, this, h) }.onFailure { pendingJpeg = null; got.countDown() }
+                    } else if (useRaw) { pendingJpeg = null; got.countDown() }
                 }
                 override fun onCaptureFailed(ss: CameraCaptureSession, rq: CaptureRequest,
                                              f: android.hardware.camera2.CaptureFailure) {
                     // 1コマでも落ちたら足しても正しい明るさにならない。この1枚は無しにして戻す。
                     Log.w("HGC-RAW", "capture failed reason=${f.reason}")
+                    capFail = f.reason; capMark("fail")
                     if (useRaw) { pendingJpeg = null; got.countDown() }
                 }
             }
@@ -614,7 +680,7 @@ object BuiltinCamera {
             } else {
                 s.capture(built, cb, h)
             }
-        } catch (ex: Exception) { pending = null; return false }
+        } catch (ex: Exception) { pending = null; capMark("except:" + (ex.message ?: ex.javaClass.simpleName)); return false }
         return true
     }
 

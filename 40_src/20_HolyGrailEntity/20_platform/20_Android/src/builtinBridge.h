@@ -46,6 +46,8 @@ namespace builtinCam
 	int thermalStatus(void);
 	// 直前のコマを実際に撮った物理カメラ id(端末の申告。空=分からない)。
 	std::string activePhysicalId(void);
+	// 直近の1コマの経過(要求枚数/露光・届いた画像と結果・失敗理由・現像時間・到着時刻)。調査用。
+	std::string captureReport(void);
 	// 直前に撮り始めた1枚を受け取る(まだ露光中なら待つ)。
 	bool takeImage(int timeoutMs, std::vector<uint8_t>& out);
 

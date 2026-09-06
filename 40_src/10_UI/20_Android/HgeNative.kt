@@ -221,6 +221,8 @@ object HgeNative {
     // 直前のコマを実際に撮った物理カメラ id(狙いどおりかの確認用)。
     @JvmStatic
     fun builtinActivePhysical(): String = BuiltinCamera.activePhysicalId()
+    @JvmStatic
+    fun builtinCaptureReport(): String = BuiltinCamera.captureReport()   // 直近の1コマの経過(調査用ログ)
 
     // 直前に撮り始めた1枚を受け取る(まだ露光中なら待つ)。
     //  【2026-09-06 に一度消えていた】試し撮りの入口を外したとき、隣のこの2つまで一緒に消し、

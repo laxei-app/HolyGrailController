@@ -139,6 +139,11 @@ namespace builtinCam
 		return callString("builtinActivePhysical", "()Ljava/lang/String;", nullptr, "");
 	}
 
+	std::string captureReport(void)
+	{
+		return callString("builtinCaptureReport", "()Ljava/lang/String;", nullptr, "");
+	}
+
 	void close(void)
 	{
 		attach a;

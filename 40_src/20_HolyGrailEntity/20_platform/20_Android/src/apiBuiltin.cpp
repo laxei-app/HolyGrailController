@@ -335,11 +335,16 @@ bool apiBuiltin::shootStart(void)
 	                           ns, (fn > 0.0) ? fn : 0.0, 0, frames, rawOk_);
 }
 
+int apiBuiltin::takeBudgetMs(void) const
+{
+	// 露光 + 現像と転送の余裕(8 秒) + 1 コマぶん(ヘッダの説明を参照)。
+	const double sec = this->curSsSec();
+	return static_cast<int>(sec * 1000.0) + 8000 + static_cast<int>(sec / this->stackFrames(sec) * 1000.0);
+}
+
 bool apiBuiltin::shootTake(std::vector<uint8_t>& out)
 {
-	// 露光 + 現像と転送の余裕。長秒でも取りこぼさない長さにする。
-	const int to = static_cast<int>(this->curSsSec() * 1000.0) + 8000;
-	return builtinCam::takeImage(to, out);
+	return builtinCam::takeImage(this->takeBudgetMs(), out);
 }
 
 // 【シャッターは待たずに戻る(2026-09-05 実機で判明)】
@@ -362,7 +367,18 @@ void apiBuiltin::collectPending(void)
 {
 	if (!lastJpeg_.empty()) { return; }	// 測光が既に受け取っている
 	std::vector<uint8_t> jpeg;
-	if (this->shootTake(jpeg))
+	const int to = this->takeBudgetMs();
+	const bool got = this->shootTake(jpeg);
+	// 【1コマごとに経過を残す(2026-09-07 調査用)】失敗したコマがどこで止まったか(結果が来ない/
+	//  画像が来ない/HAL が落とした/現像に失敗)をファイルのログで追えるようにする。
+	//  周期は 30 秒以上なので 1 行/コマでも量は知れている。原因が分かったら失敗時だけに戻す。
+	{
+		char b[640];
+		std::snprintf(b, sizeof(b), "builtin frame %s (wait<=%dms) %s",
+		              got ? "ok" : "LOST", to, builtinCam::captureReport().c_str());
+		dataManager::logEvent("CAMERA", b, !got);
+	}
+	if (got)
 	{
 		// 【狙ったセンサーで撮れたか(2026-09-05)】端末が勝手に切り替えると露出制御の土台が
 		//  崩れる。推測できないので申告を見る。違っていたら一度だけ残す(毎コマ言わない)。
