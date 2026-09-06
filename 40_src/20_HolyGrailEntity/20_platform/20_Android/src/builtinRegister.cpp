@@ -18,6 +18,7 @@
 #include <vector>
 #include <cmath>
 #include <cstdio>
+#include <ctime>
 
 namespace
 {
@@ -63,6 +64,16 @@ namespace builtinCam
 			//  後ろに付くカメラ名は端末が答えた「持ち物の名前」なので、そのまま使う。
 			cs.name     = "Phone night sky - " + d.model;
 			cs.interval = 30.0;	// 熱の都合。スマホは30秒以上(2026-09-05 ユーザー判断)
+			// 【窓を持たせる(2026-09-06)】出荷時の固定計画は開始/終了が 0 で、そのまま保存すると
+			//  ひな形を選んだときのスケジュール生成が失敗し(終了≦開始)、選べない。
+			//  夜空のひな形なので今日 20:00 〜 翌 04:00 にする(計画を作るときは日付だけ今日へ寄る)。
+			{
+				const int off = cs.place.tzOffMin;
+				hgc::dateTime st = hgc::fromUnixUtc(static_cast<long long>(std::time(nullptr)), off);
+				st.hour = 20; st.min = 0; st.sec = 0;
+				cs.start = st;
+				cs.end   = hgc::fromUnixUtc(hgc::toUnixUtc(st, off) + 8 * 3600, off);
+			}
 			// 端末の割り当ては撮影計画(cs)ではなくスマホ側が計画ごとに持つ。ひな形から作った
 			//  計画は割り当てが無い=スマホになるので、ここで指定するものは無い。
 
@@ -136,10 +147,27 @@ namespace builtinCam
 				cs.nightFixedExposure.iso = bestIso;
 			}
 
-			//  出荷時の計画は撮影制御方法の実体を持たない(読み込むときに初期値から入る)ので、
-			//  ここで吸着できるのは持っているぶんだけ。持っていなくても、撮影開始時に
-			//  exposureCtl がいちばん近い目盛りへ寄せるので破綻はしない。
 			snapExposure(cs.nightFixedExposure, t);
+
+			// 【ひな形は撮影制御方法の実体を持つ(2026-09-06 ユーザー指示)】
+			//  以前は出荷時の固定計画のまま実体を持たず、読み込むたびに初期値(プリセット)から
+			//  入れ直していた。そのため上で決めた夜間 24 秒がスケジュール生成で 8 秒に戻り、
+			//  初期値のエディタが内蔵カメラの目盛りを借りる事故の温床にもなった。
+			//  保存したひな形と同じく、作るときに初期値を取り込み、このカメラの目盛りへ寄せる。
+			//  夜間の固定露出だけは上で選んだ 24 秒相当(このカメラで出せる値)に置き換える。
+			{
+				astro::ccmSet set;
+				if (!dataManager::parseCcmSetJson(dataManager::preferredCcmSetJson(), set))
+				{ dataManager::parseCcmSetJson(dataManager::ccmDefaultsJson(), set); }
+				cs.ccm.night = set.night; cs.ccm.sunrise = set.sunrise;
+				cs.ccm.sunset = set.sunset; cs.ccm.day = set.day;
+				if (cs.ccm.night)
+				{
+					cs.ccm.night->limitBright = cs.nightFixedExposure;
+					cs.ccm.night->limitDark   = cs.nightFixedExposure;
+					cs.ccm.night->initial     = cs.nightFixedExposure;
+				}
+			}
 			for (const hgc::ccmType ty : { hgc::ccmType::night, hgc::ccmType::sunrise,
 			                               hgc::ccmType::sunset, hgc::ccmType::day })
 			{

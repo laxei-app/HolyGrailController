@@ -429,6 +429,18 @@ Java_app_laxei_holygrail_HgeNative_nativeGetExpoValues(JNIEnv* env, jobject /*th
 	return env->NewStringUTF(buf.data());
 }
 
+// 初期値のエディタ用(カメラに依らない標準目盛り)。
+JNIEXPORT jstring JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeGetStandardExpoValues(JNIEnv* env, jobject /*thiz*/)
+{
+	int32_t len = 0;
+	hge_getStandardExpoValuesJson(nullptr, &len);
+	if (len <= 0) { return env->NewStringUTF("{}"); }
+	std::vector<char> buf(static_cast<size_t>(len));
+	if (hge_getStandardExpoValuesJson(buf.data(), &len) != 0) { return env->NewStringUTF("{}"); }
+	return env->NewStringUTF(buf.data());
+}
+
 JNIEXPORT jstring JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeSunAltitudeTimes(JNIEnv* env, jobject /*thiz*/, jint altitudeDeg)
 {

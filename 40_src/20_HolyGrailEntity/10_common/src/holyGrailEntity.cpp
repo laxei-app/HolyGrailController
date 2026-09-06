@@ -805,7 +805,7 @@ namespace
 		std::string saved;
 		if (!dataManager::loadTplFile(id, saved) ||
 		    !csjson::fromJson(saved, g_plan)) { return ERR_HGC_NO_ELEMENT; }
-		if (!g_plan.ccm.complete()) { seedPlanCcmFromDefaults(g_plan); }
+		// 撮影制御方法はひな形自身が持つ(作ったときに取り込む)。読み込みで初期値を見に行かない。
 		const errCode be = astro::buildSchedule(g_plan);
 		if (be != ERR_HGC_OK) { return be; }
 		buildScheduleJson();
@@ -878,9 +878,8 @@ namespace
 			g_plan.camera = fp.camera;
 			g_plan.lens   = fp.lens;
 		}
-		// 撮影制御方法は計画のJSONに入っている。欠けている型があるときだけ初期値で補う
-		// (保存が壊れていた場合の保険。正常な計画では取り込み直さない)。
-		if (!g_plan.ccm.complete()) { seedPlanCcmFromDefaults(g_plan); }
+		// 撮影制御方法は計画のJSONに入っている(作ったときに取り込む)。読み込みで初期値を
+		//  見に行かない(2026-09-06 ユーザー指示。欠けた型は「使わない」と同じ扱いになる)。
 		const errCode be = astro::buildSchedule(g_plan);
 		if (be != ERR_HGC_OK) { return be; }
 		buildScheduleJson();
@@ -982,8 +981,13 @@ namespace
 		else                                     { std::snprintf(b, sizeof(b), "%.1f", f); }
 		return std::string(b);
 	}
-	// 露出(iso/ss/fn)1件をカメラ/レンズの範囲へクランプ。範囲を超えた値のみ限界値へ。
-	// 範囲内・リスト未設定・空文字はそのまま(初期値ccm単体=カメラ未規定では呼ばない)。
+	// 露出(iso/ss/fn)1件をカメラ/レンズの目盛りへ合わせる。
+	//  【範囲へ丸めるだけでは足りない(2026-09-06)】以前は「範囲を超えた値だけ端へ」だった。
+	//  範囲内でもそのカメラの目盛りに無い値(内蔵カメラの実測目盛りに "1600" や "8" は無い)が
+	//  残ると、計画側のエディタが位置を見失って別の値に化けた。取り込んだ時点で
+	//  **いちばん近い目盛り**へ寄せ、計画が持つ値は必ずそのカメラで出せる値にする。
+	//  範囲外の値は結果として端の目盛りになる(従来の丸めを含む)。
+	// リスト未設定・空文字はそのまま(初期値ccm単体=カメラ未規定では呼ばない)。
 	void clampExposureToGear(hgc::exposure& e, const hgc::camera& cam, const hgc::lens& lens)
 	{
 		auto clampList = [](std::string& cur, const std::vector<std::string>& list, expo::expoKind k)
@@ -991,11 +995,17 @@ namespace
 			if (cur.empty() || list.empty()) { return; }
 			double v = expo::parseValue(cur, k);
 			if (v <= 0) { return; }
-			const std::string* lo = nullptr; const std::string* hi = nullptr;
-			double loR = 1e300, hiR = -1e300;
-			for (const auto& s : list) { double r = expo::parseValue(s, k); if (r <= 0) { continue; } if (r < loR) { loR = r; lo = &s; } if (r > hiR) { hiR = r; hi = &s; } }
-			if      (lo && v < loR) { cur = *lo; }
-			else if (hi && v > hiR) { cur = *hi; }
+			const std::string* best = nullptr;
+			double bestDiff = 1e300;
+			for (const auto& s : list)
+			{
+				if (s == cur) { return; }	// 目盛りにある値はそのまま
+				const double r = expo::parseValue(s, k);
+				if (r <= 0) { continue; }
+				const double d = std::fabs(std::log2(r / v));
+				if (d < bestDiff) { bestDiff = d; best = &s; }
+			}
+			if (best) { cur = *best; }
 		};
 		clampList(e.iso, cam.isoList, expo::expoKind::iso);
 		clampList(e.ss,  cam.ssList,  expo::expoKind::ss);
@@ -1007,7 +1017,10 @@ namespace
 		{
 			const double lo = lens.fn;
 			const double hi = lens.fnMax;	// 0=未設定(上限なし)
-			auto fits = [&](double v) { return v > 0.0 && v >= lo && (hi <= 0.0 || v <= hi); };
+			// レンズの F は float 由来(2.200000047)で、文字列の 2.2 と比べると僅かに外れる。
+			//  1/100 段未満の差は「入っている」とみなす(2026-09-06。無駄な fnWish を残さない)。
+			const double eps = 1e-3;
+			auto fits = [&](double v) { return v > 0.0 && v >= lo - eps && (hi <= 0.0 || v <= hi + eps); };
 			// 今のレンズで控えが使えるなら先に戻す。
 			if (!e.fnWish.empty() && fits(expo::parseValue(e.fnWish, expo::expoKind::fn)))
 			{
@@ -2243,7 +2256,6 @@ int32_t hge_getPlanJsonById(const char* id, char* buf, int32_t* inoutLen)
 		cs.camera = fp.camera;
 		cs.lens   = fp.lens;
 	}
-	if (!cs.ccm.complete()) { seedPlanCcmFromDefaults(cs); }
 	const errCode be = astro::buildSchedule(cs);
 	if (be != ERR_HGC_OK) { return be; }
 	applyOwnedCameraSettings(cs.camera);
@@ -2546,8 +2558,9 @@ int32_t hge_newPlanFromTemplate(const char* id)
 	cs.name = uniqueName(cs.name, collectPlanNames(""));
 	shiftToToday(cs);
 	refreshCameraFromOwned(cs);
+	// ひな形の撮影制御方法をそのまま受け継ぎ、今のカメラ/レンズの目盛りへ合わせる(2026-09-06)。
+	clampOwnedToGear(cs.ccm, cs.camera, cs.lens);
 	g_plan = cs;
-	if (!g_plan.ccm.complete()) { seedPlanCcmFromDefaults(g_plan); }
 	const errCode be = astro::buildSchedule(g_plan);
 	if (be != ERR_HGC_OK) { return be; }
 	buildScheduleJson();
@@ -2577,7 +2590,7 @@ int32_t hge_updatePlanFromTemplate(const char* planId, const char* tplId)
 	cur = tpl;
 	cur.name = keepName; cur.start = keepSt; cur.end = keepEn;
 	refreshCameraFromOwned(cur);
-	if (!cur.ccm.complete()) { seedPlanCcmFromDefaults(cur); }
+	clampOwnedToGear(cur.ccm, cur.camera, cur.lens);	// ひな形の値を今のカメラ/レンズの目盛りへ
 	if (std::string(planId) == g_editId && !g_editIsTpl)
 	{
 		g_plan = cur;
@@ -2861,6 +2874,26 @@ int32_t hge_getCcmDefaultsJson(char* buf, int32_t* inoutLen)
 	std::memcpy(buf, s.c_str(), need);
 	*inoutLen = need;
 	return ERR_HGC_OK;
+}
+
+// 【初期値のエディタはカメラに依らない標準目盛りを使う(2026-09-06)】
+//  以前は初期値の編集でも計画のカメラの目盛り(hge_getExpoValuesJson)を借りていた。
+//  内蔵カメラの実測目盛りに "1600" や "8" は無く、位置を見失った初期値が
+//  ISO 11377 / 48 秒へ化けて保存された。初期値はどのカメラのものでもないので標準 1/3 段で示す。
+int32_t hge_getStandardExpoValuesJson(char* buf, int32_t* inoutLen)
+{
+	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
+	const std::vector<std::string> iso = expo::standardValues(expo::expoKind::iso);
+	const std::vector<std::string> ss  = expo::standardValues(expo::expoKind::ss);
+	const std::vector<std::string> fn  = expo::standardFn(1.0, 32.0);
+	auto arr = [](const std::vector<std::string>& v) {
+		std::string s = "[";
+		for (size_t i = 0; i < v.size(); ++i) { if (i) { s += ","; } s += "\"" + v[i] + "\""; }
+		s += "]";
+		return s;
+	};
+	const std::string j = "{\"iso\":" + arr(iso) + ",\"ss\":" + arr(ss) + ",\"fn\":" + arr(fn) + "}";
+	return copyOut(j, buf, inoutLen);
 }
 
 int32_t hge_getExpoValuesJson(char* buf, int32_t* inoutLen)
@@ -3445,7 +3478,6 @@ int32_t hge_captureStartPlan(const char* planId_)
 		//  ccmList をそのまま使う(表示用JSONを作るだけ)。窓を持たない計画が届くと、
 		//  この経路では組み立て直さないため撮影ループが**黙って空回り**する
 		//  (状態は「撮影中」なのにカメラへ一切通信しない)。ファイル経由と同じ手当てをする。
-		if (!sess->plan.ccm.complete()) { seedPlanCcmFromDefaults(sess->plan); }
 		if (sess->plan.ccmList.empty())
 		{
 			const errCode be = astro::buildSchedule(sess->plan);
@@ -3461,8 +3493,7 @@ int32_t hge_captureStartPlan(const char* planId_)
 		std::string saved; hgc::cs cs;
 		if (!dataManager::loadPlanFile(planId, saved) || !csjson::fromJson(saved, cs)) { return ERR_HGC_NO_ELEMENT; }
 		sess->plan = cs;
-		// 撮影制御方法は計画が持っている。欠けていたときだけ初期値で補い、窓が無いときだけ組み立てる。
-		if (!sess->plan.ccm.complete()) { seedPlanCcmFromDefaults(sess->plan); }
+		// 撮影制御方法は計画が持っている。窓が無いときだけ組み立てる。
 		if (sess->plan.ccmList.empty())
 		{
 			const errCode be = astro::buildSchedule(sess->plan);

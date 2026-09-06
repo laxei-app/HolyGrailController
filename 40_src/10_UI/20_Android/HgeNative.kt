@@ -83,6 +83,7 @@ object HgeNative {
     external fun nativeGetPlanCcm(): String          // 計画固有ccm(初期値とは別)
     external fun nativeSetPlanCcm(json: String): Int
     external fun nativeGetExpoValues(): String
+    external fun nativeGetStandardExpoValues(): String   // 初期値のエディタ用(カメラに依らない標準目盛り)
     external fun nativeSunAltitudeTimes(altitudeDeg: Int): String   // {"start":"MM/dd HH:mm","end":...}
     external fun nativeSetListener(listener: HgeListener?)
 

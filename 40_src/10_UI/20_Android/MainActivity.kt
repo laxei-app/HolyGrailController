@@ -264,6 +264,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private var isoDisp = listOf<String>()
     private var ssDisp = listOf<String>()
     private var fnDisp = listOf<String>()
+    // 今の目盛りが「標準(初期値の編集用)」か「計画のカメラのもの」か。エディタは目盛りを
+    //  構築時に取り込むので、編集対象(初期値/計画)が変わったら作り直す(2026-09-06)。
+    private var expoListsStandard = false
     private lateinit var fixEditor: ExposureEditor      // 夜間 固定露出(単一)
     private lateinit var editLimit: LimitEditor         // 自動露出 露出限界(優先度+明暗を一体化)
 
@@ -2919,6 +2922,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun openCcmEdit(key: String) {
         val o = ccmJson?.optJSONObject(key) ?: return
         editingKey = key
+        // 【初期値の編集はカメラに依らない標準目盛りで(2026-09-06)】計画のカメラの目盛りを
+        //  借りると、内蔵カメラの実測目盛りに無い "1600" や "8" が位置を見失って化け、
+        //  そのまま初期値へ保存されていた(ISO 11377 / 48 秒)。計画の編集はそのカメラの目盛り。
+        if (!editingPlanCcm && !expoListsStandard) { loadExpoValues(standard = true); buildExposureEditors() }
+        else if (editingPlanCcm && expoListsStandard) { reloadExpoEditors() }
         // 計画固有の編集で、その計画がロックされていれば読取専用(初期値の編集は常に可)。
         ccmReadOnly = editingPlanCcm && planReadOnly
         val title = mapOf("night" to "夜間撮影", "sunrise" to "朝日撮影", "sunset" to "夕日撮影", "day" to "日中撮影")[key]
@@ -3069,6 +3077,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (ccmReadOnly) return         // 見るだけの表示。画面を離れるときも書き戻さない
         val all = ccmJson ?: return
         val o = buildCcmEditJson() ?: return
+        // 【触っていなければ書かない(2026-09-06)】開いて閉じただけで初期値が書き換わらないように。
+        //  変更の有無は「取り消し」ボタンの赤/灰と同じ比較(開いたときの内容)で見る。
+        if (o.toString() == dirtyBaseline) return
         all.put(editingKey, o)
         if (editingPlanCcm) HgeNative.nativeSetPlanCcm(all.toString()) else savePresetFromEditor(o)
     }
@@ -3108,9 +3119,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // 設定可能な露出値(カメラ設定値の文字列)を Entity から取得して保持する。
-    private fun loadExpoValues() {
+    private fun loadExpoValues(standard: Boolean = false) {
+        expoListsStandard = standard
         try {
-            val o = JSONObject(HgeNative.nativeGetExpoValues())
+            val o = JSONObject(if (standard) HgeNative.nativeGetStandardExpoValues()
+                               else HgeNative.nativeGetExpoValues())
             isoValues = jsonToList(o.optJSONArray("iso"))
             ssValues = jsonToList(o.optJSONArray("ss"))
             fnValues = jsonToList(o.optJSONArray("fn"))
@@ -3193,7 +3206,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // 単一露出を選ぶ1本スライダー行。タイトルは左寄せ(仕様7)、値は右に表示。
     // 夜間固定露出・月の開始時露出に使う。
-    private inner class SingleRow(parent: LinearLayout, title: String, private val vals: List<String>) {
+    // 露出値の文字列を実数にする(iso: そのまま / ss: "1/250" と "8" / fn: そのまま)。失敗は 0。
+    private fun expoNum(kind: Int, s: String): Double {
+        if (kind == 1 && s.contains('/')) {
+            val p = s.split('/'); val a = p[0].trim().toDoubleOrNull() ?: return 0.0
+            val b = p.getOrNull(1)?.trim()?.toDoubleOrNull() ?: return 0.0
+            return if (b > 0.0) a / b else 0.0
+        }
+        return s.trim().trimEnd('"').toDoubleOrNull() ?: 0.0
+    }
+
+    private inner class SingleRow(parent: LinearLayout, title: String, private val vals: List<String>,
+                                  private val kind: Int) {
         private val slider = Slider(this@MainActivity)
         private val valTv: TextView
         init {
@@ -3226,7 +3250,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
             sliderWithIcons(col, slider, showIcons = false)   // 夜間固定露出・月の開始時露出は外側アイコン無し
         }
         fun set(value: String) {
-            val idx = vals.indexOf(value).let { if (it < 0) 0 else it }
+            // 一覧に無い値は位置 0(最大側)にせず、いちばん近い目盛りへ(2026-09-06)。
+            //  位置 0 にすると ISO1600 が 11377 に化ける。段数の差(log)が最小のものを採る。
+            var idx = vals.indexOf(value)
+            if (idx < 0) {
+                val v = expoNum(kind, value)
+                var best = 0; var bestDiff = Double.MAX_VALUE
+                if (v > 0.0) for (i in vals.indices) {
+                    val r = expoNum(kind, vals[i]); if (r <= 0.0) continue
+                    val d = Math.abs(Math.log(r / v)); if (d < bestDiff) { bestDiff = d; best = i }
+                }
+                idx = best
+            }
             slider.value = idx.toFloat().coerceIn(slider.valueFrom, slider.valueTo)
             valTv.text = vals.getOrElse(idx) { "" }
         }
@@ -3235,9 +3270,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // 単一露出(iso/ss/fn)を3スライダーで編集する。夜間固定露出・月の開始時露出に使う。
     private inner class ExposureEditor(container: LinearLayout) {
-        private val isoRow = SingleRow(container, "ISO感度", isoDisp)
-        private val ssRow = SingleRow(container, "シャッター速度", ssDisp)
-        private val fnRow = SingleRow(container, "F値", fnDisp)
+        private val isoRow = SingleRow(container, "ISO感度", isoDisp, 0)
+        private val ssRow = SingleRow(container, "シャッター速度", ssDisp, 1)
+        private val fnRow = SingleRow(container, "F値", fnDisp, 2)
 
         fun set(o: JSONObject?) {
             isoRow.set(o?.optString("iso") ?: "")
