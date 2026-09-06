@@ -364,17 +364,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  マスタ読み込みと同じ単一スレッドで行う(所持機材の書き込み口は1本に保つ)。
         //  一度作ったデータは差し替えない(2026-09-06 ユーザー決定)。並びや周期の規則は作るときに
         //  apiBuiltin が答えた値で決まる。新しくしたければ出荷時設定に戻して作り直す。
+        //  【計画より先に済ませる(2026-09-06 ユーザー指示)】出荷時の固定計画(FixedPlan)は最初に計画へ
+        //  触ったときに作られ、そのとき「撮影計画の初期値にする」カメラを採る。内蔵の登録が後回しだと
+        //  FixedPlan が出荷時の EOS R10 で出来てしまう。初回だけなので、終わるまでここで待つ
+        //  (カメラの列挙は権限が無くてもでき、1 秒かからない)。
         if (!hgcPrefs().getBoolean("builtinSeedDone", false)) {
-            dataExec.execute {
+            val seed = dataExec.submit {
                 // スマホ用の撮影制御方法初期値の名前(型ごと)。UI の言語で渡す(将来の言語対応は UI だけで済ませる)。
                 val names = JSONObject().put("night", "夜間スマホ").put("sunrise", "朝日スマホ")
                                         .put("sunset", "夕日スマホ").put("day", "日中スマホ").toString()
                 val found = try { HgeNative.nativeRegisterBuiltinCameras(names) } catch (_: Exception) { 0 }
-                if (found > 0) {
-                    hgcPrefs().edit().putBoolean("builtinSeedDone", true).apply()
-                    runOnUiThread { if (flipper.displayedChild == 6) buildCameraList() }
-                }
+                if (found > 0) { hgcPrefs().edit().putBoolean("builtinSeedDone", true).commit() }
             }
+            try { seed.get(10, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}
         }
 
         HgeNative.nativeEdgeSetBle(edgeUseBle())
