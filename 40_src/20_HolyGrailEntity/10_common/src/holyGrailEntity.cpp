@@ -1901,6 +1901,7 @@ int32_t hge_init(void)
 {
 	if (g_inited) { return ERR_HGC_OK; }
 	netThread::init();
+	hge::role::registerBackends();	// この役割が扱うカメラの探索元(共通は何も知らない)
 	hge::role::loadPersisted();	// 無人再起動後の「前回IP直結」用に不揮発の既知カメラを読み込む(エッジ役)
 	// カメラを探し始める前に所持カメラを読んでおく。読み込みでダイジェスト認証の資格情報が
 	//  候補に入る(エッジ役は所持を持たないが、撮影計画の受信/読み込みで同じ入口を通る)。

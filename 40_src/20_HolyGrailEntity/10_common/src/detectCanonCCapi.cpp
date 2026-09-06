@@ -17,16 +17,13 @@ namespace
 	}
 }
 
-// このバックエンドが対応するサービス定義(キーワード→apiClass)。
-// 旧 deviceDiscovery の静的テーブルをそのまま移設(挙動不変)。
-//  ・sony(DigitalImaging)はまだ専用 interface が無いので暫定で CANON_CCAPI に割り当て。
-//    将来 Sony バックエンドを追加する際にこの行は Sony 側へ移す(本改修外・構造のみ)。
+// このバックエンドが自分のカメラと見なす SSDP のサービス識別語(キヤノン CCAPI)。
+//  他社のカメラはそのバックエンドが自分の語を持つ(2026-09-06: Sony の暫定写像を削除)。
 const std::vector<deviceDiscovery::definitionIntereface>& detectCanonCCapi::interfaces() const
 {
 	static const std::vector<deviceDiscovery::definitionIntereface> ifaces =
 	{
-		{ {"ICPO-CameraControlAPIService","schemas-canon-com"}, device::apiClass::CANON_CCAPI },
-		{ {"DigitalImaging","schemas-sony-com"},                device::apiClass::CANON_CCAPI },
+		deviceDiscovery::definitionIntereface({"ICPO-CameraControlAPIService","schemas-canon-com"}),
 	};
 	return ifaces;
 }
@@ -50,7 +47,7 @@ class apiBase* detectCanonCCapi::makeApi()
 bool detectCanonCCapi::identifyAt(const std::string& host, class device& out)
 {
 	out.clear();
-	out.apiClass = device::apiClass::CANON_CCAPI;
+	out.origin   = this;
 	out.location = "http://" + host + ":49152/upnp/CameraDevDesc.xml";
 
 	apiCanonCCAPI api;
@@ -95,7 +92,7 @@ detectBase::greetResult detectCanonCCapi::greet(const class device& d)
 bool detectCanonCCapi::makeManualDevice(const std::string& host, class device& out)
 {
 	out.clear();
-	out.apiClass = device::apiClass::CANON_CCAPI;
+	out.origin   = this;
 	out.location = host;
 	out.urlAccess = "http://" + host + ":8080/ccapi";	// CCAPI のアクセスURL
 	out.model = "Canon CCAPI (manual)";

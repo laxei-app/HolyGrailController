@@ -19,6 +19,5 @@ void device::clear(void)
 
 	// api への参照を解放(最後の参照なら apiBase 実体も解放される)
 	apiBase = nullptr;
-	apiClass = apiClass::NON;
 	origin = nullptr;
 }

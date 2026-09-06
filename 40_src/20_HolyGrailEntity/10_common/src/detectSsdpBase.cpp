@@ -72,13 +72,6 @@ size_t detectSsdpBase::discover(std::vector<class device>& out, bool identifyOnl
 			integra(devices[ix].urn, devices[ixN].urn);
 			integra(devices[ix].service, devices[ixN].service);
 
-			// api を統合
-			if ((devices[ix].apiClass == device::apiClass::NON) &&
-				(devices[ix].apiClass != devices[ixN].apiClass))
-			{	// 入ってなかったら入ってる方を使う
-				devices[ix].apiClass = devices[ixN].apiClass;
-			}
-
 			// 削除
 			devices.erase(devices.begin() + ixN);
 			ixN++;

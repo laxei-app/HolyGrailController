@@ -44,7 +44,6 @@ size_t detectBuiltin::build(std::vector<class device>& out, const deviceMatch& w
 		if (id.empty()) { continue; }
 
 		class device d;
-		d.apiClass     = device::apiClass::NON;	// 内蔵カメラは既存のどれでもない
 		d.origin       = this;
 		// 宛先は "論理/物理"。超広角などは単体で開けないので、入口の論理カメラも要る。
 		d.urlAccess    = lg + "/" + id;

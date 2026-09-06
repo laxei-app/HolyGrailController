@@ -1,6 +1,5 @@
 ﻿#include "common.h"
 #include "cameraController.h"
-#include "detectCanonCCapi.h"
 #include "netThread.h"
 #include <algorithm>
 #include <mutex>
@@ -16,20 +15,17 @@ static std::string hostOfUrl(const std::string& url)
 	return url.substr(s, e - s);
 }
 
-// 受信バックエンド群(Meyers シングルトン。初回に生成)。
-// 現状は Canon CCAPI のみ。Sony/Nikon/スマホ内蔵は将来ここへ push_back する(構造のみ)。
+// 受信バックエンド群(Meyers シングルトン)。
+// 【共通はどのバックエンドも知らない(2026-09-06)】中身は役割側(hge::role::registerBackends)と
+//  成果物の初期化(スマホの内蔵カメラは jniBridge)が addBackend で入れる。ここは器だけ。
 std::vector<std::unique_ptr<detectBase>>& cameraController::backends()
 {
 	static std::vector<std::unique_ptr<detectBase>> b;
-	if (b.empty())
-	{
-		b.push_back(std::make_unique<detectCanonCCapi>());
-	}
 	return b;
 }
 
-// 外から足したバックエンド。呼ぶのは役割ごとの初期化(スマホなら内蔵カメラ)。
-//  同じ物を二度足さないよう、呼ぶ側が1回だけ呼ぶこと。
+// 外から足すバックエンド。呼ぶのは役割ごとの初期化(hge::role::registerBackends)と、
+//  成果物固有のもの(スマホの内蔵カメラ)。同じ物を二度足さないよう、呼ぶ側が1回だけ呼ぶこと。
 void cameraController::addBackend(std::unique_ptr<class detectBase> backend)
 {
 	if (!backend) { return; }

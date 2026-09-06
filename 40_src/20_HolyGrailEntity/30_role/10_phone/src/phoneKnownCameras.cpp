@@ -1,4 +1,7 @@
 ﻿#include "roleDiscovery.h"
+#include "cameraController.h"
+#include "detectCanonCCapi.h"
+#include <memory>
 
 // スマホ役の発見: スマホ自身が M-SEARCH(必要に応じ NOTIFY)で信頼できる発見を行うため、
 // エッジのような既知IPテーブルは持たない。IP直結ヒントは常に空を返し、上位は通常のSSDP発見に進む。
@@ -19,6 +22,12 @@ bool trySubnetSweep(const std::string& /*wantSerial*/, const hgc::camera& /*cam*
                     device& /*out*/)
 {
 	return false;	// スマホ役はサブネット探索しない(発見はスマホ自身のSSDPに委ねる)
+}
+
+void registerBackends()
+{
+	// スマホ役が扱う外付けカメラ。内蔵カメラは Android/iOS の初期化が足す(端末固有のため)。
+	cameraController::addBackend(std::make_unique<detectCanonCCapi>());
 }
 
 bool ownedCamerasAuthoritative()

@@ -1,6 +1,8 @@
 ﻿#include "common.h"
 #include "roleDiscovery.h"
 #include "cameraController.h"
+#include "detectCanonCCapi.h"
+#include <memory>
 #include "dataManager.h"
 #include "osFile.h"
 #include "net.h"			// §3.3 tier3: 限定サブネットのバッチ探索(net::scanSubnetPort)
@@ -226,6 +228,12 @@ void presenceStart(std::function<void()> onChange)
 }
 void presenceStop() { presenceMon::stop(); }
 std::string presenceJson() { return presenceMon::json(); }
+
+void registerBackends()
+{
+	// エッジ役が扱うカメラ(ネットワーク越しの外付けのみ)。
+	cameraController::addBackend(std::make_unique<detectCanonCCapi>());
+}
 
 bool ownedCamerasAuthoritative()
 {
