@@ -205,10 +205,39 @@ errCode apiCanonCCAPI::initManual(class device& device)
         } catch (const std::exception&) { /* deviceinformation 無し/解析失敗は無視 */ }
     }
 
+    normalizeIdentity(device);
     this->device = device;
     liveViewInfo.resize(1024 * 8);
     apiMark("init: done");
     return err;
+}
+
+// 【型番とメーカー名を機材マスタの綴りに揃える(2026-09-06)】
+//  UPnP 記述は modelName="Canon EOS R10" / manufacturer="Canon"、CCAPI の deviceinformation は
+//  productname="Canon EOS R10" / manufacturer="Canon.Inc" と、同じ機体でも綴りが違う。
+//  機材マスタと所持カメラは型番だけ("EOS R10")とメーカー1語("Canon")で持つので、ここで揃える。
+//  以前は共通側(dataManager::stripMaker)が毎回この差を吸収していた。綴りの癖はキヤノンの都合なので
+//  キヤノンの実装が正す。共通は device.model / manufacturer をそのまま鍵にする。
+void apiCanonCCAPI::normalizeIdentity(class device& device)
+{
+    auto alnumRun = [](const std::string& s) -> size_t {
+        size_t i = 0;
+        while (i < s.size() && ((s[i] >= 'A' && s[i] <= 'Z') || (s[i] >= 'a' && s[i] <= 'z') ||
+                                (s[i] >= '0' && s[i] <= '9'))) { ++i; }
+        return i;
+    };
+    const size_t mk = alnumRun(device.manufacturer);
+    if (mk > 0)
+    {
+        const std::string maker = device.manufacturer.substr(0, mk);	// "Canon.Inc" → "Canon"
+        std::string& m = device.model;
+        if (m.size() > mk && m.compare(0, mk, maker) == 0 && (m[mk] == ' ' || m[mk] == '\t'))
+        {
+            m.erase(0, mk);
+            while (!m.empty() && (m.front() == ' ' || m.front() == '\t')) { m.erase(0, 1); }
+        }
+        device.manufacturer = maker;
+    }
 }
 
 // DeviceDescriptor の内容を取得する。
@@ -242,6 +271,7 @@ errCode apiCanonCCAPI::getDeviceDescriptor(class device& device)
     device.urlAccess = tool::getXmlTagValue(deviceDescriptor, "ns:X_accessURL");
     device.urlbase = tool::getXmlTagValue(deviceDescriptor, "URLBase");
     device.serialno = tool::getXmlTagValue(deviceDescriptor, "serialNumber");
+    normalizeIdentity(device);
     return ERR_HGC_OK;
 }
 

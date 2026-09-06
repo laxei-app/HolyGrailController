@@ -13,9 +13,6 @@ public:
 	static std::string toLower(std::string data);
 	static int spaceLen(std::string& data, int offset);
 	static float ssToReal(std::string ss);
-	static std::string ssToStr(float ss);
-	static std::string ssToStrY(float ss);
-	static std::string ssToStrX(double ss);
 
     // プラットフォームで実装する
     // 時間管理系

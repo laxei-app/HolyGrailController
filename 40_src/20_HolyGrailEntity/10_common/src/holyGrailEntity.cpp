@@ -3281,7 +3281,9 @@ int32_t hge_addOwnedDetected(int32_t index)
 //  用途: ①エッジ→スマホ書き戻し(edgeの進捗JSONの serial/assignedName を受けて allowAdd=1)。
 //        ②裏の発見(プレゼンス)で allowAdd=0 → 返り値 ISNEW のとき UI が「登録しますか？」を出す。
 //  返り値: >=0 は dataManager::camApply(0=updated/1=filled/2=isNew)、<0 はエラー。
-//  maker は model 先頭トークン(空白まで)から導出する(stripMaker 用。Canon運用では "Canon EOS R100"→"Canon")。
+//  model は型番だけ("EOS R100"。探索元が揃えた綴りがそのまま届く)。メーカー名は型番から作らない
+//  (2026-09-06: 以前は先頭語を取っていたが、型番だけになった今は "EOS" になってしまう)。
+//  マスタに載っている機種は登録時にマスタの maker が入り、載っていなければ空のままにする。
 int32_t hge_recordCameraIdentity(const char* model, const char* serial, const char* assignedName, int32_t allowAdd)
 {
 	device d;
@@ -3289,8 +3291,6 @@ int32_t hge_recordCameraIdentity(const char* model, const char* serial, const ch
 	d.serialno   = (serial   != nullptr) ? serial   : "";
 	d.assignedName = (assignedName != nullptr) ? assignedName : "";
 	if (d.model.empty() && d.serialno.empty()) { return ERR_HGC_INVALID_ARG; }
-	size_t sp = d.model.find(' ');
-	d.manufacturer = (sp != std::string::npos) ? d.model.substr(0, sp) : std::string();
 
 	// 【新規登録は実機に繋いでから(2026-08-19)】ここへ来る model/serial は在否監視(SSDP)由来で、
 	//  カメラを叩かずに得た情報しか無い。マスタに無い機種は ISO/SS をカメラ本人から取りたいので、

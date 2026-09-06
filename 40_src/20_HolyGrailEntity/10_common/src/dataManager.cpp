@@ -527,44 +527,13 @@ namespace
 		return nullptr;
 	}
 
-	// device.model("Canon EOS R10")から先頭のメーカー名を除いた型番を得る("EOS R10")。
-	std::string stripMaker(const std::string& model, const std::string& maker)
-	{
-		std::string m = model;
-		if (!maker.empty() && m.size() >= maker.size() &&
-		    m.compare(0, maker.size(), maker) == 0)
-		{
-			m.erase(0, maker.size());
-			while (!m.empty() && (m.front() == ' ' || m.front() == '\t')) { m.erase(0, 1); }
-			return m;
-		}
-		// メーカー名が model 先頭と完全一致しない場合(例 UPnPは"Canon"だがCCAPI deviceinformation は
-		// "Canon.Inc")、双方の先頭英数字ラン(区切り文字直前まで)が一致すれば、その1語を型番から除く。
-		auto alnumRun = [](const std::string& s) -> size_t {
-			size_t i = 0;
-			while (i < s.size() && ((s[i] >= 'A' && s[i] <= 'Z') || (s[i] >= 'a' && s[i] <= 'z') ||
-			                        (s[i] >= '0' && s[i] <= '9'))) { ++i; }
-			return i;
-		};
-		if (!maker.empty())
-		{
-			size_t mk = alnumRun(maker);
-			size_t md = alnumRun(m);
-			if (mk > 0 && mk == md && m.compare(0, md, maker, 0, mk) == 0)
-			{
-				m.erase(0, md);
-				while (!m.empty() && (m.front() == ' ' || m.front() == '\t')) { m.erase(0, 1); }
-			}
-		}
-		return m;
-	}
-
 	// dev に最も一致するマスタカメラを返す。完全一致優先、無ければ最長部分一致。
 	// ("EOS R6" が "EOS R6 Mark II" を誤って先取りしないよう最長一致を採る)
 	const hgc::camera* matchMasterCamera(const device& dev)
 	{
 		ensureMaster();
-		std::string key = stripMaker(dev.model, dev.manufacturer);
+		// device.model は探索元が機材マスタの綴り(型番だけ)に揃えて渡してくる(2026-09-06)。
+		const std::string& key = dev.model;
 		const hgc::camera* best = nullptr;
 		size_t bestLen = 0;
 		for (const auto& c : g_masterCameras)
@@ -606,12 +575,12 @@ namespace
 		return !cam.isoList.empty() || !cam.ssList.empty();
 	}
 
-// 所持/計画カメラ cam の型番が device dev と同じ機種か(メーカー名差を吸収)。
+	// 所持/計画カメラ cam の型番が device dev と同じ機種か。device.model は探索元が型番だけに揃えている。
 	bool camModelMatchesDev(const hgc::camera& cam, const device& dev)
 	{
-		std::string key = stripMaker(dev.model, dev.manufacturer);
-		if (!cam.name.empty()  && (cam.name  == key || cam.name  == dev.model)) { return true; }
-		if (!cam.model.empty() && (cam.model == key || cam.model == dev.model)) { return true; }
+		if (dev.model.empty()) { return false; }
+		if (!cam.name.empty()  && cam.name  == dev.model) { return true; }
+		if (!cam.model.empty() && cam.model == dev.model) { return true; }
 		return false;
 	}
 
@@ -1358,8 +1327,8 @@ bool dataManager::recordConnectedCamera(const device& dev)
 int dataManager::recordConnectedCameraStatus(const device& dev, bool allowAdd)
 {
 	ensureOwned();
-	// device.model 例 "Canon EOS R10"。所持/マスタは型番のみ("EOS R10")なのでメーカー名を除いて照合。
-	std::string key = stripMaker(dev.model, dev.manufacturer);
+	// device.model は探索元が型番だけ("EOS R10")に揃えて渡してくる。所持/マスタと同じ綴り。
+	const std::string key = dev.model;
 
 	// 1) シリアル一致の所持カメラ → 同一個体。設定名(assignedName)のみ更新する(serialは識別子なので変えない)。
 	if (!dev.serialno.empty())

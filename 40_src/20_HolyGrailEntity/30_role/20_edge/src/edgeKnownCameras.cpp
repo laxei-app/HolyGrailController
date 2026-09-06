@@ -24,20 +24,13 @@ namespace {
 	std::vector<knownCam> g_knownCams;
 	std::mutex            g_knownMutex;
 
-	// 既知カメラの device.model 全体("Canon EOS R100")が計画カメラ(型番のみ "EOS R100" か全体)と同機種か。
-	//  メーカー接頭辞差を吸収する(known 側は maker を持たないため接頭辞+空白を許容)。
-	//  "EOS R10" が "Canon EOS R100" に誤一致しないよう、接尾一致は語境界(直前が空白)を要求する。
+	// 既知カメラの型番(device.model。探索元が型番だけに揃えている)が計画カメラと同機種か。
+	//  2026-09-06 に接頭辞("Canon ")の吸収を外した。古い knownCams.json に全体名が残っていても
+	//  一致しないだけで、通常の SSDP 発見に落ちる(データは作り直す方針)。
 	bool knownModelMatch(const std::string& kModel, const hgc::camera& cam)
 	{
-		auto eq = [&](const std::string& c) -> bool {
-			if (c.empty()) { return false; }
-			if (kModel == c) { return true; }										// 完全一致(全体 or 既に型番のみ)
-			if (kModel.size() > c.size() + 1 &&
-			    kModel.compare(kModel.size() - c.size(), c.size(), c) == 0 &&
-			    kModel[kModel.size() - c.size() - 1] == ' ') { return true; }	// "メーカー<空白>型番"
-			return false;
-		};
-		return eq(cam.name) || eq(cam.model);
+		if (kModel.empty()) { return false; }
+		return (!cam.name.empty() && kModel == cam.name) || (!cam.model.empty() && kModel == cam.model);
 	}
 
 	// 計画カメラにマッチするオンライン既知IPを返す(serial優先)。無ければ空文字。

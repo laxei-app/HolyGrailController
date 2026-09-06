@@ -10,9 +10,9 @@ void device::clear(void)
 	location.clear();	// device ロケーション
 
 	// 以下デバイスディスクリプタの内容
-	model.clear();			// カメラモデル名 "Canon EOS R10"
+	model.clear();			// 型番 "EOS R10"
 	assignedName.clear();		// ユーザーがカメラ本体で付けた名前(愛称)
-	manufacturer.clear();	// 提供元。"canon","sony"
+	manufacturer.clear();	// メーカー1語 "Canon"
 	serialno.clear();		// シリアルno.
 	urlbase.clear();		// url base
 	urlAccess.clear();		// access URL

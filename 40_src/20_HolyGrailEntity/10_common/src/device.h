@@ -14,9 +14,9 @@ public:
 	std::string service;		// service ネットワークサービス名称
 
 	// 以下デバイスディスクリプタの内容
-	std::string	model;			// カメラモデル名 "Canon EOS R10"
+	std::string	model;			// 型番 "EOS R10"(機材マスタと同じ綴り。メーカー名は含めない。探索元が揃える)
 	std::string	assignedName;		// ユーザーがカメラ本体で付けた名前(愛称)。同機種の見分けに使う
-	std::string	manufacturer;	// 提供元。"canon","sony"
+	std::string	manufacturer;	// メーカー1語 "Canon"(機材マスタと同じ綴り。探索元が揃える)
 	std::string	serialno;		// シリアルno.
 	std::string urlbase;		// url base
 	std::string urlAccess;		// access URL

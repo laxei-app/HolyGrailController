@@ -127,6 +127,8 @@ public:
 	// 動作を指示する
 	errCode rdyShutter(const cmdt::shotSet& shotSet);	// シャッター設定
 	errCode actShutter(void);							// シャッターを切る動作
+	// 型番とメーカー名を機材マスタの綴り("EOS R10" / "Canon")に揃える(記述子・deviceinformation の両方の後で)。
+	static void normalizeIdentity(class device& device);
 	// 直前の HTTP 失敗を CCAPI の意味へ翻訳する(503 の本文で理由を言う仕様)。
 	failInfo lastFailure(void) const override;
 	errCode startShooting(void);						// 撮影開始
