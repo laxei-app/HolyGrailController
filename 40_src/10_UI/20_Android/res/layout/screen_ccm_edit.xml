@@ -2,6 +2,7 @@
 <!-- 撮影制御方法ごとの初期値編集(仕様書10 §7.4)。方法に応じてセクションを出し分ける。
      太陽高度・ev はスライダー、露出/露出限界はキーボード入力、色はピッカー。 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical">
@@ -21,6 +22,20 @@
         <ImageView android:id="@+id/edit_menu" android:layout_width="32dp" android:layout_height="32dp"
             android:clickable="true" android:focusable="true" android:src="@drawable/ic_menu_r" />
     </LinearLayout>
+
+    <!-- ページ/型のタブ(2026-09-07 UI依頼)。スワイプは残し、どのページがあるかを見せてタップでも移動できるようにする。 -->
+    <com.google.android.material.tabs.TabLayout
+        android:id="@+id/edit_tabs"
+        android:layout_width="match_parent"
+        android:layout_height="40dp"
+        android:background="#E3F2FD"
+        app:tabMode="scrollable"
+        app:tabGravity="start"
+        app:tabMinWidth="72dp"
+        app:tabTextColor="#455A64"
+        app:tabSelectedTextColor="#0D47A1"
+        app:tabIndicatorColor="#1565C0"
+        app:tabIndicatorHeight="3dp" />
 
     <!-- 初期値プリセット一覧(初期値編集時のみ表示。計画固有編集時は非表示) -->
     <ScrollView android:id="@+id/edit_presetScroll"

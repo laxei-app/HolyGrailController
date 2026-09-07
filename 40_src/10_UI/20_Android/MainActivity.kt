@@ -245,6 +245,71 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private val ccmTextMap = HashMap<Int, Int>()
     // 色の設定画面の状態
     private var colorType = "night"
+
+    // ── タブ(2026-09-07 UI依頼) ──
+    //  撮影計画のページ(撮影計画/薄明/シミュレーション)、撮影制御方法エディタの型、色の設定の型を
+    //  上のタブで見せ、タップで移動できるようにする。スワイプやボタンからの移動はそのまま残し、
+    //  そちらで動いたときはタブの選択だけを追従させる(tabSyncing 中は選択を「操作」と見なさない)。
+    private var tabSyncing = false
+    private val twilightTitles = mutableListOf<String>()   // 薄明ページの名前(ページ順)
+    private val ccmTabKeys = listOf("night", "sunrise", "sunset", "day")
+    private val colorTabKeys = listOf("night", "sunrise", "sunset", "day", "preNight", "postNight")
+    private fun fillTabs(tl: com.google.android.material.tabs.TabLayout, names: List<String>, onPick: (Int) -> Unit) {
+        tabSyncing = true
+        tl.clearOnTabSelectedListeners()
+        tl.removeAllTabs()
+        for (n in names) { tl.addTab(tl.newTab().setText(n)) }
+        tabSyncing = false
+        tl.addOnTabSelectedListener(object : com.google.android.material.tabs.TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: com.google.android.material.tabs.TabLayout.Tab) { if (!tabSyncing) onPick(tab.position) }
+            override fun onTabUnselected(tab: com.google.android.material.tabs.TabLayout.Tab) {}
+            override fun onTabReselected(tab: com.google.android.material.tabs.TabLayout.Tab) {}
+        })
+    }
+    private fun selectTabQuiet(tl: com.google.android.material.tabs.TabLayout, idx: Int) {
+        if (idx < 0 || idx >= tl.tabCount) return
+        if (tl.selectedTabPosition == idx) return
+        tabSyncing = true; tl.getTabAt(idx)?.select(); tabSyncing = false
+    }
+    // 撮影計画のページのタブ。ページ構成(薄明ページの数)が変わるたびに作り直す。
+    private fun rebuildPlanTabs() {
+        val names = mutableListOf(if (tplMode) "ひな形" else "撮影計画")
+        names.addAll(twilightTitles)
+        if (simPage != null) names.add("シミュレーション")
+        val tl = findViewById<com.google.android.material.tabs.TabLayout>(R.id.plan_tabs)
+        fillTabs(tl, names) { i -> planPager.setCurrent(i, true) }
+        selectTabQuiet(tl, planPager.current)
+    }
+    private fun syncPlanTab() {
+        val tl = findViewById<com.google.android.material.tabs.TabLayout>(R.id.plan_tabs) ?: return
+        selectTabQuiet(tl, planPager.current)
+    }
+    // 撮影制御方法エディタの型タブ。切替=今の内容を保存してから次の型を開く(初期値/計画のどちらでも)。
+    private fun ensureCcmTabs() {
+        val tl = findViewById<com.google.android.material.tabs.TabLayout>(R.id.edit_tabs)
+        if (tl.tabCount != ccmTabKeys.size) {
+            fillTabs(tl, listOf("夜間撮影", "朝日撮影", "夕日撮影", "日中撮影")) { i -> switchCcmTab(ccmTabKeys[i]) }
+        }
+        selectTabQuiet(tl, ccmTabKeys.indexOf(editingKey))
+    }
+    private fun switchCcmTab(key: String) {
+        if (key == editingKey) return
+        stopDirtyWatch(); persistCcmEdit()
+        if (editingPlanCcm) openPlanCcmEdit(key) else openPresetScreen(key)
+    }
+    // 色の設定の型タブ。切替=今の色を保存してから次の型を出す。
+    private fun ensureColorTabs() {
+        val tl = findViewById<com.google.android.material.tabs.TabLayout>(R.id.color_tabs)
+        if (tl.tabCount != colorTabKeys.size) {
+            fillTabs(tl, colorTabKeys.map { colorTypeName(it) }) { i -> switchColorTab(colorTabKeys[i]) }
+        }
+        selectTabQuiet(tl, colorTabKeys.indexOf(colorType))
+    }
+    private fun switchColorTab(key: String) {
+        if (key == colorType) return
+        stopDirtyWatch(); saveColorScreen()
+        colorType = key; buildColorScreen()
+    }
     private var gearColorsOpen = false   // メニューの「色の設定」を展開しているか(既定=畳む)
     private var colorTextPicker: com.jaredrummler.android.colorpicker.ColorPickerView? = null
     private var colorBgPicker: com.jaredrummler.android.colorpicker.ColorPickerView? = null
@@ -570,7 +635,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         planPager = findViewById(R.id.plan_pager)
         planFormScroll = findViewById(R.id.plan_formScroll)
         planListScroll = findViewById(R.id.plan_listScroll)
-        planPager.onPageChanged = { updatePagerTitle() }
+        planPager.onPageChanged = { updatePagerTitle(); syncPlanTab() }
         planListContainer = findViewById(R.id.plan_listContainer)
         captureStatus = findViewById(R.id.plan_captureStatus)
         edgeSpinner = findViewById(R.id.plan_edgeSpinner)
@@ -915,21 +980,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         gearItem(box, "撮影計画ひな形") { openTemplates() }
         gearItem(box, "カメラ予約表") { openReserveTable() }   // 項目17
         gearBand(box, "撮影制御方法 初期値")
-        // 項目3: 「月の影響への対処」は撮影制御方法初期値から削除。
-        gearItem(box, "夜間撮影") { openPresetScreen("night") }
-        gearItem(box, "朝日撮影") { openPresetScreen("sunrise") }
-        gearItem(box, "夕日撮影") { openPresetScreen("sunset") }
-        gearItem(box, "日中撮影") { openPresetScreen("day") }
-        // 色は撮影制御方法ごとに持つものなので、帯を立てず初期値の下へ畳んで置く(2026-08-23 UI依頼)。
-        gearExpandItem(box, "色の設定", gearColorsOpen) { gearColorsOpen = !gearColorsOpen; buildGearMenu() }
-        if (gearColorsOpen) {
-            gearColorItem(box, "night", "夜間撮影")
-            gearColorItem(box, "sunrise", "朝日撮影")
-            gearColorItem(box, "sunset", "夕日撮影")
-            gearColorItem(box, "day", "日中撮影")
-            gearColorItem(box, "preNight", "夜間前移行")
-            gearColorItem(box, "postNight", "夜間後移行")
-        }
+        // 【2 項目だけ(2026-09-07 UI依頼)】型(夜間/朝日/夕日/日中)は画面の上のタブで移る。最初は夜間を出す。
+        gearItem(box, "初期値") { openPresetScreen("night") }
+        gearItem(box, "色の設定") { openColorSetting("night") }
         gearBand(box, "自動露出")
         gearItem(box, "露出平滑化") { openSmoothingScreen() }
         gearBand(box, "所持機材")
@@ -1354,6 +1407,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val t = keyType(colorType)
         findViewById<TextView>(R.id.color_title).text = colorTypeName(colorType) + "の色"
         applyHeaderColor(R.id.color_header, R.id.color_title, t)
+        ensureColorTabs()
         val box = findViewById<LinearLayout>(R.id.color_container); box.removeAllViews()
         // 横向きは縦に2分割して 左=文字の色 / 右=背景の色 に並べる(2026-08-30 UI依頼)。
         //  縦向きは従来どおり上下に積む。
@@ -3011,6 +3065,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<TextView>(R.id.edit_title).text = title +
             (if (!editingPlanCcm) "（初期値）" else if (ccmReadOnly) "（この計画・変更不可）" else "（この計画）")
         applyHeaderColor(R.id.edit_header, R.id.edit_title, keyType(key))   // タイトルバーにシステム共通色
+        ensureCcmTabs()
         val showPreset = !editingPlanCcm   // 初期値編集時のみプリセット一覧を出す
         findViewById<View>(R.id.edit_presetScroll).visibility = if (showPreset) View.VISIBLE else View.GONE
         findViewById<View>(R.id.edit_presetDivider).visibility = if (showPreset) View.VISIBLE else View.GONE
@@ -6498,6 +6553,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         for (p in twilightPages) planPager.removeView(p)
         twilightPages.clear()
         schedulePages.clear()
+        twilightTitles.clear()
         val ed = !planReadOnly
         val planName = o.optString("planName")
         o.optJSONArray("blocks")?.let { arr ->
@@ -6524,6 +6580,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 val axisDown = b.optString("axis") == "down"
                 val block = ScheduleView.Block(if (axisDown) "夕方の薄明" else "朝の薄明", axisDown,
                     b.optString("date"), segs, marks)
+                twilightTitles.add(if (axisDown) "夕方の薄明" else "朝の薄明")
                 val sv = ScheduleView(this)
                 sv.onTapType = { t -> ccmTypeToKey[t]?.let { k -> openPlanCcmEdit(k) } }
                 sv.onMoveBoundary = { before, after, occ, altDeg, rising ->
@@ -6575,6 +6632,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         planPager.refreshPages()
         updatePagerTitle()
+        rebuildPlanTabs()
     }
 
     // シミュレーションページの下準備: 恒星(fixed_star.json)を一度読み込み、ページを1度だけ生成する。
