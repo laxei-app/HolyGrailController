@@ -505,6 +505,11 @@ object BuiltinCamera {
     //  (露出制御は露光が終わってから測るので、待つ場所はそちらが正しい)。
     private var pending: CountDownLatch? = null
     private var pendingJpeg: ByteArray? = null
+    // 【救う範囲(2026-09-07 ユーザー指示)】1 フレーム(1 バースト)で撮り直すのは 2 コマまで。それ以上落ちたら
+    //  そのフレームは諦める(次のフレームは予定どおり)。受け取りの予算(apiBuiltin::takeBudgetMs)も 2 コマぶん。
+    //  キヤノン機の「3 回続けて失敗したら手を打つ」と同じ考えで、フレーム 3 連続の失敗は apiBuiltin が
+    //  カメラを開き直す。
+    const val MAX_RETRY_PER_BURST = 2
 
     // 【1コマの経過(2026-09-07 調査用)】どこで画像が来なくなるかがファイルのログに残らず、
     //  夜の失敗(60 コマ中 18 コマ欠け)の原因を追えなかった。要求から受け取りまでの経過を
@@ -660,7 +665,7 @@ object BuiltinCamera {
                     capBufLost++; capMark("bufLost")
                     // 【落ちたぶんは撮り直す(2026-09-07)】同じ要求を 1 枚足す。足りない画像が届けば finish が
                     //  締める。撮り直しも落ちたら諦める(予算切れで LOST になる)。
-                    if (useRaw && replaced < n) {
+                    if (useRaw && replaced < MAX_RETRY_PER_BURST) {
                         replaced++; capMark("retry")
                         runCatching { ss.capture(rq, this, h) }.onFailure { pendingJpeg = null; got.countDown() }
                     } else if (useRaw) { pendingJpeg = null; got.countDown() }

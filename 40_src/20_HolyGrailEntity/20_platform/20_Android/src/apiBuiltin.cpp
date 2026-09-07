@@ -339,9 +339,9 @@ bool apiBuiltin::shootStart(void)
 
 int apiBuiltin::takeBudgetMs(void) const
 {
-	// 露光 + 現像と転送の余裕(8 秒) + 1 コマぶん(ヘッダの説明を参照)。
+	// 露光 + 現像と転送の余裕(8 秒) + 撮り直し 2 コマぶん(ヘッダの説明を参照)。
 	const double sec = this->curSsSec();
-	return static_cast<int>(sec * 1000.0) + 8000 + static_cast<int>(sec / this->stackFrames(sec) * 1000.0);
+	return static_cast<int>(sec * 1000.0) + 8000 + 2 * static_cast<int>(sec / this->stackFrames(sec) * 1000.0);
 }
 
 bool apiBuiltin::shootTake(std::vector<uint8_t>& out)
@@ -379,6 +379,14 @@ void apiBuiltin::collectPending(void)
 		std::snprintf(b, sizeof(b), "builtin frame %s (wait<=%dms) %s",
 		              got ? "ok" : "LOST", to, builtinCam::captureReport().c_str());
 		dataManager::logEvent("CAMERA", b, !got);
+	}
+	// フレームを続けて失ったらカメラを開き直す(HAL の状態を一度捨てる)。次の要求(capture)が開き直す。
+	if (got) { lostStreak_ = 0; }
+	else if (++lostStreak_ >= kMaxLostFrames)
+	{
+		lostStreak_ = 0;
+		dataManager::logEvent("CAMERA", "builtin: frames lost in a row, reopening camera", true);
+		builtinCam::close(); opened_ = false;
 	}
 	if (got)
 	{
