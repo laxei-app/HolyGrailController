@@ -2336,6 +2336,8 @@ int32_t hge_listPlansJson(char* buf, int32_t* inoutLen)
 		     ",\"camName\":\"" + jesc(pc.name) + "\"" +
 		     ",\"camAssignedName\":\"" + jesc(pc.assignedName) + "\"" +
 		     ",\"camSerial\":\"" + jesc(pc.serial) + "\"" +
+		     // この端末でしか撮れないカメラ(内蔵)か。予約表が「端末の中のカメラは同時に 1 つ」と扱うのに使う。
+		     ",\"camLocalOnly\":" + std::string(pc.localOnly ? "true" : "false") +
 		     ",\"tzOffMin\":" + std::to_string(planOff(cs)) +
 		     ",\"state\":" + std::to_string(st) + "}";
 		rows.push_back(std::make_pair(startU, o));

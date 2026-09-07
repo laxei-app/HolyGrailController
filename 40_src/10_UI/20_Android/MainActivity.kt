@@ -4205,7 +4205,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             } catch (_: Exception) { "カメラ" }
             AlertDialog.Builder(this)
                 .setTitle("開始できません")
-                .setMessage("$cam は他の計画で使用中なので開始できません。")
+                .setMessage("$cam は他の計画で使用中なので開始できません。\n(このスマホのカメラは同時に 1 つの計画でしか使えません)")
                 .setPositiveButton("OK", null)
                 .show()
             return
@@ -5138,6 +5138,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val planId: String, val planName: String,
         val camKey: String, val camLabel: String,   // camKey=保存/表示用の識別文字列 / camLabel=帯の表示
         val camModel: String, val camSerial: String, // 同一機体の判定はこの2つで行う(下 sameCamera)
+        val camLocal: Boolean,                       // この端末でしか撮れないカメラ(内蔵)。同時に使えるのは 1 つ
         val edge: String,                            // 端末名(空=スマホで撮影)
         val startMs: Long, val endMs: Long,
         var conflict: Boolean = false)
@@ -5147,8 +5148,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  片方でも未確定なら機種一致で同一とみなす。
     //  ※camKey の文字列一致で判定すると、一度も接続していない計画(シリアル空)が
     //    接続済みの計画(シリアル有り)と別カメラ扱いになり、同じカメラの重複を見逃す。
+    //  【端末の中のカメラは全部で 1 台扱い(2026-09-07 ユーザー指示)】広角と超広角は別の記録だが、端末の
+    //   カメラの入口は 1 つしか無く同時には撮れない。性質(localOnly)で見る(共通部分に内蔵の判断は置かない)。
     private fun sameCamera(a: Reservation, b: Reservation): Boolean =
-        if (a.camSerial.isNotEmpty() && b.camSerial.isNotEmpty()) a.camSerial == b.camSerial
+        if (a.camLocal && b.camLocal) true
+        else if (a.camSerial.isNotEmpty() && b.camSerial.isNotEmpty()) a.camSerial == b.camSerial
         else a.camModel.isNotEmpty() && a.camModel == b.camModel
 
     private val reserveFmt = SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.JAPAN)
@@ -5234,7 +5238,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     if (assignedName.isNotEmpty()) append("  $assignedName")
                     if (serial.isNotEmpty()) append("  Sn:$serial")
                 }
-                list.add(Reservation(id, o.optString("planName"), key, label, model, serial, planEdgeName(id), s, e))
+                list.add(Reservation(id, o.optString("planName"), key, label, model, serial,
+                                     o.optBoolean("camLocalOnly", false), planEdgeName(id), s, e))
             }
         } catch (_: Exception) {}
         list.sortWith(compareBy({ it.camLabel }, { it.startMs }))
