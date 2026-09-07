@@ -1837,7 +1837,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
             box.removeAllViews(); root.removeView(box)
             root.addView(list, bi, LinearLayout.LayoutParams(mp, mdListH[listId] ?: dp(120)))
             root.addView(detail, bi + 2, LinearLayout.LayoutParams(mp, 0, 1f))   // 分割バーの次へ戻す
-            divider.visibility = View.VISIBLE
+            // 一覧が隠れている(計画内の撮影制御方法)ときは分割バーも出さない(2026-09-07 UI指摘。
+            //  初期値→計画内へ切り替えたとき横向きで灰色の棒だけが残っていた)。
+            divider.visibility = if (list.visibility == View.VISIBLE) View.VISIBLE else View.GONE
             mdBoxes.remove(listId)
         }
     }
