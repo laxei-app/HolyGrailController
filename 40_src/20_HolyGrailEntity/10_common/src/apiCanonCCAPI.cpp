@@ -738,11 +738,14 @@ errCode apiCanonCCAPI::getSettings(cmdt::shotRange& settings)
     build(ssRaw,  expo::expoKind::ss,  settings.ss,   ssSend_);
     build(fnRaw,  expo::expoKind::fn,  settings.fNum, fnSend_);
 
+    // 目盛りの刻みはこの層が答える(2026-09-07)。キヤノン機は 1/3 段。表示値(0.3 秒=1/3 秒、1/125=1/128)の
+    //  ずれは APEX を 1/3 段に揃えることで吸収するので、論理値は文字列から作らせてよい(空のまま)。
+    settings.stepStops = 1.0 / 3.0;
+    settings.isoReal.clear(); settings.ssReal.clear(); settings.fnReal.clear();
+
     // 測光用のAPEX換算テーブルも自前で構築する(2026-07-27 setExpoTables廃止)。
     // 設定可能値の中身も表記もカメラ依存なので、この層が ability から作るのが自然な置き場。
-    tables_.iso = expo::buildTable(settings.iso,  expo::expoKind::iso);
-    tables_.ss  = expo::buildTable(settings.ss,   expo::expoKind::ss);
-    tables_.fn  = expo::buildTable(settings.fNum, expo::expoKind::fn);
+    tables_ = expo::tablesFromRange(settings);
 
     // いまカメラに乗っている露出を控える。初期収束(meterHere)がライブビュー測光の出発点に使う。
     // これが無いと「測光したいがカメラが何段の設定なのか分からない」ため上位から渡してもらう

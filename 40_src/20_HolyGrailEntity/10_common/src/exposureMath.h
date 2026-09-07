@@ -8,6 +8,7 @@
 // カメラ I/O には依存しない純粋な計算モジュール(単体テスト可能)。
 
 #include "hgcCommon.h"
+#include "cameraData.h"	// cmdt::shotRange(デバイスが答える設定可能値と刻み)
 #include <cmath>
 #include <cstdint>
 #include <string>
@@ -105,13 +106,18 @@ namespace expo
 		return linear0 * std::pow(2.0, ev);
 	}
 
-	// APEX 値を 1/3 段グリッドに量子化する(最近傍)。
+	// APEX 値を stepStops 段のグリッドに量子化する(最近傍)。
+	//  【刻みは決め打ちしない(2026-09-07)】1/3 段はキヤノン機の語彙。内蔵カメラは 1/12 段。
+	//  刻みはデバイスが答え(cmdt::shotRange::stepStops)、テーブルがそれを覚える(expoTables::stepStops)。
+	double snapStops(double apex, double stepStops);
+	// 1/3 段(旧来の呼び名。標準テーブルと、刻みを言わない呼び出しの既定)。
 	double snapThird(double apex);
 
 	// --- 設定可能値テーブル(データ構造仕様書43 §3.1.1.1 / 仕様書10 §4.2) ---
 	enum class expoKind : uint8_t { iso, ss, fn };
 
-	// テーブルの1要素。value=カメラ設定値文字列、real=実数、apex=1/3段スナップしたAPEX。
+	// テーブルの1要素。value=表示用の文字列(カメラの語彙)、real=論理値(実数)、apex=刻みに揃えたAPEX。
+	//  計算は real と apex で行い、value は表示・ログ・計画の鍵にだけ使う。
 	struct expoEntry
 	{
 		std::string value;
@@ -127,8 +133,11 @@ namespace expo
 	//  t = (35*N + 30*p) / f、p[µm] = sensorW_mm / pixelW * 1000。算出できなければ 0。
 	double npfShutterSec(double sensorW_mm, double pixelW, double focal_mm, double fn);
 
-	// 値文字列群からテーブルを作る(§4.2)。apexを算出し1/3段にスナップ、apex昇順ソート。無効値は除外。
-	std::vector<expoEntry> buildTable(const std::vector<std::string>& values, expoKind k);
+	// 値文字列群からテーブルを作る(§4.2)。apex を算出し stepStops 段に揃え、real 昇順に並べる。無効値は除外。
+	//  reals: 論理値(文字列と同じ並び)。null か長さ違いなら文字列を読み戻して実数にする。
+	std::vector<expoEntry> buildTable(const std::vector<std::string>& values, expoKind k,
+	                                  double stepStops = 1.0 / 3.0,
+	                                  const std::vector<double>* reals = nullptr);
 
 	// 標準テーブル用の値文字列(カメラ未接続時の編集用)。
 	std::vector<std::string> standardValues(expoKind k);			// iso/ss(fnは下記)
@@ -140,13 +149,17 @@ namespace expo
 	//  並びは実数の昇順(ss は速→遅)。
 	std::vector<std::string> presetValues(expoKind k, bool forPhone);
 
-	// iso/ss/fn 三つ分のテーブル。
+	// iso/ss/fn 三つ分のテーブルと、その刻み[段]。
 	struct expoTables
 	{
 		std::vector<expoEntry> iso, ss, fn;
+		double stepStops = 1.0 / 3.0;	// テーブルに無い値を評価するときも同じ刻みに揃える
 	};
-	// 標準テーブル一式(編集用)。fnはレンズの開放〜最小絞り範囲。
+	// 標準テーブル一式(編集用)。fnはレンズの開放〜最小絞り範囲。1/3 段。
 	expoTables standardTables(double fnMin = 1.0, double fnMax = 32.0);
+	// デバイスが答えた設定可能値(文字列・論理値・刻み)からテーブル一式を作る。
+	//  撮影で使うテーブルは必ずここを通す(刻みと論理値を落とさないため)。
+	expoTables tablesFromRange(const cmdt::shotRange& r);
 
 	// 露出(文字列)→明るさ(段)。テーブルでapexを引く(無ければ実数から算出)。大きいほど明るい。
 	double brightnessStops(const hgc::exposure& e, const expoTables& t);

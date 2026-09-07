@@ -1180,6 +1180,79 @@ int main()
 		}
 	}
 
+	// --- 目盛りの刻みはデバイスが答える(2026-09-07) ---
+	//  【背景】共通部分が APEX を 1/3 段に決め打ちで揃えていたため、内蔵カメラの 1/12 段の目盛りが
+	//   4 つずつ同じ APEX に潰れ、1 目盛り動かしても明るさの計算が 0 段のままだった。さらに 1 秒未満を
+	//   「1/整数」で書いた文字列から実数を読み戻していたので、1/3 秒付近の升目が 0.59 段まで粗くなり、
+	//   夕方の露出がのこぎり波(0.7〜1.0 段)になった。刻みと論理値をデバイスから受け取る形にした。
+	{
+		std::printf("--- 目盛りの刻みをデバイスから貰う(1/12 段) ---\n");
+		const int n = 37;	// 0.25 秒から 3 段ぶん(1/12 段 × 36)
+		cmdt::shotRange r;
+		r.stepStops = 1.0 / 12.0;
+		for (int k = 0; k < n; ++k)
+		{
+			const double sec = 0.25 * std::pow(2.0, k / 12.0);
+			char b[32]; std::snprintf(b, sizeof(b), "%.3g", sec);	// 表示用(有効数字 3 桁)
+			r.ss.push_back(b); r.ssReal.push_back(sec);
+		}
+		r.iso.push_back("100"); r.isoReal.push_back(100.0);
+		r.fNum.push_back("2");  r.fnReal.push_back(2.0);
+		const expo::expoTables t = expo::tablesFromRange(r);
+		check(t.stepStops == 1.0 / 12.0, "テーブルがデバイスの刻みを覚える");
+		check(static_cast<int>(t.ss.size()) == n, "1/12 段の目盛りが 1 つも潰れない");
+		bool realKept = true, stepOk = true, brightOk = true;
+		for (int k = 0; k < n; ++k)
+		{
+			if (t.ss[k].real != r.ssReal[k]) { realKept = false; }	// 論理値は文字列を経由しない
+			if (k > 0)
+			{
+				const double d = std::fabs(t.ss[k].apex - t.ss[k - 1].apex);
+				if (std::fabs(d - 1.0 / 12.0) > 1e-9) { stepOk = false; }
+				hgc::exposure e0; e0.iso = "100"; e0.fn = "2"; e0.ss = t.ss[k - 1].value;
+				hgc::exposure e1 = e0; e1.ss = t.ss[k].value;
+				const double db = expo::brightnessStops(e1, t) - expo::brightnessStops(e0, t);
+				if (std::fabs(db - 1.0 / 12.0) > 1e-9) { brightOk = false; }
+			}
+		}
+		check(realKept, "real はデバイスの論理値そのもの(文字列から読み戻さない)");
+		check(stepOk,   "隣り合う目盛りの APEX 差がきっかり 1/12 段");
+		check(brightOk, "brightnessStops も 1 目盛り = 1/12 段");
+		{
+			expo::exposureCtl ctl;
+			const hgc::exposure noLim{};
+			const hgc::exposureType pri[hgc::exposureTypeNum] =
+				{ hgc::exposureType::ss, hgc::exposureType::iso, hgc::exposureType::fn };
+			ctl.init(t, noLim, noLim, pri);
+			hgc::exposure cur; cur.iso = "100"; cur.fn = "2"; cur.ss = t.ss[12].value;
+			ctl.setCurrent(cur);
+			check(std::fabs(ctl.minStepStops() - 1.0 / 12.0) < 1e-9, "exposureCtl の 1 目盛りが 1/12 段");
+		}
+		// 刻みを言わない(=キヤノンの 1/3 段)と、同じ並びは 1/3 段に潰れる。これが以前の内蔵カメラの姿。
+		{
+			cmdt::shotRange r3 = r; r3.stepStops = 1.0 / 3.0; r3.ssReal.clear();
+			const expo::expoTables t3 = expo::tablesFromRange(r3);
+			int distinct = 1;
+			for (int k = 1; k < static_cast<int>(t3.ss.size()); ++k)
+			{ if (std::fabs(t3.ss[k].apex - t3.ss[k - 1].apex) > 1e-9) { ++distinct; } }
+			check(distinct == 10, "1/3 段のまま作ると 37 目盛りが 10 段階に潰れる(修正前の再現)");
+		}
+		// キヤノンの表示値は従来どおり 1/3 段に揃う(0.3 秒=1/3 秒、1/125=1/128)。
+		{
+			cmdt::shotRange rc;
+			rc.ss = { "1/125", "1/100", "1/80", "0.3", "0.4", "0.5" };
+			rc.iso = { "100" }; rc.fNum = { "2" };
+			const expo::expoTables tc = expo::tablesFromRange(rc);
+			bool third = true;	// どの目盛りも 1/3 段の格子の上(0.3 秒は 1/3 秒として 1.667 に揃う)
+			for (const auto& e : tc.ss)
+			{
+				const double g = e.apex * 3.0;
+				if (std::fabs(g - std::round(g)) > 1e-9) { third = false; }
+			}
+			check(tc.stepStops == 1.0 / 3.0 && third, "刻みを言わないキヤノンは従来どおり 1/3 段");
+		}
+	}
+
 	std::printf("\n%s (fail=%d)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail);
 	return g_fail == 0 ? 0 : 1;
 }

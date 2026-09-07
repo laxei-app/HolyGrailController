@@ -287,10 +287,8 @@ namespace builtinCam
 			cs.ccm.sunset = set.sunset; cs.ccm.day = set.day;
 
 			// 値は並びから選んでいるので目盛りに乗っているが、念のため吸着させておく。
-			expo::expoTables t;
-			t.iso = expo::buildTable(api->isoList(), expo::expoKind::iso);
-			t.ss  = expo::buildTable(api->ssList(),  expo::expoKind::ss);
-			t.fn  = expo::buildTable(api->fnList(),  expo::expoKind::fn);
+			//  テーブルは文字列から作り直さず、デバイスのもの(論理値と 1/12 段の刻み入り)を使う。
+			const expo::expoTables& t = api->tables();
 			for (const hgc::ccmType ty : { hgc::ccmType::night, hgc::ccmType::sunrise,
 			                               hgc::ccmType::sunset, hgc::ccmType::day })
 			{

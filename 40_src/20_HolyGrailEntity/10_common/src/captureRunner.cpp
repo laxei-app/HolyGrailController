@@ -940,9 +940,8 @@ bool captureRunner::establishSession(void)
 	if (cameraController::getSettings(*dev_, range) == ERR_HGC_OK &&
 	    !range.iso.empty() && !range.ss.empty() && !range.fNum.empty())
 	{
-		tables_.iso = expo::buildTable(range.iso,  expo::expoKind::iso);
-		tables_.ss  = expo::buildTable(range.ss,   expo::expoKind::ss);
-		tables_.fn  = expo::buildTable(range.fNum, expo::expoKind::fn);
+		// 刻み(1/3 段か 1/12 段か)と論理値はデバイスが答える。ここで決め打ちしない(2026-09-07)。
+		tables_ = expo::tablesFromRange(range);
 	}
 	else
 	{	// 取得失敗時は標準テーブル(レンズのf範囲)でフォールバック
@@ -1026,9 +1025,7 @@ void captureRunner::establishSubSessions(void)
 		if (cameraController::getSettings(*sc.dev, range) == ERR_HGC_OK &&
 		    !range.iso.empty() && !range.ss.empty() && !range.fNum.empty())
 		{
-			sc.tables.iso = expo::buildTable(range.iso,  expo::expoKind::iso);
-			sc.tables.ss  = expo::buildTable(range.ss,   expo::expoKind::ss);
-			sc.tables.fn  = expo::buildTable(range.fNum, expo::expoKind::fn);
+			sc.tables = expo::tablesFromRange(range);
 		}
 		else
 		{	// 取得失敗時は主カメラのテーブルを借りる(丸めなしと同等になる)。

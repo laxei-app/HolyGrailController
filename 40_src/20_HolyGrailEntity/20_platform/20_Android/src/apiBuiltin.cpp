@@ -30,23 +30,32 @@ namespace
 std::string apiBuiltin::ssText(double sec)
 {
 	char b[32];
-	// 【分母で場合分けする(2026-09-05 実機で判明)】「1秒以上か」で分けると、1秒をほんの少し
-	//  下回る値(0.9999秒)が "1/1" になり、1秒ちょうどの "1" と**同じ値が2通りの綴り**で
-	//  並ぶ。並びに同じ値が入ると、その間の1目盛りが 0段 になり露出制御が空回りする。
-	//  丸めた分母が 1 になるものは秒の書き方へ寄せて、綴りを1つに保つ。
-	const int denom = static_cast<int>(1.0 / sec + 0.5);
-	if (denom <= 1)
+	// 【読み戻して同じ升目に落ちる精度で書く(2026-09-07)】1/12 段の升目は幅 5.9%。文字列の誤差は
+	//  その半分(2.9%)より十分小さくする。
+	//  ・1/50 秒より速い側は分母を整数にした分数(誤差 ≤ 1%。カメラの表記に合わせる)
+	//  ・それ以外は秒を有効数字 3 桁(誤差 ≤ 0.5%。0.0212 / 0.333 / 1.06 / 30.8 / 48)
+	//  以前は 1 秒未満をすべて「1/整数」にしていて、1/8〜1/2 秒で升目が潰れ(1/3→1/2 は 0.59 段)、
+	//  夕方の露出がのこぎり波になった。
+	if (sec < 0.02)
 	{
-		// 1秒以上は小数1桁まで。きりのよい値は整数で書く(ログが読みやすい)。
-		if (std::fabs(sec - std::floor(sec + 0.5)) < 0.05) { std::snprintf(b, sizeof(b), "%d", static_cast<int>(sec + 0.5)); }
-		else                                               { std::snprintf(b, sizeof(b), "%.1f", sec); }
+		const int denom = static_cast<int>(1.0 / sec + 0.5);
+		std::snprintf(b, sizeof(b), "1/%d", denom);
 	}
 	else
 	{
-		// 1秒未満は分数。分母は整数へ丸める(カメラの表記に合わせる)。
-		std::snprintf(b, sizeof(b), "1/%d", denom);
+		std::snprintf(b, sizeof(b), "%.3g", sec);
 	}
 	return std::string(b);
+}
+
+double apiBuiltin::realOf(const std::vector<std::string>& list, const std::vector<double>& reals,
+                          const std::string& v, expo::expoKind k)
+{
+	if (reals.size() == list.size())
+	{
+		for (size_t i = 0; i < list.size(); ++i) { if (list[i] == v) { return reals[i]; } }
+	}
+	return expo::parseValue(v, k);
 }
 
 std::string apiBuiltin::isoText(int iso)
@@ -70,6 +79,16 @@ std::string apiBuiltin::fnText(double fn)
 void apiBuiltin::buildTables(void)
 {
 	ssList_.clear(); isoList_.clear(); fnList_.clear();
+	ssReal_.clear(); isoReal_.clear(); fnReal_.clear();
+
+	// 論理値は 1/kStepStops 段の等比で作り、文字列はその表示。同じ文字列が続いたら(刻みが細かすぎて
+	//  表示が追いつかない所)後の方を捨てる。捨てるのは論理値も一緒(並びと長さを揃える)。
+	auto push = [](std::vector<std::string>& texts, std::vector<double>& reals,
+	               const std::string& t, double r)
+	{
+		if (!texts.empty() && texts.back() == t) { return; }
+		texts.push_back(t); reals.push_back(r);
+	};
 
 	// --- ss(短い=暗い側 から 長い=明るい側 へ。apex 昇順は上位が作る) ---
 	//  上端はセンサーの上限ではなく「加算込みで設定できる上限」(RAW が出せれば 48 秒)。
@@ -81,52 +100,43 @@ void apiBuiltin::buildTables(void)
 		if (hi < lo) { std::swap(lo, hi); }
 		const double span = std::log2(hi / lo);
 		const int    n    = static_cast<int>(span / kStepStops + 0.5);
-		std::string prev;
 		for (int k = 0; k <= n; ++k)
 		{
-			const double t = lo * std::pow(2.0, kStepStops * k);
-			const std::string s = ssText(t > hi ? hi : t);
-			if (s != prev) { ssList_.push_back(s); prev = s; }
+			double t = lo * std::pow(2.0, kStepStops * k);
+			if (t > hi) { t = hi; }
+			push(ssList_, ssReal_, ssText(t), t);
 		}
-		const std::string top = ssText(hi);
-		if (ssList_.empty() || ssList_.back() != top) { ssList_.push_back(top); }
+		push(ssList_, ssReal_, ssText(hi), hi);
 	}
 
-	// --- iso ---
+	// --- iso(整数。論理値も整数に丸めた値=カメラへ渡す値そのもの) ---
 	{
 		int lo = (isoMin_ > 0) ? isoMin_ : kFallbackIsoMin;
 		int hi = (isoMax_ > 0) ? isoMax_ : kFallbackIsoMax;
 		if (hi < lo) { std::swap(lo, hi); }
 		const double span = std::log2(static_cast<double>(hi) / lo);
 		const int    n    = static_cast<int>(span / kStepStops + 0.5);
-		std::string prev;
 		for (int k = 0; k <= n; ++k)
 		{
 			int v = static_cast<int>(lo * std::pow(2.0, kStepStops * k) + 0.5);
 			if (v > hi) { v = hi; }
-			const std::string s = isoText(v);
-			if (s != prev) { isoList_.push_back(s); prev = s; }
+			push(isoList_, isoReal_, isoText(v), static_cast<double>(v));
 		}
-		const std::string top = isoText(hi);
-		if (isoList_.empty() || isoList_.back() != top) { isoList_.push_back(top); }
+		push(isoList_, isoReal_, isoText(hi), static_cast<double>(hi));
 	}
 
 	// --- F値。多くの端末は固定(1点)。可変ならそのまま並べる ---
-	if (apertures_.empty()) { fnList_.push_back(fnText(kFallbackFn)); }
+	if (apertures_.empty()) { push(fnList_, fnReal_, fnText(kFallbackFn), kFallbackFn); }
 	else
 	{
-		std::string prev;
-		for (double a : apertures_)
-		{
-			const std::string s = fnText(a);
-			if (s != prev) { fnList_.push_back(s); prev = s; }
-		}
+		for (double a : apertures_) { push(fnList_, fnReal_, fnText(a), a); }
 	}
 
-	// 測光値の割り戻しに使う APEX テーブル。上位が作るものと同じ手順で作る。
-	tables_.iso = expo::buildTable(isoList_, expo::expoKind::iso);
-	tables_.ss  = expo::buildTable(ssList_,  expo::expoKind::ss);
-	tables_.fn  = expo::buildTable(fnList_,  expo::expoKind::fn);
+	// 測光値の割り戻しに使う APEX テーブル。撮影側(captureRunner)が getSettings から作るものと
+	//  同じ経路(tablesFromRange)で作る。刻みは kStepStops、論理値は上の実数。
+	cmdt::shotRange r;
+	this->getSettings(r);
+	tables_ = expo::tablesFromRange(r);
 }
 
 // ── 素性 ────────────────────────────────────────────────────
@@ -244,6 +254,11 @@ errCode apiBuiltin::getSettings(cmdt::shotRange& settings)
 	settings.ss   = ssList_;
 	settings.iso  = isoList_;
 	settings.fNum = fnList_;
+	// 刻みと論理値も答える(2026-09-07)。共通部分はこれでテーブルを作り、1/12 段で制御する。
+	settings.stepStops = kStepStops;
+	settings.ssReal    = ssReal_;
+	settings.isoReal   = isoReal_;
+	settings.fnReal    = fnReal_;
 	return ERR_HGC_OK;
 }
 
@@ -310,15 +325,15 @@ errCode apiBuiltin::restoreShootingMode(void)
 // ── 撮る ────────────────────────────────────────────────────
 double apiBuiltin::curSsSec(void) const
 {
-	const double sec = expo::parseValue(curSs_, expo::expoKind::ss);
+	const double sec = realOf(ssList_, ssReal_, curSs_, expo::expoKind::ss);	// 論理値(文字列は鍵)
 	return (sec > 0.0) ? sec : 1.0;
 }
 
 bool apiBuiltin::shootStart(void)
 {
 	const double sec = this->curSsSec();
-	const double iso = expo::parseValue(curIso_, expo::expoKind::iso);
-	const double fn  = expo::parseValue(curFn_,  expo::expoKind::fn);
+	const double iso = realOf(isoList_, isoReal_, curIso_, expo::expoKind::iso);
+	const double fn  = realOf(fnList_,  fnReal_,  curFn_,  expo::expoKind::fn);
 	// 【センサーの上限を超える ss は分けて撮って足す(2026-09-06)】24 秒なら 8 秒×3 コマ。
 	//  1コマの長さは等分にする(最後だけ短い、より読み出しの隙間が揃う)。
 	const int    frames = this->stackFrames(sec);

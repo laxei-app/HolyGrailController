@@ -119,18 +119,26 @@ public:
 	double maxSettableSsSec(void) const;
 	// ss[秒] を撮るのに要るコマ数(1=足さない)。
 	int stackFrames(double sec) const;
-	// 設定可能値(ひな形の露出をこの並びへ吸着させる)。
+	// 設定可能値(ひな形の露出をこの並びへ吸着させる)。表示用の文字列。
 	const std::vector<std::string>& isoList(void) const { return isoList_; }
 	const std::vector<std::string>& ssList(void)  const { return ssList_; }
 	const std::vector<std::string>& fnList(void)  const { return fnList_; }
+	// 論理値と刻みを含むテーブル(ひな形の吸着はこれで行う。文字列から作り直さない)。
+	const expo::expoTables& tables(void) const { return tables_; }
 
 private:
-	// 値の文字列と、カメラへ渡す実数の対応。文字列は上位(テーブル/ログ/計画)が使う形。
+	// 【論理値と表示用の文字列を分けて持つ(2026-09-07 ユーザー指示)】キヤノン機と同じ形。
+	//  計算(テーブルの real/apex、カメラへ渡す露光時間)は 1/12 段で計算した実数を使い、
+	//  文字列は表示・ログ・計画の鍵にだけ使う。文字列は読み戻しても同じ升目に落ちる精度で書く
+	//  (以前の「1/整数」は 1/3 秒付近で 0.08 段ずれ、升目を取り違えていた)。
 	static std::string ssText(double sec);
 	static std::string isoText(int iso);
 	static std::string fnText(double fn);
+	// 文字列 → 論理値。並びの中に同じ文字列があればその実数、無ければ読み戻す。
+	static double realOf(const std::vector<std::string>& list, const std::vector<double>& reals,
+	                     const std::string& v, expo::expoKind k);
 
-	// 範囲から 1/kStepStops 段刻みの並びを作る。両端は必ず含める。
+	// 範囲から 1/kStepStops 段刻みの並び(論理値と文字列)を作る。両端は必ず含める。
 	void buildTables(void);
 
 	// いま載っている露出で1枚撮り始める(露光の終わりは待たない)。
@@ -158,9 +166,10 @@ private:
 	// 星を消すノイズリダクションを切れるか(切れれば端末の映像処理をそのまま使える)。
 	bool     nrOff_ = false, nrMinimal_ = false, edgeOff_ = false, rawOk_ = false;
 
-	// 合成した設定可能値と、その APEX テーブル。
+	// 合成した設定可能値(表示用の文字列と論理値。同じ並び・同じ長さ)と、その APEX テーブル。
 	//  テーブルは測光値を「露出非依存の場面の明るさ」へ割り戻すのに要る(apiBase には無い)。
 	std::vector<std::string> ssList_, isoList_, fnList_;
+	std::vector<double>      ssReal_, isoReal_, fnReal_;
 	expo::expoTables tables_;
 
 	// いま載せている露出(要求ごとに渡すので、ここが唯一の状態)

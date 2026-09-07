@@ -6,10 +6,17 @@
 
 namespace expo
 {
-	// APEX 値を 1/3 段に量子化する。
+	// APEX 値を stepStops 段のグリッドに量子化する。
+	double snapStops(double apex, double stepStops)
+	{
+		const double step = (stepStops > 0.0) ? stepStops : (1.0 / 3.0);
+		return std::round(apex / step) * step;
+	}
+
+	// 1/3 段(標準テーブルと、刻みを言わない呼び出しの既定)。
 	double snapThird(double apex)
 	{
-		return std::round(apex * 3.0) / 3.0;
+		return snapStops(apex, 1.0 / 3.0);
 	}
 
 	// 測光リニア輝度とその露出設定から ev0 のリニア輝度を求める(仕様 4.3.3 環境光 + 4.3.4)。
@@ -93,17 +100,21 @@ namespace expo
 		}
 	}
 
-	std::vector<expoEntry> buildTable(const std::vector<std::string>& values, expoKind k)
+	std::vector<expoEntry> buildTable(const std::vector<std::string>& values, expoKind k,
+	                                  double stepStops, const std::vector<double>* reals)
 	{
 		std::vector<expoEntry> t;
-		for (const auto& v : values)
+		// 論理値は文字列と同じ並びで来る。長さが合わなければ信用せず文字列から作る。
+		const bool useReals = (reals != nullptr && reals->size() == values.size());
+		for (size_t i = 0; i < values.size(); ++i)
 		{
-			double r = parseValue(v, k);
+			const std::string& v = values[i];
+			double r = useReals ? (*reals)[i] : parseValue(v, k);
 			if (r <= 0.0) { continue; }	// 無効値(Bulb等)は除外
 			expoEntry e;
 			e.value = v;
 			e.real  = r;
-			e.apex  = snapThird(apexOf(r, k));
+			e.apex  = snapStops(apexOf(r, k), stepStops);
 			t.push_back(e);
 		}
 		// real 昇順(iso/ss は idx↑で明るい、fn は idx↑で暗い、になるよう)。
@@ -226,17 +237,28 @@ namespace expo
 		t.iso = buildTable(standardValues(expoKind::iso), expoKind::iso);
 		t.ss  = buildTable(standardValues(expoKind::ss),  expoKind::ss);
 		t.fn  = buildTable(standardFn(fnMin, fnMax),       expoKind::fn);
+		t.stepStops = 1.0 / 3.0;
+		return t;
+	}
+
+	expoTables tablesFromRange(const cmdt::shotRange& r)
+	{
+		expoTables t;
+		t.stepStops = (r.stepStops > 0.0) ? r.stepStops : (1.0 / 3.0);
+		t.iso = buildTable(r.iso,  expoKind::iso, t.stepStops, &r.isoReal);
+		t.ss  = buildTable(r.ss,   expoKind::ss,  t.stepStops, &r.ssReal);
+		t.fn  = buildTable(r.fNum, expoKind::fn,  t.stepStops, &r.fnReal);
 		return t;
 	}
 
 	namespace
 	{
-		// 露出値文字列の apex をテーブルから引く。無ければ実数から算出。無効は 0。
-		double apexFromTable(const std::vector<expoEntry>& tab, const std::string& v, expoKind k)
+		// 露出値文字列の apex をテーブルから引く。無ければ実数から算出(テーブルと同じ刻みに揃える)。無効は 0。
+		double apexFromTable(const std::vector<expoEntry>& tab, const std::string& v, expoKind k, double stepStops)
 		{
 			for (const auto& e : tab) { if (e.value == v) { return e.apex; } }
 			double r = parseValue(v, k);
-			return (r > 0.0) ? snapThird(apexOf(r, k)) : 0.0;
+			return (r > 0.0) ? snapStops(apexOf(r, k), stepStops) : 0.0;
 		}
 
 		int nearestIndexReal(const std::vector<expoEntry>& e, double real)
@@ -255,9 +277,9 @@ namespace expo
 	double brightnessStops(const hgc::exposure& e, const expoTables& t)
 	{
 		// Sv - Av - Tv。Sv↑=明るい、Av↑(大F)=暗い、Tv↑(短秒)=暗い。
-		return apexFromTable(t.iso, e.iso, expoKind::iso)
-		     - apexFromTable(t.fn,  e.fn,  expoKind::fn)
-		     - apexFromTable(t.ss,  e.ss,  expoKind::ss);
+		return apexFromTable(t.iso, e.iso, expoKind::iso, t.stepStops)
+		     - apexFromTable(t.fn,  e.fn,  expoKind::fn,  t.stepStops)
+		     - apexFromTable(t.ss,  e.ss,  expoKind::ss,  t.stepStops);
 	}
 
 	// --- exposureCtl(テーブル基準) ---

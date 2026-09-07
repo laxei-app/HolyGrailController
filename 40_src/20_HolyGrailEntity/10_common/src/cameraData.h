@@ -21,6 +21,14 @@ namespace cmdt
 		std::vector<std::string> ss;
 		std::vector<std::string> iso;
 		std::vector<std::string> fNum;
+		// 【目盛りの刻み[段]と論理値(2026-09-07)】上の文字列は表示用。計算はここから作る。
+		//  刻みはデバイスが答える(キヤノン=1/3 段、内蔵カメラ=1/12 段)。共通部分は決め打ちしない。
+		//  論理値(実数)は文字列と同じ並び・同じ長さで渡す。空なら文字列を読み戻して実数にする
+		//  (キヤノンは表示値=カメラの語彙なので空でよい。内蔵カメラは 1/12 段の実数をそのまま渡す)。
+		double stepStops = 1.0 / 3.0;
+		std::vector<double> ssReal;
+		std::vector<double> isoReal;
+		std::vector<double> fnReal;
 //		range ct;		// color temperature
 //		range cs;		// color shift
 	};

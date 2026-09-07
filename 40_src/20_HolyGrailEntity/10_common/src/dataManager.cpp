@@ -1385,10 +1385,19 @@ int dataManager::recordConnectedCameraStatus(const device& dev, bool allowAdd)
 				//  登録の瞬間には取れないことがある。認証が要る機体は、ユーザーが
 				//  ユーザーID/パスワードを入れるまでCCAPIを読めないため(実測 EOS R50 V の1台)。
 				//  撮影で繋いだときは認証を通っているので、そこで埋まる。
-				if ((oc.cam.isoList.empty() || oc.cam.ssList.empty()) && fillListsFromCamera(dev, oc.cam))
+				//  【端末が管理する記録(readOnly)は毎回デバイスに合わせる(2026-09-07)】内蔵カメラの目盛りは
+				//   端末が合成するもので、書式や刻みが変わったら記録も変わるべき。ユーザーが編集できない
+				//   記録なので上書きしてよい。違うときだけ書き換える(毎回保存しない)。
+				if (oc.cam.readOnly || oc.cam.isoList.empty() || oc.cam.ssList.empty())
 				{
-					logEvent("GEAR", (oc.cam.model + " iso/ss taken from camera (S/N " + dev.serialno + ")").c_str());
-					changed = true;
+					hgc::camera fresh = oc.cam;
+					if (fillListsFromCamera(dev, fresh) &&
+					    (fresh.isoList != oc.cam.isoList || fresh.ssList != oc.cam.ssList))
+					{
+						oc.cam.isoList = fresh.isoList; oc.cam.ssList = fresh.ssList;
+						logEvent("GEAR", (oc.cam.model + " iso/ss taken from camera (S/N " + dev.serialno + ")").c_str());
+						changed = true;
+					}
 				}
 				if (changed) { saveOwnedCameras(); }
 				return static_cast<int>(camApply::updated);
