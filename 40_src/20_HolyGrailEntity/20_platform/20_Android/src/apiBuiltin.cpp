@@ -201,8 +201,10 @@ double apiBuiltin::maxSettableSsSec(void) const
 int apiBuiltin::stackFrames(double sec) const
 {
 	const double hw = this->maxSsSec();
-	if (!rawOk_ || hw <= 0.0 || sec <= hw + 1e-6) { return 1; }
-	return static_cast<int>(std::ceil(sec / hw - 1e-9));
+	if (!rawOk_ || hw <= 0.0) { return 1; }
+	const double sub = hw * kSubExposureRatio;	// 1 コマの上限(ヘッダの説明を参照)
+	if (sec <= sub + 1e-6) { return 1; }
+	return static_cast<int>(std::ceil(sec / sub - 1e-9));
 }
 
 errCode apiBuiltin::readDeviceStatus(deviceStatus& out)
