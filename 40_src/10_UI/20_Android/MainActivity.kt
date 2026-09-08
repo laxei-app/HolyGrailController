@@ -4583,7 +4583,78 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun startBlink() { handler.removeCallbacks(planBlink); blinkOn = true; handler.postDelayed(planBlink, 500) }
     private fun stopBlink() { handler.removeCallbacks(planBlink) }
 
+    // ── 撮影中の画面消灯(案A。2026-09-08 ユーザー指示) ──────────────────────────
+    // 【なぜ「点けたまま真っ黒」か】本当に画面を消す(電源ボタン/自動スリープ)と、前面アプリでなくなり
+    //  内蔵カメラはシステムに止められ、外部カメラへの Wi-Fi も省電力(Doze)で絞られる。それを避けるには
+    //  フォアグラウンドサービス・ウェイクロック・電池最適化の除外が要り、端末ごとの検証も要る。
+    //  代わりに「システムに消させない(keep screen on)」+「全面黒の覆い+明るさ最小」にする。
+    //  有機 EL(Pixel 6)では黒い画素は光らず、実質消灯と同じ。撮影経路には一切影響しない。
+    // 【いつ】スマホ直結の撮影(内蔵カメラ/外部カメラ)が待機中・撮影中・未検出のいずれかにある間だけ。
+    //  エッジで撮っている計画は対象外。撮影が全部終わったら覆いを外し、keep screen on も戻す。
+    // 【操作】開始から 1 分、または最後のタッチから 1 分で黒くなる。どこかをタッチすると戻る
+    //  (そのタッチは下の画面へ渡さない=誤操作にならない)。以後また 1 分放置で黒くなる。
+    // 【注意】電源ボタンで物理的に消すとこれまでどおり撮影が止まり得る(案Aはそこを防がない)。
+    private var dimView: View? = null
+    private var dimArmed = false
+    private val kDimDelayMs = 60_000L
+    private val dimRunnable = Runnable { showDim() }
+
+    private fun localCaptureActive(): Boolean =
+        (capturingPlans + waitingPlans + disconnectedPlans).any { planEdgeName(it).isEmpty() }
+
+    private fun updateDimPolicy() {
+        val active = localCaptureActive()
+        if (active && !dimArmed) {
+            dimArmed = true
+            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            scheduleDim()
+        } else if (!active && dimArmed) {
+            dimArmed = false
+            handler.removeCallbacks(dimRunnable)
+            hideDim()
+            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    private fun scheduleDim() {
+        handler.removeCallbacks(dimRunnable)
+        if (dimArmed) handler.postDelayed(dimRunnable, kDimDelayMs)
+    }
+
+    private fun showDim() {
+        if (!dimArmed || dimView != null) return
+        val root = findViewById<ViewGroup>(android.R.id.content) ?: return
+        val v = View(this).apply {
+            setBackgroundColor(Color.BLACK)
+            isClickable = true; isFocusable = true
+            elevation = 10_000f   // どの画面・ダイアログ枠より手前
+            setOnTouchListener { _, ev ->
+                if (ev.action == MotionEvent.ACTION_DOWN) { hideDim(); scheduleDim() }
+                true   // 覆いを外すためのタッチは下へ渡さない
+            }
+        }
+        root.addView(v, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        dimView = v
+        // 明るさは最小に(0.0 は端末によってバックライトを完全に落とす扱いなので、その一歩手前)。
+        window.attributes = window.attributes.apply { screenBrightness = 0.01f }
+    }
+
+    private fun hideDim() {
+        dimView?.let { (it.parent as? ViewGroup)?.removeView(it) }
+        dimView = null
+        window.attributes = window.attributes.apply {
+            screenBrightness = android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        }
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        // 覆いが出ていない間のタッチは「放置の始まり」を更新する(覆いが出ている間は覆い自身が処理)。
+        if (dimArmed && dimView == null && ev.action == MotionEvent.ACTION_DOWN) scheduleDim()
+        return super.dispatchTouchEvent(ev)
+    }
+
     override fun onDestroy() {
+        handler.removeCallbacks(dimRunnable)
         handler.removeCallbacks(edgePoll)
         handler.removeCallbacks(edgeSweep)
         handler.removeCallbacks(edgeTimeSync)
@@ -4717,6 +4788,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                             }
                         }
                         refreshPlanList(); updateReadOnly()
+                        updateDimPolicy()   // スマホ直結の撮影中は 1 分で画面を真っ黒にする(案A)
                     }
                     // 表示中の計画の状態をステータス表示(項目6: 選択中の計画に紐付く)。
                     refreshCaptureStatusForCurrent()
