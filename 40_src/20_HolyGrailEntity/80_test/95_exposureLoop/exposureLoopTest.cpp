@@ -46,26 +46,15 @@ static double linearAtExposure(double sceneRef, const hgc::exposure& e, const ex
 	if (sceneRef <= 0.0) { return -1.0; }
 	return sceneRef * std::pow(2.0, expo::brightnessStops(e, t));
 }
-// 移動平均の遅れを傾きで補う式(= captureRunner::sceneNowFromBuf)。項目7と項目8で共有する。
-static const double kSceneLeadMaxStops = 1.5;	// = captureRunner::kSceneLeadMaxStops
+// 移動平均(段の平均。先読みなし)(= captureRunner::sceneNowFromBuf)。項目7と項目8で共有する。
+//  2026-09-09 に「傾き × (n-1)/2 の先読み」を外した(デッドゾーン制御では過補正になるため)。
 static double sceneNowFromBufRef(const std::vector<double>& buf)
 {
-	std::vector<double> l;
-	for (double v : buf) { if (v > 0.0) { l.push_back(std::log2(v)); } }
-	if (l.empty()) { return -1.0; }
 	double mean = 0.0;
-	for (double v : l) { mean += v; }
-	mean /= static_cast<double>(l.size());
-	if (l.size() < 3) { return std::pow(2.0, mean); }
-	std::vector<double> d;
-	for (size_t i = 1; i < l.size(); ++i) { d.push_back(l[i] - l[i - 1]); }
-	std::sort(d.begin(), d.end());
-	const size_t m = d.size() / 2;
-	const double slope = (d.size() % 2 != 0) ? d[m] : (d[m - 1] + d[m]) / 2.0;
-	double lead = slope * (static_cast<double>(l.size()) - 1.0) / 2.0;
-	if (lead >  kSceneLeadMaxStops) { lead =  kSceneLeadMaxStops; }
-	if (lead < -kSceneLeadMaxStops) { lead = -kSceneLeadMaxStops; }
-	return std::pow(2.0, mean + lead);
+	int n = 0;
+	for (double v : buf) { if (v > 0.0) { mean += std::log2(v); ++n; } }
+	if (n == 0) { return -1.0; }
+	return std::pow(2.0, mean / static_cast<double>(n));
 }
 static const double kStep = 1.0 / 3.0;
 // 撮影中は必ず1ステップ(=1/3段)に留める(2026-07-24: 境目の多段ジャンプ禁止)。captureRunner と同値。
@@ -269,76 +258,50 @@ int main()
 		check(kFloor >= 2.27 * kStep - 1e-9, "下限は実測γの上側(2.27)×1歩=0.76段以上");
 	}
 
-	// --- 7) 移動平均の遅れを傾きで補う(2026-08-02 案C')。captureRunner::sceneNowFromBuf と同じ式 ---
+	// --- 7) 移動平均は段の平均だけ(先読みなし)。captureRunner::sceneNowFromBuf と同じ式 ---
 	//
-	// 【背景】2026-08-01 の postNight で、写真が目標より最大 1.45段 明るくなった(IMG_4627)。
-	//  内訳は ヒステリシス帯 +0.50段 と 移動平均の遅れ +0.92段 で、主犯は後者。
-	//  n点平均は (n-1)/2 コマ遅れた値になり、遅れ[段] = 変化速度[段/コマ] × (n-1)/2。
-	//  空が 0.09段/コマ の間は 0.18段 だが、夜明けが 0.46段/コマ に加速すると 0.92段 に膨らむ。
-	//  「一部の時間帯だけ明るくずれる」のはこれが理由で、一定量のヒステリシスでは説明できない。
+	// 【経緯】2026-08-02 に「傾き × (n-1)/2 の先読み」を足した(夜明け 0.46 段/コマで平均が 0.92 段
+	//  遅れ、写真が 1.45 段明るくずれた対策。当時は帯を越えたら中央まで戻す方式)。
+	//  2026-09-08 にデッドゾーン制御(縁までの差だけ毎コマ動かす)へ変えたところ、先読みが害になった:
+	//  上がり方が鈍った後も傾きが 2〜3 コマ残り、生の測光が縁の内側に入っても暗くし続ける
+	//  (2026-09-09 朝の実測: 0.4 段・6 コマ周期の往復)。2026-09-09 に先読みを外した。
 	//
 	// 【このテストが固定する仕様】
-	//  ・一定速度の変化では遅れが 0 になること
-	//  ・1コマだけの外れ値(車のライト等)に対し、単純平均と同程度にしか反応しないこと
-	//    (最小二乗の傾きだと3倍に過剰反応し、消えた後に逆振れする。だから差分の中央値を使う)
-	//  ・外挿量は上限で頭打ちになること
+	//  ・平均は「バッファの最小〜最大」の中に収まる(先読みで真値を追い越さない)
+	//  ・上がり方が止まった直後でも、最後の値より明るい側へ出ない(過補正の元を作らない)
+	//  ・1コマだけの外れ値には 1/n しか反応しない(雲・車のライトの吸収)
+	//  ・有効な値が無ければ -1
 	{
-		const double kLeadMax = kSceneLeadMaxStops;
-
-		// 実装と同じ: 段(log2)で平均し、差分の中央値を傾きとして (n-1)/2 コマ分だけ外挿する
 		auto sceneNow = [](const std::vector<double>& buf) { return sceneNowFromBufRef(buf); };
-		auto plainAvg = [](const std::vector<double>& buf)
-		{
-			double a = 0.0;
-			for (double v : buf) { a += v; }
-			return a / static_cast<double>(buf.size());
-		};
 		auto stops = [](double a, double b) { return std::log2(a / b); };
 
-		// ① 一定速度で明るくなる(夜明け 0.30段/コマ。上限0.5段に当たらない範囲で見る)
+		// ① 一定速度で明るくなる: 平均は (n-1)/2 コマ遅れるが、最新値を追い越さない
 		{
-			const double rate = 0.46;	// 実測の夜明けの最速(2026-08-01)
+			const double rate = 0.46;
 			std::vector<double> buf;
 			for (int i = 0; i < 5; ++i) { buf.push_back(std::pow(2.0, rate * i)); }
-			const double truth = std::pow(2.0, rate * 4);	// 最新コマの真値
-			checkNear(stops(sceneNow(buf), truth), 0.0, 0.02, "一定速度の変化で遅れが消える");
-			// 単純平均は (n-1)/2 コマ分だけ遅れる
-			checkNear(stops(truth, plainAvg(buf)), rate * 2.0, 0.20, "単純平均は2コマ分遅れる(比較)");
+			const double truth = std::pow(2.0, rate * 4);
+			checkNear(stops(truth, sceneNow(buf)), rate * 2.0, 1e-9, "一定速度の変化では 2 コマ分遅れる(先読みしない)");
+			check(sceneNow(buf) <= truth, "最新値より明るい側へ出ない");
 		}
 
-		// ② 1コマだけ2段明るい(車のライト)。単純平均と同程度までしか反応しないこと
+		// ② 上がり方が止まった直後(明るくなって平坦に転じた)。先読み有りなら平坦の値を
+		//   +0.4 段ほど追い越していた。平均は平坦の値を越えない。
 		{
-			std::vector<double> buf = { 1.0, 1.0, 4.0, 1.0, 1.0 };	// 中央のコマだけ +2段
-			const double got   = stops(sceneNow(buf),  1.0);
-			const double plain = stops(plainAvg(buf), 1.0);
-			char d[160];
-			std::snprintf(d, sizeof(d), "(推定=%+.2f段 単純平均=%+.2f段)", got, plain);
-			check(got <= plain + 0.05, "一過性の光に過剰反応しない(単純平均以下)", d);
-			check(got > 0.0, "一過性の光を完全に無視はしない", d);
+			std::vector<double> buf = { 1.0, 1.3, 1.7, 2.0, 2.0 };
+			const double got = sceneNow(buf);
+			char d[120]; std::snprintf(d, sizeof(d), "(推定=%+.2f段。平坦の値=+1.00段)", stops(got, 1.0));
+			check(got <= 2.0 + 1e-9, "上がり方が止まった直後に真値を追い越さない", d);
 		}
 
-		// ③ 光が消えた後に逆振れしない(外れ値がバッファから抜ける途中)
+		// ③ 1コマだけ2段明るい(車のライト): 5 点平均なので +0.4 段まで
 		{
-			std::vector<double> buf = { 4.0, 1.0, 1.0, 1.0, 1.0 };	// 古い側に外れ値
+			std::vector<double> buf = { 1.0, 1.0, 4.0, 1.0, 1.0 };
 			const double got = stops(sceneNow(buf), 1.0);
-			char d[120];
-			std::snprintf(d, sizeof(d), "(推定=%+.2f段)", got);
-			check(got > -0.10, "外れ値が抜けるときに暗い側へ逆振れしない", d);
+			checkNear(got, 0.40, 1e-9, "一過性の光には 1/n(0.4 段)だけ反応する");
 		}
 
-		// ④ 外挿量の頭打ち(急変時に行き過ぎない)
-		{
-			const double rate = 2.0;	// 2段/コマ の極端な変化
-			std::vector<double> buf;
-			for (int i = 0; i < 5; ++i) { buf.push_back(std::pow(2.0, rate * i)); }
-			double mean = 0.0;
-			for (double v : buf) { mean += std::log2(v); }
-			mean /= 5.0;
-			checkNear(stops(sceneNow(buf), std::pow(2.0, mean)), kLeadMax, 1e-6,
-			          "外挿量は上限(1.5段)で頭打ちになる");
-		}
-
-		// ⑤ 有効な値が無ければ -1(測光失敗が続いた場合に壊れない)
+		// ④ 有効な値が無ければ -1(測光失敗が続いた場合に壊れない)
 		{
 			std::vector<double> buf = { -1.0, 0.0, -1.0 };
 			check(sceneNow(buf) < 0.0, "有効な測光値が無ければ無効を返す");
@@ -433,8 +396,9 @@ int main()
 			check(!pinned, "露出が動いていないコマでは張り付きと判定しない");
 		}
 
-		// ⑥ 張り付き中は外挿しないこと。captureRunner は検出コマでバッファを捨てるので、
-		//    偽のトレンド(絞っているのに明るくなり続ける)を増幅しない。
+		// ⑥ 張り付き中の列を増幅しないこと。captureRunner は検出コマでバッファを捨てる。
+		//    (2026-09-09 に先読みを外したので、捨てなくても平均が上振れすることは無くなった。
+		//     捨てる処理は「張り付きで測った値を平均に混ぜない」ために残している)
 		{
 			// 暴走中の測光値: 絞っているのに毎コマ +0.07段 ずつ上がっていた
 			std::vector<double> bad;
@@ -442,13 +406,13 @@ int main()
 			double mean = 0.0;
 			for (double v : bad) { mean += std::log2(v); }
 			mean /= 5.0;
-			// 捨てずに外挿すると平均より 0.14段 明るい側へ行き過ぎる(=さらに絞る方向)
+			// 平均は列の平均そのもの。先読みで上振れしない。
 			const double leaked = std::log2(sceneNowFromBufRef(bad)) - mean;
-			check(leaked > 0.10, "張り付き列をそのまま渡すと外挿が上振れする(捨てる根拠)");
-			// 検出コマで捨てた後は1点だけ。傾きは使われない。
+			checkNear(leaked, 0.0, 1e-9, "張り付き列を渡しても平均を追い越さない(先読みなし)");
+			// 検出コマで捨てた後は1点だけ。
 			std::vector<double> one = { bad.back() };
 			checkNear(std::log2(sceneNowFromBufRef(one)), std::log2(bad.back()), 1e-9,
-			          "捨てた直後は1点のみ=外挿されない");
+			          "捨てた直後は1点のみ");
 		}
 	}
 
