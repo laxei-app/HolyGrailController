@@ -274,6 +274,14 @@ namespace expo
 		}
 	}
 
+	double excessStops(double predicted, double linD, double linU)
+	{
+		if (!(predicted > 0.0) || !(linD > 0.0) || !(linU > 0.0)) { return 0.0; }
+		if (predicted < linD) { return std::log2(linD / predicted); }	// 暗すぎる → 縁まで明るく(+)
+		if (predicted > linU) { return std::log2(linU / predicted); }	// 明るすぎる → 縁まで暗く(−)
+		return 0.0;
+	}
+
 	double brightnessStops(const hgc::exposure& e, const expoTables& t)
 	{
 		// Sv - Av - Tv。Sv↑=明るい、Av↑(大F)=暗い、Tv↑(短秒)=暗い。

@@ -587,9 +587,11 @@ int captureRunner::stepsToClose(double needStops, double stepStops) const
 	const double step = (stepStops > 0.0) ? stepStops : kExposureStepStops;
 	// 貯金と「1コマの上限」の**小さい方**まで。貯まっていても1コマの粗さは上限で決まる。
 	const double room = (stepBudget_ < frameLimit_) ? stepBudget_ : frameLimit_;
-	int n    = static_cast<int>(std::fabs(needStops) / step + 0.5);	// 差を埋めるのに要る目盛り数
+	int n    = static_cast<int>(std::fabs(needStops) / step + 0.5);	// 差を埋めるのに要る目盛り数(最寄り)
 	int maxN = static_cast<int>((room + 1e-9) / step);
-	if (n < 1)    { n = 1; }
+	// 【半目盛り未満は動かない(2026-09-08)】差は「帯からはみ出た分」なので小さいことが普通。
+	//  無理に 1 目盛り踏むと縁から目盛りぶん内側へ入り、場面がその分変わるまで止まる=目盛り幅の
+	//  往復になる。最寄りの目盛り数が 0 ならそのコマは動かさず、はみ出しが半目盛りを越えてから踏む。
 	if (n > maxN) { n = maxN; }
 	return (n > 0) ? n : 0;
 }
@@ -1526,13 +1528,15 @@ errCode captureRunner::loop(void)
 					const double predicted = this->linearAtExposure(avg, preCtl.current());
 					if (predicted > linU || predicted < linD)
 					{
-						const double center = expo::linearFromEvBase(preEv, lin0);
-						const double need   = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;
-						// 帯の反対側へ飛び出すだけなら動かない(振動防止)。反転は抑制期間中は強い証拠が要る。
+						// 【はみ出た分だけ動かす(2026-09-08)】帯の縁までの差を埋める。中央までは戻さない。
+						//  反転の判定(allowStep)だけは従来どおり中央までの差で見る(急変かどうかの証拠)。
+						const double center     = expo::linearFromEvBase(preEv, lin0);
+						const double needCenter = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;
+						const double need       = expo::excessStops(predicted, linD, linU);
 						const double band = this->effHysteresis(smooth_.hysteresis);
 						const double step = preCtl.minStepStops();
 						const int    dir  = (need < 0.0) ? -1 : 1;
-						if (this->wouldOvershoot(need, band, step) || !this->allowStep(dir, need, band)) { meterFailStreak = 0; }
+						if (this->wouldOvershoot(need, band, step) || !this->allowStep(dir, needCenter, band)) { meterFailStreak = 0; }
 						else
 						{
 						const double b0     = expo::brightnessStops(preCtl.current(), tables_);
@@ -1636,13 +1640,14 @@ errCode captureRunner::loop(void)
 				const double predicted = this->linearAtExposure(avg, postCtl.current());
 				if (predicted > linU || predicted < linD)
 				{
-					const double center = expo::linearFromEvBase(postEv, lin0);
-					const double need   = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;
-					// 帯の反対側へ飛び出すだけなら動かない(振動防止)。反転は抑制期間中は強い証拠が要る。
+					// 【はみ出た分だけ動かす(2026-09-08)】preNight と同じ。
+					const double center     = expo::linearFromEvBase(postEv, lin0);
+					const double needCenter = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;
+					const double need       = expo::excessStops(predicted, linD, linU);
 					const double band = this->effHysteresis(smooth_.hysteresis);
 					const double step = postCtl.minStepStops();
 					const int    dir  = (need < 0.0) ? -1 : 1;
-					if (this->wouldOvershoot(need, band, step) || !this->allowStep(dir, need, band)) { meterFailStreak = 0; }
+					if (this->wouldOvershoot(need, band, step) || !this->allowStep(dir, needCenter, band)) { meterFailStreak = 0; }
 					else
 					{
 					const double b0     = expo::brightnessStops(postCtl.current(), tables_);
@@ -1763,13 +1768,20 @@ errCode captureRunner::loop(void)
 					const double predicted = this->linearAtExposure(avg, autoCtl.current());
 					if (predicted > linU || predicted < linD)
 					{
-						const double center = expo::linearFromEvBase(evT, lin0);
-						const double need   = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;	// +:明るく -:暗く
-						// 帯の反対側へ飛び出すだけなら動かない(振動防止)。反転は抑制期間中は強い証拠が要る。
+						// 【はみ出た分だけ動かす(2026-09-08 ユーザー決定)】
+						//  以前は帯を越えた瞬間に中央までの差を一度に埋めていたため、帯の広さ(±0.5 段)が
+						//  そのまま画の段差になり、夕方の減光で 0.5〜0.7 段ののこぎり波が出た(内蔵カメラ
+						//  09-08 実測。1 コマの許容が大きい 60 秒周期で顕在化)。帯の縁までの差だけ動かせば、
+						//  ゆっくり変わる場面では縁に沿って場面の変化量ぶんずつ小刻みに追従する。
+						//  明るさは目標より帯/2 だけ変化の向きにずれた所に落ち着く(それが帯の意味)。
+						//  反転の判定(allowStep)だけは従来どおり中央までの差で見る(急変かどうかの証拠)。
+						const double center     = expo::linearFromEvBase(evT, lin0);
+						const double needCenter = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;	// +:明るく -:暗く
+						const double need       = expo::excessStops(predicted, linD, linU);
 						const double band = this->effHysteresis(effHyst);
 						const double step = autoCtl.minStepStops();
 						const int    dir  = (need < 0.0) ? -1 : 1;
-						if (this->wouldOvershoot(need, band, step) || !this->allowStep(dir, need, band)) { meterFailStreak = 0; }
+						if (this->wouldOvershoot(need, band, step) || !this->allowStep(dir, needCenter, band)) { meterFailStreak = 0; }
 						else
 						{
 						const double b0     = expo::brightnessStops(autoCtl.current(), tables_);

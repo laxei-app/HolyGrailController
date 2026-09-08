@@ -1253,6 +1253,76 @@ int main()
 		}
 	}
 
+	// --- デッドゾーン制御: 帯からはみ出た分だけ動かす(2026-09-08 ユーザー決定) ---
+	//  【背景】帯(±0.5 段)を越えた瞬間に中央までの差を一度に埋めていたため、夕方の減光で
+	//   0.5〜0.7 段ののこぎり波が出た(内蔵カメラ 09-08 実測・60 秒周期)。縁までの差だけ動かせば、
+	//   場面の変化量ぶんずつ小刻みに追従し、明るさは縁(目標−帯/2)に沿って安定する。
+	{
+		std::printf("--- デッドゾーン制御(はみ出た分だけ) ---\n");
+		// 模擬: 場面の明るさ scene[段]が毎コマ drift だけ変わる。露出 expo[段]。写る明るさ = scene + expo。
+		//  目標 0、帯 band。1 コマの上限 cap[段]。目盛り notch[段]。
+		auto run = [&](double notch, double band, double cap, int frames, double drift,
+		               int cloudAt, int cloudLen, double cloudDepth,
+		               double& maxMove, double& maxErr, double& minErr, int& moves)
+		{
+			double scene = 0.0, expo = 0.0;
+			maxMove = 0.0; maxErr = -1e9; minErr = 1e9; moves = 0;
+			for (int f = 0; f < frames; ++f)
+			{
+				scene += drift;
+				double s = scene;
+				if (f >= cloudAt && f < cloudAt + cloudLen) { s += cloudDepth; }	// 雲(一時的)
+				const double shown = s + expo;	// 写る明るさ[段](0=目標)
+				const double lin   = std::pow(2.0, shown);
+				const double linD  = std::pow(2.0, -band / 2.0), linU = std::pow(2.0, band / 2.0);
+				const double need  = expo::excessStops(lin, linD, linU);
+				int n = static_cast<int>(std::fabs(need) / notch + 0.5);
+				const int maxN = static_cast<int>((cap + 1e-9) / notch);
+				if (n > maxN) { n = maxN; }
+				const double mv = (need < 0 ? -1.0 : 1.0) * n * notch;
+				if (n > 0) { expo += mv; ++moves; if (std::fabs(mv) > maxMove) { maxMove = std::fabs(mv); } }
+				if (f >= 10 && !(f >= cloudAt && f < cloudAt + cloudLen + 3))
+				{	// 立ち上がりと雲の最中は除いて、写る明るさの範囲を測る
+					const double e = s + expo;
+					if (e > maxErr) { maxErr = e; }
+					if (e < minErr) { minErr = e; }
+				}
+			}
+		};
+		double maxMove, maxErr, minErr; int moves;
+		// 1) 内蔵カメラ想定: 1/12 段・帯 1.0・60 秒周期(上限 4/3 段)・夕方 −0.1 段/コマ で 60 コマ
+		run(1.0 / 12.0, 1.0, 4.0 / 3.0, 60, -0.10, 999, 0, 0.0, maxMove, maxErr, minErr, moves);
+		{
+			char d[160]; std::snprintf(d, sizeof(d), "(最大移動 %.3f段 / 写る明るさ %.2f〜%.2f段 / 動いたコマ %d)", maxMove, minErr, maxErr, moves);
+			check(maxMove <= 2.0 / 12.0 + 1e-9, "減光中の 1 コマの移動は 2 目盛り以下(一気に戻さない)", d);
+			check(minErr >= -0.5 - 1.0 / 12.0 && maxErr <= -0.5 + 1.0 / 12.0, "明るさは縁(−0.5 段)に沿って ±1 目盛りに収まる", d);
+		}
+		// 2) 雲: 帯の中に収まる一時的な暗転(−0.3 段 × 3 コマ)には反応しない
+		run(1.0 / 12.0, 1.0, 4.0 / 3.0, 40, 0.0, 15, 3, -0.3, maxMove, maxErr, minErr, moves);
+		{
+			char d[96]; std::snprintf(d, sizeof(d), "(動いたコマ %d)", moves);
+			check(moves == 0, "帯の中の一時的な暗転(−0.3 段)には動かない", d);
+		}
+		// 3) 雲: 帯を越える暗転(−0.8 段 × 5 コマ)は「はみ出た分」だけ動き、晴れたら同じだけ戻る
+		run(1.0 / 12.0, 1.0, 4.0 / 3.0, 40, 0.0, 15, 5, -0.8, maxMove, maxErr, minErr, moves);
+		{
+			char d[128]; std::snprintf(d, sizeof(d), "(最大移動 %.3f段 / 動いたコマ %d)", maxMove, moves);
+			check(maxMove <= 0.3 + 1.0 / 24.0 + 1e-9, "帯を越える暗転でも動くのははみ出た分(0.3 段+半目盛り)だけ", d);
+			check(moves == 1, "動くのは暗転の入りの 1 回だけ(晴れた後は帯の中なので戻さない)", d);
+		}
+		// 4) キヤノン想定: 1/3 段・帯 0.8・15 秒周期(上限 1/3 段)・夕方 −0.05 段/コマ
+		run(1.0 / 3.0, 0.8, 1.0 / 3.0, 120, -0.05, 999, 0, 0.0, maxMove, maxErr, minErr, moves);
+		{
+			char d[160]; std::snprintf(d, sizeof(d), "(最大移動 %.3f段 / 写る明るさ %.2f〜%.2f段 / 動いたコマ %d)", maxMove, minErr, maxErr, moves);
+			check(maxMove <= 1.0 / 3.0 + 1e-9, "キヤノンは 1 コマ 1 目盛り(従来どおり)", d);
+			check(minErr >= -0.4 - 1.0 / 6.0 - 1e-9 && maxErr <= -0.4 + 1.0 / 6.0 + 1e-9, "キヤノンは縁(−0.4 段)に沿って ±半目盛りに収まる", d);
+		}
+		// 5) 純粋関数そのもの
+		check(expo::excessStops(1.0, 0.7, 1.4) == 0.0, "帯の中は 0");
+		check(std::fabs(expo::excessStops(0.5, 0.7, 1.4) - std::log2(0.7 / 0.5)) < 1e-12, "下にはみ出た分は +(明るく)");
+		check(std::fabs(expo::excessStops(2.0, 0.7, 1.4) - std::log2(1.4 / 2.0)) < 1e-12, "上にはみ出た分は −(暗く)");
+	}
+
 	std::printf("\n%s (fail=%d)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail);
 	return g_fail == 0 ? 0 : 1;
 }
