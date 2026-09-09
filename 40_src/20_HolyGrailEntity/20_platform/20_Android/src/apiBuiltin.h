@@ -83,6 +83,8 @@ public:
 		cam.lensFixed = true; cam.localOnly = true; cam.noSyncShot = true; cam.readOnly = true;
 	}
 	errCode restoreShootingMode(void) override;
+	// 直前の失敗の理由(お知らせ番号)。いまは「カメラの許可が無い」だけ。
+	int lastFailNotice(void) const override { return failNotice_; }
 	errCode keepAlive(void) override { return ERR_HGC_OK; }	// 切れる線が無い
 
 	// 諸元は端末から取れる。撮る前から分かるので EXIF を待たない。
@@ -174,6 +176,10 @@ private:
 
 	// いま載せている露出(要求ごとに渡すので、ここが唯一の状態)
 	std::string curSs_, curIso_, curFn_;
+
+	// カメラを開く(開けたら opened_ を立てる)。開けない理由が権限なら failNotice_ に残す。
+	errCode openCamera(void);
+	int failNotice_ = 0;	// 直前の失敗の理由(hgc::notice。0=特に言うことは無い)
 
 	// 撮った画像を残す(2026-09-05)。キヤノン機はカメラ側のSDに残るが、内蔵カメラには
 	//  「カメラ側」が無いので、自分で書かないと何も残らない。

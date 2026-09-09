@@ -384,6 +384,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 撮影場所「現在地を取得」の位置情報権限(§7.9)
     private var pendingLocAction: (() -> Unit)? = null
     private val LOC_PERM_REQ = 4712
+    // このスマホのカメラで撮る計画を始めるときのカメラ権限(2026-09-09)。
+    //  【なぜ開始時か】カメラの諸元(画角・ISO範囲)は権限が無くても読めるので、一覧にも出るし
+    //   計画も作れる。実際に断られるのは開こうとした瞬間だけなので、そこで頼むのが自然。
+    //   起動時にまとめて聞くと、外部カメラだけで使う人にも不要な確認が出る。
+    private var pendingCamAction: (() -> Unit)? = null
+    private val CAM_PERM_REQ = 4714
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
@@ -395,6 +401,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
             if (grantResults.isNotEmpty() && grantResults.any { it == PackageManager.PERMISSION_GRANTED }) pendingLocAction?.invoke()
             else Toast.makeText(this, "位置情報の権限が必要です", Toast.LENGTH_LONG).show()
             pendingLocAction = null
+        } else if (requestCode == CAM_PERM_REQ) {
+            // 断られたら開始しない(始めても「開けません」を繰り返すだけ)。設定への行き方を添える。
+            if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) pendingCamAction?.invoke()
+            else showCameraPermissionHelp()
+            pendingCamAction = null
         }
     }
 
@@ -4210,6 +4221,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 .show()
             return
         }
+        // このスマホのカメラで撮るなら、開く前に許可を貰っておく(2026-09-09)。
+        //  ここを通さないと、開始してから「開けません」を数秒ごとに繰り返すだけになる。
+        if (planCamLocalOnly(id) &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            ensureCameraPermission(id) { startPlan(id) }
+            return
+        }
         stoppingPlans.remove(id)   // 再開する計画は「中止確定待ち」を解除(NOCAMERA抑止をリセット)
         // 即時フィードバック: タップの瞬間に待機(カメラ点灯)へ変える。「押したのが効いたか分からない」対策。
         // 発見/開始要求は後追いで行い、失敗したらここで足した待機を取り消してトーストで知らせる。
@@ -4308,6 +4326,40 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // NOCAMERAダイアログの抑止フラグ解除＋表示中なら閉じる。状態が「未検出以外」(復帰/待機/撮影/IDLE)へ
     // 移ったとき、および停止確定時に呼ぶ。これで復帰しても閉じない/中止しても再表示される問題を根絶する。
+    // このスマホのカメラを使う計画か(内蔵カメラ = この端末でしか撮れないカメラ)。
+    private fun planCamLocalOnly(id: String): Boolean = try {
+        val arr = JSONArray(HgeNative.nativeListPlans())
+        (0 until arr.length()).asSequence().map { arr.optJSONObject(it) }
+            .firstOrNull { it?.optString("id") == id }?.optBoolean("camLocalOnly", false) ?: false
+    } catch (_: Exception) { false }
+
+    // カメラ権限が要るなら頼んでから action を行う。要らない(外部カメラ)ならそのまま行う。
+    private fun ensureCameraPermission(id: String, action: () -> Unit) {
+        if (!planCamLocalOnly(id) ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            action(); return
+        }
+        pendingCamAction = action
+        ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), CAM_PERM_REQ)
+    }
+
+    // 権限が無いときの案内。「二度と聞かない」を選ばれた後は要求しても何も出ないので、
+    //  設定画面への入口を必ず添える(ここへ来ないと利用者は直しようがない)。
+    private fun showCameraPermissionHelp() {
+        AlertDialog.Builder(this)
+            .setTitle("カメラを使えません")
+            .setMessage(noticeText(66, 0))
+            .setPositiveButton("設定を開く") { d, _ ->
+                d.dismiss()
+                runCatching {
+                    startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                         android.net.Uri.fromParts("package", packageName, null)))
+                }
+            }
+            .setNegativeButton("閉じる", null)
+            .show()
+    }
+
     private fun clearNoCam(id: String) {
         nocamDialogShown.remove(id)
         nocamDialogs.remove(id)?.let { runCatching { if (it.isShowing) it.dismiss() } }
@@ -4391,13 +4443,25 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  だけ、という場合がある。「見つかりません」と言うと電源やWi-Fiを疑って堂々巡りに
         //  なるので、分かっている理由を優先する(63=締め出し / 64=未登録 / 65=誤り)。
         val an = planAuthNotice[id] ?: 0
-        val title = if (an != 0) "カメラに接続できません" else "カメラが見つかりません"
+        // 権限が無いのは「接続できない」でも「見つからない」でもない。探し直しても直らないので
+        //  題も本文も分け、設定画面への入口を添える(2026-09-09)。
+        val noPerm = (an == 66)
+        val title = when { noPerm -> "カメラを使えません"; an != 0 -> "カメラに接続できません"; else -> "カメラが見つかりません" }
         val body  = if (an != 0) "${cam}: " + noticeText(an, 0)
                     else "${cam}が見つかりません。オンラインにしてください。"
-        val dlg = androidx.appcompat.app.AlertDialog.Builder(this)
+        val b = androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle(title)
             .setMessage(body)
             .setCancelable(false)
+        if (noPerm) {
+            b.setNeutralButton("設定を開く") { _, _ ->
+                runCatching {
+                    startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                         android.net.Uri.fromParts("package", packageName, null)))
+                }
+            }
+        }
+        val dlg = b
             .setPositiveButton("継続") { d, _ ->
                 d.dismiss(); nocamDialogs.remove(id)
                 // 即再探索(取得フェーズの60秒待ちを前倒し)。ネットワークI/Oは別スレッド。
@@ -4816,6 +4880,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     val nt = o.optInt("notice", 0)
                     val msg = if (nt != 0) noticeText(nt, o.optLong("n1", 0)) else o.optString("msg")
                     capState.text = "ERROR $msg"
+                    // 【理由を計画に覚えさせる(2026-09-09)】これまでエッジ経由(reconcileEdgePlan)でしか
+                    //  覚えておらず、スマホ直結では「見つかりません」の案内を言い換えられなかった。
+                    //  理由は案内より遅れて届くので、届いた時点で内容が変わるなら出し直す。
+                    val npid = o.optString("planId")
+                    if (npid.isNotEmpty() && nt != 0) {
+                        val prevN = planAuthNotice[npid] ?: 0
+                        planAuthNotice[npid] = nt
+                        if (nt != prevN && nocamDialogShown.contains(npid) && disconnectedPlans.contains(npid)) {
+                            clearNoCam(npid); showNoCameraDialog(npid)
+                        }
+                    }
                     // カメラ未検出・カメラ使用中など、撮影開始の失敗をユーザーへ通知する。
                     if (msg.isNotEmpty()) Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
                 }
@@ -4849,6 +4924,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         63 -> "カメラが接続を拒否しています。カメラ本体のWi-Fi設定を一度削除して入れ直してください(認証情報の登録漏れが原因のことがあります)"
         64 -> "カメラの認証情報が登録されていません。機材のカメラ設定にユーザーIDとパスワードを入れてください"
         65 -> "カメラの認証情報が正しくありません。機材のカメラ設定のユーザーIDとパスワードを確認してください"
+        66 -> "このスマホのカメラを使う許可がありません。設定 → アプリ → 権限 → カメラ を許可してください"
         else -> "カメラからのお知らせ($code)"
     }
 

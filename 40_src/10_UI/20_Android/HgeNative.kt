@@ -218,6 +218,9 @@ object HgeNative {
     @JvmStatic
     fun builtinThermal(): Int = BuiltinCamera.thermalStatus()
 
+    @JvmStatic
+    fun builtinHasPermission(): Boolean = BuiltinCamera.hasPermission()
+
     // 直前のコマを実際に撮った物理カメラ id(狙いどおりかの確認用)。
     @JvmStatic
     fun builtinActivePhysical(): String = BuiltinCamera.activePhysicalId()

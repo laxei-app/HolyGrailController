@@ -67,6 +67,11 @@ public:
 		std::string detail;
 	};
 	virtual failInfo lastFailure(void) const { return failInfo{}; }
+	// 【直前の失敗の理由をお知らせ番号で答える(2026-09-09)】0=特に言うことは無い。
+	//  共通部分は番号を上へ流すだけで、何が理由かは判断しない(文言は UI が持つ)。
+	//  例: 内蔵カメラで「この端末のカメラを使う許可が無い」。探し直しても直らないので、
+	//  「見つかりません」ではなく理由を名指しで伝えないと利用者が気づけない。
+	virtual int lastFailNotice(void) const { return 0; }
 	// 露出を1項目ずつ設定する(周期正確化のタイマ方式で、変更のあった項目だけを適用するため)。
 	virtual errCode setFNumber(const std::string& fNumber)	{ (void)fNumber; return ERR_HGC_NOT_SUPPORTED; }
 	virtual errCode setSS(const std::string& ss)			{ (void)ss;      return ERR_HGC_NOT_SUPPORTED; }

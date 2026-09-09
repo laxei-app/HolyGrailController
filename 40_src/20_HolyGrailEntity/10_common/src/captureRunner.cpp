@@ -890,9 +890,15 @@ bool captureRunner::establishSession(void)
 
 	// 撮影モードに入る(ライブビュー開始)
 	errCode err = cameraController::startShooting(*dev_);
-	if (err == ERR_HGC_OK) { this->releaseLiveView(); }	// 初期収束が要るときは中で張り直す
+	if (err == ERR_HGC_OK) { this->releaseLiveView(); sessionFailNotice_ = 0; }	// 初期収束が要るときは中で張り直す
 	if (err != ERR_HGC_OK)
 	{
+		// 【理由が分かっているなら名指しで伝える(2026-09-09)】カメラ層が理由を知っていることが
+		//  ある(例: この端末のカメラを使う許可が無い)。「見つかりません」のままだと、
+		//  探し直しても直らないものを利用者が延々と待つことになる。取得は数秒ごとにやり直すので、
+		//  同じ理由は1度だけ流す。
+		const int fn = cameraController::lastFailNotice(*dev_);
+		if (fn != 0 && fn != sessionFailNotice_ && onNotice_) { sessionFailNotice_ = fn; onNotice_(fn, 0); }
 		if (onError_) { onError_(err, this->withFailDetail("startShooting")); }
 		return false;
 	}

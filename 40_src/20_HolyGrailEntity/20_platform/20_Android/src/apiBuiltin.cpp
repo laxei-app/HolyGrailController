@@ -4,6 +4,7 @@
 #include "exposureMath.h"
 #include "jpegLuma.h"
 #include "dataManager.h"
+#include "notice.h"	// 開けない理由をお知らせ番号で上へ返す(文言は UI)
 #include "osFile.h"
 #include "tool.h"
 #include <ctime>
@@ -236,16 +237,26 @@ errCode apiBuiltin::readDeviceStatus(deviceStatus& out)
 	return ERR_HGC_OK;
 }
 
-errCode apiBuiltin::startShooting(void)
+// カメラを開く。開けなかった理由が「この端末のカメラを使う許可が無い」なら、それを覚えて
+//  上位が名指しで案内できるようにする(2026-09-09 ユーザー指示)。
+//
+// 【なぜ理由を分けるか】諸元(画角・ISO範囲・センサー寸法)は許可が無くても読めるので、
+//  カメラは一覧に出てくるし計画も作れる。開こうとして初めて断られるが、上位には
+//  「開けなかった」しか伝わらず、画面には「カメラが見つかりません。オンラインにしてください」
+//  と出ていた。目の前のカメラなので探し直しても永久に直らず、利用者は気づけない
+//  (新しい端末 Pixel 8 Pro で実際に起きた)。
+errCode apiBuiltin::openCamera(void)
 {
 	const std::string e = builtinCam::open(logicalId_, id_, rawOk_);
-	if (!e.empty())
-	{
-		dataManager::logEvent("CAMERA", ("builtin open failed: " + e).c_str(), true);
-		return ERR_HGC_NOT_FOUND;
-	}
-	opened_ = true;
-	return ERR_HGC_OK;
+	if (e.empty()) { failNotice_ = 0; opened_ = true; return ERR_HGC_OK; }
+	failNotice_ = builtinCam::hasPermission() ? 0 : static_cast<int>(hgc::notice::cameraNoPermission);
+	dataManager::logEvent("CAMERA", ("builtin open failed: " + e).c_str(), true);
+	return ERR_HGC_NOT_FOUND;
+}
+
+errCode apiBuiltin::startShooting(void)
+{
+	return this->openCamera();
 }
 
 errCode apiBuiltin::getSettings(cmdt::shotRange& settings)
@@ -287,13 +298,10 @@ errCode apiBuiltin::rdyShutter(const cmdt::shotSet& shotSet)
 
 errCode apiBuiltin::setupShootingModeManual(void)
 {
-	const std::string e = builtinCam::open(logicalId_, id_, rawOk_);
-	if (!e.empty())
 	{
-		dataManager::logEvent("CAMERA", ("builtin open failed: " + e).c_str(), true);
-		return ERR_HGC_NOT_FOUND;
+		const errCode oe = this->openCamera();
+		if (oe != ERR_HGC_OK) { return oe; }
 	}
-	opened_ = true;
 	// 【動画をここで開く(2026-09-05)】撮影の区切りと動画の区切りを一致させる。
 	//  出来上がりは Movies/HolyGrail/<計画名>_yyyymmddhhmmss.mp4。10分ごとに「そこまでの完成品」が
 	//  置き換わっていく(BuiltinVideo)。名前と置き場は Kotlin 側が決める。

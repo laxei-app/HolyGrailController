@@ -44,6 +44,9 @@ namespace builtinCam
 	             int iso, long long expNs, double aperture, int timeoutMs, int frames, bool raw);
 	// 端末の熱の状態(PowerManager の THERMAL_STATUS_*。0=平常 … 6=停止直前)。-1=分からない。
 	int thermalStatus(void);
+	// この端末のカメラを使う許可があるか(2026-09-09)。開けなかった理由を分けるために聞く。
+	//  諸元(画角・ISO範囲)は許可が無くても読めるので、開くまで気づけない。
+	bool hasPermission(void);
 	// 直前のコマを実際に撮った物理カメラ id(端末の申告。空=分からない)。
 	std::string activePhysicalId(void);
 	// 直近の1コマの経過(要求枚数/露光・届いた画像と結果・失敗理由・現像時間・到着時刻)。調査用。

@@ -86,6 +86,15 @@ object BuiltinCamera {
         return f in 0..3   // Bayer 以外(モノクロ/近赤外)は足し方が違うので JPEG へ
     }
 
+    // この端末のカメラを使う許可があるか(2026-09-09)。諸元は許可が無くても読めるので、
+    //  「開けない理由が権限かどうか」を分けるのにこれが要る。
+    @JvmStatic
+    fun hasPermission(): Boolean {
+        val c = appCtx ?: return true   // 分からないときは権限のせいにしない
+        return c.checkSelfPermission(android.Manifest.permission.CAMERA) ==
+               android.content.pm.PackageManager.PERMISSION_GRANTED
+    }
+
     // 端末の熱の状態。PowerManager の THERMAL_STATUS_*(0=平常 … 6=停止直前)。取れない端末は -1。
     @JvmStatic
     fun thermalStatus(): Int {

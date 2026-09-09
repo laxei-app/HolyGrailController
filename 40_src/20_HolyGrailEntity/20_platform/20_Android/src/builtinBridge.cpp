@@ -178,6 +178,18 @@ namespace builtinCam
 		return r == JNI_TRUE;
 	}
 
+	bool hasPermission(void)
+	{
+		attach a;
+		if (!a.ok()) { return true; }	// 分からないときは「ある」と見る(権限のせいにしない)
+		jmethodID mid = a.env->GetStaticMethodID(a.cls, "builtinHasPermission", "()Z");
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); mid = nullptr; }
+		if (mid == nullptr) { return true; }
+		jboolean r = a.env->CallStaticBooleanMethod(a.cls, mid);
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); r = JNI_TRUE; }
+		return r == JNI_TRUE;
+	}
+
 	int thermalStatus(void)
 	{
 		attach a;

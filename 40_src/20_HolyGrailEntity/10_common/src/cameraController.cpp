@@ -224,6 +224,12 @@ apiBase::failInfo cameraController::lastFailure(const class device& device)
 	return device.apiBase->lastFailure();
 }
 
+int cameraController::lastFailNotice(const class device& device)
+{
+	if (device.apiBase == nullptr) { return 0; }
+	return device.apiBase->lastFailNotice();
+}
+
 // 設定を取得する
 // device   :対象デバイス
 // settings :取得した設定
