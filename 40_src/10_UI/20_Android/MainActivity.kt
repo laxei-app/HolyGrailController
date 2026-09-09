@@ -398,6 +398,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
             else Toast.makeText(this, "BLE権限が必要です", Toast.LENGTH_LONG).show()
             pendingBleAction = null
         } else if (requestCode == LOC_PERM_REQ) {
+            // 初回起動の種まきが答えを待っている間は、この答えは種まきのもの(2026-09-09 案A)。
+            //  許可でも拒否でも種はまく。拒否なら場所は Tokyo のままで揃う。
+            if (seedWaitingPerm) { finishSeedAfterPermission(); pendingLocAction = null; return }
             if (grantResults.isNotEmpty() && grantResults.any { it == PackageManager.PERMISSION_GRANTED }) pendingLocAction?.invoke()
             else Toast.makeText(this, "位置情報の権限が必要です", Toast.LENGTH_LONG).show()
             pendingLocAction = null
@@ -446,33 +449,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  (カメラの列挙は権限が無くてもでき、1 秒かからない)。
         //  撮影場所の種(出荷時の Tokyo を現在地に差し替える)も同じときに済ませてファイルへ保存する
         //  (2026-09-06 ユーザー指示)。後回しにすると、表示した後で計画の場所が差し替わり「変更あり」になる。
-        if (!hgcPrefs().getBoolean("builtinSeedDone", false) || !hgcPrefs().getBoolean("placeSeedTried", false) ||
-            !hgcPrefs().getBoolean("factoryTplDone", false)) {
-            val seed = dataExec.submit {
-                // 場所の種が先。内蔵カメラのひな形は「撮影計画に自動的に挿入する」場所(=現在地)で作る(2026-09-06 ユーザー指示)。
-                seedFirstPlaceBlocking()
-                if (!hgcPrefs().getBoolean("builtinSeedDone", false)) {
-                    // スマホ用の撮影制御方法初期値の名前(型ごと)。UI の言語で渡す(将来の言語対応は UI だけで済ませる)。
-                    val names = JSONObject().put("night", "夜間スマホ").put("sunrise", "朝日スマホ")
-                                            .put("sunset", "夕日スマホ").put("day", "日中スマホ").toString()
-                    val found = try { HgeNative.nativeRegisterBuiltinCameras(names) } catch (_: Exception) { 0 }
-                    if (found > 0) { hgcPrefs().edit().putBoolean("builtinSeedDone", true).commit() }
-                }
-                // 出荷時のひな形(EOS-R3 night sky)もここで(場所の種の後。2026-09-06 ユーザー指示)。
-                if (!hgcPrefs().getBoolean("factoryTplDone", false)) {
-                    val r = try { HgeNative.nativeSeedFactoryTemplates() } catch (_: Exception) { -1 }
-                    if (r == 0) { hgcPrefs().edit().putBoolean("factoryTplDone", true).commit() }
-                }
-            }
-            try { seed.get(20, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}
-        }
+        startFirstLaunchSeed()
 
         HgeNative.nativeEdgeSetBle(edgeUseBle())
         HgeNative.nativeSetListener(this)
         // 起動時のログ整理(当日以外が5件以上なら古い順に削除、最新4件まで残す)。端末TZで「当日」を判定。
         val tzOffMin = java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60000
         Thread { HgeNative.nativePruneOldLogs(tzOffMin) }.start()
-        seedFirstPlaceFromLocation()              // 初回だけ、出荷時の場所を現在地で作り直す
+        //  許可の答えを待っている最中は種まき側が場所も作るので、ここでは何もしない(要求が二重になる)。
+        if (!seedWaitingPerm) { seedFirstPlaceFromLocation() }   // 初回だけ、出荷時の場所を現在地で作り直す
         handler.postDelayed(edgeTimeSync, 3000)   // 選択中エッジへ能動的な時刻同期を開始(RTC無し機/電波悪環境向け)
         handler.postDelayed(edgeSweep, 6000)      // エッジ常時スイープ(生存/IP追従+エッジ側開始・停止の検出。撮影の有無に関わらず30秒毎)
         handler.postDelayed(hgePump, 5000)        // 遅延アームのポンプ(スマホ直接撮影の予約計画の開始スレッドを期日に生成)
@@ -6175,25 +6160,155 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  権限がまだ無いときは何もせず、従来どおり seedFirstPlaceFromLocation が権限を求めて後で行う。
     //  座標は端末が覚えている最新の測位(getLastKnownLocation)。標高は標高 API(6 秒まで)、駄目なら測位値。
     //  dataExec(所持機材と同じ単一スレッド)で呼ぶ。画面には触らない。
-    private fun seedFirstPlaceBlocking() {
+    // ── 初回起動の種まき(2026-09-09 ユーザー決定: 案A) ───────────────────────────
+    // 【順番】撮影場所 → 内蔵カメラ(所持カメラ・レンズ・ひな形) → 出荷時のひな形。
+    //  場所が先なのは、ひな形の撮影場所を「撮影計画に自動的に挿入する」場所にするため。
+    //
+    // 【なぜ許可を先に聞くか】場所は現在地で作りたいが、新品の端末では位置情報の許可がまだ無い。
+    //  以前は許可を聞く前に種をまいていたので、ひな形も計画も出荷時の Tokyo で出来上がり、
+    //  その後で撮影場所の一覧だけが current location になって食い違っていた(Pixel 8 Pro で発生)。
+    //  許可されたら現在地・断られたら Tokyo、どちらでも最初から揃った状態で作る。
+    //
+    // 【待っている間に計画を作らせない】答えを待つ数秒の間に計画へ触れると、内蔵カメラも場所も
+    //  決まる前に出荷時の固定計画(FixedPlan)が出来てしまう。待っている間は Entity 側の自動生成を
+    //  止める(nativeSetSeedPending)。撮影計画の一覧はその間だけ空になる。
+    //  答えが返らないまま放置されることもあるので、時間切れ(30秒)で Tokyo として進む。
+    private var seedWaitingPerm = false
+    private val kSeedPermWaitMs = 30_000L
+    private val seedPermTimeout = Runnable { finishSeedAfterPermission() }
+    // 【許可した直後は「最後に分かった位置」が空のことがある(2026-09-09 Pixel 8 Pro 実測)】
+    //  端末が一度も測位していないと getLastKnownLocation は null を返し、そのまま作ると Tokyo になる。
+    //  記録が無いときは測り直しを頼み、返ってくるまで待ってから作る。返らなければ時間切れで Tokyo。
+    private val kSeedLocWaitMs = 15_000L
+    private var seedLocDone = false
+
+    private fun seedNeeded(): Boolean {
+        val p = hgcPrefs()
+        return !p.getBoolean("builtinSeedDone", false) || !p.getBoolean("placeSeedTried", false) ||
+               !p.getBoolean("factoryTplDone", false)
+    }
+
+    private fun startFirstLaunchSeed() {
+        if (!seedNeeded()) return
+        if (!locationGranted()) {
+            seedWaitingPerm = true
+            try { HgeNative.nativeSetSeedPending(1) } catch (_: Exception) {}
+            ActivityCompat.requestPermissions(this,
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), LOC_PERM_REQ)
+            handler.postDelayed(seedPermTimeout, kSeedPermWaitMs)
+            return
+        }
+        // 既に許可がある(2回目以降の起動・許可済みの端末)。位置がすぐ分かるならここで待って作る
+        //  (起動を遅らせない)。記録が無いときだけ測り直しを待つ。
+        val loc = lastKnownLocationOrNull()
+        if (loc != null) {
+            val seed = dataExec.submit { runFirstLaunchSeed(loc) }
+            try { seed.get(20, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}
+            return
+        }
+        try { HgeNative.nativeSetSeedPending(1) } catch (_: Exception) {}
+        fetchFreshLocationThenSeed()
+    }
+
+    private fun locationGranted(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    private fun lastKnownLocationOrNull(): android.location.Location? = try {
+        val lm = getSystemService(LOCATION_SERVICE) as android.location.LocationManager
+        lm.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER)
+            ?: lm.getLastKnownLocation(android.location.LocationManager.NETWORK_PROVIDER)
+            ?: lm.getLastKnownLocation(android.location.LocationManager.PASSIVE_PROVIDER)
+    } catch (_: Exception) { null }
+
+    // 許可の答えが出た(または時間切れ)。ここから種をまく。許可が無ければ場所は Tokyo のまま。
+    private fun finishSeedAfterPermission() {
+        if (!seedWaitingPerm) return
+        seedWaitingPerm = false
+        handler.removeCallbacks(seedPermTimeout)
+        if (!locationGranted()) { seedNow(null); return }        // 断られた → Tokyo で確定
+        val loc = lastKnownLocationOrNull()
+        if (loc != null) { seedNow(loc); return }
+        fetchFreshLocationThenSeed()
+    }
+
+    // 測り直しを頼み、返ってきたら(または時間切れで)種をまく。
+    //  「アプリの使用時のみ」の許可では前面にいる間しか測れないので、許可の直後に一度だけ頼む。
+    private fun fetchFreshLocationThenSeed() {
+        seedLocDone = false
+        val finish = { l: android.location.Location? ->
+            if (!seedLocDone) { seedLocDone = true; seedNow(l) }
+        }
+        handler.postDelayed({ finish(null) }, kSeedLocWaitMs)   // 返らない → Tokyo で確定
+        try {
+            val lm = getSystemService(LOCATION_SERVICE) as android.location.LocationManager
+            val prov = when {
+                lm.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER) ->
+                    android.location.LocationManager.NETWORK_PROVIDER
+                lm.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER) ->
+                    android.location.LocationManager.GPS_PROVIDER
+                else -> ""
+            }
+            if (prov.isEmpty()) { finish(null); return }
+            if (Build.VERSION.SDK_INT >= 30) {
+                lm.getCurrentLocation(prov, null, mainExecutor) { l -> runOnUiThread { finish(l) } }
+            } else {
+                @Suppress("DEPRECATION")
+                lm.requestSingleUpdate(prov, object : android.location.LocationListener {
+                    override fun onLocationChanged(l: android.location.Location) { finish(l) }
+                    override fun onProviderEnabled(p: String) {}
+                    override fun onProviderDisabled(p: String) {}
+                    @Deprecated("") override fun onStatusChanged(p: String?, s: Int, e: Bundle?) {}
+                }, mainLooper)
+            }
+        } catch (_: Exception) { finish(null) }
+    }
+
+    // 種まきを実行して、待ちの印を外し、画面を作り直す。
+    private fun seedNow(loc: android.location.Location?) {
+        dataExec.execute {
+            runFirstLaunchSeed(loc)
+            try { HgeNative.nativeSetSeedPending(0) } catch (_: Exception) {}
+            runOnUiThread {
+                restorePlan()            // ここで初めて出荷時の固定計画が作られる(内蔵カメラ・現在地で)
+                refreshPlanList()
+                applyAllMasterDetail()
+            }
+        }
+    }
+
+    // 種まきの中身。**dataExec の上で呼ぶこと**(所持機材の書き込み口は1本に保つ)。
+    private fun runFirstLaunchSeed(loc: android.location.Location?) {
+        seedFirstPlaceBlocking(loc)
+        if (!hgcPrefs().getBoolean("builtinSeedDone", false)) {
+            // スマホ用の撮影制御方法初期値の名前(型ごと)。UI の言語で渡す(将来の言語対応は UI だけで済ませる)。
+            val names = JSONObject().put("night", "夜間スマホ").put("sunrise", "朝日スマホ")
+                                    .put("sunset", "夕日スマホ").put("day", "日中スマホ").toString()
+            val found = try { HgeNative.nativeRegisterBuiltinCameras(names) } catch (_: Exception) { 0 }
+            if (found > 0) { hgcPrefs().edit().putBoolean("builtinSeedDone", true).commit() }
+        }
+        // 出荷時のひな形(EOS-R3 night sky)もここで(場所の種の後。2026-09-06 ユーザー指示)。
+        if (!hgcPrefs().getBoolean("factoryTplDone", false)) {
+            val r = try { HgeNative.nativeSeedFactoryTemplates() } catch (_: Exception) { -1 }
+            if (r == 0) { hgcPrefs().edit().putBoolean("factoryTplDone", true).commit() }
+        }
+    }
+
+    //  loc = 使う現在地(null なら出荷時の Tokyo のまま)。**位置は呼び出し元が用意する**。
+    //  端末の記録(getLastKnownLocation)は空のことがあるので、ここでは取りに行かない。
+    private fun seedFirstPlaceBlocking(loc: android.location.Location?) {
         val pf = hgcPrefs()
         if (pf.getBoolean("placeSeedTried", false)) return
-        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
-                      ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        if (!granted) return
         val arr = placeArray(HgeNative.nativeGetPlaces())
         if (arr.length() != 1 || arr.optJSONObject(0)?.optString("name") != "Tokyo") {
             pf.edit().putBoolean("placeSeedTried", true).commit()   // 既に使われている → 触らない
             return
         }
         pf.edit().putBoolean("placeSeedTried", true).commit()
-        HgeNative.nativeSetPlaceAutoInsert("Tokyo", 1)   // この1件を「撮影計画に自動的に挿入する」に(改名にもついていく)
-        val loc = try {
-            val lm = getSystemService(LOCATION_SERVICE) as android.location.LocationManager
-            lm.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER)
-                ?: lm.getLastKnownLocation(android.location.LocationManager.NETWORK_PROVIDER)
-                ?: lm.getLastKnownLocation(android.location.LocationManager.PASSIVE_PROVIDER)
-        } catch (_: SecurityException) { null } ?: return
+        //  出荷時の1件を「撮影計画に自動的に挿入する」に(改名にもついていく)。
+        //  位置が分からず Tokyo のまま残るときも同じ。これが無いと、ひな形も計画も場所が空欄になる。
+        HgeNative.nativeSetPlaceAutoInsert("Tokyo", 1)
+        if (loc == null) { return }   // 位置が分からない(断られた/測れなかった)→ Tokyo のまま
         val elev = fetchElevationOrNull(loc.latitude, loc.longitude) ?: (if (loc.hasAltitude()) loc.altitude else 0.0)
         val cur = findPlaceJson("Tokyo") ?: return
         val o = JSONObject(cur.toString()).apply {

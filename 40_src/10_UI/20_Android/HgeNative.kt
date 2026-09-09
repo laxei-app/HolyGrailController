@@ -102,6 +102,8 @@ object HgeNative {
     //  端末そのものなので登録可否は聞かない(外付けカメラのプロンプトとは扱いが違う)。
     external fun nativeRegisterBuiltinCameras(namesJson: String): Int
     external fun nativeSeedFactoryTemplates(): Int   // 出荷時のひな形(EOS-R3 night sky)。初回起動用   // namesJson=スマホ用初期値の名前(型ごと)
+    // 初回起動の種まきの答え待ち(1=待っている)。待っている間は出荷時の固定計画を作らせない。
+    external fun nativeSetSeedPending(on: Int): Int
     // RAW 加算(2026-09-06)。Camera2 から受け取った RAW を足して現像する。ループは C++(rawStack)。
     external fun nativeRawStackBegin(width: Int, height: Int, cfa: Int)
     external fun nativeRawStackAdd(buf: java.nio.ByteBuffer, rowStride: Int): Boolean

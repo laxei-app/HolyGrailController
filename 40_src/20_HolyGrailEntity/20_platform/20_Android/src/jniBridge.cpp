@@ -85,6 +85,12 @@ Java_app_laxei_holygrail_HgeNative_nativeInit(JNIEnv* env, jobject /*thiz*/)
 //  端末そのものなので登録可否は聞かない(外付けカメラのプロンプトとは扱いが違う)。
 // 出荷時のひな形(EOS-R3 night sky)を作る(初回起動用)。
 JNIEXPORT jint JNICALL
+Java_app_laxei_holygrail_HgeNative_nativeSetSeedPending(JNIEnv* /*env*/, jobject /*thiz*/, jint on)
+{
+	return hge_setSeedPending(on);
+}
+
+JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeSeedFactoryTemplates(JNIEnv* /*env*/, jobject /*thiz*/)
 {
 	return static_cast<jint>(hge_seedFactoryTemplates());

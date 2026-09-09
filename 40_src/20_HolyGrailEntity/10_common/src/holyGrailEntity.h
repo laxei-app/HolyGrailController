@@ -279,6 +279,13 @@ int32_t hge_updatePlanFromTemplate(const char* planId, const char* tplId); // �
 int32_t hge_saveTemplateJsonIfAbsent(const char* csJson);
 // 出荷時のひな形("EOS-R3 night sky")をコードから作る(初回起動用。同名があれば何もしない)。
 int32_t hge_seedFactoryTemplates(void);
+
+// 【初回起動の種まき待ち(2026-09-09 ユーザー決定)】1=待っている / 0=終わった。
+//  待っている間は「計画が1件も無ければ出荷時の固定計画を作る」を止める。
+//  理由: 初回起動では位置情報の許可を聞いてから種をまく(許可=現在地 / 拒否=Tokyo)。
+//  聞いている間に計画へ触れると、内蔵カメラも場所も決まる前に FixedPlan が出来てしまい、
+//  出荷時の EOS R10・Tokyo で固定されてしまう。待っている間は一覧を空のままにする。
+int32_t hge_setSeedPending(int32_t on);
 int32_t hge_removePlace(const char* name);
 int32_t hge_setPlaceAutoInsert(const char* name, int32_t autoInsert);
 // 場所詳細(name/memo/latitude/longitude/altitude/autoInsert)を JSON で更新/新規作成。origName 一致を置換。

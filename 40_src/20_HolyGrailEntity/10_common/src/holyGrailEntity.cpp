@@ -39,6 +39,8 @@ namespace
 
 	hgc::cs               g_plan;
 	bool                  g_planReady = false;
+	// 初回起動の種まきの答え待ち(hge_setSeedPending の説明を参照)。
+	bool                  g_seedPending = false;
 	// 端末のタイムゾーン。**ログの時刻とエッジの時計だけ**に使う(2026-09-03)。
 	//  計画の時刻に使ってはいけない(planOff を使うこと)。
 	int                   g_offMin = 0;
@@ -950,6 +952,10 @@ namespace
 		{
 			return ERR_HGC_OK;
 		}
+
+		// 【種まきの答え待ちなら作らない(2026-09-09)】初回起動は位置情報の許可を聞いてから
+		//  内蔵カメラの登録と場所の確定を行う。その前に作ると出荷時のカメラ・場所で固まる。
+		if (g_seedPending) { return ERR_HGC_READY; }
 
 		// 無ければ出荷時の固定計画を作成して保存する。
 		makeFactoryCurrent(nullptr);
@@ -2503,6 +2509,12 @@ int32_t hge_saveTemplateJsonIfAbsent(const char* csJson)
 //  次の 03:00〜06:30、周期 12 秒、夜間と日中を使う、撮影制御方法は外部カメラ用の初期値(レンズの範囲へ寄せる)。
 //  撮影場所は「撮影計画に自動的に挿入する」場所(初回起動で現在地に差し替えた1件)。
 //  同じ名前が既にあれば作らない(利用者が消したものを作り直さない)。機材マスタに無ければ出荷時の機材のまま。
+int32_t hge_setSeedPending(int32_t on)
+{
+	g_seedPending = (on != 0);
+	return ERR_HGC_OK;
+}
+
 int32_t hge_seedFactoryTemplates(void)
 {
 	static const char* kName = "EOS-R3 night sky";
