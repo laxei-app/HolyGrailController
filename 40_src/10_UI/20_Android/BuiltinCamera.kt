@@ -1,4 +1,4 @@
-package app.laxei.holygrail
+﻿package app.laxei.holygrail
 
 import android.content.Context
 import android.graphics.ImageFormat
@@ -173,8 +173,13 @@ object BuiltinCamera {
                     o.put("sensorH", sz?.height?.toDouble() ?: 0.0)
                     o.put("focalMm", pc.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
                                        ?.firstOrNull()?.toDouble() ?: 0.0)
-                    o.put("fn", pc.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)
-                                  ?.firstOrNull()?.toDouble() ?: 0.0)
+                    // 【絞りは 1 点とは限らない(2026-09-19)】iPhone 13 は可変で、Android にも出てくる。
+                    //  代表値の "fn" は最も明るい絞り、"apertures" に全部を並べる。
+                    val aps = pc.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)
+                    o.put("fn", aps?.minOrNull()?.toDouble() ?: 0.0)
+                    val apArr = JSONArray()
+                    aps?.forEach { apArr.put(it.toDouble()) }
+                    o.put("apertures", apArr)
                     val exp = pc.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
                     o.put("expMaxNs", exp?.upper ?: 0L)
                     o.put("expMinNs", exp?.lower ?: 0L)

@@ -276,7 +276,7 @@ public:
 	// 夜間は固定露出(limitBright==limitDark)なので対象外。既存の preNightConverge に任せる。
 	//
 	// 戻り: 組み替えを行ったら true。
-	// stepStops = そのカメラの1目盛り[段]。1コマの許容を目盛り数へ直すのに使う。
+	// stepStops = そのカメラの1目盛り[段]。0 = 無段(1コマの許容を割って刻む)。
 	bool migrateTowardCcm(expo::exposureCtl& ctl, expo::exposureCtl& want, const hgc::ccmBase* ccm,
 	                      double stepStops);
 	// ヒステリシス帯の下限[段]。刻み q・測光の応答 γ のループは、デッドバンドが γ×q 以上で
@@ -342,6 +342,9 @@ public:
 	//   ・1コマの上限 … max(1目盛り, 1コマの許容)。**1コマの動きの粗さはこれで決まる**
 	//  15秒周期・1/3段刻みなら上限は 0.333段 = 従来どおり必ず1目盛り。
 	//  60秒周期なら 1.333段 = 4目盛りまで。9秒周期は1目盛りずつだが動くコマが間引かれる。
+	// 無段のカメラで配分を寄せるときの刻み。1コマの許容をこの数で割る(2026-09-19)。
+	//  目盛りのあるカメラは目盛りを使うので、これは無段の端末にだけ効く。
+	static constexpr double kMigrateSlices = 4.0;
 	static constexpr double kStepBudgetCapFrames = 2.0;	// 貯金の頭打ち(1コマの上限の何倍まで)
 
 private:
@@ -437,7 +440,7 @@ private:
 	struct subCam
 	{
 		device*          dev = nullptr;
-		expo::expoTables tables;
+		// テーブルは持たない。露出は段でやり取りし、丸めるのは各デバイスの中だけ(2026-09-19)。
 		bool             ready = false;	// startShooting/M固定/テーブル取得まで済んだ
 		std::string      lastFn, lastSs, lastIso;	// 差分送信用(主と同じ考え方)
 		int              failStreak = 0;	// 連続失敗数(ログを毎コマ出さないため)
@@ -459,7 +462,11 @@ private:
 	void* thread_ = nullptr;
 
 	// カメラの設定可能値テーブル(開始時に取得して構築。仕様 4.2)
-	expo::expoTables tables_;
+	// 【テーブルを持たない(2026-09-19 ユーザー決定)】設定できる値の並びと刻みはカメラの
+	//  都合なので、撮影ループは一切持たない。明るさは brightnessOf() でデバイスに聞く。
+	//  露出の一点を段で測る(主カメラ)。読めない軸は 0 として足す。
+	double brightnessOf(const hgc::exposure& e) const;
+	double brightnessOf(const class device& dev, const hgc::exposure& e) const;
 
 	// ② ev0シグモイド設定(コマ毎に太陽高度から中心bmを算出して更新)。露出計算/初期収束で共用。
 	expo::ev0Sigmoid ev0cfg_{};

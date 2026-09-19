@@ -64,6 +64,12 @@ public:
 	errCode startShooting(void) override;
 
 	errCode getSettings(cmdt::shotRange& settings) override;
+
+	// 露出を「段」で扱う口(apiBase の説明を参照)。
+	//  ss と ISO はこの端末では無段(notch=0)。F 値は端末が答える並びのぶんだけ離散。
+	errCode expoAxes(axisInfo& iso, axisInfo& ss, axisInfo& fn) override;
+	errCode expoResolve(const expoPoint& want, hgc::exposure& out, expoPoint& got) override;
+	errCode expoStops(const hgc::exposure& e, expoPoint& out) override;
 	errCode setFNumber(const std::string& fNumber) override;
 	errCode setSS(const std::string& ss) override;
 	errCode setIso(const std::string& iso) override;
@@ -114,7 +120,13 @@ public:
 	double focalMm(void) const { return focalMm_; }
 	// センサーの面積[mm2]。どのカメラが星向きかを機種名に頼らず選ぶのに使う。
 	double sensorArea(void) const { return sensorW_ * sensorH_; }
-	double aperture(void) const { return apertures_.empty() ? 0.0 : apertures_.front(); }
+	// 【絞りは固定とは限らない(2026-09-19)】iPhone 13 は可変で、Android にもいずれ出る。
+	//  端末が答える並びの最小(=最も明るい)と最大を別々に返す。1 点なら同じ値になる。
+	double aperture(void) const { return this->apertureMin(); }
+	double apertureMin(void) const;
+	double apertureMax(void) const;
+	// 絞りが 2 点以上あるか(レンズ登録で「固定」と書かないための判定)。
+	bool   apertureVariable(void) const { return apertures_.size() > 1; }
 	// センサー1コマの最長露光[秒](端末の申告)。これを超える ss は加算で作る。
 	double maxSsSec(void) const { return (expMaxNs_ > 0) ? (static_cast<double>(expMaxNs_) / 1e9) : 0.0; }
 	// 設定できる最長の ss[秒](加算込み)。RAW が出せれば kMaxStackSsSec、出せなければセンサーの上限。
@@ -126,7 +138,7 @@ public:
 	const std::vector<std::string>& ssList(void)  const { return ssList_; }
 	const std::vector<std::string>& fnList(void)  const { return fnList_; }
 	// 論理値と刻みを含むテーブル(ひな形の吸着はこれで行う。文字列から作り直さない)。
-	const expo::expoTables& tables(void) const { return tables_; }
+	// 露出の明るさ[段](この層の中の割り戻し用)。
 
 private:
 	// 【論理値と表示用の文字列を分けて持つ(2026-09-07 ユーザー指示)】キヤノン機と同じ形。
@@ -172,7 +184,7 @@ private:
 	//  テーブルは測光値を「露出非依存の場面の明るさ」へ割り戻すのに要る(apiBase には無い)。
 	std::vector<std::string> ssList_, isoList_, fnList_;
 	std::vector<double>      ssReal_, isoReal_, fnReal_;
-	expo::expoTables tables_;
+	double brightnessOf(const hgc::exposure& e);
 
 	// いま載せている露出(要求ごとに渡すので、ここが唯一の状態)
 	std::string curSs_, curIso_, curFn_;

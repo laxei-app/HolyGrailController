@@ -16,11 +16,179 @@
 //   実写 IMG_1092.CR3 は 1/100 で撮れており、中央値 0.359(sRGB) = 適正だった。
 
 #include "exposureMath.h"
+#include "apiBase.h"	// 露出制御はデバイスに段で聞く
+#include <deque>
 #include <cstdio>
 #include <algorithm>
 #include <cmath>
 #include <string>
 #include <vector>
+
+// ── 試験用の偽デバイス ──────────────────────────────────────────
+// 【なぜ要るか(2026-09-19)】露出制御は設定できる値の並びを持たなくなり、デバイスに
+//  「段」で聞く形になった(apiBase::expoAxes / expoResolve / expoStops)。
+//  試験もその形に合わせる。並びを持つカメラ(キヤノン)と、無段のカメラ(スマホ内蔵)を
+//  どちらもここで作れるようにしてある。
+class fakeCam : public apiBase
+{
+public:
+	struct ax
+	{
+		expo::expoKind kind = expo::expoKind::iso;
+		std::vector<std::string> value;	// 離散のときの綴り
+		std::vector<double>      b;		// 同じ並びの段(大きいほど明るい)
+		double lo = 0.0, hi = 0.0;		// 連続のときの範囲[段]
+		bool   cont = false;			// 真=無段
+	};
+	ax iso, ss, fn;
+
+	// 並び(expoTables)からそのまま作る。刻みのあるカメラの試験はこれでよい。
+	void setFromTables(const expo::expoTables& t)
+	{
+		fill(iso, t.iso, expo::expoKind::iso);
+		fill(ss,  t.ss,  expo::expoKind::ss);
+		fill(fn,  t.fn,  expo::expoKind::fn);
+	}
+	// 離散の軸にする(実数をそのまま並べる。理想の格子へ丸めないので、
+	//  f/1.5 と f/2.4 のような「格子に乗らない」並びも素直に試せる)。
+	void setDiscrete(expo::expoKind k, const std::vector<double>& reals)
+	{
+		ax& a = ref(k);
+		a = ax{}; a.kind = k; a.cont = false;
+		for (double r : reals)
+		{
+			if (!(r > 0.0)) { continue; }
+			a.value.push_back(textOf(k, r));
+			a.b.push_back(expo::stopsOfReal(r, k));
+		}
+		if (!a.b.empty())
+		{
+			a.lo = a.b[0]; a.hi = a.b[0];
+			for (double v : a.b) { if (v < a.lo) { a.lo = v; } if (v > a.hi) { a.hi = v; } }
+		}
+	}
+	// 無段の軸にする(範囲は実数で指定)。
+	void setContinuous(expo::expoKind k, double loReal, double hiReal)
+	{
+		ax& a = ref(k);
+		a = ax{}; a.kind = k; a.cont = true;
+		double l = expo::stopsOfReal(loReal, k), h = expo::stopsOfReal(hiReal, k);
+		if (h < l) { std::swap(l, h); }
+		a.lo = l; a.hi = h;
+	}
+
+	errCode init(class device&) override { return ERR_HGC_OK; }
+
+	errCode expoAxes(axisInfo& ai, axisInfo& as, axisInfo& af) override
+	{
+		info(iso, ai); info(ss, as); info(fn, af);
+		return ERR_HGC_OK;
+	}
+	errCode expoResolve(const expoPoint& want, hgc::exposure& out, expoPoint& got) override
+	{
+		out = hgc::exposure{}; got = expoPoint{};
+		resolve(iso, want.hasIso, want.iso, out.iso, got.iso, got.hasIso);
+		resolve(ss,  want.hasSs,  want.ss,  out.ss,  got.ss,  got.hasSs);
+		resolve(fn,  want.hasFn,  want.fn,  out.fn,  got.fn,  got.hasFn);
+		return ERR_HGC_OK;
+	}
+	errCode expoStops(const hgc::exposure& e, expoPoint& out) override
+	{
+		out = expoPoint{};
+		stops(iso, e.iso, out.iso, out.hasIso);
+		stops(ss,  e.ss,  out.ss,  out.hasSs);
+		stops(fn,  e.fn,  out.fn,  out.hasFn);
+		return ERR_HGC_OK;
+	}
+
+private:
+	ax& ref(expo::expoKind k)
+	{ return (k == expo::expoKind::iso) ? iso : ((k == expo::expoKind::ss) ? ss : fn); }
+
+	static void fill(ax& a, const std::vector<expo::expoEntry>& t, expo::expoKind k)
+	{
+		a = ax{}; a.kind = k; a.cont = false;
+		for (const auto& e : t)
+		{
+			a.value.push_back(e.value);
+			a.b.push_back((k == expo::expoKind::iso) ? e.apex : -e.apex);
+		}
+		if (!a.b.empty())
+		{
+			a.lo = a.b[0]; a.hi = a.b[0];
+			for (double v : a.b) { if (v < a.lo) { a.lo = v; } if (v > a.hi) { a.hi = v; } }
+		}
+	}
+	// 軸の素性。離散なら「いまの位置」は分からないので、いちばん細かい目盛りを答える
+	//  (試験に使う並びは等間隔なので実機と同じ値になる)。
+	static void info(const ax& a, axisInfo& o)
+	{
+		o = axisInfo{};
+		o.lo = a.lo; o.hi = a.hi;
+		if (a.cont || a.b.size() < 2) { o.notch = 0.0; return; }
+		std::vector<double> s = a.b;
+		std::sort(s.begin(), s.end());
+		double best = 0.0;
+		for (size_t i = 1; i < s.size(); ++i)
+		{
+			const double d = s[i] - s[i - 1];
+			if (d > 1e-6 && (best <= 0.0 || d < best)) { best = d; }
+		}
+		o.notch = best;
+	}
+	static std::string textOf(expo::expoKind k, double real)
+	{
+		char t[32];
+		if (k == expo::expoKind::iso) { std::snprintf(t, sizeof(t), "%d", (int)(real + 0.5)); return t; }
+		if (k == expo::expoKind::fn)  { std::snprintf(t, sizeof(t), "%.2f", real); return t; }
+		if (real < 0.02) { std::snprintf(t, sizeof(t), "1/%d", (int)(1.0 / real + 0.5)); return t; }
+		std::snprintf(t, sizeof(t), "%.4g", real); return t;
+	}
+	static void resolve(const ax& a, bool has, double want, std::string& outv, double& gb, bool& gh)
+	{
+		if (!has) { return; }
+		if (a.cont)
+		{
+			double v = want;
+			if (v < a.lo) { v = a.lo; }
+			if (v > a.hi) { v = a.hi; }
+			outv = textOf(a.kind, expo::realOfStops(v, a.kind));
+			const double back = expo::parseValue(outv, a.kind);
+			gb = expo::stopsOfReal((back > 0.0) ? back : expo::realOfStops(v, a.kind), a.kind);
+			gh = true;
+			return;
+		}
+		if (a.b.empty()) { return; }
+		int best = 0; double bd = 1e300;
+		for (size_t i = 0; i < a.b.size(); ++i)
+		{
+			const double d = std::fabs(a.b[i] - want);
+			if (d < bd) { bd = d; best = (int)i; }
+		}
+		outv = a.value[best]; gb = a.b[best]; gh = true;
+	}
+	static void stops(const ax& a, const std::string& v, double& b, bool& h)
+	{
+		if (v.empty()) { return; }
+		for (size_t i = 0; i < a.value.size(); ++i)
+		{	// 並びにある綴りは、その要素の段そのもの
+			if (a.value[i] == v) { b = a.b[i]; h = true; return; }
+		}
+		const double r = expo::parseValue(v, a.kind);
+		if (!(r > 0.0)) { return; }
+		b = expo::stopsOfReal(r, a.kind); h = true;
+	}
+};
+
+
+// 偽デバイスの置き場。参照が無効にならないよう deque で持つ(試験の間ずっと生かす)。
+static apiBase* fakeOf(const expo::expoTables& t)
+{
+	static std::deque<fakeCam> pool;
+	pool.emplace_back();
+	pool.back().setFromTables(t);
+	return &pool.back();
+}
 
 static int g_fail = 0;
 static void check(bool ok, const char* name, const char* detail = "")
@@ -104,7 +272,7 @@ int main()
 		hgc::exposure limB; limB.iso = "1600"; limB.ss = "8";      limB.fn = "1.4";
 		hgc::exposure limD; limD.iso = "100";  limD.ss = "1/4000"; limD.fn = "16";
 		hgc::exposureType prio[3] = { hgc::exposureType::iso, hgc::exposureType::ss, hgc::exposureType::fn };
-		ctl.init(t, limB, limD, prio);
+		ctl.init(fakeOf(t), limB, limD, prio);
 		ctl.setCurrent(e);
 		for (int i = 0; i < 40; ++i)
 		{
@@ -125,7 +293,7 @@ int main()
 		hgc::exposure limB; limB.iso = "1600"; limB.ss = "8";      limB.fn = "1.4";
 		hgc::exposure limD; limD.iso = "100";  limD.ss = "1/4000"; limD.fn = "16";
 		hgc::exposureType prio[3] = { hgc::exposureType::iso, hgc::exposureType::ss, hgc::exposureType::fn };
-		ctl.init(t, limB, limD, prio);
+		ctl.init(fakeOf(t), limB, limD, prio);
 		ctl.setCurrent(shotExp);	// 暴走途中の 4秒 から開始
 
 		const double sceneRef = sceneRefFromMetered(metered, meterExp, t);
@@ -978,13 +1146,13 @@ int main()
 		hgc::exposure carry; carry.iso = "1600"; carry.ss = "1/125"; carry.fn = "1.4";
 
 		expo::exposureCtl ctl;
-		ctl.init(tb, limBright, limDark, prio);
+		ctl.init(fakeOf(tb), limBright, limDark, prio);
 		ctl.setCurrent(carry);
 		const double b0 = expo::brightnessStops(ctl.current(), tb);
 
 		// 一気に飛ぶ従来方式なら、どこへ行き着くか(=寄せ先)
 		expo::exposureCtl want;
-		want.init(tb, limBright, limDark, prio);
+		want.init(fakeOf(tb), limBright, limDark, prio);
 		want.setCurrent(initial);
 		want.applyStops(b0 - expo::brightnessStops(want.current(), tb));
 		const hgc::exposure dest = want.current();
@@ -997,7 +1165,7 @@ int main()
 		double prevFn = expo::parseValue(ctl.current().fn, expo::expoKind::fn);
 		while (frames < 200)
 		{
-			if (!expo::migrateToward(ctl, want, tb, initial)) { break; }
+			if (!expo::migrateToward(ctl, want, initial, ctl.minStepStops())) { break; }
 			++frames;
 			if (std::fabs(expo::brightnessStops(ctl.current(), tb) - b0) > 1e-6) { brightKept = false; }
 			const double nowFn = expo::parseValue(ctl.current().fn, expo::expoKind::fn);
@@ -1013,7 +1181,7 @@ int main()
 		      "最後は一気に飛んだ場合と同じ配分に落ち着く", dm);
 		// f1.4→f11 は 6段。1コマ1目盛り(1/3段)なので18コマ。15秒周期なら約4分半。
 		check(frames == 18, "6段の組み替えに18コマかかる(1コマ1目盛り)", dm);
-		check(expo::migrateToward(ctl, want, tb, initial) == false,
+		check(expo::migrateToward(ctl, want, initial, ctl.minStepStops()) == false,
 		      "合っていれば何も動かさない(自動露出の邪魔をしない)");
 	}
 
@@ -1084,7 +1252,7 @@ int main()
 		hgc::exposure noLim{};
 		const hgc::exposureType pri[hgc::exposureTypeNum] =
 			{ hgc::exposureType::iso, hgc::exposureType::ss, hgc::exposureType::fn };
-		c.init(t, noLim, noLim, pri);
+		c.init(fakeOf(t), noLim, noLim, pri);
 		hgc::exposure e0; e0.iso = "800"; e0.ss = "1/60"; e0.fn = "4.0";
 		c.setCurrent(e0);
 		checkNear(c.minStepStops(), 1.0 / 3.0, 1e-6, "標準テーブルの1目盛りは 1/3段");
@@ -1187,7 +1355,7 @@ int main()
 			const hgc::exposure noLim{};
 			const hgc::exposureType pri[hgc::exposureTypeNum] =
 				{ hgc::exposureType::ss, hgc::exposureType::iso, hgc::exposureType::fn };
-			ctl.init(t, noLim, noLim, pri);
+			ctl.init(fakeOf(t), noLim, noLim, pri);
 			hgc::exposure cur; cur.iso = "100"; cur.fn = "2"; cur.ss = t.ss[12].value;
 			ctl.setCurrent(cur);
 			check(std::fabs(ctl.minStepStops() - 1.0 / 12.0) < 1e-9, "exposureCtl の 1 目盛りが 1/12 段");
@@ -1375,7 +1543,7 @@ int main()
 		// ① 内部は無段階・外へ出す姿だけ目盛りに丸める(キヤノンの 1/3 段テーブル)
 		{
 			const expo::expoTables t = expo::standardTables(1.4, 22.0);
-			expo::exposureCtl c; c.init(t, noLim, noLim, pri);
+			expo::exposureCtl c; c.init(fakeOf(t), noLim, noLim, pri);
 			hgc::exposure e0; e0.iso = "800"; e0.ss = "1/60"; e0.fn = "4.0";
 			c.setCurrent(e0);
 			const double b0 = c.brightness();
@@ -1410,7 +1578,7 @@ int main()
 			const expo::expoTables t = expo::tablesFromRange(r);
 			const hgc::exposureType priSs[hgc::exposureTypeNum] =
 				{ hgc::exposureType::ss, hgc::exposureType::iso, hgc::exposureType::fn };
-			expo::exposureCtl c; c.init(t, noLim, noLim, priSs);
+			expo::exposureCtl c; c.init(fakeOf(t), noLim, noLim, priSs);
 			hgc::exposure cur; cur.iso = "100"; cur.fn = "2"; cur.ss = t.ss[12].value;
 			c.setCurrent(cur);
 			const double b0 = c.brightness();
@@ -1432,7 +1600,7 @@ int main()
 			hgc::exposure lb{}, ld{};
 			lb.iso = "800";		// 明側の限界
 			ld.iso = "200";		// 暗側の限界
-			expo::exposureCtl c; c.init(t, lb, ld, pri);
+			expo::exposureCtl c; c.init(fakeOf(t), lb, ld, pri);
 			hgc::exposure e0; e0.iso = "400"; e0.ss = "1/60"; e0.fn = "4.0";
 			c.setCurrent(e0);
 			const double did = c.moveStops(100.0);
@@ -1458,13 +1626,13 @@ int main()
 			const expo::expoTables t = expo::tablesFromRange(r);
 			hgc::exposure e0; e0.iso = "400"; e0.ss = "1/125"; e0.fn = "4.0";
 			{
-				expo::exposureCtl c; c.init(t, noLim, noLim, pri); c.setCurrent(e0);
+				expo::exposureCtl c; c.init(fakeOf(t), noLim, noLim, pri); c.setCurrent(e0);
 				checkNear(c.minStepStops(), 0.5, 1e-9, "いちばん細かい目盛りは ss の 1/2 段");
 				checkNear(c.maxStepStops(), 1.0, 1e-9, "いちばん粗い目盛りは ISO の 1 段");
 			}
 			{	// ISO を上下とも 400 に縛ると ISO は動けない → 丸めの粗さは ss の 1/2 段
 				hgc::exposure lb{}, ld{}; lb.iso = "400"; ld.iso = "400";
-				expo::exposureCtl c; c.init(t, lb, ld, pri); c.setCurrent(e0);
+				expo::exposureCtl c; c.init(fakeOf(t), lb, ld, pri); c.setCurrent(e0);
 				checkNear(c.maxStepStops(), 0.5, 1e-9, "動けない軸(固定 ISO)は丸めの誤差を生まないので数えない");
 			}
 			{	// 内蔵カメラ: F 値が 1 点しかなくても、上下限で縛られているのと同じで数えない
@@ -1478,7 +1646,7 @@ int main()
 				rb.iso = { "100","106","112" }; rb.isoReal = { 100.0, 105.95, 112.25 };
 				rb.fNum = { "1.68" };           rb.fnReal  = { 1.68 };
 				const expo::expoTables tb = expo::tablesFromRange(rb);
-				expo::exposureCtl c; c.init(tb, noLim, noLim, pri);
+				expo::exposureCtl c; c.init(fakeOf(tb), noLim, noLim, pri);
 				hgc::exposure e; e.iso = "100"; e.ss = tb.ss[12].value; e.fn = "1.68";
 				c.setCurrent(e);
 				checkNear(c.maxStepStops(), 1.0 / 12.0, 1e-9, "内蔵カメラは 1 点の F 値を数えず 1/12 段のまま");
@@ -1495,7 +1663,7 @@ int main()
 			hgc::exposure lb{}, ld{};
 			lb.iso = "200";		// ISO は 1 段ぶんしか明るくできない
 			ld.iso = "100";
-			expo::exposureCtl c; c.init(t, lb, ld, pri);
+			expo::exposureCtl c; c.init(fakeOf(t), lb, ld, pri);
 			hgc::exposure home; home.iso = "100"; home.ss = "1/60"; home.fn = "4.0";
 			c.setCurrent(home);
 			c.moveStops(2.0);	// 優先度どおり ISO を限界まで → 残りを ss へ
@@ -1531,7 +1699,7 @@ int main()
 			auto run = [&](double band, double cap, int frames, double drift, double wobble,
 			               double& maxMove, double& worst, int& reversals)
 			{
-				expo::exposureCtl c; c.init(t, lb, ld, pri); c.setCurrent(e0);
+				expo::exposureCtl c; c.init(fakeOf(t), lb, ld, pri); c.setCurrent(e0);
 				const double base = expo::brightnessStops(e0, t);
 				double scene = -base;	// 1 コマ目の写る明るさが 0(目標)になるように置く
 				double prevB = expo::brightnessStops(c.current(), t);
@@ -1688,6 +1856,135 @@ int main()
 			check(expo::medianStepStops(one, expo::expoKind::fn) == 0.0, "値が 1 つでは中央値を測れない(0)");
 			check(expo::stepMatchesValues(one, expo::expoKind::fn, 0.5),
 			      "測れないときは申告を否定しない");
+		}
+	}
+
+	// --- 露出のテーブルをデバイス側へ閉じた(2026-09-19 ユーザー決定) ---
+	//  制御側は並びも刻みも持たない。デバイスに「段」で聞き、「段」で指示する。
+	//  そのおかげで、**無段のカメラ**も**未知の刻みのカメラ**も特別扱い無しで通る。
+	{
+		std::printf("--- デバイスが段で答える(並びは制御側に無い) ---\n");
+		const hgc::exposure noLim{};
+		const hgc::exposureType pri[hgc::exposureTypeNum] =
+			{ hgc::exposureType::iso, hgc::exposureType::ss, hgc::exposureType::fn };
+
+		// ① 無段のカメラ(スマホ内蔵)。目盛りが無いので、細かい要求もそのまま設定へ届く。
+		{
+			static fakeCam cam;
+			cam.setContinuous(expo::expoKind::ss,  1.0 / 8000.0, 48.0);
+			cam.setContinuous(expo::expoKind::iso, 44.0, 11377.0);
+			{	// F は 1 点(この端末は固定絞り)
+				expo::expoTables t1;
+				t1.fn = expo::buildTable({ "1.85" }, expo::expoKind::fn, 1.0 / 12.0);
+				fakeCam tmp; tmp.setFromTables(t1);
+				cam.fn = tmp.fn;
+			}
+			expo::exposureCtl c;
+			check(c.init(&cam, noLim, noLim, pri), "無段のデバイスでも初期化できる");
+			hgc::exposure e0; e0.iso = "100"; e0.ss = "0.05"; e0.fn = "1.85";
+			c.setCurrent(e0);
+
+			checkNear(c.minStepStops(), 0.0, 1e-12, "無段の軸に目盛りは無い(0)");
+			checkNear(c.maxStepStops(), 0.0, 1e-12, "動ける軸がすべて無段なら丸めの誤差も 0");
+
+			const double b0 = c.brightness();
+			const double a0 = c.appliedBrightness();
+			c.moveStops(0.01);
+			checkNear(c.brightness() - b0, 0.01, 1e-12, "0.01 段の要求が内部にそのまま入る");
+			// ここが 1/12 段のときとの違い。以前は目盛りに届かず**送る値が動かなかった**。
+			//  ISO は整数なので、0.01 段の要求は最寄りの整数(0.0144 段)になる。
+			//  大事なのは「動くこと」。1/12 段の並びだったころは目盛りに埋もれて動かなかった。
+			const double moved = c.appliedBrightness() - a0;
+			char md[96]; std::snprintf(md, sizeof(md), "(送る値が %.4f 段動いた)", moved);
+			check(moved > 0.005 && moved < 0.02,
+			      "0.01 段でもカメラへ送る値が動く(以前は目盛りに埋もれた)", md);
+
+			c.setCurrent(e0);
+			const double b1 = c.brightness();
+			c.moveStops(0.137);
+			checkNear(c.brightness() - b1, 0.137, 1e-12, "端数の要求も無段でそのまま");
+			check(std::fabs(c.appliedBrightness() - c.brightness()) < 0.02,
+			      "送る値と内部の差は文字列の丸めぶんだけ(0.02 段未満)");
+		}
+
+		// ② 可変絞りのカメラ(iPhone 13 のような 2 点)。絞りが「動ける軸」になる。
+		//    荒い軸は荒く動く、という方針どおり、帯の下限を決める粗さもそれに従う。
+		{
+			static fakeCam cam;
+			cam.setDiscrete(expo::expoKind::fn,  { 1.5, 2.4 });			// 可変絞り(2 点)
+			cam.setDiscrete(expo::expoKind::iso, { 100.0, 200.0, 400.0 });	// ISO は 1 段刻み
+			cam.setContinuous(expo::expoKind::ss, 1.0 / 8000.0, 48.0);	// ss は無段
+
+			const double gap = std::fabs(expo::stopsOfReal(2.4, expo::expoKind::fn)
+			                           - expo::stopsOfReal(1.5, expo::expoKind::fn));
+			{
+				expo::exposureCtl c;
+				c.init(&cam, noLim, noLim, pri);
+				hgc::exposure e0; e0.iso = "100"; e0.ss = "0.01"; e0.fn = "1.5";
+				c.setCurrent(e0);
+				check(gap > 1.3 && gap < 1.4, "f/1.5 と f/2.4 は約 1.36 段離れている");
+				// 【荒い軸は荒く動く(2026-09-19 ユーザー決定)】絞りが自由なら、いちばん粗いのは
+				//  ISO の 1 段ではなく絞りの 1.36 段。帯の下限はこれに比例して広がる。
+				//  絞りを開けた途端に露出が動きにくくなるのは、この方針どおりの挙動である。
+				checkNear(c.maxStepStops(), gap, 1e-9, "絞りが自由なら、いちばん粗いのは絞りの 1.36 段");
+			}
+			{	// ISO を固定すると、いちばん粗いのは絞りになる
+				hgc::exposure lb{}, ld{}; lb.iso = "100"; ld.iso = "100";
+				expo::exposureCtl c;
+				c.init(&cam, lb, ld, pri);
+				hgc::exposure e0; e0.iso = "100"; e0.ss = "0.01"; e0.fn = "1.5";
+				c.setCurrent(e0);
+				checkNear(c.maxStepStops(), gap, 1e-9, "ISO を固定すると絞りの 1.36 段がいちばん粗い");
+			}
+			{	// 絞りを両端で固定すれば「動けない軸」になり、粗さに数えない
+				hgc::exposure lb{}, ld{}; lb.fn = "1.5"; ld.fn = "1.5";
+				expo::exposureCtl c;
+				c.init(&cam, lb, ld, pri);
+				hgc::exposure e0; e0.iso = "100"; e0.ss = "0.01"; e0.fn = "1.5";
+				c.setCurrent(e0);
+				checkNear(c.maxStepStops(), 1.0, 1e-9, "絞りを固定すれば粗さに数えない(ISO の 1 段が残る)");
+			}
+			{	// 絞りが実際に使われる: ISO と ss を使い切った先で f/2.4 へ回る
+				hgc::exposure lb{}, ld{};
+				lb.iso = "100"; ld.iso = "100";			// ISO 固定
+				lb.ss  = "0.01"; ld.ss = "0.01";		// ss も固定
+				expo::exposureCtl c;
+				c.init(&cam, lb, ld, pri);
+				hgc::exposure e0; e0.iso = "100"; e0.ss = "0.01"; e0.fn = "1.5";
+				c.setCurrent(e0);
+				c.moveStops(-2.0);						// 暗くしたい。残るのは絞りだけ
+				check(expo::parseValue(c.current().fn, expo::expoKind::fn) > 2.0,
+			      "ほかに動く軸が無ければ絞りが受け持つ(可変絞り機)");
+			}
+		}
+
+		// ③ 見覚えのない刻み(0.4 段)のカメラ。特別扱いはどこにも無い。
+		{
+			std::vector<std::string> v;
+			std::vector<double>      r;
+			for (int k = 0; k < 12; ++k)
+			{
+				const double sec = 0.001 * std::pow(2.0, 0.4 * k);
+				char b[32]; std::snprintf(b, sizeof(b), "%.5g", sec);
+				v.push_back(b); r.push_back(sec);
+			}
+			cmdt::shotRange sr;
+			sr.ss = v; sr.ssReal = r; sr.ssStep = 0.4;
+			sr.iso = { "100" }; sr.fNum = { "2.8" };
+			const expo::expoTables t = expo::tablesFromRange(sr);
+			static fakeCam cam;
+			cam.setFromTables(t);
+			expo::exposureCtl c;
+			c.init(&cam, noLim, noLim, pri);
+			hgc::exposure e0; e0.iso = "100"; e0.ss = v[5]; e0.fn = "2.8";
+			c.setCurrent(e0);
+			checkNear(c.minStepStops(), 0.4, 1e-9, "0.4 段という見覚えのない刻みでもそのまま扱える");
+			checkNear(c.maxStepStops(), 0.4, 1e-9, "帯の下限もその刻みに従う");
+			const double b0 = c.brightness();
+			const double a0 = c.appliedBrightness();
+			c.moveStops(0.4);
+			checkNear(c.brightness() - b0, 0.4, 1e-9, "内部は要求どおり動く");
+			checkNear(c.appliedBrightness() - a0, 0.4, 1e-9, "送る値もその刻みで 1 つ動く");
 		}
 	}
 

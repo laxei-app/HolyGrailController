@@ -1,4 +1,4 @@
-// スマホ内蔵カメラを所持カメラへ自動で登録する(2026-09-05)。
+﻿// スマホ内蔵カメラを所持カメラへ自動で登録する(2026-09-05)。
 //
 // 【なぜ自動なのか】外付けのカメラは「その個体を持っているか」が分からないので、
 //  登録してよいか人に聞く。内蔵カメラは端末そのものなので聞く意味が無い。複数のカメラを
@@ -31,67 +31,25 @@ namespace
 {
 	using json = nlohmann::json;
 
-	// 露出をカメラの設定可能値へ吸着させる。ひな形の初期値や限界が、そのカメラに
-	//  存在しない値のままだと、撮影開始時にいちばん近い値へ飛んで意図とずれる。
-	void snapExposure(hgc::exposure& e, const expo::expoTables& t)
+	// 【並びから選ぶのをやめた(2026-09-19)】内蔵カメラの ss と ISO は無段になり、
+	//  設定できる値の並びは持たない。欲しい値は「段」で決めて、デバイスに解決させる
+	//  (apiBase::expoResolve が範囲で止め、その端末が出せる値にする)。
+	//  以前の nearestIn / maxBelow / minOf / maxOf / snapExposure は役目を終えたので外した。
+	hgc::exposure resolveReal(apiBuiltin& api, double isoWant, double ssWant, double fnWant)
 	{
-		if (e.iso.empty() && e.ss.empty() && e.fn.empty()) { return; }
-		expo::exposureCtl ctl;
-		const hgc::exposure noLim{};
-		const hgc::exposureType pri[hgc::exposureTypeNum] =
-			{ hgc::exposureType::iso, hgc::exposureType::ss, hgc::exposureType::fn };
-		ctl.init(t, noLim, noLim, pri);
-		ctl.setCurrent(e);	// いちばん近い目盛りへ吸着する
-		e = ctl.current();
+		apiBase::expoPoint want;
+		if (isoWant > 0.0) { want.iso = expo::stopsOfReal(isoWant, expo::expoKind::iso); want.hasIso = true; }
+		if (ssWant  > 0.0) { want.ss  = expo::stopsOfReal(ssWant,  expo::expoKind::ss);  want.hasSs  = true; }
+		if (fnWant  > 0.0) { want.fn  = expo::stopsOfReal(fnWant,  expo::expoKind::fn);  want.hasFn  = true; }
+		hgc::exposure out; apiBase::expoPoint got;
+		api.expoResolve(want, out, got);
+		return out;
 	}
 
-	// ── 設定可能値の並び(カメラが答えた文字列)から値を選ぶ ──────────────
-	// 段の差(log2 比)が最小のもの。空なら "" 。
-	std::string nearestIn(const std::vector<std::string>& list, double target, expo::expoKind k)
-	{
-		const std::string* best = nullptr; double bestDiff = 1e300;
-		for (const auto& s : list)
-		{
-			const double r = expo::parseValue(s, k);
-			if (r <= 0.0 || target <= 0.0) { continue; }
-			const double d = std::fabs(std::log2(r / target));
-			if (d < bestDiff) { bestDiff = d; best = &s; }
-		}
-		return best ? *best : std::string();
-	}
-	// limit 未満で最大のもの。無ければ最小のもの。
-	std::string maxBelow(const std::vector<std::string>& list, double limit, expo::expoKind k)
-	{
-		const std::string* best = nullptr; double bestR = -1.0;
-		const std::string* lo = nullptr;   double loR = 1e300;
-		for (const auto& s : list)
-		{
-			const double r = expo::parseValue(s, k);
-			if (r <= 0.0) { continue; }
-			if (r < loR) { loR = r; lo = &s; }
-			if (r < limit && r > bestR) { bestR = r; best = &s; }
-		}
-		if (best) { return *best; }
-		return lo ? *lo : std::string();
-	}
-	std::string minOf(const std::vector<std::string>& list, expo::expoKind k)
-	{
-		const std::string* lo = nullptr; double loR = 1e300;
-		for (const auto& s : list) { const double r = expo::parseValue(s, k); if (r > 0.0 && r < loR) { loR = r; lo = &s; } }
-		return lo ? *lo : std::string();
-	}
-	std::string maxOf(const std::vector<std::string>& list, expo::expoKind k)
-	{
-		const std::string* hi = nullptr; double hiR = -1.0;
-		for (const auto& s : list) { const double r = expo::parseValue(s, k); if (r > 0.0 && r > hiR) { hiR = r; hi = &s; } }
-		return hi ? *hi : std::string();
-	}
-
-	// UI から受け取る名前(型ごと)。無ければ英語の既定。
+	// 撮影制御方法の名前(UI の言語で渡ってくる。Entity は文言を持たない)。
 	struct phoneNames
 	{
-		std::string night = "Night phone", sunrise = "Sunrise phone";
-		std::string sunset = "Sunset phone", day = "Daylight phone";
+		std::string night, sunrise, sunset, day;
 	};
 	phoneNames parseNames(const std::string& namesJson)
 	{
@@ -111,28 +69,19 @@ namespace
 	//              速くなければ最速) / 最大F。順は iso→ss→F。ev -3.0、平滑化 0.5ev・3コマ
 	//  日中      : 朝日と同じ限界、ev 0.0
 	//  ss の暗所限界は api の上限に関わらず 48 秒まで(apiBuiltin の並びが加算で 48 秒まで持つ)。
-	hgc::exposure nightExposureFor(const apiBuiltin& api, double sensorWmm, uint32_t pixelW)
+	hgc::exposure nightExposureFor(apiBuiltin& api, double sensorWmm, uint32_t pixelW)
 	{
-		hgc::exposure e;
-		const double npf = expo::npfShutterSec(sensorWmm, static_cast<double>(pixelW), api.focalMm(), api.aperture());
-		e.ss  = (npf > 0.0) ? maxBelow(api.ssList(), npf, expo::expoKind::ss)
-		                    : nearestIn(api.ssList(), 24.0, expo::expoKind::ss);
-		e.fn  = minOf(api.fnList(), expo::expoKind::fn);
-		e.iso = nearestIn(api.isoList(), 1600.0, expo::expoKind::iso);
-		return e;
+		// ss = NPF(点像を保つ目安)。出せなければ 24 秒。F は最も明るい絞り。ISO 1600。
+		const double npf = expo::npfShutterSec(sensorWmm, static_cast<double>(pixelW),
+		                                       api.focalMm(), api.apertureMin());
+		return resolveReal(api, 1600.0, (npf > 0.0) ? npf : 24.0, api.apertureMin());
 	}
-	hgc::exposure brightLimitFor(const apiBuiltin& api)
+	hgc::exposure brightLimitFor(apiBuiltin& api)
 	{
-		hgc::exposure e;
-		e.iso = nearestIn(api.isoList(), 100.0, expo::expoKind::iso);
-		const std::string fastest = minOf(api.ssList(), expo::expoKind::ss);
-		const double camMin = expo::parseValue(fastest, expo::expoKind::ss);
-		const double want   = 1.0 / 16000.0;
-		e.ss = (camMin > want) ? fastest : nearestIn(api.ssList(), want, expo::expoKind::ss);
-		e.fn = maxOf(api.fnList(), expo::expoKind::fn);
-		return e;
+		// 明所限界。ss は 1/16000 を望み、そこまで速くない端末では expoResolve が端で止める。
+		return resolveReal(api, 100.0, 1.0 / 16000.0, api.apertureMax());
 	}
-	void buildPhoneSet(const apiBuiltin& api, double sensorWmm, uint32_t pixelW,
+	void buildPhoneSet(apiBuiltin& api, double sensorWmm, uint32_t pixelW,
 	                   const phoneNames& nm, astro::ccmSet& set)
 	{
 		const hgc::exposure dark   = nightExposureFor(api, sensorWmm, pixelW);
@@ -163,12 +112,13 @@ namespace
 	}
 
 	// 見つかったカメラのうち、焦点距離がいちばん短いもの(スマホ用初期値の元にする)。
-	const apiBuiltin* shortestLens(const std::vector<class device>& cams, const class device** dev)
+	// 戻りが非 const なのは、呼ぶ側が expoResolve(デバイスの遅延構築に触る)を使うため。
+	apiBuiltin* shortestLens(const std::vector<class device>& cams, const class device** dev)
 	{
-		const apiBuiltin* best = nullptr;
+		apiBuiltin* best = nullptr;
 		for (const auto& d : cams)
 		{
-			const apiBuiltin* api = dynamic_cast<const apiBuiltin*>(d.apiBase.get());
+			apiBuiltin* api = dynamic_cast<apiBuiltin*>(d.apiBase.get());
 			if (api == nullptr || api->focalMm() <= 0.0) { continue; }
 			if (best == nullptr || api->focalMm() < best->focalMm()) { best = api; *dev = &d; }
 		}
@@ -179,7 +129,7 @@ namespace
 	void makePhonePresets(const std::vector<class device>& cams, const phoneNames& nm)
 	{
 		const class device* dev = nullptr;
-		const apiBuiltin* api = shortestLens(cams, &dev);
+		apiBuiltin* api = shortestLens(cams, &dev);
 		if (api == nullptr || dev == nullptr) { return; }
 		double wmm = 0.0, hmm = 0.0; uint32_t px = 0, py = 0;
 		dev->apiBase->readSensorSpec(wmm, hmm, px, py);
@@ -225,7 +175,7 @@ namespace builtinCam
 	{
 		for (const auto& d : cams)
 		{
-			const apiBuiltin* api = dynamic_cast<const apiBuiltin*>(d.apiBase.get());
+			apiBuiltin* api = dynamic_cast<apiBuiltin*>(d.apiBase.get());
 			if (api == nullptr) { continue; }
 
 			hgc::cs cs;
@@ -261,8 +211,10 @@ namespace builtinCam
 			ln.maker       = "builtin";
 			ln.name        = d.model;	// カメラと1対1なので同じ名前でよい
 			ln.focalLength = api->focalMm();
-			ln.fn          = api->aperture();
-			ln.fnMax       = api->aperture();	// 絞りは固定
+			// 【絞りは固定とは限らない(2026-09-19)】iPhone 13 は可変で、Android にも出てくる。
+			//  端末が答える並びの最小(最も明るい)と最大をそのまま入れる。1 点なら同じ値になる。
+			ln.fn          = api->apertureMin();
+			ln.fnMax       = api->apertureMax();
 			ln.hasContact  = false;
 			ln.readOnly    = true;				// 端末が答えた値。直す余地が無い(削除は可。2026-09-06 ユーザー指示)
 			if (dataManager::addOwnedLens(ln))
@@ -286,18 +238,8 @@ namespace builtinCam
 			cs.ccm.night = set.night; cs.ccm.sunrise = set.sunrise;
 			cs.ccm.sunset = set.sunset; cs.ccm.day = set.day;
 
-			// 値は並びから選んでいるので目盛りに乗っているが、念のため吸着させておく。
-			//  テーブルは文字列から作り直さず、デバイスのもの(論理値と 1/12 段の刻み入り)を使う。
-			const expo::expoTables& t = api->tables();
-			for (const hgc::ccmType ty : { hgc::ccmType::night, hgc::ccmType::sunrise,
-			                               hgc::ccmType::sunset, hgc::ccmType::day })
-			{
-				std::shared_ptr<hgc::ccmBase> c = cs.ccm.get(ty);
-				if (!c) { continue; }
-				snapExposure(c->initial,     t);
-				snapExposure(c->limitBright, t);
-				snapExposure(c->limitDark,   t);
-			}
+			// 【吸着は要らなくなった(2026-09-19)】値はすでに expoResolve が「その端末が出せる値」に
+			//  している。撮影時も段で決めてデバイスが解決するので、並びへ寄せ直す必要が無い。
 			cs.nightFixedExposure = set.night->limitBright;
 
 			// 撮影周期: 熱の都合で 30 秒以上(2026-09-05 ユーザー判断)。加算で長い ss を使うときは

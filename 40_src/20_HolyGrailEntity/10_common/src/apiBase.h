@@ -77,6 +77,38 @@ public:
 	virtual errCode setSS(const std::string& ss)			{ (void)ss;      return ERR_HGC_NOT_SUPPORTED; }
 	virtual errCode setIso(const std::string& iso)			{ (void)iso;     return ERR_HGC_NOT_SUPPORTED; }
 	virtual errCode getSettings(cmdt::shotRange& settings)	{ return ERR_HGC_NOT_SUPPORTED; }
+
+	// === 露出を「段」で扱う口(2026-09-19 ユーザー決定) ==========================
+	// 【なぜ要るか】設定できる値の並び(テーブル)と、その刻みは**カメラの都合**である。
+	//  これまでは共通部分がテーブルを持ち、刻みまで受け取って APEX の格子へ丸めていた。
+	//  そのため、
+	//   ・刻みを答えないカメラを勝手に 1/3 段と決めつけていた
+	//   ・もともと無段のスマホ内蔵カメラまで 1/12 段の並びに落としていた
+	//   ・テーブルが制御側で何重にも複製され、エッジの内部RAMを削っていた
+	//  という無理があった。**並びも刻みもこの層に閉じ、上位は「段」だけで話す**ようにする。
+	//  上位は刻みという語彙を持たない。未知の刻みのカメラでも、真に無段のカメラでも通る。
+	//
+	// 【段の向き】どの軸も「大きいほど明るい」で揃える(軸ごとの符号を上位に意識させない)。
+	//   iso = log2(ISO/100) / ss = log2(秒) / fn = -log2(F^2)
+	//  3軸の合計がその露出の明るさ[段]になる。
+	//
+	// 【呼ばれ方】いずれもこの層の中だけで完結する計算であること(カメラ通信をしない)。
+	//  毎コマ呼ばれる。
+	// 型そのものは expo にある(exposureMath.h)。露出制御側もデバイス側も同じものを使う。
+	//  ここで別名を張っておくと、派生クラスは修飾せずに書ける。
+	using axisInfo  = expo::axisInfo;
+	using expoPoint = expo::expoPoint;
+	// 各軸の動ける範囲と、いまの位置での目盛りの粗さ。
+	virtual errCode expoAxes(axisInfo& iso, axisInfo& ss, axisInfo& fn)
+	{ (void)iso; (void)ss; (void)fn; return ERR_HGC_NOT_SUPPORTED; }
+	// 望む段 → 実際に送る値。**丸めるのはここだけ**。got には丸めた結果の段を返す。
+	//  範囲の外を望まれたら端で止める(上位は範囲を守って呼ぶが、保険として)。
+	virtual errCode expoResolve(const expoPoint& want, hgc::exposure& out, expoPoint& got)
+	{ (void)want; (void)out; (void)got; return ERR_HGC_NOT_SUPPORTED; }
+	// 値 → 段。空の軸・読めない軸は has～ を偽にする。
+	virtual errCode expoStops(const hgc::exposure& e, expoPoint& out)
+	{ (void)e; (void)out; return ERR_HGC_NOT_SUPPORTED; }
+	// ============================================================================
 	virtual errCode rdyMetering(void)						{ return ERR_HGC_NOT_SUPPORTED; };
 	virtual errCode alzMetering(cmdt::HISTOGRAM& hist)		{ return ERR_HGC_NOT_SUPPORTED; };
 	// 撮影開始時にカメラを当アプリ都合(マニュアル露出)に設定し、終了時に元へ戻す(仕様8/CCAPI)。

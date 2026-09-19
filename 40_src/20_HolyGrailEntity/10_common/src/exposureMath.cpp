@@ -1,4 +1,5 @@
 ﻿#include "exposureMath.h"
+#include "apiBase.h"	// デバイスに段で聞く(expoAxes/expoResolve/expoStops)
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -307,6 +308,27 @@ namespace expo
 
 	}
 
+	double stopsOfReal(double real, expoKind k)
+	{
+		if (!(real > 0.0)) { return 0.0; }
+		switch (k)
+		{
+		case expoKind::iso: return  svFromIso(real);	// 大きいほど明るい
+		case expoKind::ss:  return -tvFromSs(real);		// log2(秒)
+		default:            return -avFromFn(real);		// -log2(F^2)
+		}
+	}
+
+	double realOfStops(double stops, expoKind k)
+	{
+		switch (k)
+		{
+		case expoKind::iso: return 100.0 * std::pow(2.0, stops);
+		case expoKind::ss:  return std::pow(2.0, stops);
+		default:            return std::pow(2.0, -stops / 2.0);	// F = 2^(-b/2)
+		}
+	}
+
 	double excessStops(double predicted, double linD, double linU)
 	{
 		if (!(predicted > 0.0) || !(linD > 0.0) || !(linU > 0.0)) { return 0.0; }
@@ -323,113 +345,181 @@ namespace expo
 		     - apexFromTable(t.ss,  e.ss,  expoKind::ss,  t.ssStep);
 	}
 
-	// --- exposureCtl(無段階。テーブルは語彙と上下限のためだけに持つ) ---
+	// --- exposureCtl(無段。テーブルを持たず、デバイスに段で聞く) ---
 
-	namespace
-	{
-		// 実数 → その軸が明るさに与える寄与[段](大きいほど明るい)。
-		//  buildTable と同じ計算(apex を理想の格子へ揃える)なので、テーブルにある値なら
-		//  その要素の apex と完全に一致する。テーブルに無い値(限界など)も同じ物差しで測れる。
-		double contribOfReal(double real, expoKind k, double stepStops)
-		{
-			if (!(real > 0.0)) { return 0.0; }
-			const double a = snapStops(apexOf(real, k), stepStops);
-			return (k == expoKind::iso) ? a : -a;
-		}
-		// テーブルの1要素の寄与[段]。
-		double contribOfEntry(const expoEntry& e, expoKind k)
-		{
-			return (k == expoKind::iso) ? e.apex : -e.apex;
-		}
-		// i 番の目盛りの幅[段](隣との差のうち細かい方)。隣が無ければ 0。
-		double notchAt(const std::vector<expoEntry>& e, int i)
-		{
-			const int n = static_cast<int>(e.size());
-			if (n < 2) { return 0.0; }
-			if (i < 0)  { i = 0; }
-			if (i >= n) { i = n - 1; }
-			double best = 0.0;
-			for (int j : { i - 1, i + 1 })
-			{
-				if (j < 0 || j >= n) { continue; }
-				// 同じ apex に落ちる重複はテーブルの作り方次第で起きうる。段差 0 は目盛りではない。
-				const double d = std::fabs(e[j].apex - e[i].apex);
-				if (d > 1e-6 && (best <= 0.0 || d < best)) { best = d; }
-			}
-			return best;
-		}
-	}
-
-	void exposureCtl::init(const expoTables& tables,
+	bool exposureCtl::init(apiBase* dev,
 	                       const hgc::exposure& limitBright,
 	                       const hgc::exposure& limitDark,
 	                       const hgc::exposureType priority[hgc::exposureTypeNum])
 	{
-		iso_.e = tables.iso; ss_.e = tables.ss; fn_.e = tables.fn;	// real昇順済み
+		dev_ = dev;
+		iso_ = axis{}; ss_ = axis{}; fn_ = axis{};
 		iso_.kind = expoKind::iso; ss_.kind = expoKind::ss; fn_.kind = expoKind::fn;
-		// テーブルに無い値(限界など)を同じ物差しで測るために、軸ごとの刻みを覚える。
-		iso_.step = (tables.isoStep > 0.0) ? tables.isoStep : tables.stepStops;
-		ss_.step  = (tables.ssStep  > 0.0) ? tables.ssStep  : tables.stepStops;
-		fn_.step  = (tables.fnStep  > 0.0) ? tables.fnStep  : tables.stepStops;
-
-		// 限界の実数(空=0=限界なし)
-		limBIso_ = parseValue(limitBright.iso, expoKind::iso); if (limBIso_ < 0) { limBIso_ = 0; }
-		limDIso_ = parseValue(limitDark.iso,   expoKind::iso); if (limDIso_ < 0) { limDIso_ = 0; }
-		limBSs_  = parseValue(limitBright.ss,  expoKind::ss);  if (limBSs_  < 0) { limBSs_  = 0; }
-		limDSs_  = parseValue(limitDark.ss,    expoKind::ss);  if (limDSs_  < 0) { limDSs_  = 0; }
-		limBFn_  = parseValue(limitBright.fn,  expoKind::fn);  if (limBFn_  < 0) { limBFn_  = 0; }
-		limDFn_  = parseValue(limitDark.fn,    expoKind::fn);  if (limDFn_  < 0) { limDFn_  = 0; }
-		ssCap_   = 0.0;
-
+		ssCap_ = 0.0;
+		gotSum_ = 0.0;
+		cur_ = hgc::exposure{};
 		for (int i = 0; i < hgc::exposureTypeNum; ++i) { priority_[i] = priority[i]; }
+		if (dev_ == nullptr) { return false; }
+
+		// 限界を段で測る。軸が空なら「限界なし」。
+		expoPoint pb{}, pd{};
+		dev_->expoStops(limitBright, pb);
+		dev_->expoStops(limitDark,   pd);
+		iso_.limB = pb.iso; iso_.hasLimB = pb.hasIso; iso_.limD = pd.iso; iso_.hasLimD = pd.hasIso;
+		ss_.limB  = pb.ss;  ss_.hasLimB  = pb.hasSs;  ss_.limD  = pd.ss;  ss_.hasLimD  = pd.hasSs;
+		fn_.limB  = pb.fn;  fn_.hasLimB  = pb.hasFn;  fn_.limD  = pd.fn;  fn_.hasLimD  = pd.hasFn;
+
+		axisInfo ai, as, af;
+		if (dev_->expoAxes(ai, as, af) != ERR_HGC_OK) { return false; }
+		iso_.tLo = ai.lo; iso_.tHi = ai.hi; iso_.notch = ai.notch;
+		ss_.tLo  = as.lo; ss_.tHi  = as.hi; ss_.notch  = as.notch;
+		fn_.tLo  = af.lo; fn_.tHi  = af.hi; fn_.notch  = af.notch;
 		this->recalcRanges();
-		// 出発点はテーブルの先頭(iso/ss は最小、fn は最小F=いちばん明るい)。従来 idx=0 と同じ。
-		//  呼び出し側はこの直後に setCurrent / setToBrightLimit / setToDarkLimit で置き換える。
-		iso_.b = iso_.e.empty() ? 0.0 : contribOfEntry(iso_.e.front(), expoKind::iso);
-		ss_.b  = ss_.e.empty()  ? 0.0 : contribOfEntry(ss_.e.front(),  expoKind::ss);
-		fn_.b  = fn_.e.empty()  ? 0.0 : contribOfEntry(fn_.e.front(),  expoKind::fn);
+		// 出発点はデバイスの下端(呼び出し側はこの直後に setCurrent / setToXxxLimit で置き換える)。
+		iso_.b = iso_.tLo; ss_.b = ss_.tLo; fn_.b = fn_.tHi;	// fn は明るい側=小さいF
 		this->rebuildCurrent();
+		return true;
 	}
 
-	// テーブルの端と撮影制御方法の限界から、各軸の動ける範囲を引き直す。
-	//  tLo/tHi = テーブルの端。**デバイスに存在しない設定は作らない**ので、ここは必ず守る。
-	//  bLo/bHi = それを限界で更に締めたもの。限界は「外から内へ」は通すので、動かすときだけ見る。
+	// デバイスへ範囲と丸めの粗さを聞き直す。粗さは位置で変わるので毎コマ聞いてよい
+	//  (デバイス層の中の計算だけで、カメラ通信は起きない約束)。
+	void exposureCtl::refreshAxes()
+	{
+		if (dev_ == nullptr) { return; }
+		axisInfo ai, as, af;
+		if (dev_->expoAxes(ai, as, af) != ERR_HGC_OK) { return; }
+		iso_.tLo = ai.lo; iso_.tHi = ai.hi; iso_.notch = ai.notch;
+		ss_.tLo  = as.lo; ss_.tHi  = as.hi; ss_.notch  = as.notch;
+		fn_.tLo  = af.lo; fn_.tHi  = af.hi; fn_.notch  = af.notch;
+		this->recalcRanges();
+	}
+
+	// デバイスの範囲を撮影制御方法の限界で締める。
 	void exposureCtl::recalcRanges()
 	{
-		// 最長 ss(撮影周期や夜間 ss)は明側の限界を更に締める。どちらか厳しい方。
-		double limBSs = limBSs_;
-		if (ssCap_ > 0.0 && (limBSs == 0.0 || ssCap_ < limBSs)) { limBSs = ssCap_; }
-		const double limB[3] = { limBIso_, limBSs,  limBFn_ };
-		const double limD[3] = { limDIso_, limDSs_, limDFn_ };
-		ladder* ax[3] = { &iso_, &ss_, &fn_ };
+		axis* ax[3] = { &iso_, &ss_, &fn_ };
 		for (int i = 0; i < 3; ++i)
 		{
-			ladder& L = *ax[i];
-			if (L.e.empty()) { L.tLo = L.tHi = L.bLo = L.bHi = 0.0; continue; }
-			double lo = 1e300, hi = -1e300;
-			for (const auto& e : L.e)
-			{
-				const double b = contribOfEntry(e, L.kind);
-				if (b < lo) { lo = b; }
-				if (b > hi) { hi = b; }
-			}
-			L.tLo = lo; L.tHi = hi;
-			if (limB[i] > 0.0)
-			{
-				const double b = contribOfReal(limB[i], L.kind, L.step);	// 明側=上限
-				if (b < hi) { hi = b; }
-			}
-			if (limD[i] > 0.0)
-			{
-				const double b = contribOfReal(limD[i], L.kind, L.step);	// 暗側=下限
-				if (b > lo) { lo = b; }
-			}
+			axis& a = *ax[i];
+			double lo = a.tLo, hi = a.tHi;
+			if (a.hasLimB && a.limB < hi) { hi = a.limB; }	// 明側=上限
+			if (a.hasLimD && a.limD > lo) { lo = a.limD; }	// 暗側=下限
 			if (lo > hi) { lo = hi; }	// 限界が食い違っていたら動かない軸にする
-			L.bLo = lo; L.bHi = hi;
+			a.bLo = lo; a.bHi = hi;
+		}
+		// 最長 ss(撮影周期や夜間 ss)は明側を更に締める。
+		if (ssCap_ > 0.0)
+		{
+			const double cap = stopsOfReal(ssCap_, expoKind::ss);
+			if (cap < ss_.bHi) { ss_.bHi = cap; }
+			if (ss_.bLo > ss_.bHi) { ss_.bLo = ss_.bHi; }
 		}
 	}
 
-	exposureCtl::ladder& exposureCtl::axisRef(hgc::exposureType t)
+	// b をデバイスが出せる値へ。丸めるのはここだけで、丸めた結果は b へは戻さない。
+	void exposureCtl::rebuildCurrent()
+	{
+		if (dev_ == nullptr) { return; }
+		expoPoint want;
+		want.iso = iso_.b; want.hasIso = true;
+		want.ss  = ss_.b;  want.hasSs  = true;
+		want.fn  = fn_.b;  want.hasFn  = true;
+		expoPoint got;
+		if (dev_->expoResolve(want, cur_, got) != ERR_HGC_OK) { return; }
+		gotSum_ = got.sum();
+	}
+
+	double exposureCtl::brightness() const { return iso_.b + ss_.b + fn_.b; }
+
+	expoPoint exposureCtl::point() const
+	{
+		expoPoint p;
+		p.iso = iso_.b; p.hasIso = true;
+		p.ss  = ss_.b;  p.hasSs  = true;
+		p.fn  = fn_.b;  p.hasFn  = true;
+		return p;
+	}
+
+	double exposureCtl::minStepStops() const
+	{
+		const axis* ax[3] = { &iso_, &ss_, &fn_ };
+		double best = 0.0;
+		for (int i = 0; i < 3; ++i)
+		{
+			const double d = ax[i]->notch;
+			if (d > 1e-9 && (best <= 0.0 || d < best)) { best = d; }
+		}
+		return best;	// 0 = どの軸も無段
+	}
+
+	double exposureCtl::maxStepStops() const
+	{
+		const axis* ax[3] = { &iso_, &ss_, &fn_ };
+		double best = 0.0;
+		for (int i = 0; i < 3; ++i)
+		{
+			if (!(ax[i]->bHi - ax[i]->bLo > 1e-9)) { continue; }	// 動けない軸は丸めの誤差を生まない
+			if (ax[i]->notch > best) { best = ax[i]->notch; }
+		}
+		return best;
+	}
+
+	void exposureCtl::setCurrent(const hgc::exposure& e)
+	{
+		if (dev_ == nullptr) { return; }
+		expoPoint p;
+		if (dev_->expoStops(e, p) != ERR_HGC_OK) { return; }
+		// デバイスが出せる範囲の外へは出さない(そこに設定は存在しない)。限界では止めない。
+		auto set = [](axis& a, double v, bool has)
+		{
+			if (!has) { return; }
+			if (v < a.tLo) { v = a.tLo; }
+			if (v > a.tHi) { v = a.tHi; }
+			a.b = v;
+		};
+		set(iso_, p.iso, p.hasIso);
+		set(ss_,  p.ss,  p.hasSs);
+		set(fn_,  p.fn,  p.hasFn);
+		this->rebuildCurrent();
+	}
+
+	void exposureCtl::setToBrightLimit()
+	{
+		iso_.b = iso_.bHi; ss_.b = ss_.bHi; fn_.b = fn_.bHi;
+		this->rebuildCurrent();
+	}
+
+	void exposureCtl::setToDarkLimit()
+	{
+		iso_.b = iso_.bLo; ss_.b = ss_.bLo; fn_.b = fn_.bLo;
+		this->rebuildCurrent();
+	}
+
+	void exposureCtl::capLongestSs(double maxSsSec)
+	{
+		if (maxSsSec <= 0.0) { return; }
+		if (ssCap_ == 0.0 || maxSsSec < ssCap_) { ssCap_ = maxSsSec; }	// 締めるだけ。緩めない
+		this->recalcRanges();
+		if (ss_.b > ss_.bHi) { ss_.b = ss_.bHi; }
+		this->rebuildCurrent();
+	}
+
+	// 1軸を delta 段動かす。上下限は越えない。
+	//  いま限界の外にいるなら(窓の境目の引き継ぎ)、**内へ戻る向きだけ**動ける。
+	double exposureCtl::moveAxis(axis& a, double delta)
+	{
+		if (!(std::fabs(delta) > 0.0)) { return 0.0; }
+		const double lo = (a.b < a.bLo) ? a.b : a.bLo;
+		const double hi = (a.b > a.bHi) ? a.b : a.bHi;
+		double want = a.b + delta;
+		if (want < lo) { want = lo; }
+		if (want > hi) { want = hi; }
+		const double did = want - a.b;
+		a.b = want;
+		return did;
+	}
+
+	exposureCtl::axis& exposureCtl::axisRef(hgc::exposureType t)
 	{
 		switch (t)
 		{
@@ -439,131 +529,10 @@ namespace expo
 		}
 	}
 
-	// b を「いちばん近い設定できる値」へ丸めて cur_ を作る。丸めた結果は内部(b)へは戻さない。
-	//  限界の内側にいるうちは**内側の目盛りだけ**から選ぶ(丸めで限界を踏み越えないように。
-	//  最長 ss の上限を半目盛り越えると撮影周期が崩れる)。限界の外にいるとき
-	//  (窓の境目で前の窓の露出を引き継いだ直後)は、いちばん近い目盛りをそのまま使う。
-	void exposureCtl::rebuildCurrent()
-	{
-		ladder* ax[3] = { &iso_, &ss_, &fn_ };
-		std::string* out[3] = { &cur_.iso, &cur_.ss, &cur_.fn };
-		for (int a = 0; a < 3; ++a)
-		{
-			ladder& L = *ax[a];
-			if (L.e.empty()) { continue; }
-			const bool inside = (L.b >= L.bLo - 1e-9 && L.b <= L.bHi + 1e-9);
-			int    best = -1;
-			double bd   = 1e300;
-			for (int i = 0; i < static_cast<int>(L.e.size()); ++i)
-			{
-				const double b = contribOfEntry(L.e[i], L.kind);
-				if (inside && (b < L.bLo - 1e-9 || b > L.bHi + 1e-9)) { continue; }
-				const double d = std::fabs(b - L.b);
-				if (d < bd) { bd = d; best = i; }
-			}
-			if (best < 0)
-			{	// 限界の内側に目盛りが1つも無い(限界が目盛りの隙間に落ちた)。近い方を選ぶ。
-				bd = 1e300;
-				for (int i = 0; i < static_cast<int>(L.e.size()); ++i)
-				{
-					const double d = std::fabs(contribOfEntry(L.e[i], L.kind) - L.b);
-					if (d < bd) { bd = d; best = i; }
-				}
-			}
-			L.idx = best;
-			*out[a] = L.e[best].value;
-		}
-	}
-
-	double exposureCtl::brightness() const
-	{
-		return iso_.b + ss_.b + fn_.b;
-	}
-
-	// いま踏める最小の段差[段]。宣言のところに理由を書いてある。
-	double exposureCtl::minStepStops() const
-	{
-		const ladder* ax[3] = { &iso_, &ss_, &fn_ };
-		double best = 0.0;
-		for (int i = 0; i < 3; ++i)
-		{
-			const double d = notchAt(ax[i]->e, ax[i]->idx);
-			if (d > 1e-6 && (best <= 0.0 || d < best)) { best = d; }
-		}
-		return (best > 0.0) ? best : (1.0 / 3.0);
-	}
-
-	// いちばん粗い目盛り[段]。動く余地のある軸だけを見る(宣言のところに理由)。
-	double exposureCtl::maxStepStops() const
-	{
-		const ladder* ax[3] = { &iso_, &ss_, &fn_ };
-		double best = 0.0;
-		for (int i = 0; i < 3; ++i)
-		{
-			if (!(ax[i]->bHi - ax[i]->bLo > 1e-9)) { continue; }	// 動けない軸は丸めの誤差を生まない
-			const double d = notchAt(ax[i]->e, ax[i]->idx);
-			if (d > best) { best = d; }
-		}
-		return (best > 0.0) ? best : this->minStepStops();
-	}
-
-	void exposureCtl::setCurrent(const hgc::exposure& e)
-	{
-		ladder* ax[3] = { &iso_, &ss_, &fn_ };
-		const std::string* v[3] = { &e.iso, &e.ss, &e.fn };
-		for (int a = 0; a < 3; ++a)
-		{
-			ladder& L = *ax[a];
-			if (L.e.empty()) { continue; }
-			const double r = parseValue(*v[a], L.kind);
-			if (!(r > 0.0)) { continue; }
-			double b = contribOfReal(r, L.kind, L.step);
-			if (b < L.tLo) { b = L.tLo; }	// テーブルの外 = そのデバイスには無い設定
-			if (b > L.tHi) { b = L.tHi; }
-			L.b = b;
-		}
-		this->rebuildCurrent();
-	}
-
-	void exposureCtl::setToBrightLimit()
-	{
-		iso_.b = iso_.bHi; ss_.b = ss_.bHi; fn_.b = fn_.bHi;	// 明側 = 各軸の上限
-		this->rebuildCurrent();
-	}
-
-	void exposureCtl::setToDarkLimit()
-	{
-		iso_.b = iso_.bLo; ss_.b = ss_.bLo; fn_.b = fn_.bLo;	// 暗側 = 各軸の下限
-		this->rebuildCurrent();
-	}
-
-	void exposureCtl::capLongestSs(double maxSsSec)
-	{
-		if (maxSsSec <= 0.0) { return; }
-		if (ssCap_ == 0.0 || maxSsSec < ssCap_) { ssCap_ = maxSsSec; }	// 締めるだけ。緩めない
-		this->recalcRanges();
-		if (ss_.b > ss_.bHi) { ss_.b = ss_.bHi; }	// 現在 ss が上限を超えていれば引き下げる
-		this->rebuildCurrent();
-	}
-
-	// 1軸を delta 段動かす。上下限は越えない。
-	//  いま限界の外にいるなら(窓の境目の引き継ぎ)、**内へ戻る向きだけ**動ける。
-	//  外から更に外へは動かない = 従来の「移動先が限界の外なら動かない」と同じ考え方。
-	double exposureCtl::moveAxis(ladder& L, double delta)
-	{
-		if (L.e.empty() || !(std::fabs(delta) > 0.0)) { return 0.0; }
-		const double lo = (L.b < L.bLo) ? L.b : L.bLo;
-		const double hi = (L.b > L.bHi) ? L.b : L.bHi;
-		double want = L.b + delta;
-		if (want < lo) { want = lo; }
-		if (want > hi) { want = hi; }
-		const double did = want - L.b;
-		L.b = want;
-		return did;
-	}
-
 	double exposureCtl::moveStops(double evStops, const hgc::exposure* home)
 	{
+		if (dev_ == nullptr) { return 0.0; }
+		this->refreshAxes();	// 位置で粗さと範囲が変わる。動く前に聞き直す
 		if (!(std::fabs(evStops) > 1e-12)) { return 0.0; }
 		const bool bright = (evStops > 0.0);
 		double     remain = evStops;
@@ -571,15 +540,11 @@ namespace expo
 		// ① home(基準)へ戻す軸を優先度の逆順で先に(§4.5 往復対称)。home は通り越さない。
 		if (home != nullptr)
 		{
-			const std::string* hv[3] = { &home->iso, &home->ss, &home->fn };
-			ladder*            ax[3] = { &iso_, &ss_, &fn_ };
-			double             hb[3] = { 0.0, 0.0, 0.0 };
-			bool               hok[3] = { false, false, false };
-			for (int a = 0; a < 3; ++a)
-			{
-				const double r = parseValue(*hv[a], ax[a]->kind);
-				if (r > 0.0) { hb[a] = contribOfReal(r, ax[a]->kind, ax[a]->step); hok[a] = true; }
-			}
+			expoPoint hp;
+			dev_->expoStops(*home, hp);
+			const double hb[3]  = { hp.iso, hp.ss, hp.fn };
+			const bool   hok[3] = { hp.hasIso, hp.hasSs, hp.hasFn };
+			axis*        ax[3]  = { &iso_, &ss_, &fn_ };
 			for (int k = hgc::exposureTypeNum - 1; k >= 0; --k)
 			{
 				if (std::fabs(remain) <= 1e-12) { break; }
@@ -591,8 +556,7 @@ namespace expo
 				default:                    a = 0; break;
 				}
 				if (!hok[a]) { continue; }
-				const double diff = hb[a] - ax[a]->b;	// home までの差(この軸が戻るべき量)
-				// その向きに home が無い軸は、いま戻す相手ではない(②で普通に配る)。
+				const double diff = hb[a] - ax[a]->b;	// home までの差
 				if (bright ? (diff <= 1e-9) : (diff >= -1e-9)) { continue; }
 				const double take = bright ? ((remain < diff) ? remain : diff)
 				                           : ((remain > diff) ? remain : diff);
@@ -610,35 +574,33 @@ namespace expo
 		return evStops - remain;
 	}
 
-	// 軸を指名して1目盛りだけ動かす。移動先が限界の外なら動かない(全部動くか、動かないか)。
-	//  無段階の位置(b)からきっかり目盛りぶん動かすので、丸めの端数は持ったまま運ばれる。
-	//  配分寄せは「明るい向きへ1目盛り・暗い向きへ1目盛り」を対にして呼ぶので、
-	//  端数を捨てないことで**明るさが動かない**という性質が保たれる。
-	bool exposureCtl::stepAxis(hgc::exposureType axis, bool bright)
+	// 軸を指名して動かす。目盛りがあればその1目盛り、無ければ amountStops。
+	//  移動先が限界の外なら動かない(全部動くか、動かないか)。
+	bool exposureCtl::stepAxis(hgc::exposureType axisType, bool bright, double amountStops)
 	{
-		ladder& L = this->axisRef(axis);
-		const double n = notchAt(L.e, L.idx);
-		if (!(n > 0.0)) { return false; }
-		const double lo   = (L.b < L.bLo) ? L.b : L.bLo;
-		const double hi   = (L.b > L.bHi) ? L.b : L.bHi;
-		const double want = L.b + (bright ? n : -n);
+		axis& a = this->axisRef(axisType);
+		const double n = (a.notch > 1e-9) ? a.notch : std::fabs(amountStops);
+		if (!(n > 1e-9)) { return false; }
+		const double lo   = (a.b < a.bLo) ? a.b : a.bLo;
+		const double hi   = (a.b > a.bHi) ? a.b : a.bHi;
+		const double want = a.b + (bright ? n : -n);
 		if (want < lo - 1e-9 || want > hi + 1e-9) { return false; }
-		L.b = want;
+		a.b = want;
 		this->rebuildCurrent();
 		return true;
 	}
 
-	bool exposureCtl::stepOne(bool bright)
+	bool exposureCtl::stepOne(bool bright, double amountStops)
 	{
 		for (int k = 0; k < hgc::exposureTypeNum; ++k)
 		{
-			if (this->stepAxis(priority_[k], bright)) { return true; }
+			if (this->stepAxis(priority_[k], bright, amountStops)) { return true; }
 		}
 		return false;
 	}
 
-	bool exposureCtl::brighten() { return stepOne(true); }
-	bool exposureCtl::darken()   { return stepOne(false); }
+	bool exposureCtl::brighten(double amountStops) { return stepOne(true,  amountStops); }
+	bool exposureCtl::darken(double amountStops)   { return stepOne(false, amountStops); }
 
 	hgc::exposure exposureCtl::applyStops(double evStops)
 	{
@@ -648,41 +610,44 @@ namespace expo
 
 	// 窓の境目の配分寄せ(宣言のコメント参照)。
 	bool migrateToward(exposureCtl& ctl, exposureCtl& want,
-	                   const expoTables& tables, const hgc::exposure& initial)
+	                   const hgc::exposure& initial, double amountStops)
 	{
 		// いまの明るさに対して、この撮影制御方法なら選ぶ組み合わせ(=寄せ先)。
 		//  基準(initial)から出発し、同じ明るさへ優先度・限界に従って寄せる。境目で一気に
 		//  やっていた計算そのもの。違うのは、結果へ飛ばずに1目盛りずつ近づける点だけ。
 		want.setCurrent(initial);
-		const double nowB = brightnessStops(ctl.current(), tables);
-		want.applyStops(nowB - brightnessStops(want.current(), tables));
-		const hgc::exposure dest = want.current();
-		const hgc::exposure cur  = ctl.current();
+		want.applyStops(ctl.appliedBrightness() - want.appliedBrightness());
 
-		// 軸ごとに「明るくしたい/暗くしたい/そのまま」を出す。iso/ss は実数が大きいほど
-		//  明るく、fn は小さいほど明るい。
-		auto cmp = [](double a, double b) -> int { return (a > b + 1e-9) ? 1 : ((a < b - 1e-9) ? -1 : 0); };
+		// 軸ごとに「明るくしたい/暗くしたい/そのまま」を段で出す。
+		//  【文字列を解釈しない(2026-09-19)】値の綴りはデバイスの語彙なので、
+		//   共通部分は段だけで比べる。
+		const expoPoint d = want.point();
+		const expoPoint c = ctl.point();
+		auto cmp = [](double a, double b, bool ha, bool hb) -> int
+		{
+			if (!ha || !hb) { return 0; }
+			return (a > b + 1e-9) ? 1 : ((a < b - 1e-9) ? -1 : 0);
+		};
 		const int wantBright[3] = {
-			 cmp(parseValue(dest.iso, expoKind::iso), parseValue(cur.iso, expoKind::iso)),
-			 cmp(parseValue(dest.ss,  expoKind::ss ), parseValue(cur.ss,  expoKind::ss )),
-			-cmp(parseValue(dest.fn,  expoKind::fn ), parseValue(cur.fn,  expoKind::fn )) };
+			cmp(d.iso, c.iso, d.hasIso, c.hasIso),
+			cmp(d.ss,  c.ss,  d.hasSs,  c.hasSs ),
+			cmp(d.fn,  c.fn,  d.hasFn,  c.hasFn ) };
 		const hgc::exposureType axis[3] = { hgc::exposureType::iso, hgc::exposureType::ss, hgc::exposureType::fn };
 
 		// 明るい向きへ動かす軸を1つ、暗い向きへ動かす軸を1つ、同時に1目盛りずつ。
 		//  こうすると明るさは動かない(打ち消し合う)ので、自動露出の1歩と同じコマに乗せられる。
 		//  片側しか動けないなら見送る(明るさがずれ、自動露出の枠を食うため)。
-		//  寄せ先は限界の内側なので本来どの組でも通るが、表の端で弾かれても止まらないよう
-		//  組は総当たりする。
+		//  無段の軸には目盛りが無いので amountStops を使う。
 		for (int u = 0; u < 3; ++u)
 		{
 			if (wantBright[u] <= 0) { continue; }
-			if (!ctl.stepAxis(axis[u], true)) { continue; }
-			for (int d = 0; d < 3; ++d)
+			if (!ctl.stepAxis(axis[u], true, amountStops)) { continue; }
+			for (int e = 0; e < 3; ++e)
 			{
-				if (d == u || wantBright[d] >= 0) { continue; }
-				if (ctl.stepAxis(axis[d], false)) { return true; }
+				if (e == u || wantBright[e] >= 0) { continue; }
+				if (ctl.stepAxis(axis[e], false, amountStops)) { return true; }
 			}
-			ctl.stepAxis(axis[u], false);	// 相手が見つからなかったので明るさを戻す
+			ctl.stepAxis(axis[u], false, amountStops);	// 相手が見つからなかったので明るさを戻す
 		}
 		return false;
 	}

@@ -152,6 +152,11 @@ public:
 
 	// 情報を知る
 	errCode getSettings(cmdt::shotRange& settings);		// 設定値を取得する
+
+	// 露出を「段」で扱う口(apiBase の説明を参照)。テーブルはこの層の中だけで使う。
+	errCode expoAxes(axisInfo& iso, axisInfo& ss, axisInfo& fn) override;
+	errCode expoResolve(const expoPoint& want, hgc::exposure& out, expoPoint& got) override;
+	errCode expoStops(const hgc::exposure& e, expoPoint& out) override;
 	// 撮影画像のEXIFからセンサー実寸[mm]と横画素数を読む(機材マスターに無い機種の穴埋め)。
 	errCode readSensorSpec(double& sensorWmm, double& sensorHmm, uint32_t& pixelW, uint32_t& pixelH) override;
 	// カメラ自身の状態(記録メディア/電池/温度)を読む。

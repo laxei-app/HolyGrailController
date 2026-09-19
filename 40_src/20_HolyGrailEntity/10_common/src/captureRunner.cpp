@@ -226,7 +226,7 @@ double captureRunner::linearAtExposure(double sceneRef, const hgc::exposure& e) 
 {
 	if (sceneRef <= 0.0) { return -1.0; }
 	if (!validExposure(e)) { return sceneRef; }
-	return sceneRef * std::pow(2.0, expo::brightnessStops(e, tables_));
+	return sceneRef * std::pow(2.0, this->brightnessOf(e));
 }
 
 // HTTP を伴うカメラ操作の失敗メッセージに、直近の HTTP 失敗の詳細を添える。
@@ -402,18 +402,37 @@ errCode captureRunner::fireShutter(const hgc::exposure& shotExp, double interval
 //  絵の見え方(粒状感・被写界深度・ぶれ)は変わる。露出と同じ「段/秒」で緩やかに寄せる。
 //  短い周期では数コマに1目盛り、長い周期では1コマに複数目盛りになる。
 //  露出そのものとは別枠なので、貯金も別に持つ(migrateBudget_)。
+// 露出の明るさ[段]。**デバイスに聞く**(並びも刻みもカメラの都合なので持たない)。
+double captureRunner::brightnessOf(const hgc::exposure& e) const
+{
+	return (dev_ != nullptr) ? this->brightnessOf(*dev_, e) : 0.0;
+}
+
+double captureRunner::brightnessOf(const class device& dev, const hgc::exposure& e) const
+{
+	if (dev.apiBase == nullptr) { return 0.0; }
+	expo::expoPoint p;
+	if (dev.apiBase->expoStops(e, p) != ERR_HGC_OK) { return 0.0; }
+	return p.sum();
+}
+
 bool captureRunner::migrateTowardCcm(expo::exposureCtl& ctl, expo::exposureCtl& want,
                                      const hgc::ccmBase* ccm, double stepStops)
 {
 	if (ccm == nullptr || !validExposure(ccm->initial)) { return false; }
 	// 夜間は固定露出。組み替える自由度が無いので触らない(既存の移行に任せる)。
 	if (ccm->type == hgc::ccmType::night) { return false; }
-	const double step = (stepStops > 0.0) ? stepStops : kExposureStepStops;
 	double room = (migrateBudget_ < frameLimit_) ? migrateBudget_ : frameLimit_;
+	// 【無段のカメラには目盛りが無い(2026-09-19)】その場合は 1 コマの許容を
+	//  kMigrateSlices に割って刻む。1/3 段と決め打つと、無段の端末で配分が粗く動いてしまう。
+	//  目盛りのあるカメラは従来どおり 1 目盛りずつ。
+	const double step = (stepStops > 0.0) ? stepStops
+	                  : ((room > 0.0) ? (room / kMigrateSlices) : kExposureStepStops);
+	if (!(step > 0.0)) { return false; }
 	bool moved = false;
 	while (room >= step - 1e-9)
 	{
-		if (!expo::migrateToward(ctl, want, tables_, ccm->initial)) { break; }	// もう合っている
+		if (!expo::migrateToward(ctl, want, ccm->initial, step)) { break; }	// もう合っている
 		room           -= step;
 		migrateBudget_ -= step;
 		moved = true;
@@ -725,7 +744,7 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 		const hgc::exposure& mex = validExposure(mr.meterExp) ? mr.meterExp : ctl.current();
 		const double lin0      = expo::ev0LinearForMeasure(mr.linear, mex, ev0cfg_);
 		const double linT      = expo::linearFromEvBase(evT, lin0);		// 目標リニア輝度
-		const double curB      = expo::brightnessStops(ctl.current(), tables_);
+		const double curB      = this->brightnessOf(ctl.current());
 		const double predicted = mr.sceneRef * std::pow(2.0, curB);		// 候補露出で写る明るさ
 		if (predicted <= 0.0 || linT <= 0.0) { break; }
 		const double err = std::log2(predicted / linT);	// +:明るすぎ / -:暗すぎ
@@ -740,7 +759,7 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 			std::snprintf(cb, sizeof(cb),
 			              "step=%d mss=%s mB=%.2f x=%.4f ref=%.6f cur=%.2f err=%+.2f "
 			              "settle=%dms rdy=%dms try=%d stale=%d hs=%08x",
-			              step, mex.ss.c_str(), expo::brightnessStops(mex, tables_), mr.x, mr.sceneRef,
+			              step, mex.ss.c_str(), this->brightnessOf(mex), mr.x, mr.sceneRef,
 			              curB, err, mr.settleMs, mr.rdyMs, mr.tries, mr.staleSkip,
 			              static_cast<unsigned>(mr.histSum));
 			dataManager::logEvent("CONV", cb);
@@ -794,7 +813,7 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 			const hgc::exposure& cex = validExposure(cr.meterExp) ? cr.meterExp : ctl.current();
 			const double cLin0 = expo::ev0LinearForMeasure(cr.linear, cex, ev0cfg_);
 			const double cLinT = expo::linearFromEvBase(evT, cLin0);
-			const double cCurB = expo::brightnessStops(ctl.current(), tables_);
+			const double cCurB = this->brightnessOf(ctl.current());
 			const double cPred = cr.sceneRef * std::pow(2.0, cCurB);
 			if (cPred <= 0.0 || cLinT <= 0.0) { break; }
 			const double cErr  = std::log2(cPred / cLinT);
@@ -820,7 +839,7 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 		std::snprintf(cb, sizeof(cb), "done step=%d shots=%d ng(apply=%d meter=%d) conv=%d -> iso=%s ss=%s fn=%s (%.2f stops)",
 		              step, calibShots, applyNg, meterNg, converged ? 1 : 0,
 		              ctl.current().iso.c_str(), ctl.current().ss.c_str(), ctl.current().fn.c_str(),
-		              expo::brightnessStops(ctl.current(), tables_));
+		              this->brightnessOf(ctl.current()));
 		dataManager::logEvent("CONV", cb);
 	}
 
@@ -907,20 +926,14 @@ bool captureRunner::establishSession(void)
 		else if (onError_)               { onError_(me, this->withFailDetail("setupShootingModeManual")); }
 	}
 
-	// 設定可能値を取得して設定可能値テーブルを作る(仕様 4.2)
+	// 設定可能値をデバイスに用意させる(仕様 4.2)。**並びはデバイスの中に置いたままにする**。
+	//  ここで取るのは「機材の記録と画面表示」のためで、露出制御は段でやり取りする。
+	//  【標準テーブルへの逃げをやめた(2026-09-19)】以前はカメラが答えないと 1/3 段の
+	//   標準の並びを勝手に使っていた。未知のカメラをそれに載せると歪むので、
+	//   答えられないカメラはここで失敗させる(呼び出し側が撮影を始めない)。
 	ramMark("before getSettings");
 	cmdt::shotRange range;
-	if (cameraController::getSettings(*dev_, range) == ERR_HGC_OK &&
-	    !range.iso.empty() && !range.ss.empty() && !range.fNum.empty())
-	{
-		// 刻み(1/3 段か 1/12 段か)と論理値はデバイスが答える。ここで決め打ちしない(2026-09-07)。
-		tables_ = expo::tablesFromRange(range);
-	}
-	else
-	{	// 取得失敗時は標準テーブル(レンズのf範囲)でフォールバック
-		double fmin = (plan_.lens.fn > 0.0) ? plan_.lens.fn : 1.0;
-		tables_ = expo::standardTables(fmin, 32.0);
-	}
+	cameraController::getSettings(*dev_, range);
 	// 同期撮影の追加カメラも同じタイミングで張る(失敗しても撮影は続行する)。
 	this->establishSubSessions();
 	ramMark("establish done");
@@ -931,30 +944,8 @@ bool captureRunner::establishSession(void)
 // 主カメラで測光して決めた露出を追加カメラへも配り、同じコマで全台のシャッターを切る。
 // 測光・露出計算は主カメラの経路のままで、ここは決まった露出を乗せるだけ。
 
-namespace
-{
-	// 値文字列を別のカメラの設定可能値へ丸める。
-	//  機種が違うと刻みが違う(例: 1/3段のカメラと1/2段のカメラ)ので、同じ文字列を
-	//  そのまま送るとカメラが断る。実数の比を log2 で見て一番近いものを選ぶ(=段数で最寄り)。
-	//  テーブルが空なら元の文字列をそのまま返す(最善努力)。
-	std::string nearestValue(const std::vector<expo::expoEntry>& tab,
-	                         const std::string& want, expo::expoKind k)
-	{
-		if (tab.empty() || want.empty()) { return want; }
-		for (const auto& e : tab) { if (e.value == want) { return want; } }	// そのまま使える
-		const double target = expo::parseValue(want, k);
-		if (!(target > 0.0)) { return want; }	// Bulb 等は丸めようがない
-		const std::string* best = nullptr;
-		double bestD = 0.0;
-		for (const auto& e : tab)
-		{
-			if (!(e.real > 0.0)) { continue; }
-			const double d = std::fabs(std::log2(e.real / target));
-			if (best == nullptr || d < bestD) { best = &e.value; bestD = d; }
-		}
-		return (best != nullptr) ? *best : want;
-	}
-}
+// 【値の丸めはここに無い(2026-09-19)】機種ごとに刻みが違う件は、各デバイスの
+//  expoResolve が自分の都合で解決する。撮影ループは段を渡すだけでよくなった。
 
 void captureRunner::setSubDevices(const std::vector<device*>& devs)
 {
@@ -994,30 +985,31 @@ void captureRunner::establishSubSessions(void)
 			errCode me = cameraController::setupShootingModeManual(*sc.dev);
 			if (me == ERR_HGC_OK) { interruptibleSleep(800); }	// ability 更新待ち(主と同じ)
 		}
+		// 設定可能値をこの台に用意させる(並びはその台の中に置いたままにする)。
+		//  主と機種が違えば刻みも違うが、こちらは段で渡すだけなので気にしなくてよい。
 		cmdt::shotRange range;
-		if (cameraController::getSettings(*sc.dev, range) == ERR_HGC_OK &&
-		    !range.iso.empty() && !range.ss.empty() && !range.fNum.empty())
-		{
-			sc.tables = expo::tablesFromRange(range);
-		}
-		else
-		{	// 取得失敗時は主カメラのテーブルを借りる(丸めなしと同等になる)。
-			sc.tables = tables_;
-		}
+		cameraController::getSettings(*sc.dev, range);
 		sc.ready = true;
 		sc.failStreak = 0;
 	}
 }
 
-// 主の露出を各台の設定値へ丸めて、変わった項目だけ送る。
+// 主の露出を各台へ配る。**段で渡して、丸めるのは各台の中**(2026-09-19)。
+//  以前は主が子のテーブルを持って丸めていた。機種ごとの刻みを撮影ループが抱える形だったので、
+//  それぞれのデバイスに解決させる形に改めた。台数が増えても撮影ループは何も知らなくてよい。
 void captureRunner::applySubExposure(const hgc::exposure& exp)
 {
+	if (dev_ == nullptr || dev_->apiBase == nullptr) { return; }
+	expo::expoPoint want;
+	if (dev_->apiBase->expoStops(exp, want) != ERR_HGC_OK) { return; }
 	for (auto& sc : subs_)
 	{
 		if (!sc.ready || sc.dev == nullptr || sc.dev->apiBase == nullptr) { continue; }
-		const std::string fn  = nearestValue(sc.tables.fn,  exp.fn,  expo::expoKind::fn);
-		const std::string ss  = nearestValue(sc.tables.ss,  exp.ss,  expo::expoKind::ss);
-		const std::string iso = nearestValue(sc.tables.iso, exp.iso, expo::expoKind::iso);
+		hgc::exposure e; expo::expoPoint got;
+		if (sc.dev->apiBase->expoResolve(want, e, got) != ERR_HGC_OK) { continue; }
+		const std::string& fn  = e.fn;
+		const std::string& ss  = e.ss;
+		const std::string& iso = e.iso;
 		if (fn  != sc.lastFn)  { if (cameraController::setFNumber(*sc.dev, fn) == ERR_HGC_OK) { sc.lastFn  = fn;  } }
 		if (ss  != sc.lastSs)  { if (cameraController::setSS(*sc.dev, ss)      == ERR_HGC_OK) { sc.lastSs  = ss;  } }
 		if (iso != sc.lastIso) { if (cameraController::setIso(*sc.dev, iso)    == ERR_HGC_OK) { sc.lastIso = iso; } }
@@ -1419,7 +1411,7 @@ errCode captureRunner::loop(void)
 			if (windowChanged)
 			{
 				// 上限=夜間露出(暗所限界)。下限(明所限界)・優先度は直前ccm(日中/夕日)。
-				preCtl.init(tables_, nightExp, prevC ? prevC->limitDark : hgc::exposure{},
+				preCtl.init(dev_->apiBase.get(), nightExp, prevC ? prevC->limitDark : hgc::exposure{},
 				            prevC ? prevC->priority : ccm->priority);
 				preCtl.capLongestSs(maxSsCap);	// ss は夜間ss/周期-2秒を超えない(指示3)
 				avgBuf.clear(); this->resetStepLock();
@@ -1441,7 +1433,7 @@ errCode captureRunner::loop(void)
 			// 【無段階の現在位置で測る(2026-09-19)】寄せるのは内部の位置(preCtl.brightness())
 			//  なので、残りコマ数もそれで測る。丸めた姿で測ると半目盛りぶん食い違う。
 			const double curB       = preCtl.brightness();
-			const double nightB     = validExposure(nightExp) ? expo::brightnessStops(nightExp, tables_) : curB;
+			const double nightB     = validExposure(nightExp) ? this->brightnessOf(nightExp) : curB;
 			// 【所要フレーム数と寄せ幅は必ず同じ式にする(2026-09-05)】ここがずれると窓の終端で
 			//  夜間露出にきっかり着地しない。1コマで寄せられる段数は速さの上限×撮影周期。
 			const double perFrame   = frameAllowanceStops(interval);
@@ -1556,7 +1548,7 @@ errCode captureRunner::loop(void)
 			if (windowChanged)
 			{
 				// 上限(暗所限界=最も露出の多い側)=夜間露出にクランプ。下限(明所限界)・優先度は次ccm。
-				postCtl.init(tables_, nightExp, nextC ? nextC->limitDark : hgc::exposure{},
+				postCtl.init(dev_->apiBase.get(), nightExp, nextC ? nextC->limitDark : hgc::exposure{},
 				             nextC ? nextC->priority : ccm->priority);
 				postCtl.capLongestSs(maxSsCap);	// ss は夜間ss/周期-2秒を超えない(指示3)
 				avgBuf.clear(); this->resetStepLock();
@@ -1571,7 +1563,7 @@ errCode captureRunner::loop(void)
 			}
 			// home(往復対称の基準)=次ccmの基準(=goal)。
 			const bool   haveHome = validExposure(goal);
-			const double homeB    = haveHome ? expo::brightnessStops(goal, tables_) : 0.0;
+			const double homeB    = haveHome ? this->brightnessOf(goal) : 0.0;
 			apiBase::meterResult mr;
 			this->meterFrame(shotExp, mr, warmedUp);	// 測光(実装はカメラ依存層。ウォームアップ中は切替なし=従来動作)
 			meterExp = mr.meterExp;
@@ -1634,7 +1626,7 @@ errCode captureRunner::loop(void)
 			const double evTraw = targetEv(ccm);
 			// §4.5 往復対称の基準(home)=基準の明るさ。home から離れる→優先度順 / 近づく→逆優先。
 			const bool   haveHome = validExposure(ccm->initial);
-			const double homeB    = haveHome ? expo::brightnessStops(ccm->initial, tables_) : 0.0;
+			const double homeB    = haveHome ? this->brightnessOf(ccm->initial) : 0.0;
 			// 項目7: 平滑化(ヒステリシス/移動平均)は ccm 個別値があれば優先、無ければ全体設定。
 			const double effHyst = (ccm->hysteresis > 0.0)  ? ccm->hysteresis  : smooth_.hysteresis;
 			const int    effMA   = (ccm->movingAverage > 0) ? static_cast<int>(ccm->movingAverage)
@@ -1642,11 +1634,11 @@ errCode captureRunner::loop(void)
 			bool didInitConverge = false;
 			if (windowChanged)
 			{
-				autoCtl.init(tables_, ccm->limitBright, ccm->limitDark, ccm->priority);
+				autoCtl.init(dev_->apiBase.get(), ccm->limitBright, ccm->limitDark, ccm->priority);
 				autoCtl.capLongestSs(maxSsCap);	// ss は夜間ss/周期-2秒を超えない(指示3)
 				// 配分寄せの「寄せ先」を計算する器。窓ごとに1回だけ作る(init はテーブルを
 				//  複製するので毎コマ作ると内部RAMを削る)。中身は毎コマ上書きされる。
-				migCtl.init(tables_, ccm->limitBright, ccm->limitDark, ccm->priority);
+				migCtl.init(dev_->apiBase.get(), ccm->limitBright, ccm->limitDark, ccm->priority);
 				migCtl.capLongestSs(maxSsCap);
 				avgBuf.clear(); this->resetStepLock();
 				// 項目8: 自動露出→自動露出の切替で目標evが急変するとオーバーシュートするため、
@@ -1878,7 +1870,7 @@ errCode captureRunner::loop(void)
 
 		if (onCaptured_)
 		{
-			double lum = expo::brightnessStops(shotExp, tables_);	// 撮ったのは shotExp
+			double lum = this->brightnessOf(shotExp);	// 撮ったのは shotExp
 			onCaptured_(capturedInfo{ frame, shotExp, lum, ccm->name, meteredLinear, meterMs_, applyMs, prepMs,
 			                          static_cast<int>(lateMs), meterOk_, (applyErr == ERR_HGC_OK),
 			                          meterTry_, applyTry, histSum_, lvTimeMs_, staleSkip_, shutterMs, lvP99_, lvPMax_,

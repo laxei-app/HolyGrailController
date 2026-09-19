@@ -1080,6 +1080,116 @@ double apiCanonCCAPI::askStepStops(funcNum number)
 	return (step > 0.0 && step <= 1.0 + 1e-9) ? step : 0.0;
 }
 
+// ── 露出を「段」で扱う口 ─────────────────────────────────────
+// テーブル(tables_)はこの層の持ち物で、外へは段だけを出す。上位は刻みを知らない。
+namespace
+{
+	// テーブル1要素の寄与[段]。大きいほど明るい。
+	double entryStops(const expo::expoEntry& e, expo::expoKind k)
+	{
+		return (k == expo::expoKind::iso) ? e.apex : -e.apex;
+	}
+	// b にいちばん近い要素の番号。空なら -1。
+	int nearestByStops(const std::vector<expo::expoEntry>& t, expo::expoKind k, double b)
+	{
+		int best = -1; double bd = 1e300;
+		for (int i = 0; i < static_cast<int>(t.size()); ++i)
+		{
+			const double d = std::fabs(entryStops(t[i], k) - b);
+			if (d < bd) { bd = d; best = i; }
+		}
+		return best;
+	}
+	// 軸の素性。notch は at(いまの設定)の隣との差。
+	void axisOf(const std::vector<expo::expoEntry>& t, expo::expoKind k,
+	            const std::string& at, apiBase::axisInfo& out)
+	{
+		out = apiBase::axisInfo{};
+		if (t.empty()) { return; }
+		double lo = 1e300, hi = -1e300;
+		for (const auto& e : t)
+		{
+			const double b = entryStops(e, k);
+			if (b < lo) { lo = b; }
+			if (b > hi) { hi = b; }
+		}
+		out.lo = lo; out.hi = hi;
+		// いまの位置(分からなければ真ん中)の隣との差。重複(差0)は目盛りではないので飛ばす。
+		int i = -1;
+		if (!at.empty()) { for (int n = 0; n < static_cast<int>(t.size()); ++n) { if (t[n].value == at) { i = n; break; } } }
+		if (i < 0) { i = static_cast<int>(t.size()) / 2; }
+		double best = 0.0;
+		for (int j : { i - 1, i + 1 })
+		{
+			if (j < 0 || j >= static_cast<int>(t.size())) { continue; }
+			const double d = std::fabs(t[j].apex - t[i].apex);
+			if (d > 1e-6 && (best <= 0.0 || d < best)) { best = d; }
+		}
+		out.notch = best;	// 1要素しかない軸は 0(動かないので丸めの誤差も生まない)
+	}
+}
+
+errCode apiCanonCCAPI::expoAxes(axisInfo& iso, axisInfo& ss, axisInfo& fn)
+{
+	if (tables_.iso.empty() && tables_.ss.empty() && tables_.fn.empty()) { return ERR_HGC_NOT_FOUND; }
+	axisOf(tables_.iso, expo::expoKind::iso, camExp_.iso, iso);
+	axisOf(tables_.ss,  expo::expoKind::ss,  camExp_.ss,  ss);
+	axisOf(tables_.fn,  expo::expoKind::fn,  camExp_.fn,  fn);
+	return ERR_HGC_OK;
+}
+
+errCode apiCanonCCAPI::expoResolve(const expoPoint& want, hgc::exposure& out, expoPoint& got)
+{
+	out = hgc::exposure{};
+	got = expoPoint{};
+	struct one { const std::vector<expo::expoEntry>* t; expo::expoKind k; bool has; double b;
+	             std::string* val; double* gb; bool* gh; };
+	const one axes[3] = {
+		{ &tables_.iso, expo::expoKind::iso, want.hasIso, want.iso, &out.iso, &got.iso, &got.hasIso },
+		{ &tables_.ss,  expo::expoKind::ss,  want.hasSs,  want.ss,  &out.ss,  &got.ss,  &got.hasSs  },
+		{ &tables_.fn,  expo::expoKind::fn,  want.hasFn,  want.fn,  &out.fn,  &got.fn,  &got.hasFn  },
+	};
+	for (const auto& a : axes)
+	{
+		if (!a.has || a.t->empty()) { continue; }
+		const int i = nearestByStops(*a.t, a.k, a.b);
+		if (i < 0) { continue; }
+		*a.val = (*a.t)[i].value;
+		*a.gb  = entryStops((*a.t)[i], a.k);
+		*a.gh  = true;
+	}
+	return ERR_HGC_OK;
+}
+
+errCode apiCanonCCAPI::expoStops(const hgc::exposure& e, expoPoint& out)
+{
+	out = expoPoint{};
+	struct one { const std::vector<expo::expoEntry>* t; expo::expoKind k; const std::string* v;
+	             double step; double* b; bool* h; };
+	const one axes[3] = {
+		{ &tables_.iso, expo::expoKind::iso, &e.iso, tables_.isoStep, &out.iso, &out.hasIso },
+		{ &tables_.ss,  expo::expoKind::ss,  &e.ss,  tables_.ssStep,  &out.ss,  &out.hasSs  },
+		{ &tables_.fn,  expo::expoKind::fn,  &e.fn,  tables_.fnStep,  &out.fn,  &out.hasFn  },
+	};
+	for (const auto& a : axes)
+	{
+		if (a.v->empty()) { continue; }
+		bool found = false;
+		for (const auto& t : *a.t)
+		{	// テーブルにある値は、その要素の段そのもの(丸めの誤差が入らない)
+			if (t.value == *a.v) { *a.b = entryStops(t, a.k); *a.h = true; found = true; break; }
+		}
+		if (found) { continue; }
+		// テーブルに無い値(撮影制御方法の限界や基準)。理想の格子へ揃えてから測る。
+		const double r = expo::parseValue(*a.v, a.k);
+		if (!(r > 0.0)) { continue; }
+		const double apex = expo::snapStops(expo::stopsOfReal(r, a.k),
+		                                    (a.step > 0.0) ? a.step : (1.0 / 3.0));
+		*a.b = apex; *a.h = true;
+	}
+	return ERR_HGC_OK;
+}
+
 // 機能番号の ability を取得する
 // nunber  : 機能番号
 // ability : 取得した ability

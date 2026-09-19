@@ -9,6 +9,7 @@
 #include "tool.h"
 #include <ctime>
 #include <json/nlohmann/json.hpp>
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 
@@ -37,6 +38,8 @@ std::string apiBuiltin::ssText(double sec)
 	//  ・それ以外は秒を有効数字 3 桁(誤差 ≤ 0.5%。0.0212 / 0.333 / 1.06 / 30.8 / 48)
 	//  以前は 1 秒未満をすべて「1/整数」にしていて、1/8〜1/2 秒で升目が潰れ(1/3→1/2 は 0.59 段)、
 	//  夕方の露出がのこぎり波になった。
+	//  【無段にしたので桁を増やした(2026-09-19)】丸めるのは設定の瞬間だけになり、
+	//   文字列の誤差がそのまま制御の誤差になる。有効数字 4 桁で ±0.0007 段。
 	if (sec < 0.02)
 	{
 		const int denom = static_cast<int>(1.0 / sec + 0.5);
@@ -44,7 +47,7 @@ std::string apiBuiltin::ssText(double sec)
 	}
 	else
 	{
-		std::snprintf(b, sizeof(b), "%.3g", sec);
+		std::snprintf(b, sizeof(b), "%.4g", sec);
 	}
 	return std::string(b);
 }
@@ -66,7 +69,12 @@ std::string apiBuiltin::isoText(int iso)
 
 std::string apiBuiltin::fnText(double fn)
 {
-	char b[16]; std::snprintf(b, sizeof(b), "%.1f", fn); return std::string(b);
+	//  【桁を増やした(2026-09-19)】可変絞り機では 0.1 以内に 2 点並びうる。
+	//   1 桁だと同じ綴りになって片方が消える(f/1.85 と f/1.9 など)。
+	char b[16]; std::snprintf(b, sizeof(b), "%.2f", fn);
+	std::string s = b;
+	while (s.size() > 3 && s.back() == '0') { s.pop_back(); }	// "2.00"->"2.0" / "1.80"->"1.8"
+	return s;
 }
 
 // ── テーブルの合成 ──────────────────────────────────────────
@@ -91,38 +99,26 @@ void apiBuiltin::buildTables(void)
 		texts.push_back(t); reals.push_back(r);
 	};
 
-	// --- ss(短い=暗い側 から 長い=明るい側 へ。apex 昇順は上位が作る) ---
+	// --- ss(両端だけ。この端末は無段である。2026-09-19) ---
+	//  以前は 1/12 段の等比で並びを合成していたが、それは**この端末の性能を落としていた**。
+	//  露出制御は apiBase::expoAxes/expoResolve で段のまま扱うので、並びは要らない。
+	//  ここで作る両端は「機材の記録と画面表示(min/max しか見ていない)」のためだけ。
 	//  上端はセンサーの上限ではなく「加算込みで設定できる上限」(RAW が出せれば 48 秒)。
-	//  上位から見れば単に長い ss があるだけで、分割して足すのは shootStart の中の話。
 	{
 		double lo = (expMinNs_ > 0) ? (static_cast<double>(expMinNs_) / 1e9) : kFallbackSsMin;
 		double hi = this->maxSettableSsSec();
 		if (hi <= 0.0) { hi = kFallbackSsMax; }
 		if (hi < lo) { std::swap(lo, hi); }
-		const double span = std::log2(hi / lo);
-		const int    n    = static_cast<int>(span / kStepStops + 0.5);
-		for (int k = 0; k <= n; ++k)
-		{
-			double t = lo * std::pow(2.0, kStepStops * k);
-			if (t > hi) { t = hi; }
-			push(ssList_, ssReal_, ssText(t), t);
-		}
+		push(ssList_, ssReal_, ssText(lo), lo);
 		push(ssList_, ssReal_, ssText(hi), hi);
 	}
 
-	// --- iso(整数。論理値も整数に丸めた値=カメラへ渡す値そのもの) ---
+	// --- iso(両端だけ。整数だが刻みは 1/12 段よりはるかに細かいので無段として扱う) ---
 	{
 		int lo = (isoMin_ > 0) ? isoMin_ : kFallbackIsoMin;
 		int hi = (isoMax_ > 0) ? isoMax_ : kFallbackIsoMax;
 		if (hi < lo) { std::swap(lo, hi); }
-		const double span = std::log2(static_cast<double>(hi) / lo);
-		const int    n    = static_cast<int>(span / kStepStops + 0.5);
-		for (int k = 0; k <= n; ++k)
-		{
-			int v = static_cast<int>(lo * std::pow(2.0, kStepStops * k) + 0.5);
-			if (v > hi) { v = hi; }
-			push(isoList_, isoReal_, isoText(v), static_cast<double>(v));
-		}
+		push(isoList_, isoReal_, isoText(lo), static_cast<double>(lo));
 		push(isoList_, isoReal_, isoText(hi), static_cast<double>(hi));
 	}
 
@@ -133,11 +129,8 @@ void apiBuiltin::buildTables(void)
 		for (double a : apertures_) { push(fnList_, fnReal_, fnText(a), a); }
 	}
 
-	// 測光値の割り戻しに使う APEX テーブル。撮影側(captureRunner)が getSettings から作るものと
-	//  同じ経路(tablesFromRange)で作る。刻みは kStepStops、論理値は上の実数。
-	cmdt::shotRange r;
-	this->getSettings(r);
-	tables_ = expo::tablesFromRange(r);
+	// 【テーブルは持たない(2026-09-19)】測光値の割り戻しは expoStops で行う。
+	//  並びに載っていない値(無段で決めた ss)も文字列から論理値へ読み戻せる。
 }
 
 // ── 素性 ────────────────────────────────────────────────────
@@ -280,6 +273,156 @@ errCode apiBuiltin::getSettings(cmdt::shotRange& settings)
 		              settings.isoStep, settings.ssStep, settings.fnStep);
 		dataManager::logEvent("CAMERA", b);
 	}
+	return ERR_HGC_OK;
+}
+
+// ── 露出を「段」で扱う口 ─────────────────────────────────────
+// 【この端末は ss と ISO が無段(2026-09-19 ユーザー決定)】
+//  SENSOR_EXPOSURE_TIME は ns の整数、SENSOR_SENSITIVITY は整数で、どちらも
+//  刻みは 1/12 段よりはるかに細かい(ISO 44 でも整数 1 段差は 0.032 段)。
+//  以前は 1/12 段の並びを合成して制御側に渡していたが、それはこの端末の性能を
+//  わざわざ落としていた。範囲だけを答え、丸めない(notch=0)。
+//  F 値だけは端末が答える並び(多くは 1 点、可変絞り機は複数)のぶんだけ離散。
+double apiBuiltin::apertureMin(void) const
+{
+	if (apertures_.empty()) { return 0.0; }
+	double m = apertures_.front();
+	for (double a : apertures_) { if (a > 0.0 && (m <= 0.0 || a < m)) { m = a; } }
+	return m;
+}
+
+double apiBuiltin::apertureMax(void) const
+{
+	if (apertures_.empty()) { return 0.0; }
+	double m = apertures_.front();
+	for (double a : apertures_) { if (a > m) { m = a; } }
+	return m;
+}
+
+errCode apiBuiltin::expoAxes(axisInfo& iso, axisInfo& ss, axisInfo& fn)
+{
+	if (ssList_.empty()) { this->buildTables(); }
+	iso = axisInfo{}; ss = axisInfo{}; fn = axisInfo{};
+
+	// ss: センサーの最短 〜 設定できる最長(加算込み)。無段。
+	{
+		double lo = (expMinNs_ > 0) ? (static_cast<double>(expMinNs_) / 1e9) : kFallbackSsMin;
+		double hi = this->maxSettableSsSec();
+		if (hi <= 0.0) { hi = kFallbackSsMax; }
+		if (hi < lo) { std::swap(lo, hi); }
+		ss.lo = expo::stopsOfReal(lo, expo::expoKind::ss);
+		ss.hi = expo::stopsOfReal(hi, expo::expoKind::ss);
+		ss.notch = 0.0;	// 無段
+	}
+	// ISO: 端末の範囲。整数だが刻みは細かいので無段として扱う(丸めは設定の瞬間だけ)。
+	{
+		int lo = (isoMin_ > 0) ? isoMin_ : kFallbackIsoMin;
+		int hi = (isoMax_ > 0) ? isoMax_ : kFallbackIsoMax;
+		if (hi < lo) { std::swap(lo, hi); }
+		iso.lo = expo::stopsOfReal(static_cast<double>(lo), expo::expoKind::iso);
+		iso.hi = expo::stopsOfReal(static_cast<double>(hi), expo::expoKind::iso);
+		iso.notch = 0.0;
+	}
+	// F: 端末が答える並び。1 点なら動かない軸(lo==hi・notch=0)。
+	{
+		const double amin = this->apertureMin();
+		const double amax = this->apertureMax();
+		const double f0 = (amin > 0.0) ? amin : kFallbackFn;
+		const double f1 = (amax > 0.0) ? amax : f0;
+		fn.hi = expo::stopsOfReal(f0, expo::expoKind::fn);	// 小さいFほど明るい=上端
+		fn.lo = expo::stopsOfReal(f1, expo::expoKind::fn);
+		fn.notch = 0.0;
+		if (apertures_.size() > 1)
+		{	// 隣り合う絞りの差のうちいちばん細かいもの。丸めの粗さになる。
+			std::vector<double> b;
+			for (double a : apertures_) { if (a > 0.0) { b.push_back(expo::stopsOfReal(a, expo::expoKind::fn)); } }
+			std::sort(b.begin(), b.end());
+			double best = 0.0;
+			for (size_t i = 1; i < b.size(); ++i)
+			{
+				const double d = b[i] - b[i - 1];
+				if (d > 1e-6 && (best <= 0.0 || d < best)) { best = d; }
+			}
+			fn.notch = best;
+		}
+	}
+	return ERR_HGC_OK;
+}
+
+errCode apiBuiltin::expoResolve(const expoPoint& want, hgc::exposure& out, expoPoint& got)
+{
+	axisInfo ai, as, af;
+	const errCode e = this->expoAxes(ai, as, af);
+	if (e != ERR_HGC_OK) { return e; }
+	out = hgc::exposure{};
+	got = expoPoint{};
+	auto clamp = [](double v, double lo, double hi) { return (v < lo) ? lo : ((v > hi) ? hi : v); };
+
+	// ss: 望まれた段をそのまま秒にして書き出す。丸めない。
+	if (want.hasSs)
+	{
+		const double b   = clamp(want.ss, as.lo, as.hi);
+		const double sec = expo::realOfStops(b, expo::expoKind::ss);
+		out.ss = ssText(sec);
+		// 文字列へ書いた結果を読み戻した値が「実際に設定される値」。段もそこから答える。
+		const double back = expo::parseValue(out.ss, expo::expoKind::ss);
+		got.ss = expo::stopsOfReal((back > 0.0) ? back : sec, expo::expoKind::ss);
+		got.hasSs = true;
+	}
+	// ISO: 整数へ丸める(端末が受け取れるのは整数)。範囲で止める。
+	if (want.hasIso)
+	{
+		const double b = clamp(want.iso, ai.lo, ai.hi);
+		double v = expo::realOfStops(b, expo::expoKind::iso);
+		int    n = static_cast<int>(v + 0.5);
+		const int lo = (isoMin_ > 0) ? isoMin_ : kFallbackIsoMin;
+		const int hi = (isoMax_ > 0) ? isoMax_ : kFallbackIsoMax;
+		if (n < lo) { n = lo; }
+		if (n > hi) { n = hi; }
+		out.iso = isoText(n);
+		got.iso = expo::stopsOfReal(static_cast<double>(n), expo::expoKind::iso);
+		got.hasIso = true;
+	}
+	// F: 端末が答える並びのうち、いちばん近いもの。
+	if (want.hasFn)
+	{
+		double bestA = (this->apertureMin() > 0.0) ? this->apertureMin() : kFallbackFn;
+		if (!apertures_.empty())
+		{
+			double bd = 1e300;
+			for (double a : apertures_)
+			{
+				if (!(a > 0.0)) { continue; }
+				const double d = std::fabs(expo::stopsOfReal(a, expo::expoKind::fn) - want.fn);
+				if (d < bd) { bd = d; bestA = a; }
+			}
+		}
+		out.fn = fnText(bestA);
+		got.fn = expo::stopsOfReal(bestA, expo::expoKind::fn);
+		got.hasFn = true;
+	}
+	return ERR_HGC_OK;
+}
+
+// 露出の明るさ[段]。テーブルを持たないので expoStops から作る。
+double apiBuiltin::brightnessOf(const hgc::exposure& e)
+{
+	expoPoint p;
+	if (this->expoStops(e, p) != ERR_HGC_OK) { return 0.0; }
+	return p.sum();
+}
+
+errCode apiBuiltin::expoStops(const hgc::exposure& e, expoPoint& out)
+{
+	out = expoPoint{};
+	// 文字列はこの層が書いたもの(または計画が持つ値)。論理値へ読み戻して段にする。
+	//  テーブルに載っている値なら realOf が正確な論理値を返す。無ければ文字列を読む。
+	const double si = realOf(isoList_, isoReal_, e.iso, expo::expoKind::iso);
+	const double ss = realOf(ssList_,  ssReal_,  e.ss,  expo::expoKind::ss);
+	const double sf = realOf(fnList_,  fnReal_,  e.fn,  expo::expoKind::fn);
+	if (!e.iso.empty() && si > 0.0) { out.iso = expo::stopsOfReal(si, expo::expoKind::iso); out.hasIso = true; }
+	if (!e.ss.empty()  && ss > 0.0) { out.ss  = expo::stopsOfReal(ss, expo::expoKind::ss);  out.hasSs  = true; }
+	if (!e.fn.empty()  && sf > 0.0) { out.fn  = expo::stopsOfReal(sf, expo::expoKind::fn);  out.hasFn  = true; }
 	return ERR_HGC_OK;
 }
 
@@ -493,7 +636,7 @@ errCode apiBuiltin::meterScene(const hgc::exposure& shotExp, meterResult& out,
 		return ERR_HGC_RDY_METARING;
 	}
 	out.meterExp = shotExp;	// 測ったのは撮影画像そのもの=撮影露出で測った
-	out.sceneRef = out.linear / std::pow(2.0, expo::brightnessStops(shotExp, tables_));
+	out.sceneRef = out.linear / std::pow(2.0, this->brightnessOf(shotExp));
 	return ERR_HGC_OK;
 }
 
@@ -508,7 +651,7 @@ errCode apiBuiltin::meterHere(meterResult& out, const std::function<bool()>& kee
 	// いま載せている露出で撮ったので、それが測光露出そのもの。
 	hgc::exposure me; me.iso = curIso_; me.ss = curSs_; me.fn = curFn_;
 	out.meterExp = me;
-	out.sceneRef = out.linear / std::pow(2.0, expo::brightnessStops(me, tables_));
+	out.sceneRef = out.linear / std::pow(2.0, this->brightnessOf(me));
 	lastJpeg_ = jpeg;	// 続けて meterScene が呼ばれても材料が揃っている
 	return ERR_HGC_OK;
 }
