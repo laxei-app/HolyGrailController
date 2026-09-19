@@ -376,11 +376,12 @@ private:
 	void          resetStepLock(void);	// 抑制状態を捨てる
 	int           lastStepDir_ = 0;	// 直前に動かした向き(-1=暗く +1=明るく 0=なし)
 	int           stepLock_    = 0;	// 反転を抑える残りコマ数(0=抑制なし)
-	bool          wouldOvershoot(double needStops, double bandStops, double stepStops) const;
+	// このコマで動かしてよい量[段]。速さの上限(段/秒)×撮影周期の貯金と、1コマの上限の小さい方。
+	double        moveRoomStops(void) const;
 	// このコマで踏んでよい目盛り数。貯金(stepBudget_)と1目盛りの大きさで決まる。
-	int           stepsToClose(double needStops, double stepStops) const;
+
 	// 1コマぶんの許容を貯める(露出判断の直前に1コマ1回だけ呼ぶ)。
-	void          addStepBudget(double intervalSec, double stepStops);
+	void          addStepBudget(double intervalSec);
 	// 実際に動いた段数を引く(動けなかったぶんは残る)。
 	void          spendStepBudget(double stops);
 	// 1コマで許される段数(= 上限[段/秒] × 撮影周期[秒])。

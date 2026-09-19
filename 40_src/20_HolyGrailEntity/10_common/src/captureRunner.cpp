@@ -518,18 +518,11 @@ void captureRunner::resetStepLock(void)
 	stepLock_    = 0;
 }
 
-// 踏み出すと帯の反対側へ飛び出すなら動かない(デッドバンド。2026-07-29 振動の根治)。
-//  ヒステリシス帯より1歩(1/3段)が大きいと、補正のたびに必ず反対側へ越えて往復し続ける。
-//  夕日/朝日は帯0.3段<歩幅0.333段のため必ず振動していた(日中は帯1.0段なので発動しない)。
-//  need=目標までの差[段], band=ヒステリシス全幅[段]。true=このコマは動かさない。
-bool captureRunner::wouldOvershoot(double needStops, double bandStops, double stepStops) const
-{
-	const double step = (stepStops > 0.0) ? stepStops : kExposureStepStops;
-	const double a    = std::fabs(needStops);
-	if (a >= step) { return false; }	// 1歩以上ずれている→動かすべき
-	// 1歩動かすと |a - 1歩| だけ反対側へ出る。それが帯の外なら動かさない。
-	return (step - a) > (bandStops / 2.0);
-}
+// 【飛び出しの判定は要らなくなった(2026-09-19 無段階化)】
+//  以前は「1歩=デバイスの1目盛り」しか動かせなかったので、はみ出した量より歩幅が大きいと
+//  必ず反対側へ越えて往復した(wouldOvershoot で見送っていた)。いまは**はみ出した分だけ
+//  無段階で動かす**ので、原理的に反対側へ飛び出さない。残るのは「カメラへ送るときの丸め」
+//  だけで、それは帯の下限を1目盛りに比例させて吸収する(effHysteresis)。
 
 // 【1コマぶんの許容を貯める(2026-09-05)】
 //  露出を動かす速さの上限は「段/秒」なので、1コマの許容は撮影周期で決まる。
@@ -537,13 +530,14 @@ bool captureRunner::wouldOvershoot(double needStops, double bandStops, double st
 //  (9秒周期・1/3段刻みなら 0.20段ずつ貯まり、2コマ目で1目盛り動ける)。
 //  貯めっぱなしにはしない。測光が長く失敗した後などに何段も一度に飛ぶのを防ぐため、
 //  「1コマぶん + 1目盛り」で頭打ちにする。
-void captureRunner::addStepBudget(double intervalSec, double stepStops)
+void captureRunner::addStepBudget(double intervalSec)
 {
-	const double step  = (stepStops > 0.0) ? stepStops : kExposureStepStops;
 	const double frame = frameAllowanceStops(intervalSec);
-	// このコマで動かしてよい上限。1目盛りより細かくは動けないので、最低でも1目盛りは許す
-	//  (許さないと、1コマの許容が1目盛りに満たない短い周期で永久に動けなくなる)。
-	frameLimit_ = (frame > step) ? frame : step;
+	// 【1目盛りの下駄をやめた(2026-09-19 無段階化)】以前は「1目盛りより細かくは動けない」ので
+	//  1コマの上限を最低1目盛りまで引き上げていた。そのため ISO が 1 段刻みのカメラでは
+	//  1コマで 1.0 段も動けてしまい、変化速度の上限が効かなくなる。無段階になったので
+	//  上限はそのまま「速さの上限×撮影周期」でよい。
+	frameLimit_ = frame;
 	const double cap = frameLimit_ * kStepBudgetCapFrames;
 	stepBudget_    += frame;
 	migrateBudget_ += frame;
@@ -557,21 +551,12 @@ void captureRunner::spendStepBudget(double stops)
 	if (stepBudget_ < 0.0) { stepBudget_ = 0.0; }	// 目盛りは段数を跨ぐので少し超えることがある
 }
 
-// 目標との差(段)から、このコマで踏む目盛り数を決める。
-//  上限は貯金(=速さの上限×撮影周期の積み上げ)。貯金が1目盛りに満たなければ 0 を返し、
-//  このコマは動かない。差が小さければ必要なぶんだけで止める。
-int captureRunner::stepsToClose(double needStops, double stepStops) const
+// このコマで動かしてよい量[段]。
+//  貯金(=速さの上限×撮影周期の積み上げ)と「1コマの上限」の**小さい方**。
+//  貯まっていても1コマの粗さは上限で決まる。
+double captureRunner::moveRoomStops(void) const
 {
-	const double step = (stepStops > 0.0) ? stepStops : kExposureStepStops;
-	// 貯金と「1コマの上限」の**小さい方**まで。貯まっていても1コマの粗さは上限で決まる。
-	const double room = (stepBudget_ < frameLimit_) ? stepBudget_ : frameLimit_;
-	int n    = static_cast<int>(std::fabs(needStops) / step + 0.5);	// 差を埋めるのに要る目盛り数(最寄り)
-	int maxN = static_cast<int>((room + 1e-9) / step);
-	// 【半目盛り未満は動かない(2026-09-08)】差は「帯からはみ出た分」なので小さいことが普通。
-	//  無理に 1 目盛り踏むと縁から目盛りぶん内側へ入り、場面がその分変わるまで止まる=目盛り幅の
-	//  往復になる。最寄りの目盛り数が 0 ならそのコマは動かさず、はみ出しが半目盛りを越えてから踏む。
-	if (n > maxN) { n = maxN; }
-	return (n > 0) ? n : 0;
+	return (stepBudget_ < frameLimit_) ? stepBudget_ : frameLimit_;
 }
 
 
@@ -763,11 +748,14 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 
 		if (std::fabs(err) <= kInitConvergeTolStops) { converged = true; break; }	// 収束(1枚目から1/3段以内)
 
-		ctl.applyStops(-err);	// 目標へ直接投影(限界・1/3段テーブルへは applyStops がクランプ)
-		const double newB = expo::brightnessStops(ctl.current(), tables_);
+		// 目標へ直接投影する。無段階なので誤差ぶんきっかり動く(限界は moveStops がクランプ)。
+		const double did = ctl.moveStops(-err);
 		// 露出限界に当たって動けない=これ以上詰められない。狙いには届かないが「出せる最良」に
 		// 到達しているので、収束できなかった(時間切れ)とは区別して扱う。
-		if (std::fabs(newB - curB) < 1e-6) { converged = true; break; }
+		//  【動いた量そのもので見る(2026-09-19)】カメラへ送る値は目盛りに丸めるので、
+		//  半目盛り未満の動きでは丸めた姿が変わらない。丸めた姿で比べると「動けなかった」と
+		//  取り違える。
+		if (std::fabs(did) < 1e-6) { converged = true; break; }
 		// 次の反復で新しい測光により誤差を再確認する(確認が取れたら上で break)。
 	}
 
@@ -819,9 +807,8 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 			++step;					// 実写で1歩詰めたので収束の1歩として数える
 			converged = false;
 			if (std::fabs(cErr) <= kInitConvergeTolStops) { converged = true; break; }
-			ctl.applyStops(-cErr);
-			const double cNewB = expo::brightnessStops(ctl.current(), tables_);
-			if (std::fabs(cNewB - cCurB) < 1e-6) { converged = true; break; }	// 露出限界で動けない
+			const double cDid = ctl.moveStops(-cErr);
+			if (std::fabs(cDid) < 1e-6) { converged = true; break; }	// 露出限界で動けない
 			// ここで打ち切らない。補正後の露出でもう一度測り、ev0 を引き直して確かめる
 			//  (1回の補正では 1.0〜1.3段 残る。kCalibMaxShots の説明を参照)。
 		}
@@ -1390,7 +1377,7 @@ errCode captureRunner::loop(void)
 			const expo::exposureCtl& useCtl =
 				(ccm && ccm->type == hgc::ccmType::preNight)  ? preCtl  :
 				(ccm && ccm->type == hgc::ccmType::postNight) ? postCtl : autoCtl;
-			this->addStepBudget(interval, useCtl.minStepStops());
+			this->addStepBudget(interval);
 		}
 
 		hgc::exposure target{};
@@ -1451,7 +1438,9 @@ errCode captureRunner::loop(void)
 			// 終端で夜間露出へきっかり着地させるための残フレーム判定。
 			const long long winEnd  = hgc::toUnixUtc(w->end, off_);
 			const int remainFrames  = (interval > 0.0) ? static_cast<int>((winEnd - now) / interval) : 0;
-			const double curB       = expo::brightnessStops(preCtl.current(), tables_);
+			// 【無段階の現在位置で測る(2026-09-19)】寄せるのは内部の位置(preCtl.brightness())
+			//  なので、残りコマ数もそれで測る。丸めた姿で測ると半目盛りぶん食い違う。
+			const double curB       = preCtl.brightness();
 			const double nightB     = validExposure(nightExp) ? expo::brightnessStops(nightExp, tables_) : curB;
 			// 【所要フレーム数と寄せ幅は必ず同じ式にする(2026-09-05)】ここがずれると窓の終端で
 			//  夜間露出にきっかり着地しない。1コマで寄せられる段数は速さの上限×撮影周期。
@@ -1464,19 +1453,13 @@ errCode captureRunner::loop(void)
 				// 収束フェーズ: 測光を止め夜間露出へ寄せる(終端できっかり一致)。
 				//  1コマで寄せてよいのは perFrame 段まで。目盛りが細かいカメラでは
 				//  1コマに複数目盛り踏む(合計が perFrame を超えない範囲で)。
-				const double step = preCtl.minStepStops();
-				double       room = (stepBudget_ < frameLimit_) ? stepBudget_ : frameLimit_;
-				for (;;)
-				{
-					const double cB = expo::brightnessStops(preCtl.current(), tables_);
-					const double d  = nightB - cB;
-					if (std::fabs(d) <= step / 2.0) { break; }	// 十分近い
-					if (room < step - 1e-9)         { break; }	// このコマの許容を使い切った
-					if (!(d < 0.0 ? preCtl.darken() : preCtl.brighten())) { break; }	// 限界
-					const double used = std::fabs(expo::brightnessStops(preCtl.current(), tables_) - cB);
-					room -= used;
-					this->spendStepBudget(used);
-				}
+				//  無段階になったので「目盛りを何個踏むか」ではなく、残差をそのまま
+				//  1コマの許容(=速さの上限×撮影周期)で切って動かす。終端できっかり着地する。
+				const double room = this->moveRoomStops();
+				double       d    = nightB - preCtl.brightness();
+				if (d >  room) { d =  room; }
+				if (d < -room) { d = -room; }
+				this->spendStepBudget(preCtl.moveStops(d));
 				target = preCtl.current();
 			}
 			else
@@ -1506,8 +1489,9 @@ errCode captureRunner::loop(void)
 					while (static_cast<int>(avgBuf.size()) > n) { avgBuf.erase(avgBuf.begin()); }
 					const double avg = this->sceneNowFromBuf(avgBuf);	// 移動平均(先読みなし。2026-09-09)
 					double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : preCtl.current(), ev0cfg_);
-					const double step = preCtl.minStepStops();
-					const double band = this->effHysteresis(smooth_.hysteresis, step);
+					// 帯の下限は**いちばん粗い目盛り**に比例させる。カメラへ送るときの丸めで
+					//  動いた軸の目盛りぶん行き過ぎうるので、それを帯が飲み込める広さが要る。
+					const double band = this->effHysteresis(smooth_.hysteresis, preCtl.maxStepStops());
 					double linU = expo::linearFromEvBase(preEv + band / 2.0, lin0);
 					double linD = expo::linearFromEvBase(preEv - band / 2.0, lin0);
 					// 撮影露出で撮った場合の明るさへ投影してから比べる(ループを閉じる)。
@@ -1520,27 +1504,19 @@ errCode captureRunner::loop(void)
 						const double needCenter = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;
 						const double need = expo::excessStops(predicted, linD, linU);
 						const int    dir  = (need < 0.0) ? -1 : 1;
-						if (this->wouldOvershoot(need, band, step) || !this->allowStep(dir, needCenter, band)) { meterFailStreak = 0; }
+						if (!this->allowStep(dir, needCenter, band)) { meterFailStreak = 0; }
 						else
 						{
-						const double b0     = expo::brightnessStops(preCtl.current(), tables_);
-						const int    steps  = this->stepsToClose(need, step);
-						int          moves  = 0;
-						for (int s = 0; s < steps; ++s)
-						{
-							const double cB = expo::brightnessStops(preCtl.current(), tables_);
-							bool moved;
-							if (need < 0.0) { moved = (haveHome && cB > homeB) ? preCtl.stepHome(false, nightExp) : preCtl.darken(); }
-							else            { moved = (haveHome && cB < homeB) ? preCtl.stepHome(true,  nightExp) : preCtl.brighten(); }
-							if (!moved) { break; }
-							++moves;
-						}
-						// 動いたぶんだけ貯金を引く(目盛りは軸ごとに大きさが違うので実測で引く)。
-						if (moves > 0)
-						{
-							this->noteStep(dir);
-							this->spendStepBudget(expo::brightnessStops(preCtl.current(), tables_) - b0);
-						}
+						// 【無段階で動かす(2026-09-19)】はみ出た分を、このコマの許容で切って動かす。
+						//  基準(home)へ戻る向きのときは優先度の逆順で巻き戻す(§4.5 往復対称)。
+						const double room = this->moveRoomStops();
+						double       mv   = need;
+						if (mv >  room) { mv =  room; }
+						if (mv < -room) { mv = -room; }
+						const bool useHome = haveHome &&
+							((need < 0.0) ? (preCtl.brightness() > homeB) : (preCtl.brightness() < homeB));
+						const double did = preCtl.moveStops(mv, useHome ? &nightExp : nullptr);
+						if (std::fabs(did) > 1e-9) { this->noteStep(dir); this->spendStepBudget(did); }
 						}
 					}
 					meterFailStreak = 0;
@@ -1618,8 +1594,7 @@ errCode captureRunner::loop(void)
 				while (static_cast<int>(avgBuf.size()) > n) { avgBuf.erase(avgBuf.begin()); }
 				const double avg = this->sceneNowFromBuf(avgBuf);	// 移動平均(先読みなし。2026-09-09)
 				double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : postCtl.current(), ev0cfg_);
-				const double step = postCtl.minStepStops();
-				const double band = this->effHysteresis(smooth_.hysteresis, step);
+				const double band = this->effHysteresis(smooth_.hysteresis, postCtl.maxStepStops());
 				double linU = expo::linearFromEvBase(postEv + band / 2.0, lin0);
 				double linD = expo::linearFromEvBase(postEv - band / 2.0, lin0);
 				// 撮影露出で撮った場合の明るさへ投影してから比べる(ループを閉じる)。
@@ -1631,26 +1606,17 @@ errCode captureRunner::loop(void)
 					const double needCenter = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;
 					const double need = expo::excessStops(predicted, linD, linU);
 					const int    dir  = (need < 0.0) ? -1 : 1;
-					if (this->wouldOvershoot(need, band, step) || !this->allowStep(dir, needCenter, band)) { meterFailStreak = 0; }
+					if (!this->allowStep(dir, needCenter, band)) { meterFailStreak = 0; }
 					else
 					{
-					const double b0     = expo::brightnessStops(postCtl.current(), tables_);
-					const int    steps  = this->stepsToClose(need, step);
-					int          moves  = 0;
-					for (int s = 0; s < steps; ++s)
-					{
-						const double curB = expo::brightnessStops(postCtl.current(), tables_);
-						bool moved;
-						if (need < 0.0) { moved = (haveHome && curB > homeB) ? postCtl.stepHome(false, goal) : postCtl.darken(); }
-						else            { moved = (haveHome && curB < homeB) ? postCtl.stepHome(true,  goal) : postCtl.brighten(); }
-						if (!moved) { break; }
-						++moves;
-					}
-					if (moves > 0)
-					{
-						this->noteStep(dir);
-						this->spendStepBudget(expo::brightnessStops(postCtl.current(), tables_) - b0);
-					}
+					const double room = this->moveRoomStops();
+					double       mv   = need;
+					if (mv >  room) { mv =  room; }
+					if (mv < -room) { mv = -room; }
+					const bool useHome = haveHome &&
+						((need < 0.0) ? (postCtl.brightness() > homeB) : (postCtl.brightness() < homeB));
+					const double did = postCtl.moveStops(mv, useHome ? &goal : nullptr);
+					if (std::fabs(did) > 1e-9) { this->noteStep(dir); this->spendStepBudget(did); }
 					}
 				}
 				meterFailStreak = 0;
@@ -1745,8 +1711,7 @@ errCode captureRunner::loop(void)
 					const double avg = this->sceneNowFromBuf(avgBuf);	// 移動平均(先読みなし。2026-09-09)
 
 					double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : autoCtl.current(), ev0cfg_);
-					const double step = autoCtl.minStepStops();
-					const double band = this->effHysteresis(effHyst, step);
+					const double band = this->effHysteresis(effHyst, autoCtl.maxStepStops());
 					double linU = expo::linearFromEvBase(evT + band / 2.0, lin0);
 					double linD = expo::linearFromEvBase(evT - band / 2.0, lin0);
 					// 撮影露出で撮った場合の明るさへ投影してから比べる(土俵合わせ)。これでループが
@@ -1765,26 +1730,17 @@ errCode captureRunner::loop(void)
 						const double needCenter = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;	// +:明るく -:暗く
 						const double need = expo::excessStops(predicted, linD, linU);
 						const int    dir  = (need < 0.0) ? -1 : 1;
-						if (this->wouldOvershoot(need, band, step) || !this->allowStep(dir, needCenter, band)) { meterFailStreak = 0; }
+						if (!this->allowStep(dir, needCenter, band)) { meterFailStreak = 0; }
 						else
 						{
-						const double b0     = expo::brightnessStops(autoCtl.current(), tables_);
-						const int    steps  = this->stepsToClose(need, step);
-						int          moves  = 0;
-						for (int s = 0; s < steps; ++s)
-						{
-							const double curB = expo::brightnessStops(autoCtl.current(), tables_);
-							bool moved;
-							if (need < 0.0) { moved = (haveHome && curB > homeB) ? autoCtl.stepHome(false, ccm->initial) : autoCtl.darken(); }
-							else            { moved = (haveHome && curB < homeB) ? autoCtl.stepHome(true,  ccm->initial) : autoCtl.brighten(); }
-							if (!moved) { break; }	// 限界に到達
-							++moves;
-						}
-						if (moves > 0)
-						{
-							this->noteStep(dir);
-							this->spendStepBudget(expo::brightnessStops(autoCtl.current(), tables_) - b0);
-						}
+						const double room = this->moveRoomStops();
+						double       mv   = need;
+						if (mv >  room) { mv =  room; }
+						if (mv < -room) { mv = -room; }
+						const bool useHome = haveHome &&
+							((need < 0.0) ? (autoCtl.brightness() > homeB) : (autoCtl.brightness() < homeB));
+						const double did = autoCtl.moveStops(mv, useHome ? &ccm->initial : nullptr);
+						if (std::fabs(did) > 1e-9) { this->noteStep(dir); this->spendStepBudget(did); }
 						}
 					}
 					meterFailStreak = 0;	// 測光成功
