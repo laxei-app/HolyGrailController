@@ -271,6 +271,15 @@ errCode apiBuiltin::getSettings(cmdt::shotRange& settings)
 	settings.ssReal    = ssReal_;
 	settings.isoReal   = isoReal_;
 	settings.fnReal    = fnReal_;
+	// 【刻みの出どころをログに残す(2026-09-19)】キヤノン層(apiCanonCCAPI)と同じ形で出す。
+	//  内蔵カメラは並びも刻みも端末が合成するので、聞く相手も推測する余地も無い = device。
+	//  撮影ごとに1行だけ。どの刻みで制御していたかを後からログだけで追えるようにする。
+	{
+		char b[160];
+		std::snprintf(b, sizeof(b), "exposure step: iso=%.3f(device) ss=%.3f(device) fn=%.3f(device) stops",
+		              settings.isoStep, settings.ssStep, settings.fnStep);
+		dataManager::logEvent("CAMERA", b);
+	}
 	return ERR_HGC_OK;
 }
 
