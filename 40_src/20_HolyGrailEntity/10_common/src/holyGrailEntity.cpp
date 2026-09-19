@@ -1012,25 +1012,35 @@ namespace
 	// リスト未設定・空文字はそのまま(初期値ccm単体=カメラ未規定では呼ばない)。
 	void clampExposureToGear(hgc::exposure& e, const hgc::camera& cam, const hgc::lens& lens)
 	{
-		auto clampList = [](std::string& cur, const std::vector<std::string>& list, expo::expoKind k)
+		// 【上下限で止めるだけ。並びへ吸着させない(2026-09-19)】
+		//  以前は「カメラの並びのいちばん近い値」へ寄せていた。並びが短いカメラや、
+		//  無段のカメラ(記録用の並びは両端だけ)では、範囲の内側にある値まで端へ飛ばされる。
+		//  実際、内蔵カメラで ss を 20 秒にしても 48 秒へ戻る、ISO 1600 が 11377 に化ける、
+		//  という形で現れた(2026-09-19 実機)。
+		//  撮影のときはデバイスが自分の出せる値へ解決する(apiBase::expoResolve)ので、
+		//  ここでやるべきことは「そのカメラに無い範囲へはみ出していたら端で止める」だけ。
+		auto clampRange = [](std::string& cur, const std::vector<std::string>& list, expo::expoKind k)
 		{
 			if (cur.empty() || list.empty()) { return; }
-			double v = expo::parseValue(cur, k);
-			if (v <= 0) { return; }
-			const std::string* best = nullptr;
-			double bestDiff = 1e300;
+			const double v = expo::parseValue(cur, k);
+			if (!(v > 0.0)) { return; }
+			const std::string* lo = nullptr; const std::string* hi = nullptr;
+			double loV = 0.0, hiV = 0.0;
 			for (const auto& s : list)
 			{
-				if (s == cur) { return; }	// 目盛りにある値はそのまま
+				if (s == "Bulb" || s == "auto" || s == "Auto") { continue; }
 				const double r = expo::parseValue(s, k);
-				if (r <= 0) { continue; }
-				const double d = std::fabs(std::log2(r / v));
-				if (d < bestDiff) { bestDiff = d; best = &s; }
+				if (!(r > 0.0)) { continue; }
+				if (lo == nullptr || r < loV) { loV = r; lo = &s; }
+				if (hi == nullptr || r > hiV) { hiV = r; hi = &s; }
 			}
-			if (best) { cur = *best; }
+			if (lo == nullptr || hi == nullptr) { return; }
+			if      (v < loV) { cur = *lo; }
+			else if (v > hiV) { cur = *hi; }
+			// 範囲の内側なら触らない
 		};
-		clampList(e.iso, cam.isoList, expo::expoKind::iso);
-		clampList(e.ss,  cam.ssList,  expo::expoKind::ss);
+		clampRange(e.iso, cam.isoList, expo::expoKind::iso);
+		clampRange(e.ss,  cam.ssList,  expo::expoKind::ss);
 		// fn はレンズの開放(fn)〜最小絞り(fnMax)。fnMax 0=未設定なら下限のみ。
 		// 丸めるときは元の値を fnWish へ控え、入るレンズに戻ったらそこへ復帰させる。
 		// 控えが無いと、暗いレンズを一度選んだだけで F1.4 の指定が F2.8 に化け、
