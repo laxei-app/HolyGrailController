@@ -37,6 +37,15 @@ protected:
 		AUTOPOWEROFF,				// オートパワーオフ(functions/autopoweroff)。撮影中は disable に抑止
 		EVENT_POLL,					// イベント取得(event/polling)。撮影画像の登録通知(addedcontents)に使う
 
+		// 【露出の設定ステップ(CCAPI ver1.1.0 のカメラカスタム機能。2026-09-19)】
+		//  カメラ本体のメニューで 1/3 段・1/2 段(ISO は 1/3 段・1 段)を切り替えられる機種は、
+		//  その設定を GET で答える。**本体に設定項目が無い機種(EOS R100 で確認)は
+		//  この API 自体を持たない**ので、カタログにも載らず funcList に入らない。
+		//  そのときは設定可能値の並びから見分ける(expo::detectStepStops)。
+		EXP_STEP_AV,				// 露出設定ステップ 絞り (customfunction/exposureincrements/av)
+		EXP_STEP_TV,				// 露出設定ステップ ss  (customfunction/exposureincrements/tv)
+		ISO_STEP,					// ISO 感度設定ステップ  (customfunction/isoincrements)
+
 		// 全体の要素数
 		NUM,
 		NON,				// 要素：無し
@@ -303,6 +312,10 @@ protected:
 	// ability(設定可能値)を取る。curRaw != nullptr なら同じ応答に入っている現在値(生文字列)も返す。
 	// 現在値は「いまカメラに何が乗っているか」(camExp_)の初期化に使う。GETは1回のままで済む。
 	errCode getJsonAbility(funcNum number, std::vector <std::string>& abilitys, std::string* curRaw = nullptr);
+
+	// カメラ本体に設定されている露出の設定ステップを聞く[段]。
+	//  持っていない機種・読めなかったときは 0(呼び出し側が並びから見分ける)。
+	double askStepStops(funcNum number);
 	errCode setJsonvalue(funcNum number, float val);
 
 protected:
@@ -314,13 +327,18 @@ protected:
 		bool				    find;				// 取得できたか否か
 		apiCanonCCAPI::funcNum	funcNum;			// funcNum　機能番号。この番号で機能を指定する
 		std::string			    surfix;				// url のキーワード。この文字列で後ろから探す。「control/shutterbutton」「control/shutterbutton/manual」を区別するため。
+		// 【無くてもよい機能(2026-09-19)】持っていない機種があるもの。
+		//  カタログの読み飛ばしは「必要なものが揃ったら打ち切る」作りなので、
+		//  持っていない機種で毎回カタログを最後まで読まないよう、必須の数だけを数える。
+		bool				    optional = false;
 
 	public:
-		useFunction(bool find, apiCanonCCAPI::funcNum	funcNum, std::string surfix)
+		useFunction(bool find, apiCanonCCAPI::funcNum	funcNum, std::string surfix, bool optional = false)
 		{
 			this->find = find;
 			this->funcNum = funcNum;
 			this->surfix = surfix;
+			this->optional = optional;
 		}
 	};
 	
@@ -353,6 +371,10 @@ protected:
 		{false, funcNum::SHOOTMODE,			"settings/shootingmode"},		// 撮影モード(ダイアル無し機)
 		{false, funcNum::AUTOPOWEROFF,		"functions/autopoweroff"},		// オートパワーオフ(撮影中 disable)
 		{false, funcNum::EVENT_POLL,		"/event/polling"},				// 撮影画像の登録通知(サムネ測光)
+		// 露出の設定ステップ。持っていない機種があるので optional(funcNum の説明を参照)。
+		{false, funcNum::EXP_STEP_AV,		"customfunction/exposureincrements/av", true},
+		{false, funcNum::EXP_STEP_TV,		"customfunction/exposureincrements/tv", true},
+		{false, funcNum::ISO_STEP,			"customfunction/isoincrements",         true},
 	};
 
 };

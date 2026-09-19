@@ -165,13 +165,27 @@ namespace expo
 	//  撮影で使うテーブルは必ずここを通す(刻みと論理値を落とさないため)。
 	expoTables tablesFromRange(const cmdt::shotRange& r);
 
+	// 【設定可能値の並びから露出ステップ[段]を測る(2026-09-19)】
+	//  隣り合う値の APEX 差の**中央値**を返す。0=測れない(有効な値が 3 つ未満)。
+	//  中央値にするのは、並びの端や Bulb、拡張感度のような例外に引きずられないため
+	//  (実機 EOS R10 の ISO は 1 段刻みだが 25600→32000 だけ 0.32 段しか離れていない)。
+	double medianStepStops(const std::vector<std::string>& values, expoKind k);
+
 	// 【設定可能値の並びから露出ステップ[段]を見分ける(2026-09-19)】
 	//  キヤノンはカメラ本体の設定で ss を 1/3 段と 1/2 段、ISO を 1/3 段と 1 段に切り替えられる。
 	//  決め打ちにすると、1/2 段のカメラで 1 目盛りあたり 0.17 段の誤差が出る(実機 EOS R10 で確認)。
-	//  隣り合う値の APEX 差の中央値を取り、よくある刻み(1/3・1/2・1)に近ければそれと見なす。
-	//  中央値にするのは、並びの端や Bulb のような例外に引きずられないため。
+	//  中央値がよくある刻み(1/3・1/2・1)に近ければそれと見なす。
 	//  見分けられない(値が少ない/見覚えのない刻み)ときは 0 か中央値をそのまま返す。
+	//  **デバイスが刻みを答えられるならそちらが正**。これはその裏取りと、答えない機種の代替。
 	double detectStepStops(const std::vector<std::string>& values, expoKind k);
+
+	// 【デバイスの申告と並びが矛盾しないか(2026-09-19)】
+	//  キヤノンは CCAPI で「本体に設定されている刻み」を答える(customfunction/...)。
+	//  ただし答えるのは**本体メニューの設定**で、「実際に送れる値の並び」ではない。
+	//  APEX の格子は送れる値と一致していないといけないので、鵜呑みにせずここで確かめる。
+	//  並びの中央値と stepStops がずれていれば false(呼び出し側は測った値へ落とす)。
+	//  値が少なくて測れないときは、否定する根拠が無いので true(申告を信じる)。
+	bool stepMatchesValues(const std::vector<std::string>& values, expoKind k, double stepStops);
 
 	// 露出(文字列)→明るさ(段)。テーブルでapexを引く(無ければ実数から算出)。大きいほど明るい。
 	double brightnessStops(const hgc::exposure& e, const expoTables& t);

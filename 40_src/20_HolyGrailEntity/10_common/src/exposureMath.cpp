@@ -241,12 +241,16 @@ namespace expo
 		return t;
 	}
 
-	double detectStepStops(const std::vector<std::string>& values, expoKind k)
+	// 表示値の丸めで隣り合う段差は ±0.03 段ほどばらつく(1/125 は本当は 1/128)。
+	//  刻みの同定と、デバイスの申告の検算に同じ許容を使う。
+	namespace { constexpr double kStepTolStops = 0.06; }
+
+	double medianStepStops(const std::vector<std::string>& values, expoKind k)
 	{
 		std::vector<double> r;
 		r.reserve(values.size());
 		for (const auto& v : values) { const double x = parseValue(v, k); if (x > 0.0) { r.push_back(x); } }
-		if (r.size() < 3) { return 0.0; }	// 1点だけのF値など。見分けられない
+		if (r.size() < 3) { return 0.0; }	// 1点だけのF値など。測れない
 		std::sort(r.begin(), r.end());
 		std::vector<double> d;
 		d.reserve(r.size() - 1);
@@ -257,11 +261,24 @@ namespace expo
 		}
 		if (d.empty()) { return 0.0; }
 		std::sort(d.begin(), d.end());
-		const double med = d[d.size() / 2];
-		// 表示値の丸めで ±0.03 段ほどばらつく(1/125 は本当は 1/128)。近ければその刻みと見る。
+		return d[d.size() / 2];
+	}
+
+	double detectStepStops(const std::vector<std::string>& values, expoKind k)
+	{
+		const double med = medianStepStops(values, k);
+		if (!(med > 0.0)) { return 0.0; }
 		const double cand[] = { 1.0 / 3.0, 0.5, 1.0 };
-		for (double c : cand) { if (std::fabs(med - c) <= 0.06) { return c; } }
+		for (double c : cand) { if (std::fabs(med - c) <= kStepTolStops) { return c; } }
 		return med;	// 見覚えのない刻み(内蔵カメラの細かい並び等)はそのまま返す
+	}
+
+	bool stepMatchesValues(const std::vector<std::string>& values, expoKind k, double stepStops)
+	{
+		if (!(stepStops > 0.0)) { return false; }
+		const double med = medianStepStops(values, k);
+		if (!(med > 0.0)) { return true; }	// 測れない = 否定する根拠が無いので申告を信じる
+		return std::fabs(med - stepStops) <= kStepTolStops;
 	}
 
 	expoTables tablesFromRange(const cmdt::shotRange& r)

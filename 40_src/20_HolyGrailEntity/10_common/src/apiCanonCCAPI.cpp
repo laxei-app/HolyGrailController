@@ -384,7 +384,13 @@ errCode apiCanonCCAPI::analizeUseFunction(class device& device, std::string& cat
 
             funcList[func.funcNum] = func;      // 機能リストに登録
             // 必要なものが揃ったら、残りのカタログを読まずに打ち切る。
-            if (funcList.size() == useFunction.size()) { sax.stop = true; }
+            //  無くてもよい機能(optional)は数に入れない。持っていない機種で永久に揃わず、
+            //  毎回カタログを最後まで読むことになるため(2026-09-19)。
+            //  **funcList の件数では数えない**。optional が先に見つかると、必須が揃う前に
+            //  件数だけ届いて打ち切ってしまう。必須が1つずつ見つかったかで数える。
+            size_t need = 0, got = 0;
+            for (const auto& u : useFunction) { if (!u.optional) { ++need; if (u.find) { ++got; } } }
+            if (got >= need) { sax.stop = true; }
         };
         json::sax_parse(catalog, &sax);
     }
@@ -438,6 +444,10 @@ errCode apiCanonCCAPI::probeUseFunction(class device& device)
 		{ funcNum::SHOOTMODE,      "shooting/settings/shootingmode",             verb::GET | verb::PUT },
 		{ funcNum::AUTOPOWEROFF,   "functions/autopoweroff",                     verb::GET | verb::PUT },
 		{ funcNum::EVENT_POLL,     "event/polling",                              verb::GET },
+		// 露出の設定ステップ(GET のみ)。持っていない機種は 404 になり、そのまま「無い」で通る。
+		{ funcNum::EXP_STEP_AV,    "customfunction/exposureincrements/av",       verb::GET },
+		{ funcNum::EXP_STEP_TV,    "customfunction/exposureincrements/tv",       verb::GET },
+		{ funcNum::ISO_STEP,       "customfunction/isoincrements",               verb::GET },
 	};
 	// 【ver140 まで見る(2026-08-14)】R50 V は contents が ver140 にあった。ver130 までで
 	//  打ち切っていたため「contents はどのバージョンにも無い」と誤判定していた。
@@ -744,15 +754,38 @@ errCode apiCanonCCAPI::getSettings(cmdt::shotRange& settings)
     // 【刻みは決め打ちにしない(2026-09-19)】キヤノンはカメラ本体の設定で ss を 1/3 段と 1/2 段、
     //  ISO を 1/3 段と 1 段に切り替えられる(EOS R10 で確認)。1/3 段と決め打つと、1/2 段のカメラでは
     //  1 目盛りあたり 0.17 段ずれた明るさで計算してしまう。答えてきた並びから見分ける。
-    settings.stepStops = 1.0 / 3.0;	// 見分けられなかったときの既定
-    settings.isoStep = expo::detectStepStops(settings.iso,  expo::expoKind::iso);
-    settings.ssStep  = expo::detectStepStops(settings.ss,   expo::expoKind::ss);
-    settings.fnStep  = expo::detectStepStops(settings.fNum, expo::expoKind::fn);
+    // 【まずカメラ本人に聞く(2026-09-19)】CCAPI ver1.1.0 のカメラカスタム機能で、本体に
+    //  設定されている刻みをそのまま答える機種がある(EOS R10 で確認: av=1/2 tv=1/2 iso=1)。
+    //  答えるのは**本体メニューの設定**であって「実際に送れる値の並び」ではないので、
+    //  鵜呑みにはせず並びで裏を取る(expo::stepMatchesValues)。APEX の格子は送れる値と
+    //  一致していなければならず、食い違ったまま使うと 1 目盛りあたり 0.17 段ずれる。
+    //  聞けない機種(EOS R100 は本体に設定項目が無く API も持たない)は並びから見分ける。
+    settings.stepStops = 1.0 / 3.0;	// どちらでも決まらなかったときの既定
+    struct stepPick { double step; const char* from; };
+    auto pick = [this](funcNum fn, const std::vector<std::string>& vals, expo::expoKind k) -> stepPick
+    {
+        const double told = this->askStepStops(fn);
+        if (told > 0.0 && expo::stepMatchesValues(vals, k, told)) { return { told, "camera" }; }
+        const double seen = expo::detectStepStops(vals, k);
+        if (told > 0.0)
+        {   // 申告と並びが食い違った。並びの方が正(送れる値がすべて)なので、そちらを採る。
+            char w[128];
+            std::snprintf(w, sizeof(w), "exposure step mismatch: camera says %.3f but values look %.3f stops", told, seen);
+            dataManager::logEvent("CAMERA", w, true);
+        }
+        return { seen, "values" };
+    };
+    const stepPick pIso = pick(funcNum::ISO_STEP,    settings.iso,  expo::expoKind::iso);
+    const stepPick pSs  = pick(funcNum::EXP_STEP_TV, settings.ss,   expo::expoKind::ss);
+    const stepPick pFn  = pick(funcNum::EXP_STEP_AV, settings.fNum, expo::expoKind::fn);
+    settings.isoStep = pIso.step;
+    settings.ssStep  = pSs.step;
+    settings.fnStep  = pFn.step;
     settings.isoReal.clear(); settings.ssReal.clear(); settings.fnReal.clear();
     {
-        char b[160];
-        std::snprintf(b, sizeof(b), "exposure step: iso=%.3f ss=%.3f fn=%.3f stops",
-                      settings.isoStep, settings.ssStep, settings.fnStep);
+        char b[192];
+        std::snprintf(b, sizeof(b), "exposure step: iso=%.3f(%s) ss=%.3f(%s) fn=%.3f(%s) stops",
+                      settings.isoStep, pIso.from, settings.ssStep, pSs.from, settings.fnStep, pFn.from);
         dataManager::logEvent("CAMERA", b);
     }
 
@@ -1015,6 +1048,37 @@ errCode apiCanonCCAPI::getShotPicture(std::vector<std::byte>& jpg)
     return ERR_HGC_OK;
 }
 
+
+// カメラ本体に設定されている露出の設定ステップを聞く[段]。宣言のところに説明。
+//  応答は {"value":"1/3"} / {"value":"1/2"} / {"value":"1"}(CCAPI Reference 4.6)。
+//  GET 専用で、アプリから刻みを変えることはできない。
+double apiCanonCCAPI::askStepStops(funcNum number)
+{
+	auto it = funcList.find(number);
+	if (it == funcList.end()) { return 0.0; }	// この機種は持っていない(EOS R100 など)
+	std::string answer;
+	if (!netThread::httpGet(it->second.url, answer)) { return 0.0; }
+	std::string v;
+	try
+	{
+		auto j = json::parse(answer);
+		if (!j.contains("value") || !j.at("value").is_string()) { return 0.0; }
+		v = j.at("value").get<std::string>();
+	}
+	catch (json::exception&) { return 0.0; }
+	// "1/3" → 0.333 / "1/2" → 0.5 / "1" → 1.0
+	const size_t slash = v.find('/');
+	double step = 0.0;
+	if (slash != std::string::npos)
+	{
+		const double num = std::atof(v.substr(0, slash).c_str());
+		const double den = std::atof(v.substr(slash + 1).c_str());
+		if (den != 0.0) { step = num / den; }
+	}
+	else { step = std::atof(v.c_str()); }
+	// 見覚えのない答えは使わない(1 段より粗い刻みも、0 以下もありえない)。
+	return (step > 0.0 && step <= 1.0 + 1e-9) ? step : 0.0;
+}
 
 // 機能番号の ability を取得する
 // nunber  : 機能番号

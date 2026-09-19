@@ -1655,6 +1655,40 @@ int main()
 			char d[96]; std::snprintf(d, sizeof(d), "(最大 %.3f 段)", worst);
 			check(worst > 0.15, "1/3 段と決め打つと実機の ss の目盛りが本来の 0.5 段からずれる(修正前の姿)", d);
 		}
+
+		// --- デバイスが答えた刻みの裏取り(2026-09-19) ---
+		//  キヤノンは CCAPI で本体の設定ステップを答える(実機 R10: av=1/2 tv=1/2 iso=1)。
+		//  ただし答えるのは本体メニューの設定で、送れる値の並びそのものではない。
+		//  食い違ったまま使うと APEX の格子がずれるので、並びで裏を取ってから採る。
+		{
+			// 中央値は拡張感度の外れ値に引きずられない(25600→32000 は 0.32 段しか離れていない)
+			checkNear(expo::medianStepStops(iso, expo::expoKind::iso), 1.0, 1e-9,
+			          "ISO の隣接差の中央値は 1 段(32000 の外れ値に引きずられない)");
+			checkNear(expo::medianStepStops(ss, expo::expoKind::ss), 0.5, 0.03,
+			          "ss の隣接差の中央値は約 1/2 段");
+
+			check(expo::stepMatchesValues(iso, expo::expoKind::iso, 1.0),
+			      "カメラの申告 iso=1 段は並びと合う → そのまま使う");
+			check(expo::stepMatchesValues(ss,  expo::expoKind::ss,  0.5),
+			      "カメラの申告 ss=1/2 段は並びと合う → そのまま使う");
+			check(expo::stepMatchesValues(fn,  expo::expoKind::fn,  0.5),
+			      "カメラの申告 av=1/2 段は並びと合う → そのまま使う");
+
+			// 食い違う申告は弾く。これが通ると 1 目盛りあたり 0.17 段ずれたまま撮ってしまう。
+			check(!expo::stepMatchesValues(ss, expo::expoKind::ss, 1.0 / 3.0),
+			      "1/2 段の並びに 1/3 段と申告されたら弾く");
+			check(!expo::stepMatchesValues(iso, expo::expoKind::iso, 1.0 / 3.0),
+			      "1 段の並びに 1/3 段と申告されたら弾く");
+			check(!expo::stepMatchesValues(ss, expo::expoKind::ss, 0.0),
+			      "答えが無い(0)ときは採らない");
+
+			// 測れないほど値が少ないときは、否定する根拠が無いので申告を信じる
+			//  (内蔵カメラのように F 値が 1 点しかない場合)。
+			const std::vector<std::string> one = { "2.2" };
+			check(expo::medianStepStops(one, expo::expoKind::fn) == 0.0, "値が 1 つでは中央値を測れない(0)");
+			check(expo::stepMatchesValues(one, expo::expoKind::fn, 0.5),
+			      "測れないときは申告を否定しない");
+		}
 	}
 
 	std::printf("\n%s (fail=%d)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail);
