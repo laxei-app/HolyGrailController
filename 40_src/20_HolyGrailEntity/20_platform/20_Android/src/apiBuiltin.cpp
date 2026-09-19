@@ -90,8 +90,8 @@ void apiBuiltin::buildTables(void)
 	ssList_.clear(); isoList_.clear(); fnList_.clear();
 	ssReal_.clear(); isoReal_.clear(); fnReal_.clear();
 
-	// 論理値は 1/kStepStops 段の等比で作り、文字列はその表示。同じ文字列が続いたら(刻みが細かすぎて
-	//  表示が追いつかない所)後の方を捨てる。捨てるのは論理値も一緒(並びと長さを揃える)。
+	// ここで作るのは「記録と画面表示」用の両端だけ。制御は段でやり取りするので並びは要らない。
+	//  同じ綴りが続いたら後を捨てる(並びと論理値の長さを揃える)。
 	auto push = [](std::vector<std::string>& texts, std::vector<double>& reals,
 	               const std::string& t, double r)
 	{
@@ -258,20 +258,26 @@ errCode apiBuiltin::getSettings(cmdt::shotRange& settings)
 	settings.ss   = ssList_;
 	settings.iso  = isoList_;
 	settings.fNum = fnList_;
-	// 刻みと論理値も答える(2026-09-07)。共通部分はこれでテーブルを作り、1/12 段で制御する。
-	settings.stepStops = kStepStops;
-	settings.isoStep = kStepStops; settings.ssStep = kStepStops; settings.fnStep = kStepStops;
 	settings.ssReal    = ssReal_;
 	settings.isoReal   = isoReal_;
 	settings.fnReal    = fnReal_;
-	// 【刻みの出どころをログに残す(2026-09-19)】キヤノン層(apiCanonCCAPI)と同じ形で出す。
-	//  内蔵カメラは並びも刻みも端末が合成するので、聞く相手も推測する余地も無い = device。
-	//  撮影ごとに1行だけ。どの刻みで制御していたかを後からログだけで追えるようにする。
+	// 【刻みはもう答えない(2026-09-19)】露出制御は expoAxes/expoResolve で段のまま扱う。
+	//  ここで返す並びは「機材の記録と画面表示」のためだけ(両端しか入っていない)。
+	//  ログはキヤノン層と同じ形で、実態(無段かどうか)を出す。
 	{
-		char b[160];
-		std::snprintf(b, sizeof(b), "exposure step: iso=%.3f(device) ss=%.3f(device) fn=%.3f(device) stops",
-		              settings.isoStep, settings.ssStep, settings.fnStep);
-		dataManager::logEvent("CAMERA", b);
+		axisInfo ai, as, af;
+		this->expoAxes(ai, as, af);
+		//  notch>0=その刻み / 動けない軸=fixed / それ以外=stepless(無段)
+		auto txt = [](char* b, size_t n, const axisInfo& a)
+		{
+			if (a.notch > 0.0)             { std::snprintf(b, n, "%.3f", a.notch); }
+			else if (!(a.hi - a.lo > 1e-9)) { std::snprintf(b, n, "fixed"); }
+			else                           { std::snprintf(b, n, "stepless"); }
+		};
+		char bi[16], bs[16], bf[16], msg[192];
+		txt(bi, sizeof(bi), ai); txt(bs, sizeof(bs), as); txt(bf, sizeof(bf), af);
+		std::snprintf(msg, sizeof(msg), "exposure step: iso=%s(device) ss=%s(device) fn=%s(device)", bi, bs, bf);
+		dataManager::logEvent("CAMERA", msg);
 	}
 	return ERR_HGC_OK;
 }
