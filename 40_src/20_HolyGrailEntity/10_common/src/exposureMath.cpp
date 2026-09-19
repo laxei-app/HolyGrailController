@@ -169,14 +169,24 @@ namespace expo
 				if (s.size() > 2 && s.back() == '0') { s.pop_back(); }	// "1.50"→"1.5"、"2.00"→"2.0"
 				return s;
 			}
-			const int denom = static_cast<int>(1.0 / v + 0.5);
-			if (denom <= 1)
+			// 【1 秒未満を全部「1/整数」にしない(2026-09-19)】分母を整数にすると、
+			//  1/10〜1/3 秒のあたりで 1/12 段の点がいくつも同じ綴りになり(1/3 が 6 連続)、
+			//  目盛りが潰れる。編集画面では「スライダーを動かしても値が変わらない」として現れる。
+			//  デバイス層(apiBuiltin::ssText)は既に同じ規則へ直してあるので、こちらも揃える。
+			//   ・1/50 秒より速い側 … 分母を整数にした分数(カメラの表記に合わせる)
+			//   ・それ以外          … 秒を有効数字 4 桁(0.3251 / 1.059 / 19.65 / 48)
+			if (v < 0.02)
 			{
-				// 20 秒以上は整数で十分(1/12 段でも 1 秒以上離れる)。"48" が "47.9" と出ないように。
-				if (v >= 20.0 || std::fabs(v - std::floor(v + 0.5)) < 0.05) { std::snprintf(b, sizeof(b), "%.0f", v); }
-				else                                                         { std::snprintf(b, sizeof(b), "%.1f", v); }
+				const int denom = static_cast<int>(1.0 / v + 0.5);
+				std::snprintf(b, sizeof(b), "1/%d", denom);
 			}
-			else { std::snprintf(b, sizeof(b), "1/%d", denom); }
+			else if (std::fabs(v - std::floor(v + 0.5)) < 0.005)
+			{	// ほぼ整数秒は整数で。"48" が "47.99" と出ないように。
+				//  【20 秒以上を一律に整数へ丸めない(2026-09-19)】1/12 段は 20〜48 秒では
+				//   1.2〜2.9 秒あるので、整数へ丸めると 21→23 のように刻みが崩れる(0.13 段)。
+				std::snprintf(b, sizeof(b), "%.0f", v);
+			}
+			else { std::snprintf(b, sizeof(b), "%.4g", v); }
 			return b;
 		}
 		// base × 2^(n/perStop) を lo〜hi(3% の余裕)で並べる。同じ綴りは1つにする。
@@ -210,6 +220,32 @@ namespace expo
 			}
 			return out;
 		}
+	}
+
+	std::vector<std::string> rangeValues(expoKind k, double stepStops, double loReal, double hiReal)
+	{
+		if (!(loReal > 0.0) || !(hiReal > 0.0)) { return {}; }
+		if (hiReal < loReal) { std::swap(loReal, hiReal); }
+		double step = (stepStops > 0.0) ? stepStops : (1.0 / 3.0);
+		if (step < 1.0 / 24.0) { step = 1.0 / 24.0; }	// これより細かいと綴りが重複して潰れる
+		if (step > 1.0)        { step = 1.0; }
+		// 【起点はデバイスの下端(2026-09-19)】ISO 100 や 1 秒を起点にすると、端末が答える
+		//  下端(例 ISO 44)から刻んだ並びと噛み合わず、計画が持つ値が目盛りから外れる。
+		//  外れた値は編集画面を開いた瞬間に最寄りへ吸着して保存されるので、**黙って値が動く**。
+		//  下端を起点にすれば、その端末で作った値はそのまま目盛りに乗る。
+		//  F は 1 段が比 √2 なので指数を半分にする。
+		const double perStep = (k == expoKind::fn) ? (step / 2.0) : step;
+		std::vector<std::string> out;
+		for (int n = 0; n < 4096; ++n)
+		{
+			const double v = loReal * std::pow(2.0, perStep * n);
+			if (v > hiReal * 1.001) { break; }
+			const std::string t = gridText(k, v);
+			if (out.empty() || out.back() != t) { out.push_back(t); }
+		}
+		const std::string last = gridText(k, hiReal);
+		if (out.empty() || out.back() != last) { out.push_back(last); }
+		return out;
 	}
 
 	std::vector<std::string> presetValues(expoKind k, bool forPhone)

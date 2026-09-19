@@ -114,6 +114,9 @@ namespace hgc
 		double focalLength = 0.0;	// 焦点距離[mm]
 		double fn = 0.0;			// 開放F値(F最小)
 		double fnMax = 0.0;			// 最小絞り(F最大)。0=未設定
+		// 【選べる絞りの並び(2026-09-19)】可変絞りのレンズ(iPhone 13 など)が持つ実際の値。
+		//  空 = 並びは無い(固定絞りなら fn==fnMax の 1 点、交換レンズなら fn〜fnMax の連続)。
+		std::vector<std::string> fnList;
 		bool   hasContact = true;	// 電子接点有無
 		bool   fisheye = false;		// 魚眼レンズ(投影方式=等距離)。マスタ lenses_list.json の "fisheye" 由来
 		bool   readOnly = false;	// 利用者が欄を編集できない(端末が答えた値。削除は可)。登録時に api 実装が立てる

@@ -28,6 +28,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.CheckBox
@@ -332,6 +333,21 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 今の目盛りの出所: 0=計画のカメラ / 1=初期値(外部カメラ向け 1/3 段) / 2=初期値(スマホ向け 1/12 段)。
     //  エディタは目盛りを構築時に取り込むので、編集対象が変わったら作り直す(2026-09-06)。
     private var expoListsMode = -1
+    // 【撮影制御方法エディタの刻み(2026-09-19 ユーザー指示)】画面ごとに選べる。
+    //  1段を何分割するか。2=1/2段 / 3=1/3段 / 12=1/12段 / 0=おまかせ
+    //  (端末が答えるカメラ=1/12段、外部カメラ=1/3段)。
+    //  範囲はカメラ/レンズの実力から決まるので、ここで選ぶのは刻みだけ。
+    //  撮影そのものには影響しない(撮影はデバイスが出せる値へ解決する)ので、
+    //  計画データではなく端末の設定として持つ。
+    private var ccmEditStepPer = 0
+    private fun ccmStepKey(key: String) = "ccmStep_" + key
+    // 選べる刻み。おまかせは、端末が答えるカメラなら 1/12 段・外部カメラなら 1/3 段。
+    private val ccmStepChoices = listOf(0 to "おまかせ", 2 to "1/2 段", 3 to "1/3 段", 12 to "1/12 段")
+    private fun loadCcmStep(key: String) { ccmEditStepPer = hgcPrefs().getInt(ccmStepKey(key), 0) }
+    private fun saveCcmStep(key: String, per: Int) {
+        ccmEditStepPer = per
+        hgcPrefs().edit().putInt(ccmStepKey(key), per).apply()
+    }
     private lateinit var fixEditor: ExposureEditor      // 夜間 固定露出(単一)
     private lateinit var editLimit: LimitEditor         // 自動露出 露出限界(優先度+明暗を一体化)
 
@@ -3051,6 +3067,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun openCcmEdit(key: String) {
         val o = ccmJson?.optJSONObject(key) ?: return
         editingKey = key
+        loadCcmStep(key)                    // この画面の刻み(撮影制御方法ごとに覚える)
+        expoListsMode = -1                  // 刻みが変わっているかもしれないので必ず取り直す
+        buildStepSpinner(key)
         // 【初期値の編集はカメラに依らない標準目盛りで(2026-09-06)】計画のカメラの目盛りを
         //  借りると、内蔵カメラの実測目盛りに無い "1600" や "8" が位置を見失って化け、
         //  そのまま初期値へ保存されていた(ISO 11377 / 48 秒)。計画の編集はそのカメラの目盛り。
@@ -3254,6 +3273,33 @@ class MainActivity : AppCompatActivity(), HgeListener {
         return l
     }
 
+    // 【刻みの選択(2026-09-19 ユーザー指示)】撮影制御方法の画面ごとに覚える。
+    //  範囲はカメラ/レンズの実力で決まるので、ここで選ぶのは目盛りの細かさだけ。
+    //  撮影そのものには影響しない(撮影時はデバイスが自分の出せる値へ解決する)。
+    //  初期値(カメラに依らない標準目盛り)の編集では意味が無いので隠す。
+    private fun buildStepSpinner(key: String) {
+        val row = findViewById<View>(R.id.edit_step_row) ?: return
+        val sp  = findViewById<Spinner>(R.id.edit_step_spinner) ?: return
+        row.visibility = if (editingPlanCcm) View.VISIBLE else View.GONE
+        if (!editingPlanCcm) return
+        val ad = ArrayAdapter(this, android.R.layout.simple_spinner_item, ccmStepChoices.map { it.second })
+        ad.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        sp.onItemSelectedListener = null
+        sp.adapter = ad
+        val idx = ccmStepChoices.indexOfFirst { it.first == ccmEditStepPer }
+        sp.setSelection(if (idx >= 0) idx else 0, false)
+        sp.isEnabled = !ccmReadOnly
+        sp.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                val per = ccmStepChoices[pos].first
+                if (per == ccmEditStepPer) return
+                saveCcmStep(key, per)
+                reloadExpoEditors()       // 目盛りを張り直してスライダーを作り直す
+            }
+            override fun onNothingSelected(p: AdapterView<*>?) {}
+        }
+    }
+
     // 設定可能な露出値(カメラ設定値の文字列)を Entity から取得して保持する。
     private fun loadExpoValues(mode: Int = 0) {
         expoListsMode = mode
@@ -3261,7 +3307,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val o = JSONObject(when (mode) {
                 1 -> HgeNative.nativeGetPresetExpoValues(false)
                 2 -> HgeNative.nativeGetPresetExpoValues(true)
-                else -> HgeNative.nativeGetExpoValues()
+                else -> HgeNative.nativeGetExpoValues(ccmEditStepPer)
             })
             isoValues = jsonToList(o.optJSONArray("iso"))
             ssValues = jsonToList(o.optJSONArray("ss"))

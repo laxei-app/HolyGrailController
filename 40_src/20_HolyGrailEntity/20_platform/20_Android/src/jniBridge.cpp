@@ -436,13 +436,13 @@ Java_app_laxei_holygrail_HgeNative_nativeSetPlanCcm(JNIEnv* env, jobject /*thiz*
 }
 
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeGetExpoValues(JNIEnv* env, jobject /*thiz*/)
+Java_app_laxei_holygrail_HgeNative_nativeGetExpoValues(JNIEnv* env, jobject /*thiz*/, jint stepPerStop)
 {
 	int32_t len = 0;
-	hge_getExpoValuesJson(nullptr, &len);
+	hge_getExpoValuesJson(stepPerStop, nullptr, &len);
 	if (len <= 0) { return env->NewStringUTF("{}"); }
 	std::vector<char> buf(static_cast<size_t>(len));
-	if (hge_getExpoValuesJson(buf.data(), &len) != 0) { return env->NewStringUTF("{}"); }
+	if (hge_getExpoValuesJson(stepPerStop, buf.data(), &len) != 0) { return env->NewStringUTF("{}"); }
 	return env->NewStringUTF(buf.data());
 }
 

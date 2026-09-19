@@ -150,7 +150,8 @@ namespace csjson
 		{
 			return json{ {"maker", l.maker}, {"name", l.name}, {"focalLength", l.focalLength},
 			             {"fn", l.fn}, {"fnMax", l.fnMax}, {"hasContact", l.hasContact},
-			             {"fisheye", l.fisheye}, {"readOnly", l.readOnly} };
+			             {"fisheye", l.fisheye}, {"readOnly", l.readOnly},
+			             {"fnList", l.fnList} };
 		}
 		hgc::lens lensFromJson(const json& j)
 		{
@@ -163,6 +164,8 @@ namespace csjson
 			l.hasContact  = j.value("hasContact", true);
 			l.fisheye     = j.value("fisheye", isFisheyeName(l.name));	// フィールド優先・無ければ名前判定
 			l.readOnly    = j.value("readOnly", false);
+			if (j.contains("fnList") && j["fnList"].is_array())
+			{ l.fnList = j["fnList"].get<std::vector<std::string>>(); }
 			return l;
 		}
 

@@ -1988,6 +1988,97 @@ int main()
 		}
 	}
 
+	// --- 編集画面の目盛り(2026-09-19 ユーザー報告の3件) ---
+	//  ① ss と ISO が「2 つしか選べない」= 記録用の並び(両端だけ)をそのまま選択肢にしていた
+	//  ② F 値が沢山出る = standardFn(1.85, 1.85) が範囲に1つも入らず「全部」へ落ちていた
+	//  ③ ss を動かしても値が変わらない = 1 秒未満を全部「1/整数」にして綴りが潰れていた
+	//     (1/3 が 6 連続。以前デバイス層で直した件と同じ理由が共通層に残っていた)
+	{
+		std::printf("--- 編集画面の目盛り ---\n");
+
+		// ① 上下限から刻みで張り直す。スマホ内蔵カメラの実測範囲で確かめる。
+		const double ssLo = 26503e-9, ssHi = 48.0;		// Pixel 6 広角 24mm の実測
+		const double isoLo = 44.0,    isoHi = 11377.0;
+		{
+			const std::vector<std::string> ss12 = expo::rangeValues(expo::expoKind::ss, 1.0 / 12.0, ssLo, ssHi);
+			const std::vector<std::string> ss3  = expo::rangeValues(expo::expoKind::ss, 1.0 / 3.0,  ssLo, ssHi);
+			const std::vector<std::string> ss2  = expo::rangeValues(expo::expoKind::ss, 0.5,        ssLo, ssHi);
+			check(ss12.size() > 200, "1/12 段なら 200 個以上の目盛りになる");
+			check(ss3.size()  > 50 && ss3.size()  < ss12.size(), "1/3 段は粗くなる");
+			check(ss2.size()  > 30 && ss2.size()  < ss3.size(),  "1/2 段はもっと粗くなる");
+			const std::vector<std::string> iso = expo::rangeValues(expo::expoKind::iso, 1.0 / 12.0, isoLo, isoHi);
+			check(iso.size() > 90, "ISO も 1/12 段なら 90 個以上");
+		}
+
+		// ③ 綴りが潰れない(同じ文字列が続かない = スライダーを動かせば必ず値が変わる)
+		{
+			const std::vector<std::string> ss = expo::rangeValues(expo::expoKind::ss, 1.0 / 12.0, ssLo, ssHi);
+			int dup = 0;
+			for (size_t i = 1; i < ss.size(); ++i) { if (ss[i] == ss[i - 1]) { ++dup; } }
+			check(dup == 0, "同じ綴りが並ばない");
+			// 段の差でも見る。1/12 段の並びなのに 0 段差の隣り合いがあれば潰れている。
+			double worst = 0.0;
+			int    flat  = 0;
+			for (size_t i = 1; i < ss.size(); ++i)
+			{
+				const double a = expo::parseValue(ss[i - 1], expo::expoKind::ss);
+				const double b = expo::parseValue(ss[i],     expo::expoKind::ss);
+				if (!(a > 0.0) || !(b > 0.0)) { continue; }
+				const double d = std::fabs(std::log2(b / a));
+				if (d < 1e-6) { ++flat; }
+				if (d > worst) { worst = d; }
+			}
+			char det[96]; std::snprintf(det, sizeof(det), "(最大の段差 %.4f 段 / 差0の隣り %d 組)", worst, flat);
+			check(flat == 0, "隣り合う目盛りが必ず離れている(ss を動かせば必ず変わる)", det);
+			check(worst < 0.12, "どこも 1/12 段に近い(0.59 段の飛びが無い)", det);
+		}
+
+		// ③' 1 秒未満を全部 "1/整数" にしていた頃の再現。1/3 秒あたりが潰れる。
+		{
+			int worstRun = 1, run = 1;
+			std::string prev;
+			for (int n = 0; n < 400; ++n)
+			{
+				const double v = ssLo * std::pow(2.0, n / 12.0);
+				if (v > ssHi) { break; }
+				char b[32];
+				const int denom = static_cast<int>(1.0 / v + 0.5);
+				if (denom <= 1) { std::snprintf(b, sizeof(b), "%.1f", v); }
+				else            { std::snprintf(b, sizeof(b), "1/%d", denom); }
+				const std::string t = b;
+				if (t == prev) { ++run; if (run > worstRun) { worstRun = run; } } else { run = 1; }
+				prev = t;
+			}
+			char det[64]; std::snprintf(det, sizeof(det), "(同じ綴りが最大 %d 連続)", worstRun);
+			check(worstRun >= 5, "旧規則(1秒未満は全部 1/整数)では綴りが潰れる(修正前の再現)", det);
+		}
+
+		// ② 起点はデバイスの下端。計画が持つ値がそのまま目盛りに乗る。
+		//    ISO 100 / 1 秒を起点にすると外れて、編集画面を開いただけで値が動いてしまう。
+		{
+			const std::vector<std::string> iso = expo::rangeValues(expo::expoKind::iso, 1.0 / 12.0, isoLo, isoHi);
+			const std::vector<std::string> ss  = expo::rangeValues(expo::expoKind::ss,  1.0 / 12.0, ssLo,  ssHi);
+			bool hasIso = false, hasSs = false;
+			for (const auto& v : iso) { if (v == "1580") { hasIso = true; } }
+			for (const auto& v : ss)  { if (v == "19.65") { hasSs = true; } }
+			check(hasIso, "端末が作った ISO 1580 がそのまま目盛りに乗る");
+			check(hasSs,  "端末が作った ss 19.65 秒がそのまま目盛りに乗る");
+			check(iso.front() == "44", "下端はデバイスの下限そのもの");
+		}
+
+		// ② F 値: 1 点しかないなら 1 点だけ。範囲があるなら慣用の目盛り。
+		{
+			const std::vector<std::string> one = expo::standardFn(1.85, 1.85);
+			char det[96];
+			std::snprintf(det, sizeof(det), "(standardFn(1.85,1.85) は %d 個)", static_cast<int>(one.size()));
+			// 【これが「F値が沢山出る」の正体】範囲に1つも入らないと「全部」へ落ちる作りだった。
+			//  呼ぶ側(hge_getExpoValuesJson)が fn==fnMax を先に見て 1 点だけ返すようにしてある。
+			check(one.size() > 5, "固定絞りを standardFn に渡すと全部返ってくる(呼ぶ側で避ける)", det);
+			const std::vector<std::string> range = expo::standardFn(1.4, 16.0);
+			check(range.size() > 10 && range.front() == "1.4", "範囲があるときは慣用の目盛りが並ぶ");
+		}
+	}
+
 	std::printf("\n%s (fail=%d)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail);
 	return g_fail == 0 ? 0 : 1;
 }

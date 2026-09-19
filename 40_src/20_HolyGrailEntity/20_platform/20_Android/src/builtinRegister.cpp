@@ -215,6 +215,7 @@ namespace builtinCam
 			//  端末が答える並びの最小(最も明るい)と最大をそのまま入れる。1 点なら同じ値になる。
 			ln.fn          = api->apertureMin();
 			ln.fnMax       = api->apertureMax();
+			ln.fnList      = api->fnList();	// 選べる絞りそのもの(1 点なら 1 つだけ)
 			ln.hasContact  = false;
 			ln.readOnly    = true;				// 端末が答えた値。直す余地が無い(削除は可。2026-09-06 ユーザー指示)
 			if (dataManager::addOwnedLens(ln))

@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <!-- 撮影制御方法ごとの初期値編集(仕様書10 §7.4)。方法に応じてセクションを出し分ける。
      太陽高度・ev はスライダー、露出/露出限界はキーボード入力、色はピッカー。 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -95,6 +95,12 @@
                     <View android:layout_width="match_parent" android:layout_height="12dp" android:layout_gravity="center_vertical" android:background="@drawable/brightness_bar" />
                     <com.google.android.material.slider.Slider android:id="@+id/edit_ev_seek" android:layout_width="match_parent" android:layout_height="wrap_content" />
                 </FrameLayout>
+            </LinearLayout>
+
+            <!-- 露出の刻み(この画面の編集用。撮影そのものには影響しない) -->
+            <LinearLayout android:id="@+id/edit_step_row" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:layout_marginTop="12dp">
+                <TextView android:layout_width="96dp" android:layout_height="wrap_content" android:text="刻み" android:textStyle="bold" />
+                <Spinner android:id="@+id/edit_step_spinner" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" />
             </LinearLayout>
 
             <!-- 固定露出(夜間) -->

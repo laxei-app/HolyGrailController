@@ -214,7 +214,8 @@ int32_t hge_getCcmDefaultsJson(char* buf, int32_t* inoutLen);
 // 露出編集用の設定可能値(文字列配列)を取得する(バッファ規約)。
 //  {"iso":["100",...],"ss":["1/8000",...,"30"],"fn":["1.4",...,"32"]}
 //  iso/ss は標準1/3段、fn は計画のレンズf範囲。スライダーの選択肢に使う。
-int32_t hge_getExpoValuesJson(char* buf, int32_t* inoutLen);
+// 撮影制御方法エディタの選択肢。範囲はカメラ/レンズ、刻みは stepPerStop(2/3/12。0=おまかせ)。
+int32_t hge_getExpoValuesJson(int32_t stepPerStop, char* buf, int32_t* inoutLen);
 // 初期値(プリセット)のエディタ用。カメラに依らない目盛り。forPhone=1: 1/12 段(ss 48〜1/50000、
 //  F1.5〜3.5、ISO20〜12800) / 0: 1/3 段(ss 30〜1/16000、F0.5〜24、ISO100〜24000)。
 int32_t hge_getPresetExpoValuesJson(int32_t forPhone, char* buf, int32_t* inoutLen);

@@ -2993,20 +2993,66 @@ int32_t hge_getPresetExpoValuesJson(int32_t forPhone, char* buf, int32_t* inoutL
 	return copyOut(j, buf, inoutLen);
 }
 
-int32_t hge_getExpoValuesJson(char* buf, int32_t* inoutLen)
+// 撮影制御方法エディタの選択肢。
+//
+// 【範囲はカメラ/レンズ、刻みは編集する人の好み(2026-09-19 ユーザー指示)】
+//  以前はカメラが答えた並びをそのまま出していた。内蔵カメラが無段になって並びが
+//  両端だけになったため、ss と ISO が「2 つしか選べない」状態になった(実機で発覚)。
+//  カメラからは**上下限だけ**を取り、そこへ指定の刻みで目盛りを張る。
+//  カメラを変えれば、その機種の上下限で張り直される。
+//
+//  stepPerStop: 1 段を何分割するか。2=1/2段 / 3=1/3段 / 12=1/12段。
+//               0 = おまかせ(端末が答えるカメラ=1/12段、外部カメラ=1/3段)。
+//  F 値は「選べる値だけ」。レンズが 1 点しか持たない(スマホ)ならその 1 つだけを返し、
+//  画面でも動かせなくする。可変絞りのレンズは持っている並びをそのまま返す。
+int32_t hge_getExpoValuesJson(int32_t stepPerStop, char* buf, int32_t* inoutLen)
 {
 	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
 	if (!g_planReady) { loadFixedPlanImpl(); }
 	double fmin = (g_plan.lens.fn > 0.0) ? g_plan.lens.fn : 1.0;
 	double fmax = (g_plan.lens.fnMax > 0.0) ? g_plan.lens.fnMax : 32.0;	// レンズのF最大があれば使う
-	// item3: iso/ss はスライダ選択範囲も計画のカメラの設定可能範囲(isoList/ssList)に限定する。
-	// カメラ未設定時は標準1/3段にフォールバック。ss の "Bulb" はスライダ対象外として除く。
-	std::vector<std::string> iso = !g_plan.camera.isoList.empty()
-	                               ? g_plan.camera.isoList : expo::standardValues(expo::expoKind::iso);
-	std::vector<std::string> ss;
-	if (!g_plan.camera.ssList.empty()) { for (const auto& s : g_plan.camera.ssList) { if (s != "Bulb") { ss.push_back(s); } } }
-	else                               { ss = expo::standardValues(expo::expoKind::ss); }
-	auto fn  = expo::standardFn(fmin, fmax);	// fn はレンズの開放〜最小絞り(従来どおり)
+
+	// 刻み。0 は「おまかせ」= 端末が答えるカメラ(readOnly)なら 1/12 段、それ以外は 1/3 段。
+	int per = stepPerStop;
+	if (per <= 0) { per = g_plan.camera.readOnly ? 12 : 3; }
+	const double step = 1.0 / static_cast<double>(per);
+
+	// 並びの両端 = そのカメラの上下限。値が取れなければ標準の範囲へ。
+	auto span = [](const std::vector<std::string>& v, expo::expoKind k, double& lo, double& hi) -> bool
+	{
+		bool any = false;
+		for (const auto& s : v)
+		{
+			if (s == "Bulb" || s == "auto" || s == "Auto") { continue; }
+			const double r = expo::parseValue(s, k);
+			if (!(r > 0.0)) { continue; }
+			if (!any) { lo = hi = r; any = true; }
+			else { if (r < lo) { lo = r; } if (r > hi) { hi = r; } }
+		}
+		return any;
+	};
+	std::vector<std::string> iso, ss;
+	double lo = 0.0, hi = 0.0;
+	if (span(g_plan.camera.isoList, expo::expoKind::iso, lo, hi))
+	{ iso = expo::rangeValues(expo::expoKind::iso, step, lo, hi); }
+	if (iso.empty()) { iso = expo::standardValues(expo::expoKind::iso); }
+	if (span(g_plan.camera.ssList, expo::expoKind::ss, lo, hi))
+	{ ss = expo::rangeValues(expo::expoKind::ss, step, lo, hi); }
+	if (ss.empty()) { ss = expo::standardValues(expo::expoKind::ss); }
+
+	// F 値: レンズが持っている並び(あればそれ)。無ければ開放〜最小絞りの慣用の目盛り。
+	//  【1 点しかないなら 1 点だけ返す(2026-09-19)】以前は standardFn(1.85, 1.85) が
+	//   範囲に1つも入らず「全部」へ落ちていたため、スマホなのに F1.0〜32 が並んでいた。
+	std::vector<std::string> fn;
+	if (!g_plan.lens.fnList.empty()) { fn = g_plan.lens.fnList; }
+	else if (std::fabs(fmax - fmin) < 1e-6)
+	{	// 固定絞り。綴りはレンズが持つ値そのまま(小数2桁。1.85 が 1.9 に化けない)
+		char b[16]; std::snprintf(b, sizeof(b), "%.2f", fmin);
+		std::string t = b;
+		while (t.size() > 3 && t.back() == '0') { t.pop_back(); }
+		fn.push_back(t);
+	}
+	else { fn = expo::standardFn(fmin, fmax); }
 	auto arr = [](const std::vector<std::string>& v) {
 		std::string s = "[";
 		for (size_t i = 0; i < v.size(); ++i) { if (i) { s += ","; } s += "\"" + v[i] + "\""; }

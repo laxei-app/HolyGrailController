@@ -172,6 +172,13 @@ namespace expo
 	std::vector<std::string> standardValues(expoKind k);			// iso/ss(fnは下記)
 	std::vector<std::string> standardFn(double fnMin, double fnMax);	// レンズf範囲の1/3段F値
 
+	// 【上下限と刻みから編集用の目盛りを作る(2026-09-19)】
+	//  カメラが答える並びをそのまま出すのはやめた。内蔵カメラは無段になり、
+	//  並びが両端だけになったため、そのままでは「2 つしか選べない」状態になる(実機で発覚)。
+	//  範囲はカメラ/レンズの実力、刻みは編集する人の好み、と役割を分ける。
+	//  stepStops: 0.5 / 1/3 / 1/12 など。0 なら 1/3 段。
+	std::vector<std::string> rangeValues(expoKind k, double stepStops, double loReal, double hiReal);
+
 	// 初期値(プリセット)のエディタ用の目盛り(2026-09-06 仕様)。カメラに依らない。
 	//  forPhone=真: 1/12 段。ss 48〜1/50000、F1.5〜3.5、ISO20〜12800(数値から作る)
 	//  forPhone=偽: 1/3 段。ss 30〜1/16000、F0.5〜24、ISO100〜24000(慣用の表記を範囲で絞る)
