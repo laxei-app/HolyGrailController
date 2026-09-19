@@ -294,6 +294,17 @@ public:
 	// 追従の代償は小さい: 動き出すしきい値 0.183段 → 0.400段。ただし現状は振動そのもので
 	// ±0.28段ぶれているので、実際の絵の安定性は改善する(テストの最大誤差 0.28→0.34段)。
 	static constexpr double kMinHysteresisStops = 0.8;
+	// 【帯の下限は1目盛りに比例させる(2026-09-19 ユーザー決定)】
+	//  上の 0.8 段は「1目盛り=1/3段」のカメラでの値である。本質は「帯の半分が1目盛りより広い」こと。
+	//  1目盛り動かすと必要量より最大1目盛りぶん行き過ぎるので、その行き過ぎが帯に収まらないと
+	//  次のコマで戻され、往復になる(模擬で確認: 1/3段のカメラに帯0.3を与えると反転が出る)。
+	//  比 2.4 は従来値から決めた(1/3段 × 2.4 = 0.8段 = 今までと同じ)。
+	//   1/3 段のカメラ → 0.80 段(従来と同じ)
+	//   1/2 段のカメラ → 1.20 段
+	//   内蔵カメラ(細かい) → 目盛りに応じて狭くなる。無段階に近いほど帯を狭くできる
+	static constexpr double kBandPerNotch = 2.4;
+	// 目盛りが極端に細かいデバイスでも、測光の揺れを吸う最低限は残す。
+	static constexpr double kBandFloorStops = 0.10;
 	// (移動平均の傾きの先読み kSceneLeadMaxStops は 2026-09-09 に廃止。sceneNowFromBuf の説明を参照)
 	// 露出の変化速度の貯金[段]。addStepBudget で貯め、動いたぶんを spendStepBudget で引く。
 	//  露出そのものと、窓の境目の配分寄せ(明るさは変えない別枠)で別々に持つ。
@@ -356,7 +367,8 @@ private:
 	// ヒステリシス帯の実効値(1歩=1/3段を下限とする。設定は書き換えない)。
 	// 移動平均バッファから「いまの場面の明るさ」を推定する(平均の遅れを傾きで補う)。
 	double        sceneNowFromBuf(const std::vector<double>& buf) const;
-	double        effHysteresis(double raw) const;
+	//  notchStops = そのデバイスの1目盛り[段]。帯の下限をこれに比例させる(2026-09-19)。
+	double        effHysteresis(double raw, double notchStops) const;
 	// 反転の抑制(2026-07-30): 露出を1歩変えると測光値が0.30段ずれ、移動平均が異なる露出の
 	// 値を混ぜるため、直後の逆向きは信用できない。抑制中の反転には帯を超える差を要求する。
 	bool          allowStep(int dir, double needStops, double bandStops) const;

@@ -475,9 +475,13 @@ double captureRunner::sceneNowFromBuf(const std::vector<double>& buf) const
 // 入れないので、補正するたび必ず反対側へ飛び出す)。下限は kMinHysteresisStops で、
 // 実測から選んだ値である(1歩の大きさから導いたものではない。ヘッダの説明を参照)。
 // 設定そのものは書き換えない(ユーザーの値は保存されたまま、使うときだけ下限を当てる)。
-double captureRunner::effHysteresis(double raw) const
+double captureRunner::effHysteresis(double raw, double notchStops) const
 {
-	const double lo = kMinHysteresisStops;
+	// 下限はデバイスの1目盛りに比例させる(ヘッダの kBandPerNotch を参照)。
+	//  1/3 段のカメラでは従来の 0.8 段と同じ値になる。
+	const double notch = (notchStops > 0.0) ? notchStops : kExposureStepStops;
+	double lo = kBandPerNotch * notch;
+	if (lo < kBandFloorStops) { lo = kBandFloorStops; }
 	return (raw > lo) ? raw : lo;
 }
 
@@ -1502,8 +1506,10 @@ errCode captureRunner::loop(void)
 					while (static_cast<int>(avgBuf.size()) > n) { avgBuf.erase(avgBuf.begin()); }
 					const double avg = this->sceneNowFromBuf(avgBuf);	// 移動平均(先読みなし。2026-09-09)
 					double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : preCtl.current(), ev0cfg_);
-					double linU = expo::linearFromEvBase(preEv + this->effHysteresis(smooth_.hysteresis) / 2.0, lin0);
-					double linD = expo::linearFromEvBase(preEv - this->effHysteresis(smooth_.hysteresis) / 2.0, lin0);
+					const double step = preCtl.minStepStops();
+					const double band = this->effHysteresis(smooth_.hysteresis, step);
+					double linU = expo::linearFromEvBase(preEv + band / 2.0, lin0);
+					double linD = expo::linearFromEvBase(preEv - band / 2.0, lin0);
 					// 撮影露出で撮った場合の明るさへ投影してから比べる(ループを閉じる)。
 					const double predicted = this->linearAtExposure(avg, preCtl.current());
 					if (predicted > linU || predicted < linD)
@@ -1512,9 +1518,7 @@ errCode captureRunner::loop(void)
 						//  反転の判定(allowStep)だけは従来どおり中央までの差で見る(急変かどうかの証拠)。
 						const double center     = expo::linearFromEvBase(preEv, lin0);
 						const double needCenter = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;
-						const double need       = expo::excessStops(predicted, linD, linU);
-						const double band = this->effHysteresis(smooth_.hysteresis);
-						const double step = preCtl.minStepStops();
+						const double need = expo::excessStops(predicted, linD, linU);
 						const int    dir  = (need < 0.0) ? -1 : 1;
 						if (this->wouldOvershoot(need, band, step) || !this->allowStep(dir, needCenter, band)) { meterFailStreak = 0; }
 						else
@@ -1614,8 +1618,10 @@ errCode captureRunner::loop(void)
 				while (static_cast<int>(avgBuf.size()) > n) { avgBuf.erase(avgBuf.begin()); }
 				const double avg = this->sceneNowFromBuf(avgBuf);	// 移動平均(先読みなし。2026-09-09)
 				double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : postCtl.current(), ev0cfg_);
-				double linU = expo::linearFromEvBase(postEv + this->effHysteresis(smooth_.hysteresis) / 2.0, lin0);
-				double linD = expo::linearFromEvBase(postEv - this->effHysteresis(smooth_.hysteresis) / 2.0, lin0);
+				const double step = postCtl.minStepStops();
+				const double band = this->effHysteresis(smooth_.hysteresis, step);
+				double linU = expo::linearFromEvBase(postEv + band / 2.0, lin0);
+				double linD = expo::linearFromEvBase(postEv - band / 2.0, lin0);
 				// 撮影露出で撮った場合の明るさへ投影してから比べる(ループを閉じる)。
 				const double predicted = this->linearAtExposure(avg, postCtl.current());
 				if (predicted > linU || predicted < linD)
@@ -1623,9 +1629,7 @@ errCode captureRunner::loop(void)
 					// 【はみ出た分だけ動かす(2026-09-08)】preNight と同じ。
 					const double center     = expo::linearFromEvBase(postEv, lin0);
 					const double needCenter = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;
-					const double need       = expo::excessStops(predicted, linD, linU);
-					const double band = this->effHysteresis(smooth_.hysteresis);
-					const double step = postCtl.minStepStops();
+					const double need = expo::excessStops(predicted, linD, linU);
 					const int    dir  = (need < 0.0) ? -1 : 1;
 					if (this->wouldOvershoot(need, band, step) || !this->allowStep(dir, needCenter, band)) { meterFailStreak = 0; }
 					else
@@ -1741,8 +1745,10 @@ errCode captureRunner::loop(void)
 					const double avg = this->sceneNowFromBuf(avgBuf);	// 移動平均(先読みなし。2026-09-09)
 
 					double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : autoCtl.current(), ev0cfg_);
-					double linU = expo::linearFromEvBase(evT + this->effHysteresis(effHyst) / 2.0, lin0);
-					double linD = expo::linearFromEvBase(evT - this->effHysteresis(effHyst) / 2.0, lin0);
+					const double step = autoCtl.minStepStops();
+					const double band = this->effHysteresis(effHyst, step);
+					double linU = expo::linearFromEvBase(evT + band / 2.0, lin0);
+					double linD = expo::linearFromEvBase(evT - band / 2.0, lin0);
 					// 撮影露出で撮った場合の明るさへ投影してから比べる(土俵合わせ)。これでループが
 					// 閉じ、露出を動かすと比較結果も動く(従来は測光値が撮影露出に依存せず暴走した)。
 					const double predicted = this->linearAtExposure(avg, autoCtl.current());
@@ -1757,9 +1763,7 @@ errCode captureRunner::loop(void)
 						//  反転の判定(allowStep)だけは従来どおり中央までの差で見る(急変かどうかの証拠)。
 						const double center     = expo::linearFromEvBase(evT, lin0);
 						const double needCenter = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;	// +:明るく -:暗く
-						const double need       = expo::excessStops(predicted, linD, linU);
-						const double band = this->effHysteresis(effHyst);
-						const double step = autoCtl.minStepStops();
+						const double need = expo::excessStops(predicted, linD, linU);
 						const int    dir  = (need < 0.0) ? -1 : 1;
 						if (this->wouldOvershoot(need, band, step) || !this->allowStep(dir, needCenter, band)) { meterFailStreak = 0; }
 						else

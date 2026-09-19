@@ -1287,6 +1287,78 @@ int main()
 		check(std::fabs(expo::excessStops(2.0, 0.7, 1.4) - std::log2(1.4 / 2.0)) < 1e-12, "上にはみ出た分は −(暗く)");
 	}
 
+	// --- 露出ステップをカメラの答えから見分ける(2026-09-19) ---
+	//  【背景】キヤノンはカメラ本体の設定で ss を 1/3 段と 1/2 段、ISO を 1/3 段と 1 段に切り替えられる。
+	//   1/3 段と決め打っていたため、1/2 段のカメラでは APEX を 1/3 段の格子へ丸めてしまい、
+	//   1 目盛りあたり 0.17 段ずれた明るさで計算していた(実機 EOS R10 の設定で確認)。
+	{
+		std::printf("--- 露出ステップの見分け ---\n");
+		const std::vector<std::string> third = { "1/4000","1/3200","1/2500","1/2000","1/1600","1/1250","1/1000","1/800","1/640","1/500" };
+		const std::vector<std::string> half  = { "1/4000","1/3000","1/2000","1/1500","1/1000","1/750","1/500","1/350","1/250","1/180",
+		                                         "1/125","1/90","1/60","1/45","1/30","1/20","1/15","1/10","1/8","1/6","1/4","1/3","1/2",
+		                                         "0.7","1","1.5","2","3","4","6","8","10","15","20","30" };
+		const std::vector<std::string> iso3 = { "100","125","160","200","250","320","400","500","640","800" };
+		const std::vector<std::string> iso1 = { "100","200","400","800","1600","3200","6400","12800","25600" };
+		checkNear(expo::detectStepStops(third, expo::expoKind::ss),  1.0 / 3.0, 1e-9, "ss 1/3 段を見分ける");
+		checkNear(expo::detectStepStops(half,  expo::expoKind::ss),  0.5,       1e-9, "ss 1/2 段を見分ける");
+		checkNear(expo::detectStepStops(iso3,  expo::expoKind::iso), 1.0 / 3.0, 1e-9, "ISO 1/3 段を見分ける");
+		checkNear(expo::detectStepStops(iso1,  expo::expoKind::iso), 1.0,       1e-9, "ISO 1 段を見分ける");
+		// Bulb のような例外が混ざっても中央値なので引きずられない
+		std::vector<std::string> withBulb = half; withBulb.push_back("Bulb");
+		checkNear(expo::detectStepStops(withBulb, expo::expoKind::ss), 0.5, 1e-9, "Bulb が混ざっても 1/2 段と見分ける");
+		// 値が少なすぎる(内蔵カメラの固定F値など)ときは 0 を返す = 呼び出し側の既定に任せる
+		std::vector<std::string> one = { "2.2" };
+		check(expo::detectStepStops(one, expo::expoKind::fn) == 0.0, "値が1つだけなら見分けない(0)");
+
+		// 1/2 段と 1 段を軸ごとに伝えれば、隣接の APEX 差はきっかりその値になる
+		{
+			cmdt::shotRange r;
+			r.ss   = half; r.ssStep  = expo::detectStepStops(half, expo::expoKind::ss);
+			r.iso  = iso1; r.isoStep = expo::detectStepStops(iso1, expo::expoKind::iso);
+			r.fNum = { "2.8" };
+			const expo::expoTables t = expo::tablesFromRange(r);
+			bool okSs = true, okIso = true;
+			for (size_t i = 1; i < t.ss.size(); ++i)
+			{ if (std::fabs(std::fabs(t.ss[i].apex - t.ss[i - 1].apex) - 0.5) > 1e-9) { okSs = false; } }
+			for (size_t i = 1; i < t.iso.size(); ++i)
+			{ if (std::fabs(std::fabs(t.iso[i].apex - t.iso[i - 1].apex) - 1.0) > 1e-9) { okIso = false; } }
+			check(okSs,  "1/2 段のカメラでは ss の 1 目盛りがきっかり 0.5 段になる");
+			check(okIso, "1 段のカメラでは ISO の 1 目盛りがきっかり 1.0 段になる");
+		}
+		// 決め打ち(1/3 段)のままだと 1/2 段の並びが歪む = 修正前の再現
+		{
+			cmdt::shotRange r3; r3.ss = half; r3.iso = iso1; r3.fNum = { "2.8" };	// 軸ごとの指定なし=既定 1/3 段
+			const expo::expoTables t3 = expo::tablesFromRange(r3);
+			bool mixed = false;
+			for (size_t i = 1; i < t3.ss.size(); ++i)
+			{ if (std::fabs(std::fabs(t3.ss[i].apex - t3.ss[i - 1].apex) - 0.5) > 1e-9) { mixed = true; } }
+			check(mixed, "1/3 段と決め打つと 1/2 段の並びが歪む(修正前の再現)");
+		}
+	}
+
+	// --- 帯の下限はデバイスの1目盛りに比例させる(2026-09-19 ユーザー決定) ---
+	//  1目盛り動かすと必要量より最大1目盛りぶん行き過ぎる。その行き過ぎが帯に収まらないと
+	//  次のコマで戻されて往復になる。条件は「帯の半分 > 1目盛り」。
+	{
+		std::printf("--- 帯の下限は1目盛りに比例 ---\n");
+		const double kPerNotch = 2.4;	// = captureRunner::kBandPerNotch
+		const double kFloorB   = 0.10;	// = captureRunner::kBandFloorStops
+		auto eff = [&](double raw, double notch) {
+			const double n = (notch > 0.0) ? notch : (1.0 / 3.0);
+			double lo = kPerNotch * n;
+			if (lo < kFloorB) { lo = kFloorB; }
+			return (raw > lo) ? raw : lo;
+		};
+		checkNear(eff(0.0, 1.0 / 3.0),   0.80,   1e-9, "1/3 段のカメラは従来どおり 0.8 段");
+		checkNear(eff(0.5, 1.0 / 3.0),   0.80,   1e-9, "朝日夕日の 0.5 も 1/3 段なら 0.8 段(従来と同じ)");
+		checkNear(eff(1.0, 1.0 / 3.0),   1.00,   1e-9, "日中の 1.0 はそのまま(下限より広い)");
+		checkNear(eff(0.0, 0.5),         1.20,   1e-9, "1/2 段のカメラは 1.2 段");
+		checkNear(eff(0.0, 1.0 / 12.0),  0.20,   1e-9, "1/12 段の内蔵カメラは 0.2 段");
+		checkNear(eff(0.0, 1.0 / 100.0), kFloorB, 1e-9, "極端に細かいデバイスでも下限 0.1 段は残す");
+		check(eff(0.0, 1.0 / 3.0) / 2.0 > 1.0 / 3.0, "1/3 段: 帯の半分が1目盛りより広い");
+		check(eff(0.0, 0.5) / 2.0 > 0.5,             "1/2 段: 帯の半分が1目盛りより広い");
+	}
+
 	std::printf("\n%s (fail=%d)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail);
 	return g_fail == 0 ? 0 : 1;
 }

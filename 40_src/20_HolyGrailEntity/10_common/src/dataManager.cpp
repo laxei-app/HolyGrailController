@@ -935,23 +935,24 @@ bool dataManager::setOwnedCameraDetailJson(const std::string& origName, const st
 	if (j.contains("authPass")) { cam.authPass = secret::decrypt(j.value("authPass", std::string())); }
 	httpAuth::addCandidate(cam.authUser, cam.authPass);	// 編集直後から 401 に対応できるように
 
-	// ISO/SS: min/max が現状と変わったときだけ標準1/3段で再生成(マスタ/カメラ取得値は維持)。
+	// ISO/SS: 並びが**空のときだけ**上下限から標準1/3段で作る。
+	//
+	// 【カメラから取った値を上書きしない(2026-09-19 ユーザー指示)】以前は「上下限が並びの両端と
+	//  違えば作り直す」だったため、カメラが答えた並びを詳細画面の保存で標準1/3段に置き換えていた。
+	//  カメラ本体を 1/2 段設定にしても、保存した瞬間に 1/3 段へ戻ってしまう。
+	//  実際に設定できる値を知っているのはカメラだけなので、一度入った並びは触らない。
+	//  ここで作るのは、まだ一度も繋いでいない機種の初期値としての並びだけである。
 	std::string isoMin = j.value("isoMin", std::string());
 	std::string isoMax = j.value("isoMax", std::string());
-	if (!isoMin.empty() && !isoMax.empty() &&
-	    (cam.isoList.empty() || isoMin != listMin(cam.isoList) || isoMax != listMax(cam.isoList)))
+	if (!isoMin.empty() && !isoMax.empty() && cam.isoList.empty())
 	{
 		cam.isoList = sliceStd(expo::expoKind::iso, isoMin, isoMax);
 	}
 	std::string ssMin = j.value("ssMin", std::string());
 	std::string ssMax = j.value("ssMax", std::string());
-	if (!ssMin.empty() && !ssMax.empty() &&
-	    (cam.ssList.empty() || ssMin != listMin(cam.ssList) || ssMax != listMax(cam.ssList)))
+	if (!ssMin.empty() && !ssMax.empty() && cam.ssList.empty())
 	{
-		bool keepBulb = false;
-		for (const auto& s : cam.ssList) { if (s == "Bulb") { keepBulb = true; break; } }
 		cam.ssList = sliceStd(expo::expoKind::ss, ssMin, ssMax);
-		if (keepBulb) { cam.ssList.push_back("Bulb"); }
 	}
 
 	oc->autoInsert = j.value("autoInsert", oc->autoInsert);

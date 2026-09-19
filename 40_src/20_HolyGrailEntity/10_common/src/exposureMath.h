@@ -153,13 +153,25 @@ namespace expo
 	struct expoTables
 	{
 		std::vector<expoEntry> iso, ss, fn;
-		double stepStops = 1.0 / 3.0;	// テーブルに無い値を評価するときも同じ刻みに揃える
+		double stepStops = 1.0 / 3.0;	// 既定(軸ごとの指定が無いときに使う)
+		// テーブルに無い値を評価するときも同じ刻みに揃える。軸ごとに違うことがある(2026-09-19)。
+		double isoStep = 1.0 / 3.0;
+		double ssStep  = 1.0 / 3.0;
+		double fnStep  = 1.0 / 3.0;
 	};
 	// 標準テーブル一式(編集用)。fnはレンズの開放〜最小絞り範囲。1/3 段。
 	expoTables standardTables(double fnMin = 1.0, double fnMax = 32.0);
 	// デバイスが答えた設定可能値(文字列・論理値・刻み)からテーブル一式を作る。
 	//  撮影で使うテーブルは必ずここを通す(刻みと論理値を落とさないため)。
 	expoTables tablesFromRange(const cmdt::shotRange& r);
+
+	// 【設定可能値の並びから露出ステップ[段]を見分ける(2026-09-19)】
+	//  キヤノンはカメラ本体の設定で ss を 1/3 段と 1/2 段、ISO を 1/3 段と 1 段に切り替えられる。
+	//  決め打ちにすると、1/2 段のカメラで 1 目盛りあたり 0.17 段の誤差が出る(実機 EOS R10 で確認)。
+	//  隣り合う値の APEX 差の中央値を取り、よくある刻み(1/3・1/2・1)に近ければそれと見なす。
+	//  中央値にするのは、並びの端や Bulb のような例外に引きずられないため。
+	//  見分けられない(値が少ない/見覚えのない刻み)ときは 0 か中央値をそのまま返す。
+	double detectStepStops(const std::vector<std::string>& values, expoKind k);
 
 	// 露出(文字列)→明るさ(段)。テーブルでapexを引く(無ければ実数から算出)。大きいほど明るい。
 	double brightnessStops(const hgc::exposure& e, const expoTables& t);

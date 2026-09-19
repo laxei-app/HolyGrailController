@@ -267,6 +267,7 @@ errCode apiBuiltin::getSettings(cmdt::shotRange& settings)
 	settings.fNum = fnList_;
 	// 刻みと論理値も答える(2026-09-07)。共通部分はこれでテーブルを作り、1/12 段で制御する。
 	settings.stepStops = kStepStops;
+	settings.isoStep = kStepStops; settings.ssStep = kStepStops; settings.fnStep = kStepStops;
 	settings.ssReal    = ssReal_;
 	settings.isoReal   = isoReal_;
 	settings.fnReal    = fnReal_;

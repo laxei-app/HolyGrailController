@@ -241,13 +241,40 @@ namespace expo
 		return t;
 	}
 
+	double detectStepStops(const std::vector<std::string>& values, expoKind k)
+	{
+		std::vector<double> r;
+		r.reserve(values.size());
+		for (const auto& v : values) { const double x = parseValue(v, k); if (x > 0.0) { r.push_back(x); } }
+		if (r.size() < 3) { return 0.0; }	// 1点だけのF値など。見分けられない
+		std::sort(r.begin(), r.end());
+		std::vector<double> d;
+		d.reserve(r.size() - 1);
+		for (size_t i = 1; i < r.size(); ++i)
+		{
+			const double g = std::fabs(apexOf(r[i], k) - apexOf(r[i - 1], k));
+			if (g > 1e-6) { d.push_back(g); }	// 同じ値が2つ並ぶ並びは段差0になるので数えない
+		}
+		if (d.empty()) { return 0.0; }
+		std::sort(d.begin(), d.end());
+		const double med = d[d.size() / 2];
+		// 表示値の丸めで ±0.03 段ほどばらつく(1/125 は本当は 1/128)。近ければその刻みと見る。
+		const double cand[] = { 1.0 / 3.0, 0.5, 1.0 };
+		for (double c : cand) { if (std::fabs(med - c) <= 0.06) { return c; } }
+		return med;	// 見覚えのない刻み(内蔵カメラの細かい並び等)はそのまま返す
+	}
+
 	expoTables tablesFromRange(const cmdt::shotRange& r)
 	{
 		expoTables t;
-		t.stepStops = (r.stepStops > 0.0) ? r.stepStops : (1.0 / 3.0);
-		t.iso = buildTable(r.iso,  expoKind::iso, t.stepStops, &r.isoReal);
-		t.ss  = buildTable(r.ss,   expoKind::ss,  t.stepStops, &r.ssReal);
-		t.fn  = buildTable(r.fNum, expoKind::fn,  t.stepStops, &r.fnReal);
+		const double def = (r.stepStops > 0.0) ? r.stepStops : (1.0 / 3.0);
+		t.stepStops = def;
+		t.isoStep = (r.isoStep > 0.0) ? r.isoStep : def;
+		t.ssStep  = (r.ssStep  > 0.0) ? r.ssStep  : def;
+		t.fnStep  = (r.fnStep  > 0.0) ? r.fnStep  : def;
+		t.iso = buildTable(r.iso,  expoKind::iso, t.isoStep, &r.isoReal);
+		t.ss  = buildTable(r.ss,   expoKind::ss,  t.ssStep,  &r.ssReal);
+		t.fn  = buildTable(r.fNum, expoKind::fn,  t.fnStep,  &r.fnReal);
 		return t;
 	}
 
@@ -285,9 +312,9 @@ namespace expo
 	double brightnessStops(const hgc::exposure& e, const expoTables& t)
 	{
 		// Sv - Av - Tv。Sv↑=明るい、Av↑(大F)=暗い、Tv↑(短秒)=暗い。
-		return apexFromTable(t.iso, e.iso, expoKind::iso, t.stepStops)
-		     - apexFromTable(t.fn,  e.fn,  expoKind::fn,  t.stepStops)
-		     - apexFromTable(t.ss,  e.ss,  expoKind::ss,  t.stepStops);
+		return apexFromTable(t.iso, e.iso, expoKind::iso, t.isoStep)
+		     - apexFromTable(t.fn,  e.fn,  expoKind::fn,  t.fnStep)
+		     - apexFromTable(t.ss,  e.ss,  expoKind::ss,  t.ssStep);
 	}
 
 	// --- exposureCtl(テーブル基準) ---

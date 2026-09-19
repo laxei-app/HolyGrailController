@@ -738,10 +738,23 @@ errCode apiCanonCCAPI::getSettings(cmdt::shotRange& settings)
     build(ssRaw,  expo::expoKind::ss,  settings.ss,   ssSend_);
     build(fnRaw,  expo::expoKind::fn,  settings.fNum, fnSend_);
 
-    // 目盛りの刻みはこの層が答える(2026-09-07)。キヤノン機は 1/3 段。表示値(0.3 秒=1/3 秒、1/125=1/128)の
-    //  ずれは APEX を 1/3 段に揃えることで吸収するので、論理値は文字列から作らせてよい(空のまま)。
-    settings.stepStops = 1.0 / 3.0;
+    // 目盛りの刻みはこの層が答える(2026-09-07)。表示値(0.3 秒=1/3 秒、1/125=1/128)のずれは
+    //  APEX をその刻みへ揃えることで吸収するので、論理値は文字列から作らせてよい(空のまま)。
+    //
+    // 【刻みは決め打ちにしない(2026-09-19)】キヤノンはカメラ本体の設定で ss を 1/3 段と 1/2 段、
+    //  ISO を 1/3 段と 1 段に切り替えられる(EOS R10 で確認)。1/3 段と決め打つと、1/2 段のカメラでは
+    //  1 目盛りあたり 0.17 段ずれた明るさで計算してしまう。答えてきた並びから見分ける。
+    settings.stepStops = 1.0 / 3.0;	// 見分けられなかったときの既定
+    settings.isoStep = expo::detectStepStops(settings.iso,  expo::expoKind::iso);
+    settings.ssStep  = expo::detectStepStops(settings.ss,   expo::expoKind::ss);
+    settings.fnStep  = expo::detectStepStops(settings.fNum, expo::expoKind::fn);
     settings.isoReal.clear(); settings.ssReal.clear(); settings.fnReal.clear();
+    {
+        char b[160];
+        std::snprintf(b, sizeof(b), "exposure step: iso=%.3f ss=%.3f fn=%.3f stops",
+                      settings.isoStep, settings.ssStep, settings.fnStep);
+        dataManager::logEvent("CAMERA", b);
+    }
 
     // 測光用のAPEX換算テーブルも自前で構築する(2026-07-27 setExpoTables廃止)。
     // 設定可能値の中身も表記もカメラ依存なので、この層が ability から作るのが自然な置き場。
