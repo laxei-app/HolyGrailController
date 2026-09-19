@@ -1586,6 +1586,77 @@ int main()
 		}
 	}
 
+	// --- 実機 EOS R10 が申告した設定可能値(2026-09-19 採取) ---
+	//  カメラ本体を ss 1/2 段・ISO 1 段に設定した状態で CCAPI から読んだ生の並び
+	//  (S/N 011031000158。shooting/settings/{iso,tv,av} の "ability")。
+	//  文字列は apiCanonCCAPI::toDisp を通した後の形。キヤノンは秒の小数点に " を使う
+	//  ので 1"5 は 1.5 秒、8" は 8 秒になる(1"5 を 15 と読むと並びが壊れる)。
+	//  合成した並びではなく**実機が答えた並び**で見分けられることを固定する。
+	{
+		std::printf("--- 実機 EOS R10 の設定可能値 ---\n");
+		const std::vector<std::string> iso = {
+			"auto","100","200","400","800","1600","3200","6400","12800","25600","32000","51200" };
+		const std::vector<std::string> ss = {
+			"30","20","15","10","8","6","4","3","2","1.5","1","0.7","0.5","0.3",
+			"1/4","1/6","1/8","1/10","1/15","1/20","1/30","1/45","1/60","1/90","1/125","1/180",
+			"1/250","1/350","1/500","1/750","1/1000","1/1500","1/2000","1/3000","1/4000","1/6000",
+			"1/8000","1/16000" };
+		const std::vector<std::string> fn = {
+			"1.4","1.8","2.0","2.5","2.8","3.5","4.0","4.5","5.6","6.7","8.0","9.5","11","13","16" };
+
+		const double isoStep = expo::detectStepStops(iso, expo::expoKind::iso);
+		const double ssStep  = expo::detectStepStops(ss,  expo::expoKind::ss);
+		const double fnStep  = expo::detectStepStops(fn,  expo::expoKind::fn);
+		checkNear(isoStep, 1.0, 1e-9, "実機 R10 の ISO は 1 段と見分ける");
+		checkNear(ssStep,  0.5, 1e-9, "実機 R10 の ss は 1/2 段と見分ける");
+		checkNear(fnStep,  0.5, 1e-9, "実機 R10 の F 値も 1/2 段と見分ける(絞りも本体設定に従う)");
+
+		cmdt::shotRange r;
+		r.iso = iso; r.ss = ss; r.fNum = fn;
+		r.isoStep = isoStep; r.ssStep = ssStep; r.fnStep = fnStep;
+		const expo::expoTables t = expo::tablesFromRange(r);
+		// 隣り合う目盛りの APEX 差は、見分けた刻みのきっかり整数倍になる(格子がずれない)。
+		//  同じ APEX へ潰れた組(差 0)は別に数える。
+		auto grid = [](const std::vector<expo::expoEntry>& e, double step, int& bad, int& dup)
+		{
+			bad = 0; dup = 0;
+			for (size_t i = 1; i < e.size(); ++i)
+			{
+				const double n = std::fabs(e[i].apex - e[i - 1].apex) / step;
+				if (n < 1e-9) { ++dup; continue; }
+				if (std::fabs(n - std::floor(n + 0.5)) > 1e-9) { ++bad; }
+			}
+		};
+		int bad = 0, dup = 0;
+		grid(t.iso, isoStep, bad, dup);
+		check(bad == 0, "ISO テーブルは 1 段格子にきっかり乗る");
+		// 【ISO 25600 と 32000 は同じ目盛りに潰れる】1 段格子では 32000(APEX 8.32)が 8.0 へ丸まり、
+		//  25600 と同じになる。並びは実数の昇順なので最近傍は先に来る 25600 が勝ち、32000 は
+		//  選ばれなくなる。32000 は 25600 の 1/3 段上の拡張値なので実害は無い。
+		//  ここが 2 以上に増えたら、本来使える目盛りを落としているので見直すこと。
+		check(dup == 1, "1 段刻みでは ISO 25600 と 32000 が同じ目盛りに潰れる(1 組だけ)");
+		grid(t.ss, ssStep, bad, dup);
+		check(bad == 0 && dup == 0, "ss テーブルは 1/2 段格子にきっかり乗る(潰れ無し)");
+		grid(t.fn, fnStep, bad, dup);
+		check(bad == 0 && dup == 0, "F 値テーブルは 1/2 段格子にきっかり乗る(潰れ無し)");
+		check(static_cast<int>(t.iso.size()) == 11, "auto は露出計算に使えないので落ちる(12→11)");
+
+		// 1/3 段と決め打っていた頃は、この並びで 1 目盛りあたり 0.17 段ずれていた。
+		{
+			cmdt::shotRange r3; r3.iso = iso; r3.ss = ss; r3.fNum = fn;	// 軸ごとの指定なし=既定 1/3 段
+			const expo::expoTables t3 = expo::tablesFromRange(r3);
+			double worst = 0.0;
+			for (size_t i = 1; i < t3.ss.size(); ++i)
+			{
+				const double d = std::fabs(t3.ss[i].apex - t3.ss[i - 1].apex);
+				const double e = std::fabs(d - 0.5);	// 本当は 0.5 段であるべき
+				if (e > worst) { worst = e; }
+			}
+			char d[96]; std::snprintf(d, sizeof(d), "(最大 %.3f 段)", worst);
+			check(worst > 0.15, "1/3 段と決め打つと実機の ss の目盛りが本来の 0.5 段からずれる(修正前の姿)", d);
+		}
+	}
+
 	std::printf("\n%s (fail=%d)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail);
 	return g_fail == 0 ? 0 : 1;
 }
