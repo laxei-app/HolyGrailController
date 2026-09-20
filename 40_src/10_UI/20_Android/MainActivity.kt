@@ -3202,6 +3202,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // 現在のエディタ内容から ccm の JSON を組み立てる(保存せず・破壊しない)。dirty 比較にも使う。
+    // 露出エディタへ値を入れる。openCcmEdit と、刻みを変えて作り直したときの両方から呼ぶ。
+    //  o=null なら保存済みの内容から入れ直す。
+    private fun restoreCcmEditValues(o: JSONObject?) {
+        val src = o ?: ccmJson?.optJSONObject(editingKey) ?: return
+        if (editingKey == "night") {
+            fixEditor.set(src.optJSONObject("limitBright"))
+        } else {
+            editLimit.set(src.optJSONObject("limitBright"), src.optJSONObject("limitDark"),
+                src.optJSONArray("priority"), src.optJSONObject("initial"),
+                dayMode = (editingKey == "day"))
+        }
+    }
+
     private fun buildCcmEditJson(): JSONObject? {
         val all = ccmJson ?: return null
         val src = all.optJSONObject(editingKey) ?: return null
@@ -3293,8 +3306,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
             override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
                 val per = ccmStepChoices[pos].first
                 if (per == ccmEditStepPer) return
+                // 【刻みを変えただけで表示が消える件(2026-09-20)】目盛りを張り直すとスライダーを
+                //  作り直すので、いま画面にある値を控えてから作り直し、同じ値を入れ直す。
+                //  入れ直さないと、夜間は数値が消えてつまみが左端へ寄り、朝日/夕日/日中は
+                //  カードごと消える(LimitEditor は set() を受けるまで中身を描かない)。
+                //  控えは画面から集める(まだ保存していない編集を捨てないため)。
+                val keep = buildCcmEditJson()
                 saveCcmStep(key, per)
                 reloadExpoEditors()       // 目盛りを張り直してスライダーを作り直す
+                restoreCcmEditValues(keep)
             }
             override fun onNothingSelected(p: AdapterView<*>?) {}
         }
