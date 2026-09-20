@@ -3088,8 +3088,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 計画固有の編集で、その計画がロックされていれば読取専用(初期値の編集は常に可)。
         ccmReadOnly = editingPlanCcm && planReadOnly
         val title = mapOf("night" to "夜間撮影", "sunrise" to "朝日撮影", "sunset" to "夕日撮影", "day" to "日中撮影")[key]
+        // 【どの計画のものかを名前で出す(2026-09-20 ユーザー指示)】計画・ひな形の撮影制御方法は
+        //  「（この計画）」ではなくその名前を出す。名前は選択中の計画/ひな形のスケジュールから採る
+        //  (ひな形を選んでいるときはひな形の名前が入っている)。取れなければ従来の「この計画」。
+        //  初期値の編集はどの計画のものでもないので「（初期値）」のまま。
+        val ccmOwner = (try { JSONObject(latestSchedule).optString("planName") } catch (_: Exception) { "" })
+            .ifEmpty { "この計画" }
         findViewById<TextView>(R.id.edit_title).text = title +
-            (if (!editingPlanCcm) "（初期値）" else if (ccmReadOnly) "（この計画・変更不可）" else "（この計画）")
+            (if (!editingPlanCcm) "（初期値）" else if (ccmReadOnly) "（$ccmOwner・変更不可）" else "（$ccmOwner）")
         applyHeaderColor(R.id.edit_header, R.id.edit_title, keyType(key))   // タイトルバーにシステム共通色
         ensureCcmTabs()
         val showPreset = !editingPlanCcm   // 初期値編集時のみプリセット一覧を出す
