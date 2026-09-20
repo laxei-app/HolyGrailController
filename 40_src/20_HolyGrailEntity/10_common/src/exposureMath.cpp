@@ -34,8 +34,9 @@ namespace expo
 		return ev0LinearFromBv(bv, s);
 	}
 
-	// ヒストグラム中央値(0.0～1.0)。仕様 4.3.1。
-	double histMedian(const uint16_t* lumBins, int nBins)
+	// ヒストグラム中央値(0.0～1.0)。仕様 4.3.1。受け皿の幅は問わない。
+	template <typename T>
+	static double histMedianOf(const T* lumBins, int nBins)
 	{
 		if (lumBins == nullptr || nBins <= 1) { return 0.0; }
 		double total = 0.0;
@@ -56,6 +57,9 @@ namespace expo
 		}
 		return 1.0;
 	}
+
+	double histMedian(const uint16_t* lumBins, int nBins) { return histMedianOf(lumBins, nBins); }
+	double histMedian(const uint32_t* lumBins, int nBins) { return histMedianOf(lumBins, nBins); }
 
 	// --- 設定可能値テーブル ---
 

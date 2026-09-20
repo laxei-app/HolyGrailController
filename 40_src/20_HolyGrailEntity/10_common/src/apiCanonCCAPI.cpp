@@ -2276,7 +2276,7 @@ errCode apiCanonCCAPI::thumbMeterCore(meterResult& out, int budgetMs, const std:
 	void* tf = tool::startElapse();
 	const std::string url = base + path + "?kind=thumbnail";
 	std::string jpg;
-	uint16_t hist[256];
+	uint32_t hist[256];
 	int  w = 0, h = 0;
 	bool got = false, dec = false;
 	int  decodeMs = 0;

@@ -594,7 +594,7 @@ void apiBuiltin::collectPending(void)
 bool apiBuiltin::measure(const std::vector<uint8_t>& jpeg, meterResult& out) const
 {
 	if (jpeg.empty()) { out.failStage = 1; return false; }
-	uint16_t hist[cmdt::hist_bin] = {0};
+	uint32_t hist[cmdt::hist_bin] = {0};
 	int w = 0, h = 0;
 	void* t0 = tool::startElapse();
 	// 内蔵カメラの JPEG は素の画角そのままで、レターボックスの黒帯が無い。切り落とさない。

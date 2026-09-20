@@ -2127,6 +2127,51 @@ int main()
 		}
 	}
 
+	// --- 測光ヒストグラムの受け皿(2026-09-20 「昼が明るすぎる」の真因) ---
+	//  以前は uint16 で数えていた。1 ビンの上限は 65,535。内蔵カメラの画像は
+	//  2040x1536 = 313 万画素あるので、同じ明るさの画素が全体の 2.1% を超えると
+	//  ビンが溢れて巻き戻る。平らな白い空はこれを軽く超え、明側が数えられずに
+	//  中央値が暗く出る → 場面を実際より暗いと判断し、露出を明るいまま残していた。
+	//  実測(2026-09-20 朝の窓辺): 真の中央値 173 に対しアプリは 138 相当、0.7 段の差。
+	{
+		std::printf("--- 測光ヒストグラムの受け皿 ---\n");
+		// 実測に近い形: 総画素 2,764,800、上端(白飛び)が 36%、残りは 0〜200 に一様。
+		const uint32_t total = 2764800u;
+		const uint32_t sat   = static_cast<uint32_t>(total * 0.36);
+		uint32_t h32[256] = {0};
+		h32[255] = sat;
+		const uint32_t each = (total - sat) / 201u;
+		for (int i = 0; i <= 200; ++i) { h32[i] = each; }
+
+		const double m32 = expo::histMedian(h32, 256);
+		char det[96];
+		std::snprintf(det, sizeof(det), "(32ビット %.0f / 256)", m32 * 255.0);
+		check(m32 * 255.0 > 150.0, "32ビットなら明側を数え切れて中央値が正しく出る", det);
+		check(h32[255] > 65535u, "白飛びのビンは 16 ビットの上限を超えている");
+
+		// 同じ中身を 16 ビットに入れると巻き戻る(以前の姿)。
+		uint16_t h16[256] = {0};
+		for (int i = 0; i < 256; ++i) { h16[i] = static_cast<uint16_t>(h32[i]); }
+		const double m16 = expo::histMedian(h16, 256);
+		std::snprintf(det, sizeof(det), "(16ビット %.0f / 32ビット %.0f)", m16 * 255.0, m32 * 255.0);
+		check(m16 < m32 - 0.1, "16ビットでは溢れて中央値が暗く出る(以前の不具合の再現)", det);
+		const double gap = std::log2(expo::srgbToLinear(m32) / expo::srgbToLinear(m16));
+		std::snprintf(det, sizeof(det), "(%.2f 段)", gap);
+		check(gap > 0.4, "その差は露出にして 0.4 段以上(実測 0.7 段)", det);
+
+		// 溢れない大きさ(カメラが答えるヒストグラム)では 16 ビットでも一致する。
+		{
+			uint32_t s32[256] = {0}; uint16_t s16[256] = {0};
+			for (int i = 0; i < 256; ++i)
+			{
+				const uint32_t v = (i == 255) ? 20000u : 100u;
+				s32[i] = v; s16[i] = static_cast<uint16_t>(v);
+			}
+			checkNear(expo::histMedian(s16, 256), expo::histMedian(s32, 256), 1e-12,
+			          "溢れない大きさなら 16 ビットと 32 ビットは同じ(カメラ由来は据え置き)");
+		}
+	}
+
 	std::printf("\n%s (fail=%d)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail);
 	return g_fail == 0 ? 0 : 1;
 }

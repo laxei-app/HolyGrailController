@@ -252,6 +252,9 @@ namespace expo
 	//  lumBins : 輝度ヒストグラム。nBins 個。
 	//  戻り値  : 中央値の位置 /(nBins-1)。要素が無ければ 0。
 	double histMedian(const uint16_t* lumBins, int nBins);
+	// 32 ビットの受け皿（自前で作るヒストグラム。jpglm::lumaHistogram の出力）。
+	//  カメラが答えるヒストグラムは 16 ビットのままでよい（小さい画像の集計なので溢れない）。
+	double histMedian(const uint32_t* lumBins, int nBins);
 
 	// 露出設定を優先度・限界に従って動かす制御。仕様 4.4 / 4.5 / 7.4。
 	//
