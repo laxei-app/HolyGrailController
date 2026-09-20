@@ -75,6 +75,12 @@ object BuiltinCamera {
     private var whiteLevel = 1023
     private var blackPos = floatArrayOf(64f, 64f, 64f, 64f)   // 黒レベル。位置順(左上,右上,左下,右下)
     private var canShadingMap = false    // 周辺減光の地図を撮影結果に付けられるか
+    // 【撮影結果が色の情報を答えない端末の控え(2026-09-20 AQUOS SH-M08 で実測)】
+    //  端末によっては COLOR_CORRECTION_GAINS も SENSOR_NEUTRAL_COLOR_POINT も 0 で返る。
+    //  RAW を出せる端末は DNG 用の較正(colorTransform/calibrationTransform/forwardMatrix)を
+    //  静的な諸元として必ず持つので、そこから昼光の白バランスと色行列を作っておく。
+    private var fbGains: FloatArray? = null   // 昼光の白バランス(R, Gr, Gb, B)
+    private var fbCcm: FloatArray? = null     // センサーRGB → 線形sRGB の 3x3(行優先)
     @Volatile var lastStackMs = 0        // 直前の現像にかかった時間[ms](実測用)
 
     private fun rawSupported(c: CameraCharacteristics): Boolean {
@@ -445,6 +451,7 @@ object BuiltinCamera {
             }
             canShadingMap = c.get(CameraCharacteristics.STATISTICS_INFO_AVAILABLE_LENS_SHADING_MAP_MODES)
                 ?.contains(CameraMetadata.STATISTICS_LENS_SHADING_MAP_MODE_ON) ?: false
+            buildStaticColor(c)
             // 足す最中に次のコマが届くので、受け取り口は数枚ぶん持つ(1枚 25MB)。
             rd = ImageReader.newInstance(size.width, size.height, ImageFormat.RAW_SENSOR, 4)
         } else {
@@ -703,20 +710,108 @@ object BuiltinCamera {
         return true
     }
 
+    // 静的な色較正から「昼光の白バランス」と「センサーRGB→線形sRGB」を作る。
+    //  DNG と同じ手順。ColorTransform は XYZ→センサー参照色、CalibrationTransform は
+    //  参照色→この個体、ForwardMatrix は白を合わせたセンサー値→XYZ(D50)。
+    //  白バランス = 昼光(D65)の白がセンサーでどう写るか(= その逆数)。
+    private fun buildStaticColor(c: CameraCharacteristics) {
+        fbGains = null; fbCcm = null
+        fun mat(k: CameraCharacteristics.Key<android.hardware.camera2.params.ColorSpaceTransform>): FloatArray? {
+            val t = c.get(k) ?: return null
+            val m = FloatArray(9)
+            for (r in 0..2) for (col in 0..2) m[r * 3 + col] = t.getElement(col, r).toFloat()
+            var sum = 0f
+            for (v in m) { sum += kotlin.math.abs(v) }
+            return if (m.all { it.isFinite() } && sum > 0.5f) m else null
+        }
+        // 2 つある較正のうち昼光側を選ぶ(片方は白熱灯 STANDARD_A のことが多い)。
+        val il1 = c.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1)
+        val day1 = (il1 == CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_D65 ||
+                    il1 == CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_D55 ||
+                    il1 == CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_D50 ||
+                    il1 == CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_DAYLIGHT)
+        val cm  = (if (day1) mat(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1) else null)
+                  ?: mat(CameraCharacteristics.SENSOR_COLOR_TRANSFORM2)
+                  ?: mat(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1) ?: return
+        val ct  = (if (day1) mat(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM1) else null)
+                  ?: mat(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM2)
+                  ?: floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
+        fun mul(a: FloatArray, b: FloatArray): FloatArray {
+            val o = FloatArray(9)
+            for (r in 0..2) for (col in 0..2) {
+                var v = 0f
+                for (k in 0..2) { v += a[r * 3 + k] * b[k * 3 + col] }
+                o[r * 3 + col] = v
+            }
+            return o
+        }
+        fun apply(m: FloatArray, v: FloatArray) = floatArrayOf(
+            m[0] * v[0] + m[1] * v[1] + m[2] * v[2],
+            m[3] * v[0] + m[4] * v[1] + m[5] * v[2],
+            m[6] * v[0] + m[7] * v[1] + m[8] * v[2])
+        val n = apply(mul(ct, cm), floatArrayOf(0.9504f, 1.0000f, 1.0888f))   // D65 の白
+        if (n[0] > 1e-4f && n[1] > 1e-4f && n[2] > 1e-4f) {
+            fbGains = floatArrayOf(n[1] / n[0], 1f, 1f, n[1] / n[2])          // 緑を 1 に正規化
+        }
+        // 色行列: ForwardMatrix(→XYZ D50) に XYZ(D50)→線形sRGB を掛ける。
+        val fm = (if (day1) mat(CameraCharacteristics.SENSOR_FORWARD_MATRIX1) else null)
+                 ?: mat(CameraCharacteristics.SENSOR_FORWARD_MATRIX2)
+                 ?: mat(CameraCharacteristics.SENSOR_FORWARD_MATRIX1)
+        if (fm != null) {
+            val xyzD50ToSrgb = floatArrayOf(
+                3.1338561f, -1.6168667f, -0.4906146f,
+                -0.9787684f, 1.9161415f, 0.0334540f,
+                0.0719453f, -0.2289914f, 1.4052427f)
+            fbCcm = mul(xyzD50ToSrgb, fm)
+        }
+        Log.i("HGC-RAW", "static color: illum1=$il1 gains=${fbGains?.toList()} ccm=${fbCcm?.toList()}")
+    }
+
     // 足したものを現像して JPEG にする。ホワイトバランス・色行列・黒レベル・周辺減光は
     //  撮影結果(端末の映像処理が使った値)をそのまま使う。
     private fun developStack(res: TotalCaptureResult?, frames: Int): ByteArray? {
         val t0 = SystemClock.elapsedRealtime()
         val black = blackPos.copyOf()
         res?.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)?.let { if (it.size >= 4) for (i in 0..3) black[i] = it[i] }
+        // 【端末の申告を鵜呑みにしない(2026-09-20 AQUOS SH-M08 で実測)】
+        //  COLOR_CORRECTION_GAINS に 0 を返す端末がある。現像はこの値を素直に掛けるので、
+        //  そのまま使うと**全画素 0 の真っ黒**になる(撮れてはいるのに真っ暗に見える)。
+        //  使えない値だったら端末の中立色点から作り直し、それも無ければ等倍で通す。
+        //  緑かぶりはしても、真っ黒よりははるかによい。
         val gains = floatArrayOf(1f, 1f, 1f, 1f)
+        var wbFrom = "none"
         res?.get(CaptureResult.COLOR_CORRECTION_GAINS)?.let {
-            gains[0] = it.red; gains[1] = it.greenEven; gains[2] = it.greenOdd; gains[3] = it.blue
+            val g = floatArrayOf(it.red, it.greenEven, it.greenOdd, it.blue)
+            if (g.all { v -> v.isFinite() && v > 0f }) { g.copyInto(gains); wbFrom = "result" }
+        }
+        if (wbFrom == "none") {
+            // 中立色点 = 無彩色がセンサーで何色に写るか。その逆数が白の揃うゲイン(緑を 1 に正規化)。
+            res?.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)?.let { n ->
+                if (n.size >= 3) {
+                    val r = n[0].toFloat(); val g = n[1].toFloat(); val b = n[2].toFloat()
+                    if (r > 0f && g > 0f && b > 0f) {
+                        gains[0] = g / r; gains[1] = 1f; gains[2] = 1f; gains[3] = g / b
+                        wbFrom = "neutral"
+                    }
+                }
+            }
+        }
+        if (wbFrom == "none") {
+            // 撮影結果が何も答えない端末。静的な較正から作った昼光の白バランスを使う
+            //  (AWB は DAYLIGHT で撮っているので筋は合う)。等倍のままだと緑かぶりする。
+            fbGains?.let { it.copyInto(gains); wbFrom = "static" }
         }
         val ccm = floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
+        var ccmFrom = "none"
         res?.get(CaptureResult.COLOR_CORRECTION_TRANSFORM)?.let { t ->
-            for (r in 0..2) for (c in 0..2) ccm[r * 3 + c] = t.getElement(c, r).toFloat()
+            val m = FloatArray(9)
+            for (r in 0..2) for (c in 0..2) m[r * 3 + c] = t.getElement(c, r).toFloat()
+            // 色行列も同じ。全 0 を掛けると色が消える。まともな大きさのときだけ採る(単位行列は和 3)。
+            var sum = 0f
+            for (v in m) { sum += kotlin.math.abs(v) }
+            if (m.all { it.isFinite() } && sum > 0.5f) { m.copyInto(ccm); ccmFrom = "result" }
         }
+        if (ccmFrom == "none") { fbCcm?.let { it.copyInto(ccm); ccmFrom = "static" } }
         var shading: FloatArray? = null; var cols = 0; var rows = 0
         res?.get(CaptureResult.STATISTICS_LENS_SHADING_CORRECTION_MAP)?.let { m ->
             cols = m.columnCount; rows = m.rowCount
@@ -734,7 +829,7 @@ object BuiltinCamera {
         bmp.recycle()
         lastStackMs = (SystemClock.elapsedRealtime() - t0).toInt()
         Log.i("HGC-RAW", "stack $frames frames -> ${rawW / 2}x${rawH / 2} in ${lastStackMs}ms " +
-                         "wb=${gains.toList()} black=${black.toList()} white=$whiteLevel shading=${cols}x$rows")
+                         "wb($wbFrom)=${gains.toList()} ccm=$ccmFrom black=${black.toList()} white=$whiteLevel shading=${cols}x$rows")
         return bos.toByteArray()
     }
 
