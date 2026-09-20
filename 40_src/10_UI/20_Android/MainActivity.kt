@@ -2946,13 +2946,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  切り捨てだと端数で1目盛り下へ落ちる(-3.0 が -3.17 になる)ので四捨五入する。
     private fun evToSeek(v: Double) = Math.round((v + 5.0) * 6.0).toInt().coerceIn(0, 60)
     private fun seekToEv(p: Int) = -5.0 + p / 6.0
-    // 1/6 段は小数1桁では潰れる(0.17 と 0.33 がどちらも 0.2/0.3 に見える)。
-    //  1/2 段の倍数(整数・0.5 刻み)は1桁、それ以外は2桁で出す。
-    private fun evLabel(p: Int): String {
-        val v = seekToEv(p)
-        val half = Math.abs(v * 2.0 - Math.round(v * 2.0)) < 1e-9
-        return String.format(if (half) "%+.1f ev" else "%+.2f ev", v)
-    }
+    // 表示は小数1桁でそろえる(2026-09-20 ユーザー指示)。1/6 段=0.167 は 0.05 より大きいので、
+    //  1目盛り動かせば表示も必ず変わる(0.0 / 0.2 / 0.3 / 0.5 / 0.7 / 0.8 / 1.0 …)。
+    //  保存されるのは丸めていない値(1/6 段そのもの)で、表示だけを丸める。
+    private fun evLabel(p: Int): String = String.format("%+.1f ev", seekToEv(p))
     // ヒステリシス: Slider 0..20 ⇔ 0.0..2.0 ev(0.1刻み)。0=全体設定に従う(ccm個別では未設定扱い)。
     private fun hystToSeek(v: Double) = (v * 10.0).toInt().coerceIn(0, 20)
     private fun seekToHyst(p: Int) = p / 10.0
