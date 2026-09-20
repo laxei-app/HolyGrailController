@@ -2172,6 +2172,66 @@ int main()
 		}
 	}
 
+	// --- 編集画面はカメラが持つ並びを見せる(2026-09-20 ユーザー指示) ---
+	//  上下限から目盛りを合成すると、カメラに無い値が画面に出る。EOS R3 のひな型で
+	//  「夜間の 8 秒」が 8.192 秒と表示されていた(下端 1/64000 から 1/3 段で張ると
+	//  19 段上がちょうど 8.192 秒。カメラの並びには 6 / 8 / 10 しか無い)。
+	{
+		std::printf("--- 編集画面はカメラの並びを見せる ---\n");
+		// EOS R3 の長秒側(実機の綴り)。
+		const std::vector<std::string> r3 = {
+			"1/64000", "1/51200", "1/40960", "1/32000", "1/8000", "1/4000", "1/2000", "1/1000",
+			"1/500", "1/250", "1/125", "1/60", "1/30", "1/15", "1/8", "1/4", "1/2",
+			"1", "2", "4", "6", "8", "10", "13", "15", "20", "25", "30", "Bulb" };
+
+		// 合成した目盛りは 8 を作れない(不具合の再現)。
+		{
+			double lo = 1.0 / 64000.0, hi = 30.0;
+			const std::vector<std::string> made = expo::rangeValues(expo::expoKind::ss, 1.0 / 3.0, lo, hi);
+			bool has8 = false, has8192 = false;
+			for (const auto& v : made) { if (v == "8") { has8 = true; } if (v == "8.192") { has8192 = true; } }
+			check(!has8 && has8192, "合成した目盛りには 8 が無く 8.192 が出る(以前の姿)");
+		}
+
+		// カメラの並びから選び直せば、綴りはカメラのものだけになる。
+		{
+			const std::vector<std::string> v = expo::pickFromValues(r3, expo::expoKind::ss, 1.0 / 3.0);
+			bool has8 = false, bogus = false;
+			for (const auto& x : v)
+			{
+				if (x == "8") { has8 = true; }
+				bool found = false;
+				for (const auto& y : r3) { if (x == y) { found = true; break; } }
+				if (!found) { bogus = true; }
+			}
+			check(has8, "カメラが持つ 8 秒がそのまま出る");
+			check(!bogus, "カメラに無い綴りは1つも作らない");
+			bool bulb = false;
+			for (const auto& x : v) { if (x == "Bulb") { bulb = true; } }
+			check(!bulb, "数値でない綴り(Bulb)は除く");
+		}
+
+		// 刻みを粗くすると間引かれ、細かくしてもカメラより細かくはならない。
+		{
+			const std::vector<std::string> fine = expo::pickFromValues(r3, expo::expoKind::ss, 1.0 / 12.0);
+			const std::vector<std::string> mid  = expo::pickFromValues(r3, expo::expoKind::ss, 1.0 / 3.0);
+			const std::vector<std::string> wide = expo::pickFromValues(r3, expo::expoKind::ss, 1.0);
+			char det[96];
+			std::snprintf(det, sizeof(det), "(1/12段 %d / 1/3段 %d / 1段 %d)",
+			              (int)fine.size(), (int)mid.size(), (int)wide.size());
+			check(fine.size() == 28, "カメラより細かい刻みでは並びがそのまま(Bulb を除く 28 個)", det);
+			check(wide.size() < mid.size() && mid.size() <= fine.size(), "粗い刻みほど間引かれる", det);
+			check(wide.front() == fine.front() && wide.back() == fine.back(), "どの刻みでも両端は残る");
+		}
+
+		// 並びを持たない機種(端末の内蔵カメラは上下限の 2 点だけ)は選びようがない。
+		{
+			const std::vector<std::string> ends = { "1/37732", "48" };
+			const std::vector<std::string> v = expo::pickFromValues(ends, expo::expoKind::ss, 1.0 / 12.0);
+			check(v.size() < 3, "両端しか答えない機種では「並び」とみなさない(合成へ落ちる)");
+		}
+	}
+
 	std::printf("\n%s (fail=%d)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail);
 	return g_fail == 0 ? 0 : 1;
 }

@@ -3050,13 +3050,23 @@ int32_t hge_getExpoValuesJson(int32_t stepPerStop, char* buf, int32_t* inoutLen)
 		}
 		return any;
 	};
-	std::vector<std::string> iso, ss;
-	double lo = 0.0, hi = 0.0;
-	if (span(g_plan.camera.isoList, expo::expoKind::iso, lo, hi))
-	{ iso = expo::rangeValues(expo::expoKind::iso, step, lo, hi); }
+	// 【カメラが自分の並びを持っているならそれを見せる(2026-09-20 ユーザー指示)】
+	//  上下限から目盛りを合成すると、カメラに無い値が画面に出る。EOS R3 の 8 秒は
+	//  下端 1/64000 から 1/3 段で張ると 8.192 秒になり、実機の綴りと食い違っていた
+	//  (送る直前にデバイス側が 8 へ丸めるので写りは合っていたが、表示と保存が嘘になる)。
+	//  並びを持たない機種(端末の内蔵カメラは上下限の 2 点しか答えない)は今までどおり合成する。
+	//  ここでは機種を判断せず、「並びがあるか」だけを見る。
+	auto values = [&](const std::vector<std::string>& list, expo::expoKind k) -> std::vector<std::string>
+	{
+		std::vector<std::string> v = expo::pickFromValues(list, k, step);
+		if (v.size() >= 3) { return v; }	// 3 点以上あれば「並びを持っている」とみなす
+		double lo = 0.0, hi = 0.0;
+		if (span(list, k, lo, hi)) { return expo::rangeValues(k, step, lo, hi); }
+		return {};
+	};
+	std::vector<std::string> iso = values(g_plan.camera.isoList, expo::expoKind::iso);
 	if (iso.empty()) { iso = expo::standardValues(expo::expoKind::iso); }
-	if (span(g_plan.camera.ssList, expo::expoKind::ss, lo, hi))
-	{ ss = expo::rangeValues(expo::expoKind::ss, step, lo, hi); }
+	std::vector<std::string> ss = values(g_plan.camera.ssList, expo::expoKind::ss);
 	if (ss.empty()) { ss = expo::standardValues(expo::expoKind::ss); }
 
 	// F 値: レンズが持っている並び(あればそれ)。無ければ開放〜最小絞りの慣用の目盛り。

@@ -179,6 +179,14 @@ namespace expo
 	//  stepStops: 0.5 / 1/3 / 1/12 など。0 なら 1/3 段。
 	std::vector<std::string> rangeValues(expoKind k, double stepStops, double loReal, double hiReal);
 
+	// 【カメラが自分の並びを持っているならそれを見せる(2026-09-20 ユーザー指示)】
+	//  values からこの刻み以上の間隔で選び直す。刻みがカメラより細かければ並びがそのまま返る
+	//  (カメラより細かくはできない)。両端は必ず残す。数値でない綴り(Bulb/auto)は除く。
+	//  合成した目盛り(rangeValues)はカメラに無い値を作ってしまう: EOS R3 の 8 秒は
+	//  下端 1/64000 から 1/3 段で張ると 8.192 秒になり、実機に無い値が画面に出ていた。
+	std::vector<std::string> pickFromValues(const std::vector<std::string>& values,
+	                                        expoKind k, double stepStops);
+
 	// 初期値(プリセット)のエディタ用の目盛り(2026-09-06 仕様)。カメラに依らない。
 	//  forPhone=真: 1/12 段。ss 48〜1/50000、F1.5〜3.5、ISO20〜12800(数値から作る)
 	//  forPhone=偽: 1/3 段。ss 30〜1/16000、F0.5〜24、ISO100〜24000(慣用の表記を範囲で絞る)

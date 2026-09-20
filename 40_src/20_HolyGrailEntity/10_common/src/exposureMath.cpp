@@ -252,6 +252,38 @@ namespace expo
 		return out;
 	}
 
+	std::vector<std::string> pickFromValues(const std::vector<std::string>& values,
+	                                        expoKind k, double stepStops)
+	{
+		struct one { double real; double b; std::string v; };
+		std::vector<one> all;
+		for (const auto& s : values)
+		{
+			const double r = parseValue(s, k);
+			if (!(r > 0.0)) { continue; }	// Bulb / auto / 壊れた綴りは除く
+			all.push_back({ r, stopsOfReal(r, k), s });
+		}
+		if (all.size() < 2) { return {}; }
+		std::sort(all.begin(), all.end(), [](const one& a, const one& b) { return a.real < b.real; });
+
+		double step = (stepStops > 0.0) ? stepStops : (1.0 / 3.0);
+		if (step > 1.0) { step = 1.0; }
+		std::vector<std::string> out;
+		out.push_back(all.front().v);
+		double last = all.front().b;
+		for (size_t i = 1; i + 1 < all.size(); ++i)
+		{
+			// 刻みぶん離れたものだけ採る。カメラの刻みより細かい指定では全部通る。
+			if (std::fabs(all[i].b - last) >= step - 1e-6)
+			{
+				out.push_back(all[i].v);
+				last = all[i].b;
+			}
+		}
+		if (all.back().v != out.back()) { out.push_back(all.back().v); }	// 上端は必ず残す
+		return out;
+	}
+
 	std::vector<std::string> presetValues(expoKind k, bool forPhone)
 	{
 		if (forPhone)
