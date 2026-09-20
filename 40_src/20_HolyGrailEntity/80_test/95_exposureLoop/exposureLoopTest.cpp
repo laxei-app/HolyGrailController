@@ -2079,6 +2079,54 @@ int main()
 		}
 	}
 
+	// --- 最初の補正の飽和ガード(2026-09-20 夕方の白飛びの再発防止) ---
+	//  実機ログ(2026-09-19 16:29 開始・内蔵カメラ)の数字をそのまま固定する。
+	//  19.7 秒始まりで約 10 段オーバー → 投影で 0.304 秒まで落とすが、それでもまだ飽和。
+	//  飽和した画像は中央値が頭打ちで場面の明るさを過小評価するので err がほぼ 0 に見え、
+	//  「収束した」と誤判定して最初の 8 コマを白飛びさせた。
+	{
+		std::printf("--- 最初の補正の飽和ガード ---\n");
+		const double tol = 1.0 / 3.0, satX = 0.95, satStep = 4.0;
+
+		// (1) 事故の再現。step=2 の実測(x=0.9978 err=-1.04)。
+		{
+			const expo::convergeStep r = expo::initialConvergeStep(-1.04, 0.9978, tol, satX, satStep);
+			check(r.saturated, "中央値 0.9978 は飽和とみなす");
+			check(!r.converged, "飽和している間は収束と認めない");
+			checkNear(r.delta, -satStep, 1e-12, "投影量(1.04段)より深く、最低 4 段暗くする");
+		}
+		// (2) 事故を決定づけた step=3 の実測(x=0.9978 err=+0.00)。ここで止まったのが白飛びの入口。
+		{
+			const expo::convergeStep r = expo::initialConvergeStep(0.0, 0.9978, tol, satX, satStep);
+			check(!r.converged, "飽和したまま err≒0 でも収束させない(旧実装はここで止まった)");
+			checkNear(r.delta, -satStep, 1e-12, "誤差 0 に見えても暗くしにいく");
+		}
+		// (3) 飽和が解ければ、いつもどおり投影して収束する(ガードが居座らない)。
+		//     2026-09-20 09:02 の実機 step=3 の数字。
+		{
+			const expo::convergeStep r = expo::initialConvergeStep(0.08, 0.6690, tol, satX, satStep);
+			check(!r.saturated, "中央値 0.669 は飽和ではない");
+			check(r.converged, "誤差 0.08 段なら収束(2026-09-20 09:02 実機の step=3)");
+		}
+		// (4) 通常の投影は素通し。2026-09-20 09:02 の実機 step=1(x=0.6533 err=+9.10)。
+		{
+			const expo::convergeStep r = expo::initialConvergeStep(9.10, 0.6533, tol, satX, satStep);
+			check(!r.converged, "9.10 段ずれていればまだ収束しない");
+			checkNear(r.delta, -9.10, 1e-12, "飽和していなければ投影量そのまま(ガードは効かない)");
+		}
+		// (5) 飽和していても、投影がもっと深い暗さを求めるならそちらを採る(下駄であって蓋ではない)。
+		{
+			const expo::convergeStep r = expo::initialConvergeStep(9.10, 0.99, tol, satX, satStep);
+			checkNear(r.delta, -9.10, 1e-12, "4 段より深い要求は削らない");
+		}
+		// (6) 飽和中に「明るくしたい」と出ても、その向きへは動かさない(頭打ちの誤差は信用しない)。
+		{
+			const expo::convergeStep r = expo::initialConvergeStep(-2.0, 0.99, tol, satX, satStep);
+			check(r.delta < 0.0, "飽和中に明るくする向きへは動かさない");
+			checkNear(r.delta, -satStep, 1e-12, "暗くする側へ 4 段");
+		}
+	}
+
 	std::printf("\n%s (fail=%d)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail);
 	return g_fail == 0 ? 0 : 1;
 }

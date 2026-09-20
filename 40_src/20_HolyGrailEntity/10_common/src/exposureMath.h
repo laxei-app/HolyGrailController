@@ -233,6 +233,21 @@ namespace expo
 	//  帯の広さが段差の大きさにならない(以前は帯を越えた瞬間に中央までの差を一度に埋めていた)。
 	double excessStops(double predicted, double linD, double linU);
 
+	// 【飽和ガード(2026-09-20)】最初の補正(仕様 4.4)の1反復ぶんの判断。
+	//  errStops : 測光から投影した誤差[段]。+ = 目標より明るく写る(暗くしたい)。
+	//  medianX  : 測光画像のヒストグラム中央値 0.0～1.0。satMedian 以上なら頭打ち=飽和。
+	//  飽和した画像は輝度が上限に張り付き、場面の明るさを過小評価する。そのため errStops が
+	//  0 付近に見えても「合っている」とは限らない。飽和している間は収束と認めず、投影量に
+	//  関わらず最低 satStepStops 段だけ暗くして飽和を抜けにいく。
+	struct convergeStep
+	{
+		bool   converged = false;	// 収束した(撮影を始めてよい)
+		double delta     = 0.0;		// 動かす量[段]。+ = 明るく
+		bool   saturated = false;	// 測光が頭打ちだった
+	};
+	convergeStep initialConvergeStep(double errStops, double medianX,
+		                             double tolStops, double satMedian, double satStepStops);
+
 	// ヒストグラム(輝度bin列)の中央値を 0.0～1.0(sRGB符号化)で返す。仕様 4.3.1。
 	//  lumBins : 輝度ヒストグラム。nBins 個。
 	//  戻り値  : 中央値の位置 /(nBins-1)。要素が無ければ 0。

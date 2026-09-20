@@ -373,6 +373,19 @@ namespace expo
 		return 0.0;
 	}
 
+	convergeStep initialConvergeStep(double errStops, double medianX,
+	                                 double tolStops, double satMedian, double satStepStops)
+	{
+		convergeStep r;
+		r.saturated = (medianX >= satMedian);
+		// 飽和しているときの errStops は過小評価。収束と認めない。
+		if (!r.saturated && std::fabs(errStops) <= tolStops) { r.converged = true; return r; }
+		// 目標へ直接投影する(無段階なので誤差ぶんきっかり)。飽和中は最低 satStepStops 段は暗く。
+		r.delta = -errStops;
+		if (r.saturated && r.delta > -satStepStops) { r.delta = -satStepStops; }
+		return r;
+	}
+
 	double brightnessStops(const hgc::exposure& e, const expoTables& t)
 	{
 		// Sv - Av - Tv。Sv↑=明るい、Av↑(大F)=暗い、Tv↑(短秒)=暗い。

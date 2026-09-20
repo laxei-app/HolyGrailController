@@ -54,6 +54,13 @@ namespace
 	constexpr int    kInitConvergeBudgetMs = 25000;
 	// 目標 ev への許容[段]。これ以内に入ったら収束終了して撮影に入る(=1枚目から1/3段以内)。
 	constexpr double kInitConvergeTolStops = 1.0 / 3.0;
+	// 【飽和ガード(2026-09-20)】測光画像のヒストグラム中央値がこの値以上なら「飽和」とみなす。
+	//  飽和した画像は輝度が頭打ちで真の明るさが測れず、場面の明るさ(sceneRef)を過小評価する。
+	//  そのまま投影すると「もう合っている(err≒0)」と誤判定し、実際は数段オーバーのまま撮り始める。
+	//  実機(内蔵カメラ・夕方 09-19)で 19.7 秒開始→ ss 0.3 秒でも中央値 0.998 のまま収束扱いになり、
+	//  最初の 8 コマが白飛びした。飽和が解けるまで、投影量に関わらず最低 kInitSatStepStops 段は暗くする。
+	constexpr double kInitSatMedian    = 0.95;
+	constexpr double kInitSatStepStops = 4.0;
 	// 「露光終了直後に測光」型(meterTimingHint.afterShutterClose)のとき、露光終了から
 	// この余裕[ms]を置いて準備を始める。露光中は画像取得ができないため。
 	constexpr long   kAfterShutterMarginMs = 300;
@@ -765,10 +772,12 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 			dataManager::logEvent("CONV", cb);
 		}
 
-		if (std::fabs(err) <= kInitConvergeTolStops) { converged = true; break; }	// 収束(1枚目から1/3段以内)
-
-		// 目標へ直接投影する。無段階なので誤差ぶんきっかり動く(限界は moveStops がクランプ)。
-		const double did = ctl.moveStops(-err);
+		// 収束の判断と動かす量。飽和していれば収束と認めず、投影量に関わらず暗くする
+		//  (判断そのものは expo::initialConvergeStep。単体テストで実測値を固定してある)。
+		const expo::convergeStep cs = expo::initialConvergeStep(err, mr.x, kInitConvergeTolStops,
+		                                                        kInitSatMedian, kInitSatStepStops);
+		if (cs.converged) { converged = true; break; }	// 収束(1枚目から1/3段以内)
+		const double did = ctl.moveStops(cs.delta);
 		// 露出限界に当たって動けない=これ以上詰められない。狙いには届かないが「出せる最良」に
 		// 到達しているので、収束できなかった(時間切れ)とは区別して扱う。
 		//  【動いた量そのもので見る(2026-09-19)】カメラへ送る値は目盛りに丸めるので、
