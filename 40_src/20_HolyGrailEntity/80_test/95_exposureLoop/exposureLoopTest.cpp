@@ -2232,6 +2232,35 @@ int main()
 		}
 	}
 
+	// --- 帯の下限は1目盛りに比例。無段のカメラは下限まで狭める(2026-09-20) ---
+	//  captureRunner::effHysteresis と同じ式。帯は**全幅**で、縁は目標 ± 帯/2。
+	//  以前は目盛りが無い(notch=0)と既定の 1/3 段へ落としていたため、無段の内蔵カメラにも
+	//  0.80 段(±0.40 段)の帯が当たり、細かい露出補正が1コマも動かずに埋もれていた。
+	{
+		std::printf("--- 帯の下限と無段のカメラ ---\n");
+		const double kPerNotch = 2.4, kFloor = 0.10;
+		auto eff = [&](double raw, double notch)
+		{
+			double lo = (notch > 0.0) ? (kPerNotch * notch) : kFloor;
+			if (lo < kFloor) { lo = kFloor; }
+			return (raw > lo) ? raw : lo;
+		};
+		checkNear(eff(0.0, 1.0 / 3.0),  0.80, 1e-9, "1/3 段のカメラは従来どおり 0.80 段");
+		checkNear(eff(0.0, 0.5),        1.20, 1e-9, "1/2 段のカメラは 1.20 段");
+		checkNear(eff(0.0, 1.0 / 12.0), 0.20, 1e-9, "1/12 段なら 0.20 段まで狭くなる");
+		checkNear(eff(0.0, 0.0),        kFloor, 1e-9,
+		          "無段のカメラは下限 0.10 段(以前は既定の 1/3 段へ落ちて 0.80 段だった)");
+		checkNear(eff(0.5, 0.0),        0.50, 1e-9, "撮影制御方法の設定が下限より広ければそのまま");
+
+		// 露出補正 1/6 段が帯に埋もれないこと。縁は目標 ± 帯/2 なので、帯/2 を超えれば動く。
+		const double step6 = 1.0 / 6.0;
+		char det[96];
+		std::snprintf(det, sizeof(det), "(1/6段 %.3f / 帯の半分 %.3f)", step6, eff(0.0, 0.0) / 2.0);
+		check(step6 > eff(0.0, 0.0) / 2.0, "無段のカメラでは 1/6 段の露出補正が効く", det);
+		std::snprintf(det, sizeof(det), "(1/6段 %.3f / 旧の帯の半分 %.3f)", step6, 0.80 / 2.0);
+		check(step6 < 0.80 / 2.0, "旧(0.80段)では 1/6 段は帯に埋もれていた(不具合の再現)", det);
+	}
+
 	std::printf("\n%s (fail=%d)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail);
 	return g_fail == 0 ? 0 : 1;
 }

@@ -505,8 +505,11 @@ double captureRunner::effHysteresis(double raw, double notchStops) const
 {
 	// 下限はデバイスの1目盛りに比例させる(ヘッダの kBandPerNotch を参照)。
 	//  1/3 段のカメラでは従来の 0.8 段と同じ値になる。
-	const double notch = (notchStops > 0.0) ? notchStops : kExposureStepStops;
-	double lo = kBandPerNotch * notch;
+	// 【無段のカメラは下限まで狭める(2026-09-20)】目盛りが無い(notch=0)カメラでは
+	//  丸めの行き過ぎが起きないので、帯は測光の揺れを吸う最低限でよい。
+	//  以前はここで既定の 1/3 段へ落としていたため、無段の内蔵カメラにも 0.80 段の帯が
+	//  当たり、細かい露出補正が1コマも動かずに埋もれていた(ヘッダの意図とも食い違っていた)。
+	double lo = (notchStops > 0.0) ? (kBandPerNotch * notchStops) : kBandFloorStops;
 	if (lo < kBandFloorStops) { lo = kBandFloorStops; }
 	return (raw > lo) ? raw : lo;
 }

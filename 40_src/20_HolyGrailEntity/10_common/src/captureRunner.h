@@ -302,6 +302,7 @@ public:
 	//   1/3 段のカメラ → 0.80 段(従来と同じ)
 	//   1/2 段のカメラ → 1.20 段
 	//   内蔵カメラ(細かい) → 目盛りに応じて狭くなる。無段階に近いほど帯を狭くできる
+	//   無段のカメラ(目盛り無し) → kBandFloorStops。丸めの行き過ぎが無いので最低限でよい
 	static constexpr double kBandPerNotch = 2.4;
 	// 目盛りが極端に細かいデバイスでも、測光の揺れを吸う最低限は残す。
 	static constexpr double kBandFloorStops = 0.10;

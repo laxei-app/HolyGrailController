@@ -881,14 +881,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
             findViewById<TextView>(R.id.edit_alt_val).text = altLabel(deg)
             updateAltTimes(deg.toInt())
         }
-        setupValueSlider(R.id.edit_ev_seek, 30, gradient = true) {
-            findViewById<TextView>(R.id.edit_ev_val).text = String.format("%+.1f ev", seekToEv(it))
+        setupValueSlider(R.id.edit_ev_seek, 60, gradient = true) {
+            findViewById<TextView>(R.id.edit_ev_val).text = evLabel(it)
         }
-        setupValueSlider(R.id.edit_postev_seek, 30, gradient = true) {
-            findViewById<TextView>(R.id.edit_postev_val).text = String.format("%+.1f ev", seekToEv(it))
+        setupValueSlider(R.id.edit_postev_seek, 60, gradient = true) {
+            findViewById<TextView>(R.id.edit_postev_val).text = evLabel(it)
         }
-        setupValueSlider(R.id.edit_preev_seek, 30, gradient = true) {
-            findViewById<TextView>(R.id.edit_preev_val).text = String.format("%+.1f ev", seekToEv(it))
+        setupValueSlider(R.id.edit_preev_seek, 60, gradient = true) {
+            findViewById<TextView>(R.id.edit_preev_val).text = evLabel(it)
         }
         setupValueSlider(R.id.edit_hyst_seek, 20) {
             findViewById<TextView>(R.id.edit_hyst_val).text = hystLabel(it)
@@ -2939,8 +2939,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun altToSeek(v: Double) = (v + 19.0).toInt().coerceIn(0, 14)
     private fun seekToAlt(p: Int) = -19.0 + p
     // ev: SeekBar 0..30 ⇔ -5.0..+5.0(1/3刻み)
-    private fun evToSeek(v: Double) = ((v + 5.0) * 3.0).toInt().coerceIn(0, 30)
-    private fun seekToEv(p: Int) = -5.0 + p / 3.0
+    // 露出補正: Slider 0..60 ⇔ -5.0..+5.0 ev(1/6 段刻み。2026-09-20 ユーザー指示)。
+    //  【なぜ 1/6 段か】露出制御は内部が無段で、丸めるのは送る直前だけ。狙いを 1/6 段ずらせば
+    //   丸めの境目を越える時期が変わるので、1コマでは 1/3 段しか動かない外部カメラでも、
+    //   並びとしての明るさは 1/6 段ぶん動く。内蔵カメラは無段なのでそのまま出る。
+    //  切り捨てだと端数で1目盛り下へ落ちる(-3.0 が -3.17 になる)ので四捨五入する。
+    private fun evToSeek(v: Double) = Math.round((v + 5.0) * 6.0).toInt().coerceIn(0, 60)
+    private fun seekToEv(p: Int) = -5.0 + p / 6.0
+    // 1/6 段は小数1桁では潰れる(0.17 と 0.33 がどちらも 0.2/0.3 に見える)。
+    //  1/2 段の倍数(整数・0.5 刻み)は1桁、それ以外は2桁で出す。
+    private fun evLabel(p: Int): String {
+        val v = seekToEv(p)
+        val half = Math.abs(v * 2.0 - Math.round(v * 2.0)) < 1e-9
+        return String.format(if (half) "%+.1f ev" else "%+.2f ev", v)
+    }
     // ヒステリシス: Slider 0..20 ⇔ 0.0..2.0 ev(0.1刻み)。0=全体設定に従う(ccm個別では未設定扱い)。
     private fun hystToSeek(v: Double) = (v * 10.0).toInt().coerceIn(0, 20)
     private fun seekToHyst(p: Int) = p / 10.0
@@ -3136,15 +3148,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (hasEv) {
             val p = evToSeek(o.optDouble("ev", 0.0))
             setSliderProgress(R.id.edit_ev_seek, p)
-            findViewById<TextView>(R.id.edit_ev_val).text = String.format("%+.1f ev", seekToEv(p))
+            findViewById<TextView>(R.id.edit_ev_val).text = evLabel(p)
         }
         if (isNight) {
             val pp = evToSeek(o.optDouble("postNightEv", 0.0))   // 夜間後露出補正
             setSliderProgress(R.id.edit_postev_seek, pp)
-            findViewById<TextView>(R.id.edit_postev_val).text = String.format("%+.1f ev", seekToEv(pp))
+            findViewById<TextView>(R.id.edit_postev_val).text = evLabel(pp)
             val pe = evToSeek(o.optDouble("preNightEv", 0.0))    // 夜間前露出補正(仕様3.7)
             setSliderProgress(R.id.edit_preev_seek, pe)
-            findViewById<TextView>(R.id.edit_preev_val).text = String.format("%+.1f ev", seekToEv(pe))
+            findViewById<TextView>(R.id.edit_preev_val).text = evLabel(pe)
             fixEditor.set(o.optJSONObject("limitBright"))
         } else {
             editLimit.set(o.optJSONObject("limitBright"), o.optJSONObject("limitDark"),
