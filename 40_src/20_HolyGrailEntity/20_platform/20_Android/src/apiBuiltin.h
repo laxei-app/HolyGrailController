@@ -41,12 +41,21 @@ public:
 	static constexpr int kMaxLostFrames = 3;
 	int lostStreak_ = 0;
 
-	// 【撮影周期の下限の規則(2026-09-06 ユーザー決定)】最小周期 = 最長ss × 1.25(余裕 0 秒)。
-	//  露光の後に加算・現像・JPEG 化(実測 0.6〜0.9 秒)と測光が続くぶん。8.3 秒なら 10.4 秒で
-	//  キヤノン機の規則(ss+2)とほぼ同じ、24 秒なら 30 秒、48 秒なら 60 秒。
+	// 【撮影周期の下限の規則(2026-09-20 実測しなおし)】倍率の決め打ちをやめ、センサーの
+	//  1 コマ上限から求める。長秒は加算(stackFrames)で作るので、1 周期はこうなる:
+	//    1周期 ≒ ss + 枚数 × コマ間の隙間 + 後処理
+	//    枚数  = ss ÷ (1コマ上限 × kSubExposureRatio)
+	//    → 1周期 ≒ ss × (1 + 隙間 ÷ (1コマ上限 × kSubExposureRatio)) + 後処理
+	//  隙間は「1コマ上限が何秒でも」ほぼ一定で、実測 Pixel 6 広角 0.05 秒 / AQUOS SH-M08 0.09 秒。
+	//  安全側に 0.1 秒を採る。後処理(加算・現像・JPEG・撮り始めの頭)は実測 Pixel 1.5 秒 /
+	//  AQUOS 4.9 秒なので 5.0 秒を余裕に置く。
+	//  【なぜ決め打ちをやめたか】1.25 倍は 1 コマ上限が長い端末(Pixel 6 = 8.31 秒)にしか合わない。
+	//  上限 0.691 秒の AQUOS では ss 31 秒に 90 枚要り、実測 44.5 秒に対して 39 秒しか見ていなかった
+	//  (レポートの余裕 -6.3 秒・遅れ 7/8 コマ)。短い ss でも同じで、1.25 倍だと AQUOS の ss 1 秒に
+	//  周期 1.3 秒を許してしまう(実際は 5.8 秒かかる)。
 	//  共通部分はこの値を所持カメラの記録から読むだけで、内蔵カメラかどうかを判断しない。
-	static constexpr double kMinIntervalFactor    = 1.25;
-	static constexpr double kMinIntervalMarginSec = 0.0;
+	static constexpr double kFrameGapSec          = 0.1;	// コマ間の隙間(読み出し)[秒]
+	static constexpr double kMinIntervalMarginSec = 5.0;	// 後処理ぶんの余裕[秒]
 
 	// device.serialno に入れる識別子の頭。所持カメラはこれで一意に管理される。
 	static const char* kSerialPrefix;	// "BUILTIN:"
@@ -86,7 +95,7 @@ public:
 	//  同期撮影不可・編集不可)。UI は序数の頭("BUILTIN:")を見ず、この欄だけを見る(2026-09-06)。
 	void fillCameraProfile(hgc::camera& cam) override
 	{
-		cam.intervalFactor = kMinIntervalFactor; cam.intervalMargin = kMinIntervalMarginSec;
+		cam.intervalFactor = this->minIntervalFactor(); cam.intervalMargin = kMinIntervalMarginSec;
 		cam.lensFixed = true; cam.localOnly = true; cam.noSyncShot = true; cam.readOnly = true;
 	}
 	errCode restoreShootingMode(void) override;
@@ -130,6 +139,14 @@ public:
 	bool   apertureVariable(void) const { return apertures_.size() > 1; }
 	// センサー1コマの最長露光[秒](端末の申告)。これを超える ss は加算で作る。
 	double maxSsSec(void) const { return (expMaxNs_ > 0) ? (static_cast<double>(expMaxNs_) / 1e9) : 0.0; }
+	// 撮影周期の下限の倍率。1 コマ上限が短いほど加算の枚数が増え、そのぶん隙間が積み上がる。
+	//  上限が分からない端末は従来どおり 1.25 倍(この値だけで安全側になる)。
+	double minIntervalFactor(void) const
+	{
+		const double hw = this->maxSsSec();
+		if (!(hw > 0.0)) { return 1.25; }
+		return 1.0 + kFrameGapSec / (hw * kSubExposureRatio);
+	}
 	// 設定できる最長の ss[秒](加算込み)。RAW が出せれば kMaxStackSsSec、出せなければセンサーの上限。
 	double maxSettableSsSec(void) const;
 	// ss[秒] を撮るのに要るコマ数(1=足さない)。

@@ -1400,6 +1400,26 @@ int dataManager::recordConnectedCameraStatus(const device& dev, bool allowAdd)
 						changed = true;
 					}
 				}
+				// 【周期の規則もデバイスの答えへ合わせる(2026-09-20)】規則そのものが変わることがある
+				//  (内蔵カメラは「1コマ上限から倍率を出す」形になった)。登録した瞬間の値を持ち続けると
+				//  古い規則のまま撮ってしまう。答えない機種は何も入らないので影響しない。
+				if (dev.apiBase)
+				{
+					hgc::camera probe = oc.cam;
+					dev.apiBase->fillCameraProfile(probe);
+					if (probe.intervalFactor != oc.cam.intervalFactor ||
+					    probe.intervalMargin != oc.cam.intervalMargin)
+					{
+						char b[128];
+						std::snprintf(b, sizeof(b), "%s interval rule %.3fx+%.1fs -> %.3fx+%.1fs",
+						              oc.cam.model.c_str(), oc.cam.intervalFactor, oc.cam.intervalMargin,
+						              probe.intervalFactor, probe.intervalMargin);
+						logEvent("GEAR", b);
+						oc.cam.intervalFactor = probe.intervalFactor;
+						oc.cam.intervalMargin = probe.intervalMargin;
+						changed = true;
+					}
+				}
 				if (changed) { saveOwnedCameras(); }
 				return static_cast<int>(camApply::updated);
 			}

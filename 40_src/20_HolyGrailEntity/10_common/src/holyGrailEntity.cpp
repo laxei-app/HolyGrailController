@@ -884,6 +884,12 @@ namespace
 		//  見に行かない(2026-09-06 ユーザー指示。欠けた型は「使わない」と同じ扱いになる)。
 		const errCode be = astro::buildSchedule(g_plan);
 		if (be != ERR_HGC_OK) { return be; }
+		// 【周期の規則が変わっていたら締め直す(2026-09-20)】カメラが答える周期の規則は変わりうる
+		//  (内蔵カメラは1コマ上限から倍率を出すようになった)。古い規則で保存された計画は最短周期を
+		//  割ったまま残るので、開いた時点で伸ばす。**短くはしない**(利用者が広げた周期は尊重する)。
+		//  控えを所持カメラの今の値へ引き直してから見る(そうしないと古い規則で計算してしまう)。
+		applyOwnedCameraSettings(g_plan.camera);
+		{ const int mn = minIntervalSec(g_plan); if (g_plan.interval < static_cast<double>(mn)) { g_plan.interval = mn; } }
 		buildScheduleJson();
 		g_editId    = id;
 		g_editIsTpl = false;	// 計画を開いた → ひな形ではない
@@ -1172,7 +1178,10 @@ namespace
 			if (cam.sensorPixel == 0   && oc.sensorPixel > 0)   { cam.sensorPixel = oc.sensorPixel; }
 			if (cam.sensorPixelV == 0  && oc.sensorPixelV > 0)  { cam.sensorPixelV = oc.sensorPixelV; }
 			// 撮影周期の規則も同じ扱い(控えが未設定なら所持カメラの値を採る)。
-			if (cam.intervalFactor <= 0.0 && oc.intervalFactor > 0.0)
+			//  【端末が管理する記録(readOnly)は毎回引き直す(2026-09-20)】iso/ss の並びと同じ理由。
+			//   規則は端末が出すもので、ユーザーは編集できない。古い規則の控えを持ち続けると、
+			//   以前に作った計画だけ短すぎる周期のまま撮ってしまう。
+			if ((oc.readOnly || cam.intervalFactor <= 0.0) && oc.intervalFactor > 0.0)
 			{ cam.intervalFactor = oc.intervalFactor; cam.intervalMargin = oc.intervalMargin; }
 		}
 	}
