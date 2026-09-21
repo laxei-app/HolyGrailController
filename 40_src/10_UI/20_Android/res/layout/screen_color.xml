@@ -15,9 +15,13 @@
         android:padding="8dp">
         <ImageView android:id="@+id/color_home" android:layout_width="32dp" android:layout_height="32dp"
             android:clickable="true" android:focusable="true" android:src="@drawable/ic_home_r" />
+        <!-- 戻る(1つ前の画面へ。端末の戻るキーと同じ。2026-09-21 UI依頼で復活) -->
+        <ImageView android:id="@+id/color_back" android:layout_width="32dp" android:layout_height="32dp"
+            android:layout_marginStart="8dp" android:clickable="true" android:focusable="true" android:src="@drawable/ic_back_r" />
         <TextView android:id="@+id/color_title" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
             android:gravity="center" android:text="色の設定" android:textColor="#FFFFFF"
             android:textSize="20sp" android:textStyle="bold" />
+        <View android:layout_width="40dp" android:layout_height="32dp" />
         <!-- 右上のメニューは廃止(2026-08-29 UI依頼)。題が中央に見えるよう幅だけ残す -->
         <ImageView android:id="@+id/color_menu" android:layout_width="32dp" android:layout_height="32dp"
             android:clickable="true" android:focusable="true" android:src="@drawable/ic_menu_r" />

@@ -688,6 +688,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<ImageView>(menuId)?.setOnClickListener { onLeave(kScreenMenu) }
     }
 
+    // 【戻るボタン(2026-09-21 UI依頼で復活)】端末の戻る機能で戻り先がある画面すべてに、ホームの右へ置く。
+    //  動きは端末の戻るキーと完全に同じ(goBackOneScreen)。撮影計画(ホーム)は戻り先が無いので付けない。
+    private fun wireBackButtons() {
+        val ids = intArrayOf(R.id.cap_back, R.id.edit_back, R.id.cmenu_back, R.id.gmenu_back,
+                             R.id.cameralist_back, R.id.cameraadd_back, R.id.lenslist_back, R.id.lensadd_back,
+                             R.id.color_back, R.id.smooth_back, R.id.places_back, R.id.reserve_back,
+                             R.id.history_back, R.id.report_back, R.id.edge_back, R.id.dlog_back)
+        for (id in ids) { findViewById<ImageView>(id)?.setOnClickListener { goBackOneScreen() } }
+    }
+
     private fun gotoScreen(dest: Int) {
         flipper.displayedChild = dest
         if (dest == kScreenMenu) { buildGearMenu() } else { capturePlanBaseline() }
@@ -804,6 +814,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         buildCcmEditButtons()
         // メニュー(plan_menu→600.メニュー)。帯付きの一覧から各画面へ分岐。
         wireHeader(R.id.cap_home, R.id.cap_menu) { gotoScreen(it) }
+        wireBackButtons()
         planMenu.setOnClickListener {
             if (tplMode) { leaveTemplates { openGearMenu() } } else { openGearMenu() }
         }

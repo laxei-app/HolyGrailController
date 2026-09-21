@@ -84,6 +84,9 @@ class EdgeFlashActivity : AppCompatActivity() {
         //  デバッグログの取得中と同じ扱いにする。端末の戻るキーも同じ(下の onBackPressed)。
         findViewById<ImageView>(R.id.fl_home).setOnClickListener { leaveTo(true) }
         findViewById<ImageView>(R.id.fl_menu).setOnClickListener { leaveTo(false) }
+        // 戻る(2026-09-21 UI依頼で復活)。端末の戻るキーと同じ(書き込み中は止める)。
+        @Suppress("DEPRECATION")
+        findViewById<ImageView>(R.id.fl_back).setOnClickListener { onBackPressed() }
         probeBtn.setOnClickListener { withDevice { dev -> runOffUi { doProbe(dev) } } }
         writeBtn.setOnClickListener { withDevice { dev -> runOffUi { doWrite(dev) } } }
 
