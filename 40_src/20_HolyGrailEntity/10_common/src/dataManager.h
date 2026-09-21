@@ -65,6 +65,9 @@ public:
 	// 機材マスタから型番/レンズ名で1件(出荷時のひな形などが使う)。無ければ false。
 	static bool masterCameraByName(const std::string& name, hgc::camera& out);
 	static bool masterLensByName(const std::string& name, hgc::lens& out);
+	// 機材マスタから「そのメーカー・そのマウントで、魚眼でない、最も焦点距離の短いレンズ」を1本
+	//  (標準ひな形の既定レンズ。2026-09-21 ユーザー指示)。maker/mount が空なら条件にしない。無ければ false。
+	static bool masterLensShortest(const std::string& maker, const std::string& mount, hgc::lens& out);
 	// マスタに無いレンズを所持レンズへ足す(同じ名前が既にあれば何もしない)。
 	//  スマホ内蔵カメラのように、レンズが交換できず端末が諸元を答える機材のための口。
 	static bool addOwnedLens(const hgc::lens& lens);

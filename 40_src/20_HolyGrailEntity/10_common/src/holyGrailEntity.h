@@ -66,8 +66,10 @@ int32_t hge_setKnownCameras(const char* json, int32_t len);
 
 // スマホ役: いま所持しているカメラから台帳 JSON を作る。パスワードは暗号文で入る。
 //  エッジ役では空配列。内容が変わったかどうかの判定にもこの文字列を使ってよい。
-const char* hge_cameraBookJson(void);
-
+const char* hge_cameraBookJson(void);
+
+
+
 // 台帳の**中身の指紋**。暗号化する前の値から作るので、同じ内容なら必ず同じになる。
 //  【なぜ要るか(2026-08-29 実機で判明)】secret::encrypt は毎回ちがう nonce を使うため、
 //   同じパスワードでも暗号文が変わる。台帳 JSON をそのまま比べると毎回「変わった」と
@@ -272,14 +274,24 @@ int32_t hge_copyTemplate(const char* id);
 int32_t hge_deleteTemplate(const char* id);
 int32_t hge_renameTemplate(const char* id, const char* name);
 int32_t hge_newPlanFromTemplate(const char* id);             // 開始日=今日 / 名前は連番回避
-int32_t hge_updatePlanFromTemplate(const char* planId, const char* tplId); // 名前・時刻は据え置き
-
+int32_t hge_updatePlanFromTemplate(const char* planId, const char* tplId); // 名前・時刻は据え置き
+
+
+
 // 与えた撮影計画(JSON)をひな形として保存する。**同じ名前のひな形が既にあれば何もしない**。
 //  端末ごとに中身が変わるひな形(スマホ内蔵カメラ用など)を、役割側から作るための口。
 //  一度作った後に利用者が消したものを、起動のたびに作り直さないための「あれば何もしない」。
 int32_t hge_saveTemplateJsonIfAbsent(const char* csJson);
-// 出荷時のひな形("EOS-R3 night sky")をコードから作る(初回起動用。同名があれば何もしない)。
-int32_t hge_seedFactoryTemplates(void);
+// 【標準ひな形(2026-09-21)】与えた撮影計画(JSON。tplKind 必須)をひな形として保存する。
+//  **同じカメラ・同じ tplKind のひな形が既にあれば何もしない**(名前は利用者が変えるので鍵にしない)。
+//  戻り: 1=作った / 0=既にある / 負=エラー(errCode)。
+int32_t hge_saveStdTemplateJson(const char* csJson);
+// 【標準ひな形の種まき(初回起動用。2026-09-21 ユーザー指示)】ミラーレス機の既定として EOS R3 を
+//  所持カメラへ強制的に入れ(魚眼でない最短の RF レンズを所持レンズへ入れて組み合わせる)、
+//  標準ひな形 8 種を作る。内蔵カメラのぶんは builtinCam::registerAll が同じ仕組みで作る。
+//  namesJson: {"tpl":{"star_sunrise":"…",…8 種}, "ccm":{"night":"…","sunrise":"…","sunset":"…","day":"…"}}
+//  (UI の言語。Entity は文言を持たない)。既にあるものは作らない。
+int32_t hge_seedStandardTemplates(const char* namesJson);
 
 // 【初回起動の種まき待ち(2026-09-09 ユーザー決定)】1=待っている / 0=終わった。
 //  待っている間は「計画が1件も無ければ出荷時の固定計画を作る」を止める。

@@ -20,6 +20,7 @@
 #include "holyGrailEntity.h"
 #include "csJson.h"
 #include "exposureMath.h"
+#include "stdTemplates.h"
 #include <json/nlohmann/json.hpp>
 #include <string>
 #include <vector>
@@ -155,7 +156,7 @@ namespace
 
 namespace builtinCam
 {
-	// スマホ用の撮影計画ひな形を、内蔵カメラ1台につき1つ用意する(2026-09-05)。
+	// 【標準ひな形を内蔵カメラ1台につき1組(光条なしの 4 種)作る(2026-09-21 ユーザー指示)】
 	//
 	// 【なぜ要るか】スマホの撮影周期は熱の都合で30秒以上にしたい。レンズや露出の値も
 	//  そのカメラのものでないと NPF も撮影シミュレーションも出せない。出荷時の固定計画は
@@ -166,42 +167,22 @@ namespace builtinCam
 	//
 	// 【端末ごとに中身が変わる】名前も焦点距離も露出の実力も端末で違うので、資産として
 	//  同梱できない。登録の直後にその端末の実力から組み立てる。
-	//  同じ名前が既にあれば何もしない(消したものを起動のたびに作り直さない)。
+	//  同じカメラ・同じ種類が既にあれば何もしない(消したものを起動のたびに作り直さない)。
 	//
-	// 【撮影制御方法はスマホ用の初期値と同じ作りで、そのカメラに最適化する(2026-09-06 仕様)】
-	//  NPF・設定可能範囲・刻みはカメラごとに違うので、初期値をそのまま写さず同じ規則で
-	//  そのカメラの実力から組み立てる(=初期値を取り込んでカメラに応じて最適化したもの)。
-	void makeTemplate(const std::vector<class device>& cams, const phoneNames& nm)
+	// 【組み立ては共通部分(stdTemplates)】ここが答えるのは、このカメラの実力だけ:
+	//  夜間の露出(NPF・開放・ISO1600)、夜景はその ss 半分、明所限界、周期の規則。
+	//  光条(F11〜16 に絞る)は内蔵カメラには作らない(絞りが固定。ユーザー指示 2026-09-21)。
+	void makeTemplate(const std::vector<class device>& cams, const std::string& namesJson)
 	{
+		const stdtpl::names nm = stdtpl::parseNames(namesJson, "");	// 撮影制御方法の名前はスマホ用初期値と同じ
 		for (const auto& d : cams)
 		{
 			apiBuiltin* api = dynamic_cast<apiBuiltin*>(d.apiBase.get());
 			if (api == nullptr) { continue; }
 
-			hgc::cs cs;
-			dataManager::factoryFixedPlan(cs);
-			// 撮影場所は「撮影計画に自動的に挿入する」場所(初回起動で現在地に差し替えた1件)。無ければ出荷時のまま。
-			{ hgc::place ap; if (dataManager::autoInsertPlace(ap)) { cs.place = ap; } }
-			// 【頭は英語(2026-08-22 の決まり)】Entity と通信路に日本語を置かない。
-			//  後ろに付くカメラ名は端末が答えた「持ち物の名前」なので、そのまま使う。
-			cs.name     = "Phone night sky - " + d.model;
-			// 【窓を持たせる(2026-09-06)】出荷時の固定計画は開始/終了が 0 で、そのまま保存すると
-			//  ひな形を選んだときのスケジュール生成が失敗し(終了≦開始)、選べない。
-			//  夜空のひな形なので今日 20:00 〜 翌 04:00 にする(計画を作るときは日付だけ今日へ寄る)。
-			{
-				const int off = cs.place.tzOffMin;
-				hgc::dateTime st = hgc::fromUnixUtc(static_cast<long long>(std::time(nullptr)), off);
-				st.hour = 20; st.min = 0; st.sec = 0;
-				cs.start = st;
-				cs.end   = hgc::fromUnixUtc(hgc::toUnixUtc(st, off) + 8 * 3600, off);
-			}
-			// 端末の割り当ては撮影計画(cs)ではなくスマホ側が計画ごとに持つ。ひな形から作った
-			//  計画は割り当てが無い=スマホになるので、ここで指定するものは無い。
-
-			// カメラは所持カメラから引く(iso/ss の並びもそこに入っている)。
-			hgc::camera oc;
-			if (dataManager::findOwnedCamera(d.model, oc)) { cs.camera = oc; }
-			else { cs.camera.name = d.model; cs.camera.model = d.model; }
+			stdtpl::gear g;
+			// カメラは所持カメラから引く(iso/ss の並び・周期の規則もそこに入っている)。
+			if (!dataManager::findOwnedCamera(d.model, g.camera)) { g.camera.name = d.model; g.camera.model = d.model; }
 
 			// 【レンズも所持レンズとして登録する(2026-09-05 ユーザー指示)】
 			//  内蔵カメラのレンズは交換できず機材マスタにも載らないが、諸元は端末が答える。
@@ -227,42 +208,43 @@ namespace builtinCam
 			}
 			// 所持カメラの「組み合わせるレンズ」へ割り当てる。これで、計画でこのカメラを
 			//  選んだときにレンズも一緒に付いてくる(hge_setPlanCamera)。
-			dataManager::setOwnedCameraLens(cs.camera.name, ln.name);
+			dataManager::setOwnedCameraLens(g.camera.name, ln.name);
 			hgc::lens ol;
-			cs.lens = dataManager::findOwnedCameraDefaultLens(cs.camera.name, ol) ? ol : ln;
+			g.lens = dataManager::findOwnedCameraDefaultLens(g.camera.name, ol) ? ol : ln;
 
-			// 撮影制御方法: このカメラの実力(NPF・並び)で組み立てる。
+			// 露出: このカメラの実力(NPF・範囲)で組み立てる。値は expoResolve が「その端末が出せる値」にする。
 			double wmm = 0.0, hmm = 0.0; uint32_t px = 0, py = 0;
 			d.apiBase->readSensorSpec(wmm, hmm, px, py);
-			astro::ccmSet set;
-			buildPhoneSet(*api, wmm, px, nm, set);
-			cs.ccm.night = set.night; cs.ccm.sunrise = set.sunrise;
-			cs.ccm.sunset = set.sunset; cs.ccm.day = set.day;
-
-			// 【吸着は要らなくなった(2026-09-19)】値はすでに expoResolve が「その端末が出せる値」に
-			//  している。撮影時も段で決めてデバイスが解決するので、並びへ寄せ直す必要が無い。
-			cs.nightFixedExposure = set.night->limitBright;
+			g.starNight = nightExposureFor(*api, wmm, px);
+			{
+				const double ssStar = expo::parseValue(g.starNight.ss, expo::expoKind::ss);
+				g.cityNight = resolveReal(*api, 1600.0, (ssStar > 0.0) ? ssStar * 0.5 : 12.0, api->apertureMin());
+			}
+			g.bright   = brightLimitFor(*api);
+			g.fnFixed  = !(api->apertureMax() > api->apertureMin() + 1e-9);
+			g.forPhone = true;
 
 			// 撮影周期: 熱の都合で 30 秒以上(2026-09-05 ユーザー判断)。加算で長い ss を使うときは
 			//  カメラの規則(最長 ss × 係数 + 余裕)がそれを超えるので、大きいほうを採る。
+			auto intervalFor = [&](const std::string& ss) -> double
 			{
-				const double maxSs  = expo::parseValue(cs.nightFixedExposure.ss, expo::expoKind::ss);
-				const double factor = (cs.camera.intervalFactor > 0.0) ? cs.camera.intervalFactor : 1.0;
-				const double margin = (cs.camera.intervalFactor > 0.0) ? cs.camera.intervalMargin : 2.0;
+				const double maxSs  = expo::parseValue(ss, expo::expoKind::ss);
+				const double factor = (g.camera.intervalFactor > 0.0) ? g.camera.intervalFactor : 1.0;
+				const double margin = (g.camera.intervalFactor > 0.0) ? g.camera.intervalMargin : 2.0;
 				const double need   = (maxSs > 0.0) ? std::ceil(maxSs * factor + margin) : 0.0;
-				cs.interval = (need > 30.0) ? need : 30.0;
-			}
+				return (need > 30.0) ? need : 30.0;
+			};
+			g.starInterval = intervalFor(g.starNight.ss);
+			g.cityInterval = intervalFor(g.cityNight.ss);
 
-			if (hge_saveTemplateJsonIfAbsent(csjson::toJson(cs).c_str()) == ERR_HGC_OK)
-			{
-				char b[224];
-				std::snprintf(b, sizeof(b),
-				              "phone template ready: %s (%.1fmm F%.1f / %.0fs cycle / night %s %s %s)",
-				              cs.name.c_str(), cs.lens.focalLength, cs.lens.fn, cs.interval,
-				              cs.nightFixedExposure.iso.c_str(), cs.nightFixedExposure.ss.c_str(),
-				              cs.nightFixedExposure.fn.c_str());
-				dataManager::logEvent("GEAR", b);
-			}
+			const int made = stdtpl::seed(g, nm, false);
+			char b[224];
+			std::snprintf(b, sizeof(b),
+			              "std templates for %s (%.1fmm F%.1f): %d made / night %s %s %s / city ss %s / %.0fs,%.0fs cycle",
+			              g.camera.name.c_str(), g.lens.focalLength, g.lens.fn, made,
+			              g.starNight.iso.c_str(), g.starNight.ss.c_str(), g.starNight.fn.c_str(),
+			              g.cityNight.ss.c_str(), g.starInterval, g.cityInterval);
+			dataManager::logEvent("GEAR", b);
 		}
 	}
 
@@ -271,7 +253,7 @@ namespace builtinCam
 	//  「用意し終えたか(=もう二度としなくてよいか)」を判断する。0 のときは
 	//  カメラの権限がまだ無いなどの理由で列挙できていないので、次の起動でやり直す。
 	//  既にあるものは触らない(名前や値をユーザーが変えていることがある)。
-	//  namesJson: 初期値の名前 {"night":..,"sunrise":..,"sunset":..,"day":..}(UI の言語で)。
+	//  namesJson: 初期値の名前 {"night":..,"sunrise":..,"sunset":..,"day":.., "tpl":{標準ひな形の名前}}(UI の言語で)。
 	int registerAll(const std::string& namesJson)
 	{
 		detectBuiltin det;
@@ -303,7 +285,7 @@ namespace builtinCam
 		}
 		const phoneNames nm = parseNames(namesJson);
 		makePhonePresets(found, nm);
-		makeTemplate(found, nm);
+		makeTemplate(found, namesJson);
 		// 【新規計画の初期カメラ(2026-09-06 ユーザー指示)】スマホ用初期値の元にした(焦点距離が最短の)
 		//  内蔵カメラに「撮影計画の初期値にする」を入れる。利用者が既に別のカメラを選んでいれば触らない。
 		{

@@ -65,6 +65,10 @@ namespace hgc
 	struct cs
 	{
 		std::string name;				// 名前
+		// 【標準ひな形の種類(2026-09-21)】インストール時にカメラごとに作る標準セットの識別子
+		//  ("star_sunrise" など。stdTemplates.h)。計画や利用者が作ったひな形は空。
+		//  「同じカメラ・同じ種類」があるかで作り直しを判定する(名前は利用者が変えるので鍵にしない)。
+		std::string tplKind;
 		dateTime    start;				// 撮影開始の日時
 		dateTime    end;				// 撮影終了の日時
 		hgc::place  place;				// 位置情報

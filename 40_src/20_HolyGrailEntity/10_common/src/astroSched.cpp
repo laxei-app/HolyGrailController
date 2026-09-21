@@ -318,7 +318,15 @@ namespace astro
 					{
 						if (samples[s].ut < lo.ut || samples[s].ut > hi.ut) { continue; }
 						if (samples[s].rising != bo.rising) { continue; }	// 昇降方向が一致する交差のみ
-						if ((samples[s - 1].h - bo.altDeg) * (samples[s].h - bo.altDeg) <= 0.0) { wut = samples[s].ut; break; }
+						if ((samples[s - 1].h - bo.altDeg) * (samples[s].h - bo.altDeg) <= 0.0)
+						{
+							// 交差した 2 サンプルの間を線形補間する(2026-09-21)。サンプル位置のままだと最大 1 分
+							//  (約 0.2°)行き過ぎ、-3.0° の指定が画面で -3.2° と出る(自動の境目の refineUt と同じ扱い)。
+							const double d = samples[s].h - samples[s - 1].h;
+							const double r = (std::fabs(d) < 1e-9) ? 1.0 : (bo.altDeg - samples[s - 1].h) / d;
+							wut = samples[s - 1].ut + (samples[s].ut - samples[s - 1].ut) * ((r < 0.0) ? 0.0 : (r > 1.0) ? 1.0 : r);
+							break;
+						}
 					}
 				}
 				else

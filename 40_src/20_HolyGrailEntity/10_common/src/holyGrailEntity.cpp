@@ -8,6 +8,7 @@
 #include "dataManager.h"
 #include "notice.h"	// ユーザーへのお知らせはコードで持つ(文言はUI側)
 #include "roleDiscovery.h"	// 役割別の発見(エッジ=IP直結ヒント / スマホ=スタブ)。30_role
+#include "stdTemplates.h"	// 標準ひな形(2026-09-21)
 #include "csJson.h"
 #include "osFile.h"		// カメラ台帳の置き場(/asset/camBook.json)
 #include "secret.h"		// 台帳のパスワードは暗号文で運ぶ
@@ -2523,72 +2524,131 @@ int32_t hge_saveTemplateJsonIfAbsent(const char* csJson)
 	return dataManager::saveTplFile(makeTplId(), csjson::toJson(cs)) ? ERR_HGC_OK : ERR_HGC_INVALID_STATE;
 }
 
-// 【出荷時のひな形(2026-09-06 ユーザー指示)】ミラーレス機向けの星景ひな形 "EOS-R3 night sky" を初回起動で
-//  コードから1件作る。中身は利用者が作った「ミラーレス星景」と同じ: EOS R3 + RF28mm F2.8 STM、
-//  次の 03:00〜06:30、周期 12 秒、夜間と日中を使う、撮影制御方法は外部カメラ用の初期値(レンズの範囲へ寄せる)。
-//  撮影場所は「撮影計画に自動的に挿入する」場所(初回起動で現在地に差し替えた1件)。
-//  同じ名前が既にあれば作らない(利用者が消したものを作り直さない)。機材マスタに無ければ出荷時の機材のまま。
 int32_t hge_setSeedPending(int32_t on)
 {
 	g_seedPending = (on != 0);
 	return ERR_HGC_OK;
 }
 
-int32_t hge_seedFactoryTemplates(void)
+int32_t hge_saveStdTemplateJson(const char* csJson)
 {
-	static const char* kName = "EOS-R3 night sky";
-	for (const auto& n : collectTplNames("")) { if (n == kName) { return ERR_HGC_OK; } }
-
+	if (csJson == nullptr || csJson[0] == 0) { return ERR_HGC_INVALID_ARG; }
 	hgc::cs cs;
-	dataManager::factoryFixedPlan(cs);
-	cs.name = kName;
-	{ hgc::place ap; if (dataManager::autoInsertPlace(ap)) { cs.place = ap; } }
-	{ hgc::camera c; if (dataManager::masterCameraByName("EOS R3", c)) { cs.camera = c; } }
-	{ hgc::lens l;   if (dataManager::masterLensByName("RF28mm F2.8 STM", l)) { cs.lens = l; } }
-	cs.interval = 12.0;
-
-	// 窓: 次に来る 03:00 から 3 時間 30 分(端末のローカル時刻)。
+	if (!csjson::fromJson(std::string(csJson), cs)) { return ERR_HGC_JSON_PARSE; }
+	if (cs.name.empty() || cs.tplKind.empty() || cs.camera.name.empty()) { return ERR_HGC_INVALID_ARG; }
+	// 同じカメラ・同じ種類が既にある = 作る必要が無い(利用者が消したり名前を変えたものを作り直さない)。
+	for (const std::string& id : dataManager::listTplIds())
 	{
-		const time_t now = std::time(nullptr);
-		hgc::dateTime d; int off = 0;
-		localFromTime(now, d, off);
-		hgc::dateTime st = d; st.hour = 3; st.min = 0; st.sec = 0;
-		long long stUt = hgc::toUnixUtc(st, off);
-		if (stUt <= static_cast<long long>(now)) { stUt += 24 * 3600; }
-		cs.start = hgc::fromUnixUtc(stUt, off);
-		cs.end   = hgc::fromUnixUtc(stUt + 3 * 3600 + 30 * 60, off);
+		std::string saved; hgc::cs e;
+		if (!dataManager::loadTplFile(id, saved) || !csjson::fromJson(saved, e)) { continue; }
+		if (e.tplKind == cs.tplKind && e.camera.name == cs.camera.name) { return 0; }
+	}
+	cs.name = uniqueName(cs.name, collectTplNames(""));	// 名前だけ同じものがあれば連番(別カメラの同名など)
+	return dataManager::saveTplFile(makeTplId(), csjson::toJson(cs)) ? 1 : ERR_HGC_INVALID_STATE;
+}
+
+// 【標準ひな形の種まき(2026-09-21 ユーザー指示)】ミラーレス機の既定 = EOS R3 + 魚眼でない最短の RF レンズ。
+//  ・EOS R3 を所持カメラへ強制的に入れる(初回起動では所持カメラが内蔵カメラしか無いため)。
+//  ・レンズは機材マスタの Canon RF から魚眼でない最短(f_min 最小)を所持レンズへ入れ、EOS R3 に組み合わせる。
+//    (マスタにはフルサイズ/APS-C の区別が無く、他社製を含めると APS-C 用の 9mm が最短になって
+//     フルサイズ機に合わないので、カメラと同じメーカーの RF に限る)
+//  ・夜間の露出: ISO1600 / F=レンズの開放 / ss=カメラの並びのうち NPF 以下の最大(30 秒まで)。
+//    夜景はその半分以下の最大。明所限界は ISO100 / 1/8000 / F16(並びに無ければ最寄り)。
+//  ・撮影周期: ss + 3 秒(ミラーレス機。ユーザー指示)。
+int32_t hge_seedStandardTemplates(const char* namesJson)
+{
+	static const char* kCam   = "EOS R3";
+	static const char* kMount = "RF";
+	const std::string names = (namesJson != nullptr) ? namesJson : "";
+
+	// 所持カメラへ(既にあれば何もしない。addOwnedCameraFromMaster は未識別の同機種があると false を返す)。
+	hgc::camera cam;
+	if (!dataManager::findOwnedCamera(kCam, cam))
+	{
+		dataManager::addOwnedCameraFromMaster(kCam);
+		if (!dataManager::findOwnedCamera(kCam, cam)) { return ERR_HGC_NO_ELEMENT; }
+		dataManager::logEvent("GEAR", "std template: owned camera added EOS R3");
+	}
+	// レンズ: 組み合わせ済みならそれ、無ければマスタから選んで所持レンズへ入れ、組み合わせる。
+	hgc::lens lens;
+	if (!dataManager::findOwnedCameraDefaultLens(kCam, lens))
+	{
+		hgc::lens ml;
+		if (!dataManager::masterLensShortest(cam.maker, kMount, ml)) { return ERR_HGC_NO_ELEMENT; }
+		dataManager::addOwnedLensFromMaster(ml.name);
+		dataManager::setOwnedCameraLens(kCam, ml.name);
+		if (!dataManager::findOwnedCameraDefaultLens(kCam, lens)) { lens = ml; }
+		dataManager::logEvent("GEAR", ("std template: owned lens added " + ml.name).c_str());
 	}
 
-	// 撮影制御方法: 外部カメラ用の初期値(型ごとに、スマホ向けでない最初の1件)。無ければ出荷時のコード生成。
+	// 並びから選ぶ(並びはカメラの表記のまま持つ。値は parseValue で実数に)。
+	auto largestBelow = [](const std::vector<std::string>& list, double limit, expo::expoKind k) -> std::string
 	{
-		astro::ccmSet set;
-		dataManager::parseCcmSetJson(dataManager::ccmDefaultsJson(), set);
-		auto pick = [](const char* type) -> std::shared_ptr<hgc::ccmBase>
+		std::string best; double bv = -1.0;
+		for (const auto& s : list)
 		{
-			nlohmann::json arr = nlohmann::json::parse(dataManager::ccmPresetsJson(type), nullptr, false);
-			if (arr.is_discarded() || !arr.is_array()) { return nullptr; }
-			for (const auto& e : arr)
-			{
-				if (!e.is_object() || e.value("forPhone", false)) { continue; }
-				return csjson::ccmFromJson(e.dump());
-			}
-			return nullptr;
-		};
-		auto put = [&](hgc::ccmType t, const char* key, std::shared_ptr<hgc::ccmBase> fallback)
+			const double v = expo::parseValue(s, k);
+			if (v <= 0.0 || v > limit + 1e-9) { continue; }
+			if (v > bv) { bv = v; best = s; }
+		}
+		return best;
+	};
+	auto nearestTo = [](const std::vector<std::string>& list, double want, expo::expoKind k) -> std::string
+	{
+		std::string best; double bd = 1e9;
+		for (const auto& s : list)
 		{
-			std::shared_ptr<hgc::ccmBase> c = pick(key);
-			cs.ccm.set(t, (c && c->type == t) ? c : fallback);
-		};
-		put(hgc::ccmType::night,   "night",   set.night);
-		put(hgc::ccmType::sunrise, "sunrise", set.sunrise);
-		put(hgc::ccmType::sunset,  "sunset",  set.sunset);
-		put(hgc::ccmType::day,     "day",     set.day);
+			const double v = expo::parseValue(s, k);
+			if (v <= 0.0) { continue; }
+			const double d = std::fabs(std::log2(v) - std::log2(want));
+			if (d < bd) { bd = d; best = s; }
+		}
+		return best;
+	};
+	// 並びに無いときの綴り(整数なら "16"、そうでなければ "2.8" のように。出荷時の初期値と同じ流儀)。
+	auto numText = [](double v) -> std::string
+	{
+		char b[24];
+		if (std::fabs(v - std::floor(v + 0.5)) < 0.005) { std::snprintf(b, sizeof(b), "%.0f", v); }
+		else { std::snprintf(b, sizeof(b), "%.1f", v); }
+		return b;
+	};
+	const double npf = expo::npfShutterSec(cam.sensorSize, static_cast<double>(cam.sensorPixel),
+	                                       lens.focalLength, lens.fn);
+	const double ssStarLimit = (npf > 0.0 && npf < 30.0) ? npf : 30.0;
+	std::string ssStar = largestBelow(cam.ssList, ssStarLimit, expo::expoKind::ss);
+	if (ssStar.empty()) { ssStar = numText(ssStarLimit); }
+	const double ssStarSec = expo::parseValue(ssStar, expo::expoKind::ss);
+	std::string ssCity = largestBelow(cam.ssList, ssStarSec * 0.5, expo::expoKind::ss);
+	if (ssCity.empty()) { ssCity = numText(ssStarSec * 0.5); }
+	const double ssCitySec = expo::parseValue(ssCity, expo::expoKind::ss);
+	std::string isoNight = nearestTo(cam.isoList, 1600.0, expo::expoKind::iso);
+	if (isoNight.empty()) { isoNight = "1600"; }
+	std::string isoBright = nearestTo(cam.isoList, 100.0, expo::expoKind::iso);
+	if (isoBright.empty()) { isoBright = "100"; }
+	std::string ssBright = nearestTo(cam.ssList, 1.0 / 8000.0, expo::expoKind::ss);
+	if (ssBright.empty()) { ssBright = "1/8000"; }
+	const double fnBrightV = (lens.fnMax > 0.0 && lens.fnMax < 16.0) ? lens.fnMax : 16.0;
+
+	stdtpl::gear g;
+	g.camera = cam;
+	g.lens   = lens;
+	g.starNight = { isoNight, ssStar, numText(lens.fn) };
+	g.cityNight = { isoNight, ssCity, numText(lens.fn) };
+	g.bright    = { isoBright, ssBright, numText(fnBrightV) };
+	g.starInterval = std::ceil(ssStarSec) + 3.0;
+	g.cityInterval = std::ceil(ssCitySec) + 3.0;
+	g.fnFixed  = (lens.fnMax > 0.0 && lens.fnMax <= lens.fn + 1e-9);
+	g.forPhone = false;
+	const stdtpl::names nm = stdtpl::parseNames(names, "ccm");
+	const int made = stdtpl::seed(g, nm, true);
+	{
+		char b[200];
+		std::snprintf(b, sizeof(b), "std templates for %s + %s: %d made (npf %.1fs -> ss %s / %s)",
+		              kCam, lens.name.c_str(), made, npf, ssStar.c_str(), ssCity.c_str());
+		dataManager::logEvent("GEAR", b);
 	}
-	clampOwnedToGear(cs.ccm, cs.camera, cs.lens);	// F1.4 はレンズの開放 F2.8 へ(控えは fnWish)
-	astro::buildSchedule(cs);
-	const bool ok = dataManager::saveTplFile(makeTplId(), csjson::toJson(cs));
-	if (ok) { dataManager::logEvent("GEAR", ("factory template ready: " + std::string(kName)).c_str()); }
-	return ok ? ERR_HGC_OK : ERR_HGC_INVALID_STATE;
+	return ERR_HGC_OK;
 }
 
 int32_t hge_saveTemplateFromPlan(const char* name)

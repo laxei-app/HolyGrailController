@@ -83,17 +83,20 @@ Java_app_laxei_holygrail_HgeNative_nativeInit(JNIEnv* env, jobject /*thiz*/)
 
 // スマホ内蔵カメラを所持カメラへ足す(まだ無いものだけ)。戻り=足した台数。
 //  端末そのものなので登録可否は聞かない(外付けカメラのプロンプトとは扱いが違う)。
-// 出荷時のひな形(EOS-R3 night sky)を作る(初回起動用)。
 JNIEXPORT jint JNICALL
 Java_app_laxei_holygrail_HgeNative_nativeSetSeedPending(JNIEnv* /*env*/, jobject /*thiz*/, jint on)
 {
 	return hge_setSeedPending(on);
 }
 
+// 標準ひな形(EOS R3 ぶん)を作る(初回起動用)。namesJson: ひな形・撮影制御方法の名前(UI の言語で)。
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSeedFactoryTemplates(JNIEnv* /*env*/, jobject /*thiz*/)
+Java_app_laxei_holygrail_HgeNative_nativeSeedStandardTemplates(JNIEnv* env, jobject /*thiz*/, jstring namesJson_)
 {
-	return static_cast<jint>(hge_seedFactoryTemplates());
+	const char* j = namesJson_ ? env->GetStringUTFChars(namesJson_, nullptr) : nullptr;
+	const std::string names = j ? j : "";
+	if (j) { env->ReleaseStringUTFChars(namesJson_, j); }
+	return static_cast<jint>(hge_seedStandardTemplates(names.c_str()));
 }
 
 //  namesJson: スマホ用の撮影制御方法初期値の名前(型ごと。UI の言語で)。

@@ -6270,7 +6270,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun seedNeeded(): Boolean {
         val p = hgcPrefs()
         return !p.getBoolean("builtinSeedDone", false) || !p.getBoolean("placeSeedTried", false) ||
-               !p.getBoolean("factoryTplDone", false)
+               !p.getBoolean("stdTplDone", false)
     }
 
     private fun startFirstLaunchSeed() {
@@ -6365,17 +6365,32 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 種まきの中身。**dataExec の上で呼ぶこと**(所持機材の書き込み口は1本に保つ)。
     private fun runFirstLaunchSeed(loc: android.location.Location?) {
         seedFirstPlaceBlocking(loc)
+        // 名前は UI の言語で渡す(将来の言語対応は UI だけで済ませる。Entity と通信路に日本語を置かない)。
+        //  最上位 = スマホ用の撮影制御方法初期値の名前(型ごと。内蔵カメラのひな形の撮影制御方法もこの名前)
+        //  ccm    = ミラーレス機のひな形の撮影制御方法の名前
+        //  tpl    = 標準ひな形の名前(種類ごと。題名は「カメラ名 + これ」)
+        val names = JSONObject().put("night", "夜間スマホ").put("sunrise", "朝日スマホ")
+                                .put("sunset", "夕日スマホ").put("day", "日中スマホ")
+            .put("ccm", JSONObject().put("night", "夜間").put("sunrise", "朝日").put("sunset", "夕日").put("day", "日中"))
+            .put("tpl", JSONObject()
+                .put("star_sunrise",          "星景(日の出含む)")
+                .put("night_sunrise",         "夜景(日の出含む)")
+                .put("star_sunrise_sunstar",  "星景(日の出光条)")
+                .put("night_sunrise_sunstar", "夜景(日の出光条)")
+                .put("star_sunset",           "星景(日の入含む)")
+                .put("night_sunset",          "夜景(日の入含む)")
+                .put("star_sunset_sunstar",   "星景(日の入光条)")
+                .put("night_sunset_sunstar",  "夜景(日の入光条)"))
+            .toString()
         if (!hgcPrefs().getBoolean("builtinSeedDone", false)) {
-            // スマホ用の撮影制御方法初期値の名前(型ごと)。UI の言語で渡す(将来の言語対応は UI だけで済ませる)。
-            val names = JSONObject().put("night", "夜間スマホ").put("sunrise", "朝日スマホ")
-                                    .put("sunset", "夕日スマホ").put("day", "日中スマホ").toString()
             val found = try { HgeNative.nativeRegisterBuiltinCameras(names) } catch (_: Exception) { 0 }
             if (found > 0) { hgcPrefs().edit().putBoolean("builtinSeedDone", true).commit() }
         }
-        // 出荷時のひな形(EOS-R3 night sky)もここで(場所の種の後。2026-09-06 ユーザー指示)。
-        if (!hgcPrefs().getBoolean("factoryTplDone", false)) {
-            val r = try { HgeNative.nativeSeedFactoryTemplates() } catch (_: Exception) { -1 }
-            if (r == 0) { hgcPrefs().edit().putBoolean("factoryTplDone", true).commit() }
+        // ミラーレス機の既定(EOS R3)の標準ひな形もここで(場所の種の後・内蔵カメラの後。
+        //  内蔵カメラを先にしないと「撮影計画の初期値にするカメラ」が EOS R3 になりかねない)。
+        if (!hgcPrefs().getBoolean("stdTplDone", false)) {
+            val r = try { HgeNative.nativeSeedStandardTemplates(names) } catch (_: Exception) { -1 }
+            if (r == 0) { hgcPrefs().edit().putBoolean("stdTplDone", true).commit() }
         }
     }
 

@@ -1336,6 +1336,22 @@ bool dataManager::masterLensByName(const std::string& name, hgc::lens& out)
 	return true;
 }
 
+bool dataManager::masterLensShortest(const std::string& maker, const std::string& mount, hgc::lens& out)
+{
+	ensureMaster();
+	const hgc::lens* best = nullptr;
+	for (const auto& l : g_masterLenses)
+	{
+		if (l.fisheye || l.focalLength <= 0.0) { continue; }
+		if (!maker.empty() && l.maker != maker) { continue; }
+		if (!mount.empty() && l.mount != mount) { continue; }
+		if (best == nullptr || l.focalLength < best->focalLength) { best = &l; }
+	}
+	if (best == nullptr) { return false; }
+	out = *best;
+	return true;
+}
+
 bool dataManager::findOwnedCamera(const std::string& name, hgc::camera& out)
 {
 	ensureOwned();

@@ -148,7 +148,7 @@ namespace csjson
 		}
 		json lensToJson(const hgc::lens& l)
 		{
-			return json{ {"maker", l.maker}, {"name", l.name}, {"focalLength", l.focalLength},
+			return json{ {"maker", l.maker}, {"name", l.name}, {"mount", l.mount}, {"focalLength", l.focalLength},
 			             {"fn", l.fn}, {"fnMax", l.fnMax}, {"hasContact", l.hasContact},
 			             {"fisheye", l.fisheye}, {"readOnly", l.readOnly},
 			             {"fnList", l.fnList} };
@@ -158,6 +158,7 @@ namespace csjson
 			hgc::lens l;
 			l.maker       = j.value("maker", std::string());
 			l.name        = j.value("name", std::string());
+			l.mount       = j.value("mount", std::string());
 			l.focalLength = j.value("focalLength", 0.0);
 			l.fn          = j.value("fn", 0.0);
 			l.fnMax       = j.value("fnMax", 0.0);
@@ -300,6 +301,7 @@ namespace csjson
 		//  一般名なので、別種のJSONと取り違えたときに見分けが付かなかった。
 		//  **保存ファイルの形式も変わる**(旧い計画ファイルは名前を失う。計画は作り直す)。
 		j["planName"]  = plan.name;
+		if (!plan.tplKind.empty()) { j["tplKind"] = plan.tplKind; }	// 標準ひな形だけが持つ
 		j["start"]     = dtToJson(plan.start);
 		j["end"]       = dtToJson(plan.end);
 		j["place"]     = placeToJson(plan.place);
@@ -374,6 +376,7 @@ namespace csjson
 
 		plan = hgc::cs{};
 		plan.name      = j.value("planName", std::string());
+		plan.tplKind   = j.value("tplKind", std::string());
 		if (j.contains("start")) { plan.start = dtFromJson(j["start"]); }
 		if (j.contains("end"))   { plan.end   = dtFromJson(j["end"]); }
 		if (j.contains("place"))  { plan.place  = placeFromJson(j["place"]); }
@@ -594,6 +597,7 @@ namespace csjson
 			hgc::lens l;
 			l.maker       = m.value("manufacture", std::string());
 			l.name        = m.value("name", std::string());
+			l.mount       = m.value("mount", std::string());
 			l.focalLength = m.value("f_min", 0.0);
 			l.fn          = m.value("fnum_min_wide", 0.0);
 			l.fnMax       = m.value("fnum_max", 0.0);
