@@ -420,6 +420,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             if (grantResults.isNotEmpty() && grantResults.any { it == PackageManager.PERMISSION_GRANTED }) pendingLocAction?.invoke()
             else Toast.makeText(this, "位置情報の権限が必要です", Toast.LENGTH_LONG).show()
             pendingLocAction = null
+        } else if (requestCode == PERMCHECK_REQ) {
+            if (flipper.displayedChild == kScreenPermCheck) buildPermCheckScreen()   // 答えを反映
         } else if (requestCode == CAM_PERM_REQ) {
             // 断られたら開始しない(始めても「開けません」を繰り返すだけ)。設定への行き方を添える。
             if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) pendingCamAction?.invoke()
@@ -681,6 +683,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
     override fun onResume() {
         super.onResume()
         if (goHomeOnResume) { goHomeOnResume = false; if (::flipper.isInitialized) gotoScreen(kScreenHome) }
+        // 権限、端末設定の画面を開いたまま設定へ行って戻ってきた → 状態を取り直す
+        if (::flipper.isInitialized && flipper.displayedChild == kScreenPermCheck) buildPermCheckScreen()
     }
 
     private fun wireHeader(homeId: Int, menuId: Int, onLeave: (Int) -> Unit) {
@@ -694,7 +698,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val ids = intArrayOf(R.id.cap_back, R.id.edit_back, R.id.cmenu_back, R.id.gmenu_back,
                              R.id.cameralist_back, R.id.cameraadd_back, R.id.lenslist_back, R.id.lensadd_back,
                              R.id.color_back, R.id.smooth_back, R.id.places_back, R.id.reserve_back,
-                             R.id.history_back, R.id.report_back, R.id.edge_back, R.id.dlog_back)
+                             R.id.history_back, R.id.report_back, R.id.edge_back, R.id.dlog_back, R.id.pc_back)
         for (id in ids) { findViewById<ImageView>(id)?.setOnClickListener { goBackOneScreen() } }
     }
 
@@ -730,6 +734,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             //  分からなくなる)。中断してから戻ってもらう。
             16 -> { if (dlogBusy) Toast.makeText(this, "取得中です。中断してから戻ってください", Toast.LENGTH_SHORT).show()
                     else { flipper.displayedChild = 4; buildGearMenu() } }
+            17 -> { flipper.displayedChild = 4; buildGearMenu() }        // 権限、端末設定 → メニュー
             else -> { flipper.displayedChild = 0 }
         }
         return true
@@ -832,6 +837,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         wireHeader(R.id.report_home, R.id.report_menu) { gotoScreen(it) }
         // 8.2 エッジ端末設定(2026-08-08 UI依頼で画面化)
         wireHeader(R.id.edge_home, R.id.edge_menu) { stashEdgeForm(); gotoScreen(it) }
+        wireHeader(R.id.pc_home, R.id.pc_menu) { gotoScreen(it) }
         wireHeader(R.id.dlog_home, R.id.dlog_menu) { dest ->
             // 取得中は戻らせない(端末の戻るキーと同じ扱い)。
             if (dlogBusy) Toast.makeText(this, "取得中です。中断してから移動してください", Toast.LENGTH_SHORT).show()
@@ -1029,6 +1035,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  ・屋外でエッジが AP のときは BLE にすると SSID を切り替えずに全台と話せる
         //  ・エッジ側にモードを持たせないので、戻せなくなって現地へ行く経路は無い
         gearSwitchItem(box, "外部端末とBLEで通信する", edgeUseBle()) { on -> setEdgeUseBle(on) }
+        gearBand(box, "権限、端末設定")
+        gearItem(box, "権限、端末設定") { openPermCheck() }
         gearBand(box, "ログ")
         // 撮影中/開始要求中はグレー表示で不可(コピー処理が撮影と競合しないように)。
         // 【撮影中でも開ける(2026-08-29 実機で気づいた)】この画面には性質の違う2つが同居する。
@@ -1199,6 +1207,164 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (!ed.reachable()) return
         val c = loadEdgeLogOpt(name)
         Thread { try { HgeNative.nativeEdgeSendLogOpt(ed.addr(), ed.port, c.shot, c.batt, c.sys) } catch (_: Exception) {} }.start()
+    }
+
+    // ================= 権限、端末設定(2026-09-21 UI依頼) =================
+    // アプリを正常に動かすのに要る「実行時の権限」と「端末の設定」を一覧にして、揃っているかを見せる。
+    //  ・先頭のチェックは状態の表示だけ(触れない)。▼で開くと「何に要るか」と「設定する」ボタン
+    //  ・「設定する」は権限なら OS の確認ダイアログ(二度と聞けない状態ならアプリの設定画面)、
+    //    端末の設定なら該当する設定画面へ移る。戻ってきたとき(onResume)に取り直す
+    //  ・動作中に見るもの(空き容量・熱・同じネットワークに居るか)は載せない。設定しておけば済むものだけ
+    //  ・USB の許可は機器を挿したときに機器ごとに聞くものなので、ここでは扱えない(載せない)
+    private val kScreenPermCheck = 17
+    private val PERMCHECK_REQ = 4715
+    private var permCheckExpanded = HashSet<String>()
+
+    private class CheckItem(val key: String, val title: String, val desc: String,
+                            val isOk: () -> Boolean, val settle: () -> Unit)
+
+    private fun permGranted(vararg p: String) =
+        p.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
+
+    // 権限の「設定する」: OS のダイアログを出す。二度と聞けない状態(一度断って「今後表示しない」)では
+    //  ダイアログが出ずに即座に拒否が返るので、そのときはアプリの設定画面へ送る。
+    private fun settlePermission(perms: Array<String>) {
+        val canAsk = perms.any { ActivityCompat.shouldShowRequestPermissionRationale(this, it) } ||
+                     perms.all { !hgcPrefs().getBoolean("permAsked_$it", false) }
+        perms.forEach { hgcPrefs().edit().putBoolean("permAsked_$it", true).apply() }
+        if (canAsk) ActivityCompat.requestPermissions(this, perms, PERMCHECK_REQ)
+        else openAppDetailsSettings()
+    }
+    private fun openAppDetailsSettings() {
+        try {
+            startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                 android.net.Uri.parse("package:$packageName")))
+        } catch (_: Exception) { Toast.makeText(this, "設定画面を開けませんでした", Toast.LENGTH_SHORT).show() }
+    }
+    private fun openSystemSettings(action: String, data: android.net.Uri? = null) {
+        try { startActivity(Intent(action).apply { if (data != null) setData(data) }) }
+        catch (_: Exception) {
+            // その画面が無い機種 → 設定のトップへ
+            try { startActivity(Intent(android.provider.Settings.ACTION_SETTINGS)) } catch (_: Exception) {}
+        }
+    }
+
+    private fun permCheckItems(): List<CheckItem> {
+        val list = ArrayList<CheckItem>()
+        val sdk = Build.VERSION.SDK_INT
+        // --- 権限 ---
+        list.add(CheckItem("perm_camera", "カメラの権限",
+            "このスマホの内蔵カメラで撮影するときと、外部端末の設定用 QR を読むときに使います。" +
+            "外部のカメラ(ミラーレス機)だけで使うなら無くても動きます。",
+            { permGranted(Manifest.permission.CAMERA) },
+            { settlePermission(arrayOf(Manifest.permission.CAMERA)) }))
+        list.add(CheckItem("perm_location", "位置情報の権限",
+            "撮影場所を現在地から作るときに使います(初回起動と、撮影場所の「現在地を取得」)。" +
+            (if (sdk < 31) "この Android では外部端末を Bluetooth で探すときにも要ります。" else ""),
+            { permGranted(Manifest.permission.ACCESS_FINE_LOCATION) || permGranted(Manifest.permission.ACCESS_COARSE_LOCATION) },
+            { settlePermission(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) }))
+        if (sdk >= 31) {
+            list.add(CheckItem("perm_nearby", "付近のデバイスの権限(Bluetooth)",
+                "外部端末を Bluetooth で探して登録・設定するときと、外部端末と BLE で通信するときに使います。" +
+                "外部端末を使わないなら無くても動きます。",
+                { permGranted(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT) },
+                { settlePermission(arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)) }))
+        }
+        if (sdk <= 28) {
+            list.add(CheckItem("perm_storage", "ストレージへの書き込み権限",
+                "撮影ログを Download フォルダへ保存するときに使います(この Android の版だけ必要です)。",
+                { permGranted(Manifest.permission.WRITE_EXTERNAL_STORAGE) },
+                { settlePermission(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE)) }))
+        }
+        // --- 端末の設定 ---
+        list.add(CheckItem("set_location", "位置情報サービス(端末の設定)",
+            "権限があっても、端末の位置情報が OFF だと現在地を測れず、撮影場所が Tokyo のままになります。" +
+            (if (sdk < 31) "Bluetooth で外部端末を探すときにも要ります。" else ""),
+            {
+                val lm = getSystemService(LOCATION_SERVICE) as android.location.LocationManager
+                if (sdk >= 28) lm.isLocationEnabled
+                else runCatching { android.provider.Settings.Secure.getInt(contentResolver, android.provider.Settings.Secure.LOCATION_MODE) !=
+                                   android.provider.Settings.Secure.LOCATION_MODE_OFF }.getOrDefault(false)
+            },
+            { openSystemSettings(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS) }))
+        list.add(CheckItem("set_bluetooth", "Bluetooth を ON",
+            "外部端末の登録・設定(プロビジョニング)と、外部端末との BLE 通信に使います。外部端末を使わないなら不要です。",
+            { (getSystemService(BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)?.adapter?.isEnabled == true },
+            { openSystemSettings(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS) }))
+        list.add(CheckItem("set_wifi", "Wi-Fi を ON",
+            "ミラーレス機を見つけて撮影するときと、外部端末との通信に使います。屋外では外部端末のアクセスポイント(TLP-Edge-…)に接続します。",
+            { (applicationContext.getSystemService(WIFI_SERVICE) as? WifiManager)?.isWifiEnabled == true },
+            { openSystemSettings(android.provider.Settings.ACTION_WIFI_SETTINGS) }))
+        list.add(CheckItem("set_battery", "電池の最適化の対象外にする",
+            "このスマホで直接撮影するときや予約開始を待つとき、アプリは前面で動き続ける必要があります。" +
+            "電池の最適化(省電力)の対象だと、長時間の撮影の途中で止められることがあります。",
+            { (getSystemService(POWER_SERVICE) as android.os.PowerManager).isIgnoringBatteryOptimizations(packageName) },
+            { openSystemSettings(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                 android.net.Uri.parse("package:$packageName")) }))
+        list.add(CheckItem("set_autotime", "日時とタイムゾーンを自動設定",
+            "撮影スケジュール(夜間・薄明・日の出の時刻)は端末の時刻とタイムゾーンから計算します。" +
+            "外部端末の時刻もスマホから合わせます。自動設定にしておくと狂いません。",
+            {
+                val cr = contentResolver
+                runCatching { android.provider.Settings.Global.getInt(cr, android.provider.Settings.Global.AUTO_TIME) == 1 &&
+                              android.provider.Settings.Global.getInt(cr, android.provider.Settings.Global.AUTO_TIME_ZONE) == 1 }
+                    .getOrDefault(false)
+            },
+            { openSystemSettings(android.provider.Settings.ACTION_DATE_SETTINGS) }))
+        return list
+    }
+
+    private fun openPermCheck() {
+        buildPermCheckScreen()
+        flipper.displayedChild = kScreenPermCheck
+    }
+
+    private fun buildPermCheckScreen() {
+        val box = findViewById<LinearLayout>(R.id.pc_container)
+        box.removeAllViews()
+        val items = permCheckItems()
+        var okCount = 0
+        for (item in items) {
+            val ok = runCatching { item.isOk() }.getOrDefault(false)
+            if (ok) okCount++
+            val card = LinearLayout(this); card.orientation = LinearLayout.VERTICAL
+            val head = LinearLayout(this); head.orientation = LinearLayout.HORIZONTAL
+            head.gravity = Gravity.CENTER_VERTICAL
+            head.setPadding(dp(12), dp(10), dp(12), dp(10))
+            // 状態のチェック(触れない)。無効にしても色が薄くならないよう、クリックだけ止める。
+            val cb = CheckBox(this); cb.isChecked = ok; cb.isClickable = false; cb.isFocusable = false
+            head.addView(cb, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            val tv = TextView(this); tv.text = item.title; tv.textSize = 16f
+            tv.setTextColor(if (ok) Color.BLACK else Color.parseColor("#C62828"))
+            tv.setPadding(dp(8), 0, 0, 0)
+            head.addView(tv, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            val expanded = permCheckExpanded.contains(item.key)
+            val arrow = TextView(this); arrow.text = if (expanded) "▲" else "▼"; arrow.textSize = 14f
+            arrow.setTextColor(Color.parseColor("#1565C0")); arrow.setPadding(dp(12), dp(4), dp(4), dp(4))
+            head.addView(arrow)
+            card.addView(head)
+            // 開いたときの中身: 説明 + 設定する
+            val body = LinearLayout(this); body.orientation = LinearLayout.VERTICAL
+            body.setPadding(dp(44), 0, dp(12), dp(10))
+            body.visibility = if (expanded) View.VISIBLE else View.GONE
+            val desc = TextView(this); desc.text = item.desc; desc.textSize = 14f; desc.setTextColor(Color.parseColor("#424242"))
+            body.addView(desc)
+            val btn = blueButton("設定する") { item.settle() }
+            btn.isEnabled = !ok
+            (btn.layoutParams as LinearLayout.LayoutParams).let { lp -> lp.width = ViewGroup.LayoutParams.WRAP_CONTENT; lp.gravity = Gravity.END; btn.layoutParams = lp }
+            body.addView(btn)
+            card.addView(body)
+            head.setOnClickListener {
+                if (body.visibility == View.VISIBLE) { body.visibility = View.GONE; arrow.text = "▼"; permCheckExpanded.remove(item.key) }
+                else { body.visibility = View.VISIBLE; arrow.text = "▲"; permCheckExpanded.add(item.key) }
+            }
+            box.addView(card)
+            box.addView(thinDivider())
+        }
+        val sum = TextView(this)
+        sum.text = if (okCount == items.size) "すべて揃っています" else "${items.size - okCount} 件が未設定です(赤い項目)"
+        sum.textSize = 13f; sum.setTextColor(Color.parseColor("#616161")); sum.setPadding(dp(12), dp(12), dp(12), dp(12))
+        box.addView(sum, 0)
     }
 
     private fun openDebugLog() {

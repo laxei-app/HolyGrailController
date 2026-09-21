@@ -26,6 +26,8 @@
     <!-- BLE(<31)と撮影場所の現在地取得(§7.9)の両方で使うためSDK上限なし -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+    <!-- 「権限、端末設定」画面から電池の最適化の対象外を頼む(2026-09-21)。長時間の撮影を前面で続けるため -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:allowBackup="true"
