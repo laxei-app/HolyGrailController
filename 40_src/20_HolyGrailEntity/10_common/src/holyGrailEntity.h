@@ -287,7 +287,7 @@ int32_t hge_saveTemplateJsonIfAbsent(const char* csJson);
 //  戻り: 1=作った / 0=既にある / 負=エラー(errCode)。
 int32_t hge_saveStdTemplateJson(const char* csJson);
 // 【標準ひな形の種まき(初回起動用。2026-09-21 ユーザー指示)】ミラーレス機の既定として EOS R3 を
-//  所持カメラへ強制的に入れ(魚眼でない最短の RF レンズを所持レンズへ入れて組み合わせる)、
+//  所持カメラへ強制的に入れ(RF16mm F2.8 STM を所持レンズへ入れて組み合わせる)、
 //  標準ひな形 8 種を作る。内蔵カメラのぶんは builtinCam::registerAll が同じ仕組みで作る。
 //  namesJson: {"tpl":{"star_sunrise":"…",…8 種}, "ccm":{"night":"…","sunrise":"…","sunset":"…","day":"…"}}
 //  (UI の言語。Entity は文言を持たない)。既にあるものは作らない。

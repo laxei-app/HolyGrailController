@@ -2547,17 +2547,18 @@ int32_t hge_saveStdTemplateJson(const char* csJson)
 	return dataManager::saveTplFile(makeTplId(), csjson::toJson(cs)) ? 1 : ERR_HGC_INVALID_STATE;
 }
 
-// 【標準ひな形の種まき(2026-09-21 ユーザー指示)】ミラーレス機の既定 = EOS R3 + 魚眼でない最短の RF レンズ。
+// 【標準ひな形の種まき(2026-09-21 ユーザー指示)】ミラーレス機の既定 = EOS R3 + RF16mm F2.8 STM。
 //  ・EOS R3 を所持カメラへ強制的に入れる(初回起動では所持カメラが内蔵カメラしか無いため)。
-//  ・レンズは機材マスタの Canon RF から魚眼でない最短(f_min 最小)を所持レンズへ入れ、EOS R3 に組み合わせる。
-//    (マスタにはフルサイズ/APS-C の区別が無く、他社製を含めると APS-C 用の 9mm が最短になって
-//     フルサイズ機に合わないので、カメラと同じメーカーの RF に限る)
+//  ・レンズは RF16mm F2.8 STM(ユーザー指定 2026-09-21)を所持レンズへ入れ、EOS R3 の先頭に組み合わせる。
+//    マスタに無いときだけ、カメラと同じメーカーの RF から魚眼でない最短を選ぶ
+//    (マスタにはフルサイズ/APS-C の区別が無く、他社製を含めると APS-C 用の 9mm が最短になる)。
 //  ・夜間の露出: ISO1600 / F=レンズの開放 / ss=カメラの並びのうち NPF 以下の最大(30 秒まで)。
 //    夜景はその半分以下の最大。明所限界は ISO100 / 1/8000 / F16(並びに無ければ最寄り)。
 //  ・撮影周期: ss + 3 秒(ミラーレス機。ユーザー指示)。
 int32_t hge_seedStandardTemplates(const char* namesJson)
 {
 	static const char* kCam   = "EOS R3";
+	static const char* kLens  = "RF16mm F2.8 STM";
 	static const char* kMount = "RF";
 	const std::string names = (namesJson != nullptr) ? namesJson : "";
 
@@ -2569,16 +2570,18 @@ int32_t hge_seedStandardTemplates(const char* namesJson)
 		if (!dataManager::findOwnedCamera(kCam, cam)) { return ERR_HGC_NO_ELEMENT; }
 		dataManager::logEvent("GEAR", "std template: owned camera added EOS R3");
 	}
-	// レンズ: 組み合わせ済みならそれ、無ければマスタから選んで所持レンズへ入れ、組み合わせる。
+	// レンズ: 指定のレンズを所持レンズへ入れ、EOS R3 の組み合わせの先頭にする(既にあれば触らない)。
 	hgc::lens lens;
-	if (!dataManager::findOwnedCameraDefaultLens(kCam, lens))
 	{
 		hgc::lens ml;
-		if (!dataManager::masterLensShortest(cam.maker, kMount, ml)) { return ERR_HGC_NO_ELEMENT; }
+		if (!dataManager::masterLensByName(kLens, ml) &&
+		    !dataManager::masterLensShortest(cam.maker, kMount, ml)) { return ERR_HGC_NO_ELEMENT; }
 		dataManager::addOwnedLensFromMaster(ml.name);
-		dataManager::setOwnedCameraLens(kCam, ml.name);
-		if (!dataManager::findOwnedCameraDefaultLens(kCam, lens)) { lens = ml; }
-		dataManager::logEvent("GEAR", ("std template: owned lens added " + ml.name).c_str());
+		if (dataManager::setOwnedCameraLens(kCam, ml.name))
+		{
+			dataManager::logEvent("GEAR", ("std template: owned lens added " + ml.name).c_str());
+		}
+		if (!dataManager::findOwnedLens(ml.name, lens)) { lens = ml; }
 	}
 
 	// 並びから選ぶ(並びはカメラの表記のまま持つ。値は parseValue で実数に)。
