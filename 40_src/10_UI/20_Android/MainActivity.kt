@@ -106,6 +106,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  選択が化ける(以前 restoreViewingSelection で起きた不具合と同じ形になる)。
     private var tplMode = false
     private var planIdBeforeTpl = ""      // ひな形画面へ入る前に選んでいた計画(戻すため)
+    private var tplOpenedFrom = 4           // ひな形画面を開いた元の画面(戻るボタンの行き先。2026-09-21 UI依頼)。4=メニュー(kScreenMenu は後ろで宣言されるので数で持つ)
 
     // 編集対象の計画 id。切替(選択/新規/複製/起動時)のたびに「変更の取り消し」用のベースラインを取り直す。
     private var currentPlanId: String = ""
@@ -715,7 +716,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun goBackOneScreen(): Boolean {
         if (!::flipper.isInitialized) return false
         when (flipper.displayedChild) {
-            0 -> return false                                            // 撮影計画(先頭)→ アプリ終了に委ねる
+            0 -> { if (!tplMode) return false                               // 撮影計画(先頭)→ アプリ終了に委ねる
+                   leaveTemplates { gotoScreen(tplOpenedFrom) } }           // ひな形 → 開いた元の画面へ
             1 -> { flipper.displayedChild = 0 }                          // 撮影中 → 撮影計画
             2 -> { flipper.displayedChild = 4; buildGearMenu() }         // ccmメニュー(未使用)→ メニュー
             3 -> { stopDirtyWatch(); persistCcmEdit(); flipper.displayedChild = if (editingPlanCcm) 0 else 4 }
@@ -827,6 +829,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<ImageView>(R.id.plan_home).setOnClickListener {
             if (tplMode) { leaveTemplates { gotoScreen(kScreenHome) } }
         }
+        // 戻る(ひな形のときだけ見える)。開いた元の画面へ(端末の戻るキーと同じ)。
+        findViewById<ImageView>(R.id.plan_back).setOnClickListener { if (tplMode) goBackOneScreen() }
         // メニュー画面にはホームだけ(メニューの中にメニューは要らない)
         findViewById<ImageView>(R.id.gmenu_home).setOnClickListener { gotoScreen(kScreenHome) }
         // 650 カメラ予約表(項目17)。戻る/メニューどちらもメニューへ戻す。
@@ -4131,6 +4135,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     return@runOnUiThread
                 }
                 planIdBeforeTpl = currentPlanId
+                tplOpenedFrom = flipper.displayedChild   // 戻るの行き先(いまはメニューからだけ開く)
                 tplMode = true
                 selectTplRow(ids.first())
                 flipper.displayedChild = 0
@@ -4169,6 +4174,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // ホームは「撮影計画ひな形」のときだけ出す。撮影計画そのものがホームなので、
         //  そこでは押す意味がない(場所は空けたままにして題を中央に保つ)。
         findViewById<View>(R.id.plan_home)?.visibility = if (tplMode) View.VISIBLE else View.INVISIBLE
+        findViewById<View>(R.id.plan_back)?.visibility = if (tplMode) View.VISIBLE else View.INVISIBLE
         updatePagerTitle()
         // 先頭タブの名前(ひな形/撮影計画)も切り替える(2026-09-21 UI依頼)。ひな形からホームで戻るとき、
         //  計画の選び直し(EV_SCHEDULE)でタブが作られるのが tplMode を落とす前なので「ひな形」のまま残っていた。
