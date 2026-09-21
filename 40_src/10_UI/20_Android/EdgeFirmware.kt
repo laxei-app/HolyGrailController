@@ -10,7 +10,7 @@ import java.util.Base64
 
 // エッジのファームを公開リポジトリから取ってきて、正しさを確かめる(2026-08-26)。
 //
-// 置き場は laxei-app/hgc-master の firmware/。公開なのでトークンは要らない
+// 置き場は laxei-app/tlp-master の firmware/。公開なのでトークンは要らない
 // (実測で確認済み)。目録(manifest.json)に版数・大きさ・SHA256 が入っている。
 //
 // 【必ず確かめてから焼くこと】途中で切れた中身をそのまま焼くと、端末は PC から焼き直す
@@ -102,7 +102,7 @@ class FwIdentity(val name: String, val version: String, val valid: Boolean) {
 
 object EdgeFirmware {
 
-    const val BASE = "https://raw.githubusercontent.com/laxei-app/hgc-master/main/firmware/"
+    const val BASE = "https://raw.githubusercontent.com/laxei-app/tlp-master/main/firmware/"
 
     // ── 通信を伴わない部分(単体試験の対象) ──────────────────────
 
