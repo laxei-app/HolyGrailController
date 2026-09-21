@@ -377,9 +377,28 @@ private:
 	// 値を混ぜるため、直後の逆向きは信用できない。抑制中の反転には帯を超える差を要求する。
 	bool          allowStep(int dir, double needStops, double bandStops) const;
 	void          noteStep(int dir);		// 動かした向きを記録し抑制期間を張る
-	void          resetStepLock(void);	// 抑制状態を捨てる
+	void          resetStepLock(void);	// 抑制状態を捨てる(速度も 0 に戻す)
 	int           lastStepDir_ = 0;	// 直前に動かした向き(-1=暗く +1=明るく 0=なし)
 	int           stepLock_    = 0;	// 反転を抑える残りコマ数(0=抑制なし)
+
+	// 【速度をならして動かす(2026-09-21 ユーザー決定)】
+	//  動画で目立つのは明るさそのものより「変わり方が変わる瞬間」(動き出し・止まり・歩幅の伸縮)。
+	//  以前は測光を移動平均してから「はみ出た分だけその場で動かす」形で、平均のむだ時間で
+	//  動き出しが 3 コマ遅れ、遅れたぶんを大股で追いつくのが空の境目の往復として見えた
+	//  (2026-09-21 朝・Pixel 6 実測)。キヤノン機ではサムネイル測光の 0.3 段の偽の揺れが
+	//  そのまま歩幅に乗っていた(速度の最大変化 0.17〜0.22 段/コマ)。
+	//  いまは測光は最新 1 コマだけを見て、代わりに**速度**をならす:
+	//    速度の目標 = はみ出た量 ÷ 見込み時間       … 縁に近いほどゆっくり、遠いほど速く
+	//    速度の変化 = 1 コマに a まで                 … a = 速度上限 ÷ なめらかさ[分]
+	//  つまみは「なめらかさ[分]」1 つ(全体設定 / 朝日・夕日は個別)。見込み時間はその 1/4。
+	//  机上比較(2026-09-21 朝の Pixel 6 と R50V の場面系列): 止まりが 3〜25 コマ → 0〜7、
+	//  速度の最大変化が R50V 0.22 → 0.013 段、画の揺れは同等。機種の判断は無い(共通)。
+	double        shapedMove(expo::exposureCtl& ctl, double need,
+	                         const hgc::exposure* home, double homeB,
+	                         double smoothMin, double intervalSec);
+	double        vel_ = 0.0;		// いまの速度[段/コマ](+ 明るく)。窓の切替・測光失敗で 0 に戻す
+	static constexpr double kSmoothMinDefault  = 4.0;	// なめらかさの既定[分]
+	static constexpr double kApproachFraction  = 0.25;	// 見込み時間 = なめらかさ × これ
 	// このコマで動かしてよい量[段]。速さの上限(段/秒)×撮影周期の貯金と、1コマの上限の小さい方。
 	double        moveRoomStops(void) const;
 	// このコマで踏んでよい目盛り数。貯金(stepBudget_)と1目盛りの大きさで決まる。

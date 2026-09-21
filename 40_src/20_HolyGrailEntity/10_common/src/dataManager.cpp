@@ -1049,6 +1049,7 @@ hgc::exposureSmoothing dataManager::currentSmoothing(void)
 		const auto& o = g_settings["smoothing"];
 		s.hysteresis    = o.value("hysteresis", s.hysteresis);
 		s.movingAverage = static_cast<uint16_t>(o.value("movingAverage", static_cast<int>(s.movingAverage)));
+		s.smoothMin     = o.value("smoothMin", s.smoothMin);
 	}
 	return s;
 }
@@ -1056,7 +1057,7 @@ hgc::exposureSmoothing dataManager::currentSmoothing(void)
 std::string dataManager::smoothingJson(void)
 {
 	hgc::exposureSmoothing s = currentSmoothing();
-	json j; j["hysteresis"] = s.hysteresis; j["movingAverage"] = s.movingAverage;
+	json j; j["hysteresis"] = s.hysteresis; j["movingAverage"] = s.movingAverage; j["smoothMin"] = s.smoothMin;
 	return j.dump();
 }
 
@@ -1068,6 +1069,7 @@ bool dataManager::setSmoothingJson(const std::string& jsonStr)
 	json o;
 	o["hysteresis"]    = j.value("hysteresis", 1.0);
 	o["movingAverage"] = j.value("movingAverage", 5);
+	o["smoothMin"]     = j.value("smoothMin", 4.0);
 	g_settings["smoothing"] = o;
 	return saveSettings();
 }

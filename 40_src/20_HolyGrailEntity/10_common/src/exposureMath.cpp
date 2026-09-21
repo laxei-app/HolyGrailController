@@ -409,6 +409,20 @@ namespace expo
 		return 0.0;
 	}
 
+	double shapeVelocity(double& vel, double need, double vmax, double accel, double horizonFrames)
+	{
+		const double th = (horizonFrames > 1.0) ? horizonFrames : 1.0;
+		double tv = need / th;
+		if (tv >  vmax) { tv =  vmax; }
+		if (tv < -vmax) { tv = -vmax; }
+		double dv = tv - vel;
+		if (dv >  accel) { dv =  accel; }
+		if (dv < -accel) { dv = -accel; }
+		vel += dv;
+		if (std::fabs(vel) < 1e-12) { vel = 0.0; }
+		return vel;
+	}
+
 	convergeStep initialConvergeStep(double errStops, double medianX,
 	                                 double tolStops, double satMedian, double satStepStops)
 	{

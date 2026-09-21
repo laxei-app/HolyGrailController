@@ -545,6 +545,35 @@ void captureRunner::resetStepLock(void)
 {
 	lastStepDir_ = 0;
 	stepLock_    = 0;
+	vel_         = 0.0;
+}
+
+double captureRunner::shapedMove(expo::exposureCtl& ctl, double need,
+                                 const hgc::exposure* home, double homeB,
+                                 double smoothMin, double intervalSec)
+{
+	const double T      = (intervalSec > 0.0) ? intervalSec : 15.0;
+	const double minutes = (smoothMin > 0.0) ? smoothMin : kSmoothMinDefault;
+	const double secs   = minutes * 60.0;
+	// 1 コマの速度変化の上限。速度上限まで secs かけて変わる。
+	const double frames = secs / T;
+	const double a      = frameLimit_ / ((frames > 1.0) ? frames : 1.0);
+	// 見込み時間[コマ]。縁までの距離をこの時間で埋める速度を目標にする(縁に近いほどゆっくり)。
+	const double th     = (secs * kApproachFraction) / T;
+	double mv = expo::shapeVelocity(vel_, need, frameLimit_, a, th);	// 計算は純関数(単体テスト済み)
+	// このコマで動かしてよい量(貯金と 1 コマの上限の小さい方)で切る。
+	const double room = this->moveRoomStops();
+	if (mv >  room) { mv =  room; }
+	if (mv < -room) { mv = -room; }
+	if (std::fabs(mv) < 1e-9) { return 0.0; }
+	// 基準(home)へ戻る向きのときは優先度の逆順で巻き戻す(§4.5 往復対称)。向きは速度で見る。
+	const bool useHome = (home != nullptr) &&
+		((mv < 0.0) ? (ctl.brightness() > homeB) : (ctl.brightness() < homeB));
+	const double did = ctl.moveStops(mv, useHome ? home : nullptr);
+	// 限界に当たって動けなかったぶんは速度から捨てる(溜め込むと限界を離れた瞬間に一気に出る)。
+	if (std::fabs(did - mv) > 1e-6) { vel_ = did; }
+	if (std::fabs(did) > 1e-9) { this->spendStepBudget(did); }
+	return did;
 }
 
 // 【飛び出しの判定は要らなくなった(2026-09-19 無段階化)】
@@ -1489,9 +1518,10 @@ errCode captureRunner::loop(void)
 					if (mr.pinned && !pinPrev) { avgBuf.clear(); this->resetStepLock(); }
 					pinPrev = mr.pinned;
 					avgBuf.push_back(mr.sceneRef);
-					int n = (smooth_.movingAverage > 0) ? smooth_.movingAverage : 5;
-					while (static_cast<int>(avgBuf.size()) > n) { avgBuf.erase(avgBuf.begin()); }
-					const double avg = this->sceneNowFromBuf(avgBuf);	// 移動平均(先読みなし。2026-09-09)
+					// 【移動平均は廃止(2026-09-21)】最新 1 コマだけを見る。平均のむだ時間が動き出しを
+					//  遅らせていた。揺れは速度側でならす(shapedMove)。
+					while (static_cast<int>(avgBuf.size()) > 1) { avgBuf.erase(avgBuf.begin()); }
+					const double avg = this->sceneNowFromBuf(avgBuf);
 					double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : preCtl.current(), ev0cfg_);
 					// 帯の下限は**いちばん粗い目盛り**に比例させる。カメラへ送るときの丸めで
 					//  動いた軸の目盛りぶん行き過ぎうるので、それを帯が飲み込める広さが要る。
@@ -1500,29 +1530,12 @@ errCode captureRunner::loop(void)
 					double linD = expo::linearFromEvBase(preEv - band / 2.0, lin0);
 					// 撮影露出で撮った場合の明るさへ投影してから比べる(ループを閉じる)。
 					const double predicted = this->linearAtExposure(avg, preCtl.current());
-					if (predicted > linU || predicted < linD)
-					{
-						// 【はみ出た分だけ動かす(2026-09-08)】帯の縁までの差を埋める。中央までは戻さない。
-						//  反転の判定(allowStep)だけは従来どおり中央までの差で見る(急変かどうかの証拠)。
-						const double center     = expo::linearFromEvBase(preEv, lin0);
-						const double needCenter = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;
-						const double need = expo::excessStops(predicted, linD, linU);
-						const int    dir  = (need < 0.0) ? -1 : 1;
-						if (!this->allowStep(dir, needCenter, band)) { meterFailStreak = 0; }
-						else
-						{
-						// 【無段階で動かす(2026-09-19)】はみ出た分を、このコマの許容で切って動かす。
-						//  基準(home)へ戻る向きのときは優先度の逆順で巻き戻す(§4.5 往復対称)。
-						const double room = this->moveRoomStops();
-						double       mv   = need;
-						if (mv >  room) { mv =  room; }
-						if (mv < -room) { mv = -room; }
-						const bool useHome = haveHome &&
-							((need < 0.0) ? (preCtl.brightness() > homeB) : (preCtl.brightness() < homeB));
-						const double did = preCtl.moveStops(mv, useHome ? &nightExp : nullptr);
-						if (std::fabs(did) > 1e-9) { this->noteStep(dir); this->spendStepBudget(did); }
-						}
-					}
+					// 【はみ出た分から速度を決めて動かす(2026-09-21)】帯の内側なら need=0(速度は減っていく)。
+					//  帯の縁までの差を埋める。中央までは戻さない(2026-09-08 の方針そのまま)。
+					const double need = (predicted > linU || predicted < linD)
+					                  ? expo::excessStops(predicted, linD, linU) : 0.0;
+					this->shapedMove(preCtl, need, haveHome ? &nightExp : nullptr, homeB,
+					                 smooth_.smoothMin, interval);
 					meterFailStreak = 0;
 				}
 				else
@@ -1594,35 +1607,18 @@ errCode captureRunner::loop(void)
 				if (mr.pinned && !pinPrev) { avgBuf.clear(); this->resetStepLock(); }
 				pinPrev = mr.pinned;
 				avgBuf.push_back(mr.sceneRef);
-				int n = (smooth_.movingAverage > 0) ? smooth_.movingAverage : 5;
-				while (static_cast<int>(avgBuf.size()) > n) { avgBuf.erase(avgBuf.begin()); }
-				const double avg = this->sceneNowFromBuf(avgBuf);	// 移動平均(先読みなし。2026-09-09)
+				while (static_cast<int>(avgBuf.size()) > 1) { avgBuf.erase(avgBuf.begin()); }	// 移動平均は廃止(2026-09-21)
+				const double avg = this->sceneNowFromBuf(avgBuf);
 				double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : postCtl.current(), ev0cfg_);
 				const double band = this->effHysteresis(smooth_.hysteresis, postCtl.maxStepStops());
 				double linU = expo::linearFromEvBase(postEv + band / 2.0, lin0);
 				double linD = expo::linearFromEvBase(postEv - band / 2.0, lin0);
 				// 撮影露出で撮った場合の明るさへ投影してから比べる(ループを閉じる)。
 				const double predicted = this->linearAtExposure(avg, postCtl.current());
-				if (predicted > linU || predicted < linD)
-				{
-					// 【はみ出た分だけ動かす(2026-09-08)】preNight と同じ。
-					const double center     = expo::linearFromEvBase(postEv, lin0);
-					const double needCenter = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;
-					const double need = expo::excessStops(predicted, linD, linU);
-					const int    dir  = (need < 0.0) ? -1 : 1;
-					if (!this->allowStep(dir, needCenter, band)) { meterFailStreak = 0; }
-					else
-					{
-					const double room = this->moveRoomStops();
-					double       mv   = need;
-					if (mv >  room) { mv =  room; }
-					if (mv < -room) { mv = -room; }
-					const bool useHome = haveHome &&
-						((need < 0.0) ? (postCtl.brightness() > homeB) : (postCtl.brightness() < homeB));
-					const double did = postCtl.moveStops(mv, useHome ? &goal : nullptr);
-					if (std::fabs(did) > 1e-9) { this->noteStep(dir); this->spendStepBudget(did); }
-					}
-				}
+				const double need = (predicted > linU || predicted < linD)
+				                  ? expo::excessStops(predicted, linD, linU) : 0.0;	// 帯の内側なら 0
+				this->shapedMove(postCtl, need, haveHome ? &goal : nullptr, homeB,
+				                 smooth_.smoothMin, interval);	// preNight と同じ(2026-09-21)
 				meterFailStreak = 0;
 			}
 			else
@@ -1641,8 +1637,7 @@ errCode captureRunner::loop(void)
 			const double homeB    = haveHome ? this->brightnessOf(ccm->initial) : 0.0;
 			// 項目7: 平滑化(ヒステリシス/移動平均)は ccm 個別値があれば優先、無ければ全体設定。
 			const double effHyst = (ccm->hysteresis > 0.0)  ? ccm->hysteresis  : smooth_.hysteresis;
-			const int    effMA   = (ccm->movingAverage > 0) ? static_cast<int>(ccm->movingAverage)
-			                     : ((smooth_.movingAverage > 0) ? smooth_.movingAverage : 5);
+			const double effSmooth = (ccm->smoothMin > 0.0) ? ccm->smoothMin : smooth_.smoothMin;	// なめらかさ[分]
 			bool didInitConverge = false;
 			if (windowChanged)
 			{
@@ -1710,9 +1705,8 @@ errCode captureRunner::loop(void)
 					if (mr.pinned && !pinPrev) { avgBuf.clear(); this->resetStepLock(); }
 					pinPrev = mr.pinned;
 					avgBuf.push_back(mr.sceneRef);
-					int n = effMA;
-					while (static_cast<int>(avgBuf.size()) > n) { avgBuf.erase(avgBuf.begin()); }
-					const double avg = this->sceneNowFromBuf(avgBuf);	// 移動平均(先読みなし。2026-09-09)
+					while (static_cast<int>(avgBuf.size()) > 1) { avgBuf.erase(avgBuf.begin()); }	// 移動平均は廃止(2026-09-21)
+					const double avg = this->sceneNowFromBuf(avgBuf);
 
 					double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : autoCtl.current(), ev0cfg_);
 					const double band = this->effHysteresis(effHyst, autoCtl.maxStepStops());
@@ -1721,32 +1715,18 @@ errCode captureRunner::loop(void)
 					// 撮影露出で撮った場合の明るさへ投影してから比べる(土俵合わせ)。これでループが
 					// 閉じ、露出を動かすと比較結果も動く(従来は測光値が撮影露出に依存せず暴走した)。
 					const double predicted = this->linearAtExposure(avg, autoCtl.current());
-					if (predicted > linU || predicted < linD)
-					{
-						// 【はみ出た分だけ動かす(2026-09-08 ユーザー決定)】
-						//  以前は帯を越えた瞬間に中央までの差を一度に埋めていたため、帯の広さ(±0.5 段)が
-						//  そのまま画の段差になり、夕方の減光で 0.5〜0.7 段ののこぎり波が出た(内蔵カメラ
-						//  09-08 実測。1 コマの許容が大きい 60 秒周期で顕在化)。帯の縁までの差だけ動かせば、
-						//  ゆっくり変わる場面では縁に沿って場面の変化量ぶんずつ小刻みに追従する。
-						//  明るさは目標より帯/2 だけ変化の向きにずれた所に落ち着く(それが帯の意味)。
-						//  反転の判定(allowStep)だけは従来どおり中央までの差で見る(急変かどうかの証拠)。
-						const double center     = expo::linearFromEvBase(evT, lin0);
-						const double needCenter = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;	// +:明るく -:暗く
-						const double need = expo::excessStops(predicted, linD, linU);
-						const int    dir  = (need < 0.0) ? -1 : 1;
-						if (!this->allowStep(dir, needCenter, band)) { meterFailStreak = 0; }
-						else
-						{
-						const double room = this->moveRoomStops();
-						double       mv   = need;
-						if (mv >  room) { mv =  room; }
-						if (mv < -room) { mv = -room; }
-						const bool useHome = haveHome &&
-							((need < 0.0) ? (autoCtl.brightness() > homeB) : (autoCtl.brightness() < homeB));
-						const double did = autoCtl.moveStops(mv, useHome ? &ccm->initial : nullptr);
-						if (std::fabs(did) > 1e-9) { this->noteStep(dir); this->spendStepBudget(did); }
-						}
-					}
+					// 【はみ出た分だけ動かす(2026-09-08 ユーザー決定)】
+					//  以前は帯を越えた瞬間に中央までの差を一度に埋めていたため、帯の広さ(±0.5 段)が
+					//  そのまま画の段差になり、夕方の減光で 0.5〜0.7 段ののこぎり波が出た(内蔵カメラ
+					//  09-08 実測)。帯の縁までの差だけ動かせば、ゆっくり変わる場面では縁に沿って
+					//  場面の変化量ぶんずつ追従する。明るさは目標より帯/2 だけずれた所に落ち着く。
+					// 【速度をならす(2026-09-21)】その差から直接動かさず、速度の目標にして 1 コマの速度変化を
+					//  抑える(shapedMove)。帯の内側なら need=0 で速度が減っていく。反転抑制(allowStep)は
+					//  不要になった。反転は必ず減速→停止→加速を通るので、速い往復が構造的に起きない。
+					const double need = (predicted > linU || predicted < linD)
+					                  ? expo::excessStops(predicted, linD, linU) : 0.0;
+					this->shapedMove(autoCtl, need, haveHome ? &ccm->initial : nullptr, homeB,
+					                 effSmooth, interval);
 					meterFailStreak = 0;	// 測光成功
 				}
 				else

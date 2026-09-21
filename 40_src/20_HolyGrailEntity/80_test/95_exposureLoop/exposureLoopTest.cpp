@@ -2261,6 +2261,91 @@ int main()
 		check(step6 < 0.80 / 2.0, "旧(0.80段)では 1/6 段は帯に埋もれていた(不具合の再現)", det);
 	}
 
+	// --- 速度をならす(2026-09-21 ユーザー決定): 動き出し・止まり・歩幅の急変を作らない ---
+	//  2026-09-21 朝(Pixel 6・30 秒周期)の実測から: 朝日の場面は +0.1〜0.2 段/コマで明るくなり、
+	//  移動平均のむだ時間で 3 コマ動かず、そのあと大股で追いついていた。
+	//  なめらかさ 4 分 → 1 コマの速度変化は 0.667 ÷ 8 = 0.083 段、見込み 1 分 = 2 コマ。
+	{
+		std::printf("--- 速度をならす ---\n");
+		const double vmax = (1.0 / 3.0) / 15.0 * 30.0;	// 0.667 段/コマ(30 秒周期)
+		const double a    = vmax / 8.0;					// なめらかさ 4 分
+		const double th   = 2.0;						// 見込み 1 分 = 2 コマ
+		char det[96];
+
+		// ① むだ時間が無い: はみ出た最初のコマから動く(以前は平均のせいで 3 コマ動かなかった)
+		{
+			double v = 0.0;
+			const double mv = expo::shapeVelocity(v, -0.10, vmax, a, th);
+			check(mv < -1e-9, "はみ出たコマから動き出す(むだ時間なし)");
+			checkNear(mv, -0.05, 1e-9, "動き出しの 1 コマ目は need/見込み = 0.05 段(a より小さいのでそのまま)");
+		}
+		// ② 速度の変化は 1 コマに a まで(大股で追いつかない)
+		{
+			double v = 0.0;
+			double prev = 0.0, worst = 0.0;
+			for (int i = 0; i < 20; ++i)
+			{
+				const double mv = expo::shapeVelocity(v, -2.0, vmax, a, th);	// 2 段はみ出しっぱなし(目標 2/2=1.0 は上限 0.667 で切られる)
+				if (std::fabs(mv - prev) > worst) { worst = std::fabs(mv - prev); }
+				prev = mv;
+			}
+			std::snprintf(det, sizeof(det), "(最大 %.4f / 上限 %.4f)", worst, a);
+			check(worst <= a + 1e-9, "速度の変化は 1 コマに a まで", det);
+			checkNear(v, -vmax, 1e-9, "はみ出し続ければ速度上限に達して張り付く");
+		}
+		// ③ 帯の内側に入ると速度は減っていき、止まる(止まり方も急でない)
+		{
+			double v = -0.15;	// 朝日の速さで動いている
+			double prev = v; int n = 0;
+			while (std::fabs(v) > 1e-9 && n < 20)
+			{
+				const double mv = expo::shapeVelocity(v, 0.0, vmax, a, th);
+				check(std::fabs(mv - prev) <= a + 1e-9, "減速も 1 コマに a まで");
+				prev = mv; ++n;
+			}
+			std::snprintf(det, sizeof(det), "(%d コマで停止)", n);
+			check(n == 2, "0.15 段/コマ からは 2 コマで止まる(a=0.083)", det);
+		}
+		// ④ 縁に張り付いて一様に明るくなる場面では、速度が場面の変化に一致する(遅れは一定)
+		{
+			double v = 0.0, E = 0.0;
+			const double rate = 0.12;	// 場面が毎コマ +0.12 段
+			double over = 0.0;		// 縁からのはみ出し
+			double lastMv = 0.0;
+			for (int i = 0; i < 40; ++i)
+			{
+				over += rate;						// 場面が明るくなる
+				lastMv = expo::shapeVelocity(v, -over, vmax, a, th);
+				over += lastMv;						// 露出を下げたぶん戻る
+				E += lastMv;
+			}
+			std::snprintf(det, sizeof(det), "(速度 %.4f / 場面 %.4f / 遅れ %.3f 段)", -lastMv, rate, over);
+			check(std::fabs(-lastMv - rate) < 1e-3, "張り付き中の速度は場面の変化と同じ", det);
+			check(over > 0.0 && over < 0.4, "遅れ(縁からのはみ出し)は一定で 0.4 段未満", det);
+		}
+		// ⑤ キヤノン機の偽の揺れ(±0.3 段がコマごと)は速度に乗らない
+		{
+			double v = 0.0, prev = 0.0, worst = 0.0;
+			const double aC = (1.0 / 3.0) / 15.0 * 12.0 / 20.0;	// 12 秒周期・4 分 → 0.0133
+			const double thC = 60.0 / 12.0;
+			for (int i = 0; i < 60; ++i)
+			{
+				const double noise = ((i & 1) ? +0.3 : -0.3);		// 交互に ±0.3 段
+				const double mv = expo::shapeVelocity(v, -(0.5 + noise), 0.267, aC, thC);
+				if (i > 0 && std::fabs(mv - prev) > worst) { worst = std::fabs(mv - prev); }
+				prev = mv;
+			}
+			std::snprintf(det, sizeof(det), "(速度の最大変化 %.4f / 以前は 0.17〜0.22)", worst);
+			check(worst <= aC + 1e-9, "±0.3 段の揺れがあっても速度の変化は a(0.013)まで", det);
+		}
+		// ⑥ 反転は減速→停止→加速を通る(いきなり逆へ飛ばない)
+		{
+			double v = -0.15;
+			const double mv = expo::shapeVelocity(v, +0.5, vmax, a, th);	// 逆向きに 0.5 段はみ出した
+			checkNear(mv, -0.15 + a, 1e-9, "逆向きの要求でも 1 コマでは a しか変わらない");
+		}
+	}
+
 	std::printf("\n%s (fail=%d)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail);
 	return g_fail == 0 ? 0 : 1;
 }

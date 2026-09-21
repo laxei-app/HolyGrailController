@@ -871,8 +871,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         setupValueSlider(R.id.smooth_hyst_seek, 20) {
             findViewById<TextView>(R.id.smooth_hyst_val).text = String.format("%.1fev", seekToHyst(it))
         }
+        // 【なめらかさ(分)(2026-09-21)】移動平均フレーム数の席を引き継ぐ。露出の変化速度が 0 から
+        //  上限まで変わるのにかける時間。全体設定は 1〜10 分(0 は 1 として扱う)。
         setupValueSlider(R.id.smooth_ma_seek, 10) {
-            findViewById<TextView>(R.id.smooth_ma_val).text = "${it}frame"
+            findViewById<TextView>(R.id.smooth_ma_val).text = smoothLabel(it, global = true)
         }
         // 初期値プリセット一覧の分割バー(620と同挙動)
         // スライダーの値ラベル更新(露出スライダーと形を統一するため Material Slider・仕様8)
@@ -894,7 +896,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             findViewById<TextView>(R.id.edit_hyst_val).text = hystLabel(it)
         }
         setupValueSlider(R.id.edit_ma_seek, 10) {
-            findViewById<TextView>(R.id.edit_ma_val).text = maLabel(it)
+            findViewById<TextView>(R.id.edit_ma_val).text = smoothLabel(it, global = false)
         }
         // 朝日/夕日の太陽高度=範囲スライダー(2つまみ)。明暗バー下地・つまみ●。
         findViewById<RangeSlider>(R.id.edit_alt_range).apply {
@@ -1472,15 +1474,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val h = hystToSeek(o.optDouble("hysteresis", 0.5))
         setSliderProgress(R.id.smooth_hyst_seek, h)
         findViewById<TextView>(R.id.smooth_hyst_val).text = String.format("%.1fev", seekToHyst(h))
-        val m = o.optInt("movingAverage", 5).coerceIn(0, 10)
+        val m = Math.round(o.optDouble("smoothMin", 4.0)).toInt().coerceIn(1, 10)
         setSliderProgress(R.id.smooth_ma_seek, m)
-        findViewById<TextView>(R.id.smooth_ma_val).text = "${m}frame"
+        findViewById<TextView>(R.id.smooth_ma_val).text = smoothLabel(m, global = true)
     }
     private fun leaveSmoothingScreen(dest: Int = kScreenMenu) { stopDirtyWatch(); saveSmoothingScreen(); gotoScreen(dest) }
     private fun saveSmoothingScreen() {
         val js = JSONObject()
             .put("hysteresis", seekToHyst(sliderProgress(R.id.smooth_hyst_seek)))
-            .put("movingAverage", sliderProgress(R.id.smooth_ma_seek))
+            .put("smoothMin", sliderProgress(R.id.smooth_ma_seek).coerceIn(1, 10).toDouble())
             .toString()
         Thread { HgeNative.nativeSetSmoothing(js) }.start()
     }
@@ -2955,7 +2957,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun seekToHyst(p: Int) = p / 10.0
     private fun hystLabel(p: Int) = if (p == 0) "全体設定" else String.format("%.1fev", seekToHyst(p))
     // 移動平均フレーム数: Slider 0..10(1刻み)。0=全体設定に従う(ccm個別では未設定扱い)。
-    private fun maLabel(p: Int) = if (p == 0) "全体設定" else "${p}frame"
+    // なめらかさ(分)。全体設定は 1〜10、撮影制御方法の個別設定は 0=全体設定に従う。
+    private fun smoothLabel(p: Int, global: Boolean) =
+        if (global) "${p.coerceIn(1, 10)}分" else (if (p == 0) "全体設定" else "${p}分")
 
     private fun altLabel(v: Double) = String.format("%.0f°", v)
 
@@ -3169,9 +3173,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val hp = hystToSeek(o.optDouble("hysteresis", 0.3))   // ccm個別の平滑化(項目7)
             setSliderProgress(R.id.edit_hyst_seek, hp)
             findViewById<TextView>(R.id.edit_hyst_val).text = hystLabel(hp)
-            val mp = o.optInt("movingAverage", 3).coerceIn(0, 10)
+            val mp = Math.round(o.optDouble("smoothMin", 0.0)).toInt().coerceIn(0, 10)   // 0=全体設定
             setSliderProgress(R.id.edit_ma_seek, mp)
-            findViewById<TextView>(R.id.edit_ma_val).text = maLabel(mp)
+            findViewById<TextView>(R.id.edit_ma_val).text = smoothLabel(mp, global = false)
         }
         // 計画固有編集では「初期値リストから選択」ボタンを出す(§7.4.1)。
         val onPick: (() -> Unit)? = if (editingPlanCcm) ({
@@ -3238,7 +3242,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (editingKey != "night") o.put("ev", seekToEv(sliderProgress(R.id.edit_ev_seek)))
         if (editingKey == "sunrise" || editingKey == "sunset") {
             o.put("hysteresis", seekToHyst(sliderProgress(R.id.edit_hyst_seek)))    // ccm個別の平滑化(項目7)
-            o.put("movingAverage", sliderProgress(R.id.edit_ma_seek))
+            o.put("smoothMin", sliderProgress(R.id.edit_ma_seek).toDouble())
         }
         if (editingKey == "night") {
             o.put("postNightEv", seekToEv(sliderProgress(R.id.edit_postev_seek)))   // 夜間後露出補正

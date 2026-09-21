@@ -182,6 +182,7 @@ namespace csjson
 			j["priority"] = pr;
 			j["hysteresis"]    = c.hysteresis;		// 個別露出平滑化(0=全体設定)
 			j["movingAverage"] = c.movingAverage;
+			j["smoothMin"]     = c.smoothMin;
 			j["forPhone"]      = c.forPhone;		// スマホ向け(エディタの目盛り)
 		}
 		void baseFromJson(const json& j, hgc::ccmBase& c)
@@ -203,6 +204,7 @@ namespace csjson
 			}
 			c.hysteresis    = j.value("hysteresis", 0.0);		// 個別露出平滑化(0=全体設定)
 			c.movingAverage = j.value("movingAverage", 0u);
+			c.smoothMin     = j.value("smoothMin", 0.0);
 			c.forPhone      = j.value("forPhone", false);
 		}
 
