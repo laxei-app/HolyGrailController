@@ -1214,6 +1214,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  ・先頭のチェックは状態の表示だけ(触れない)。▼で開くと「何に要るか」と「設定する」ボタン
     //  ・「設定する」は権限なら OS の確認ダイアログ(二度と聞けない状態ならアプリの設定画面)、
     //    端末の設定なら該当する設定画面へ移る。戻ってきたとき(onResume)に取り直す
+    //  ・【設定済みでも押せる(2026-09-21 ユーザー決定)】やめる(取り消す)用事もあるので、ボタンは常に押せる。
+    //    設定済みのときは文言を「設定を開く」にし、行き先を「取り消せる場所」へ切り替える:
+    //      権限 … 許可済みの権限は OS のダイアログが出ないので、アプリの設定画面(権限の項目)へ
+    //      電池 … 既に対象外なら確認が出ないので、電池の最適化の一覧画面へ
+    //      位置情報/Bluetooth/Wi-Fi/日時 … 同じ設定画面(ON も OFF もそこで行う)
+    //    権限を取り消すと Android がアプリを作り直す(撮影が止まる)ので、撮影中は権限の変更だけ止める。
     //  ・動作中に見るもの(空き容量・熱・同じネットワークに居るか)は載せない。設定しておけば済むものだけ
     //  ・USB の許可は機器を挿したときに機器ごとに聞くものなので、ここでは扱えない(載せない)
     private val kScreenPermCheck = 17
@@ -1221,7 +1227,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private var permCheckExpanded = HashSet<String>()
 
     private class CheckItem(val key: String, val title: String, val desc: String,
-                            val isOk: () -> Boolean, val settle: () -> Unit)
+                            val isOk: () -> Boolean, val settle: () -> Unit,
+                            val settleWhenOk: () -> Unit = settle,   // 設定済みのときの行き先(取り消せる場所)
+                            val isPermission: Boolean = false)       // 取り消すとアプリが作り直される種類
 
     private fun permGranted(vararg p: String) =
         p.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
@@ -1257,24 +1265,28 @@ class MainActivity : AppCompatActivity(), HgeListener {
             "このスマホの内蔵カメラで撮影するときと、外部端末の設定用 QR を読むときに使います。" +
             "外部のカメラ(ミラーレス機)だけで使うなら無くても動きます。",
             { permGranted(Manifest.permission.CAMERA) },
-            { settlePermission(arrayOf(Manifest.permission.CAMERA)) }))
+            { settlePermission(arrayOf(Manifest.permission.CAMERA)) },
+            { openAppDetailsSettings() }, isPermission = true))
         list.add(CheckItem("perm_location", "位置情報の権限",
             "撮影場所を現在地から作るときに使います(初回起動と、撮影場所の「現在地を取得」)。" +
             (if (sdk < 31) "この Android では外部端末を Bluetooth で探すときにも要ります。" else ""),
             { permGranted(Manifest.permission.ACCESS_FINE_LOCATION) || permGranted(Manifest.permission.ACCESS_COARSE_LOCATION) },
-            { settlePermission(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) }))
+            { settlePermission(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) },
+            { openAppDetailsSettings() }, isPermission = true))
         if (sdk >= 31) {
             list.add(CheckItem("perm_nearby", "付近のデバイスの権限(Bluetooth)",
                 "外部端末を Bluetooth で探して登録・設定するときと、外部端末と BLE で通信するときに使います。" +
                 "外部端末を使わないなら無くても動きます。",
                 { permGranted(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT) },
-                { settlePermission(arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)) }))
+                { settlePermission(arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)) },
+                { openAppDetailsSettings() }, isPermission = true))
         }
         if (sdk <= 28) {
             list.add(CheckItem("perm_storage", "ストレージへの書き込み権限",
                 "撮影ログを Download フォルダへ保存するときに使います(この Android の版だけ必要です)。",
                 { permGranted(Manifest.permission.WRITE_EXTERNAL_STORAGE) },
-                { settlePermission(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE)) }))
+                { settlePermission(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE)) },
+                { openAppDetailsSettings() }, isPermission = true))
         }
         // --- 端末の設定 ---
         list.add(CheckItem("set_location", "位置情報サービス(端末の設定)",
@@ -1292,7 +1304,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             { (getSystemService(BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)?.adapter?.isEnabled == true },
             { openSystemSettings(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS) }))
         list.add(CheckItem("set_wifi", "Wi-Fi を ON",
-            "ミラーレス機を見つけて撮影するときと、外部端末との通信に使います。屋外では外部端末のアクセスポイント(TLP-Edge-…)に接続します。",
+            "ミラーレス機を見つけて撮影するときと、外部端末との通信に使います。屋外では外部端末のアクセスポイント(TLP-Edge-…)に接続します。撮影中は変えないでください。",
             { (applicationContext.getSystemService(WIFI_SERVICE) as? WifiManager)?.isWifiEnabled == true },
             { openSystemSettings(android.provider.Settings.ACTION_WIFI_SETTINGS) }))
         list.add(CheckItem("set_battery", "電池の最適化の対象外にする",
@@ -1300,7 +1312,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             "電池の最適化(省電力)の対象だと、長時間の撮影の途中で止められることがあります。",
             { (getSystemService(POWER_SERVICE) as android.os.PowerManager).isIgnoringBatteryOptimizations(packageName) },
             { openSystemSettings(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                                 android.net.Uri.parse("package:$packageName")) }))
+                                 android.net.Uri.parse("package:$packageName")) },
+            { openSystemSettings(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS) }))
         list.add(CheckItem("set_autotime", "日時とタイムゾーンを自動設定",
             "撮影スケジュール(夜間・薄明・日の出の時刻)は端末の時刻とタイムゾーンから計算します。" +
             "外部端末の時刻もスマホから合わせます。自動設定にしておくと狂いません。",
@@ -1349,8 +1362,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
             body.visibility = if (expanded) View.VISIBLE else View.GONE
             val desc = TextView(this); desc.text = item.desc; desc.textSize = 14f; desc.setTextColor(Color.parseColor("#424242"))
             body.addView(desc)
-            val btn = blueButton("設定する") { item.settle() }
-            btn.isEnabled = !ok
+            // 常に押せる。設定済みは「設定を開く」で取り消せる場所へ。撮影中の権限変更だけ止める(アプリが作り直される)。
+            val capturing = localCaptureActive()
+            val btn = blueButton(if (ok) "設定を開く" else "設定する") {
+                if (item.isPermission && capturing) {
+                    Toast.makeText(this, "撮影中は権限を変えられません(アプリが再起動され撮影が止まります)", Toast.LENGTH_LONG).show()
+                } else if (ok) item.settleWhenOk() else item.settle()
+            }
+            btn.isEnabled = !(item.isPermission && capturing)
             (btn.layoutParams as LinearLayout.LayoutParams).let { lp -> lp.width = ViewGroup.LayoutParams.WRAP_CONTENT; lp.gravity = Gravity.END; btn.layoutParams = lp }
             body.addView(btn)
             card.addView(body)
