@@ -873,6 +873,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 撮影制御方法の編集は、計画から開いたときも初期値から開いたときも同じ画面。
         //  ホーム/メニューのどちらを押したかで行き先を決める(以前は開いた経路で決めていた)。
         wireHeader(R.id.edit_home, R.id.edit_menu) { stopDirtyWatch(); persistCcmEdit(); gotoScreen(it) }
+        findViewById<Button>(R.id.edit_set_dark_btn).setOnClickListener { applyNightToDarkLimits() }
         findViewById<Button>(R.id.edit_save).visibility = View.GONE   // 取消はエディタ先頭行へ移動
         // 色はメニュー「色の設定」(システム共通)で設定する(per-ccm色は廃止)。
         wireHeader(R.id.color_home, R.id.color_menu) { leaveColorScreen(it) }
@@ -3132,6 +3133,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val isSun = key == "sunrise" || key == "sunset"
         findViewById<View>(R.id.edit_smooth_section).visibility = if (isSun) View.VISIBLE else View.GONE
         findViewById<View>(R.id.edit_limit_section).visibility = if (isNight) View.GONE else View.VISIBLE
+        // 「暗所限界に設定」は夜間で、計画/ひな形の編集のときだけ(初期値は対象外。2026-09-21 UI依頼)。
+        findViewById<View>(R.id.edit_set_dark_btn).visibility =
+            if (isNight && editingPlanCcm && !ccmReadOnly) View.VISIBLE else View.GONE
 
         if (hasAlt) {
             val isNightAlt = key == "night"
@@ -3223,6 +3227,29 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun setEnabledDeep(v: View, enabled: Boolean) {
         if (v is ViewGroup) { for (i in 0 until v.childCount) setEnabledDeep(v.getChildAt(i), enabled) }
         else v.isEnabled = enabled
+    }
+
+    // 【暗所限界に設定(2026-09-21 UI依頼)】夜間撮影の固定露出(いま画面にある iso/ss/F)を、朝日・夕日・日中の
+    //  暗所限界(limitBright)へ写す。対象は計画とひな形(初期値は対象外)。優先順(priority)は変えず値だけ。
+    //  基準(initial)が暗所限界と同じ値だったもの(=基準は暗所限界)は、意味を保つため一緒に動かす。
+    //  すぐ保存する(夜間の編集そのものは従来どおり離脱時に保存)。
+    private fun applyNightToDarkLimits() {
+        if (editingKey != "night" || !editingPlanCcm || ccmReadOnly) return
+        val all = ccmJson ?: return
+        val e = fixEditor.get()
+        val keys = listOf("iso", "ss", "fn")
+        if (keys.any { e.optString(it).isEmpty() }) { Toast.makeText(this, "夜間の固定露出が未設定です", Toast.LENGTH_SHORT).show(); return }
+        for (k in listOf("sunrise", "sunset", "day")) {
+            val o = all.optJSONObject(k) ?: continue
+            val old = o.optJSONObject("limitBright"); val init = o.optJSONObject("initial")
+            val initIsDark = old != null && init != null && keys.all { old.optString(it) == init.optString(it) }
+            val nb = JSONObject(); for (key in keys) nb.put(key, e.optString(key))
+            o.put("limitBright", nb)
+            if (initIsDark) o.put("initial", JSONObject(nb.toString()))
+        }
+        HgeNative.nativeSetPlanCcm(all.toString())
+        Toast.makeText(this, "朝日・夕日・日中の暗所限界を ISO${e.optString("iso")} / ${e.optString("ss")}秒 / F${e.optString("fn")} にしました",
+                       Toast.LENGTH_SHORT).show()
     }
 
     // 撮影制御方法編集の取り消し(保存済みから再読込して破棄)。

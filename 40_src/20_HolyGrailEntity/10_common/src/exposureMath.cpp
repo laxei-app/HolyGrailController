@@ -268,13 +268,17 @@ namespace expo
 
 		double step = (stepStops > 0.0) ? stepStops : (1.0 / 3.0);
 		if (step > 1.0) { step = 1.0; }
+		// 【カメラの 1/3 段は等間隔でない(2026-09-21)】キヤノンの並びは 13→15 秒が 0.21 段、20→25 秒が
+		//  0.32 段のように丸めてある。刻みぴったりで間引くと 15 や 25 が落ち、ひな形の 15 秒が画面で 13 と出た。
+		//  刻みの 6 割離れていれば「次の目盛り」とみなす(1/3 段なら 0.2 段。1/2 段では 15 と 25 は間引かれる)。
+		const double need = step * 0.58;
 		std::vector<std::string> out;
 		out.push_back(all.front().v);
 		double last = all.front().b;
 		for (size_t i = 1; i + 1 < all.size(); ++i)
 		{
 			// 刻みぶん離れたものだけ採る。カメラの刻みより細かい指定では全部通る。
-			if (std::fabs(all[i].b - last) >= step - 1e-6)
+			if (std::fabs(all[i].b - last) >= need - 1e-6)
 			{
 				out.push_back(all[i].v);
 				last = all[i].b;

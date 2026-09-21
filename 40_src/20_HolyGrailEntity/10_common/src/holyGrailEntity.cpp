@@ -2673,6 +2673,7 @@ int32_t hge_copyTemplate(const char* id)
 	if (!dataManager::loadTplFile(std::string(id), saved) ||
 	    !csjson::fromJson(saved, cs)) { return ERR_HGC_NO_ELEMENT; }
 	cs.name = uniqueName(cs.name, collectTplNames(""));	// 末尾に連番(前に付けると名前順で離れる)
+	cs.tplKind.clear();	// 複製は利用者のひな形。元を消しても標準のものは作り直される
 	return dataManager::saveTplFile(makeTplId(), csjson::toJson(cs)) ? ERR_HGC_OK : ERR_HGC_INVALID_STATE;
 }
 
@@ -2730,6 +2731,7 @@ int32_t hge_newPlanFromTemplate(const char* id)
 	if (!dataManager::loadTplFile(std::string(id), saved) ||
 	    !csjson::fromJson(saved, cs)) { return ERR_HGC_NO_ELEMENT; }
 	cs.name = uniqueName(cs.name, collectPlanNames(""));
+	cs.tplKind.clear();	// 計画は標準ひな形ではない(種類の印はひな形だけが持つ)
 	shiftToToday(cs);
 	refreshCameraFromOwned(cs);
 	// ひな形の撮影制御方法をそのまま受け継ぎ、今のカメラ/レンズの目盛りへ合わせる(2026-09-06)。
@@ -2764,6 +2766,7 @@ int32_t hge_updatePlanFromTemplate(const char* planId, const char* tplId)
 	const hgc::dateTime keepEn  = cur.end;
 	cur = tpl;
 	cur.name = keepName; cur.start = keepSt; cur.end = keepEn;
+	cur.tplKind.clear();	// 計画は標準ひな形ではない
 	refreshCameraFromOwned(cur);
 	clampOwnedToGear(cur.ccm, cur.camera, cur.lens);	// ひな形の値を今のカメラ/レンズの目盛りへ
 	if (std::string(planId) == g_editId && !g_editIsTpl)

@@ -2206,6 +2206,10 @@ int main()
 			}
 			check(has8, "カメラが持つ 8 秒がそのまま出る");
 			check(!bogus, "カメラに無い綴りは1つも作らない");
+			// 1/3 段の指定ならカメラの 1/3 段の並びがそのまま残る(13→15 秒は 0.21 段しか離れていない)。
+			bool has15 = false, has25 = false;
+			for (const auto& x : v) { if (x == "15") { has15 = true; } if (x == "25") { has25 = true; } }
+			check(has15 && has25, "刻み 1/3 段でカメラの 15 秒・25 秒が落ちない(丸めた並びを間引かない)");
 			bool bulb = false;
 			for (const auto& x : v) { if (x == "Bulb") { bulb = true; } }
 			check(!bulb, "数値でない綴り(Bulb)は除く");

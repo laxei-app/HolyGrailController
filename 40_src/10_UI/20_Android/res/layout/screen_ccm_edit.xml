@@ -105,6 +105,12 @@
             <LinearLayout android:id="@+id/edit_step_row" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:layout_marginTop="12dp">
                 <TextView android:layout_width="96dp" android:layout_height="wrap_content" android:text="刻み" android:textStyle="bold" />
                 <Spinner android:id="@+id/edit_step_spinner" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" />
+                <!-- 暗所限界に設定(夜間・計画/ひな形のときだけ。2026-09-21 UI依頼)。見た目は端末設定のボタン(btn_blue_round)と同じ -->
+                <Button android:id="@+id/edit_set_dark_btn" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp" android:text="暗所限界に設定" android:textAllCaps="false" android:textSize="12sp"
+                    android:textColor="#FFFFFF" android:background="@drawable/btn_blue_round" android:stateListAnimator="@null"
+                    android:paddingStart="16dp" android:paddingEnd="16dp" android:paddingTop="8dp" android:paddingBottom="8dp"
+                    android:minWidth="0dp" android:minHeight="0dp" android:visibility="gone" />
             </LinearLayout>
 
             <!-- 固定露出(夜間) -->
