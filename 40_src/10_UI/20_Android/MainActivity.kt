@@ -4080,7 +4080,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         return out
     }
 
-    private fun refreshPlanList() {
+    //  then: 一覧を作り終えたあと UI スレッドで呼ぶ(画面を出すのを一覧の完成まで待たせる用。2026-09-21)。
+    private fun refreshPlanList(then: (() -> Unit)? = null) {
         // 一覧の読み出しも計画操作と同じ単一スレッドで実行し、改名・編集の直後に最新状態を読む。
         planExec.execute {
             // 【ひな形モード(2026-09-04 UI依頼)】一覧をひな形に差し替える。選択を native へ
@@ -4092,7 +4093,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     if (currentPlanId.isEmpty() || !tids.contains(currentPlanId)) {
                         currentPlanId = tids.firstOrNull() ?: ""
                     }
-                    buildPlanList(tj); updateReadOnly()
+                    buildPlanList(tj); updateReadOnly(); then?.invoke()
                 }
                 return@execute
             }
@@ -4117,7 +4118,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             runOnUiThread {
                 // 選択が消えた(削除された)ときと、まだ何も選んでいない起動時だけ native に従う。
                 if (currentPlanId.isEmpty() || !ids.contains(currentPlanId)) { currentPlanId = cur }
-                buildPlanList(js); updateReadOnly(); refreshEdgeSpinner()
+                buildPlanList(js); updateReadOnly(); refreshEdgeSpinner(); then?.invoke()
             }
         }
     }
@@ -4137,8 +4138,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 planIdBeforeTpl = currentPlanId
                 tplOpenedFrom = flipper.displayedChild   // 戻るの行き先(いまはメニューからだけ開く)
                 tplMode = true
-                selectTplRow(ids.first())
-                flipper.displayedChild = 0
+                // 【画面はひな形を載せ終えてから出す(2026-09-21 UI依頼)】先に出すと、選び直しが済むまでの
+                //  一瞬、元の計画(題も「撮影計画」)が見えてしまう。
+                selectTplRow(ids.first()) { flipper.displayedChild = 0 }
             }
         }
     }
@@ -4161,10 +4163,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun tplIdsSorted(): List<String> = planIdsIn(HgeNative.nativeListTemplates()).toList()
 
     // ひな形を1件選ぶ(編集対象にする)。撮影計画の selectPlanRow と同じ役目。
-    private fun selectTplRow(id: String) {
+    private fun selectTplRow(id: String, then: (() -> Unit)? = null) {
         planExec.execute {
             HgeNative.nativeSelectTemplate(id)
-            runOnUiThread { currentPlanId = id; refreshPlanList(); applyTplMode(); reloadExpoEditors() }
+            // 一覧(ひな形)が出来てから then を呼ぶ。先に画面を出すと元の計画の一覧が一瞬見える。
+            runOnUiThread { currentPlanId = id; applyTplMode(); reloadExpoEditors(); refreshPlanList { then?.invoke() } }
         }
     }
 
