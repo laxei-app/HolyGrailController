@@ -1075,8 +1075,8 @@ int main()
 		// ① 実測の構成: 1536KB / 当日以外 3+72+394+661KB / 当日と他で約100KB使用
 		{
 			fsSim s{ 1536ULL * 1024, (3 + 72 + 394 + 661 + 100) * 1024ULL,
-			         { {"hg_2026-08-02.log", 3 * 1024ULL}, {"hg_2026-08-05.log", 72 * 1024ULL},
-			           {"hg_2026-08-06.log", 394 * 1024ULL}, {"hg_2026-08-07.log", 661 * 1024ULL} } };
+			         { {"tlp_2026-08-02.log", 3 * 1024ULL}, {"tlp_2026-08-05.log", 72 * 1024ULL},
+			           {"tlp_2026-08-06.log", 394 * 1024ULL}, {"tlp_2026-08-07.log", 661 * 1024ULL} } };
 			const unsigned long long before = s.total - s.used;
 			s.prune(KEEP_FREE, 4, true);
 			const unsigned long long after = s.total - s.used;
@@ -1110,17 +1110,17 @@ int main()
 		// ④ 必要な分だけ消す(消しすぎない)。1件消せば足りるなら1件で止まる。
 		{
 			fsSim s{ 1000 * 1024ULL, 900 * 1024ULL,
-			         { {"hg_2026-01-01.log", 300 * 1024ULL}, {"hg_2026-01-02.log", 300 * 1024ULL} } };
+			         { {"tlp_2026-01-01.log", 300 * 1024ULL}, {"tlp_2026-01-02.log", 300 * 1024ULL} } };
 			s.prune(300 * 1024ULL, 4, true);	// 空き100KB → 1件(300KB)消せば400KBで足りる
 			check(s.removed == 1, "1件で足りるなら1件で止まる(消しすぎない)");
 			check(s.total - s.used >= 300 * 1024ULL, "消したあとは条件を満たす");
-			check(s.others[1].first == "hg_2026-01-02.log", "残るのは新しい側");
+			check(s.others[1].first == "tlp_2026-01-02.log", "残るのは新しい側");
 		}
 
 		// ⑤ 足りなければ足りるまで消す(1件では届かない場合)
 		{
 			fsSim s{ 1000 * 1024ULL, 900 * 1024ULL,
-			         { {"hg_2026-01-01.log", 300 * 1024ULL}, {"hg_2026-01-02.log", 300 * 1024ULL} } };
+			         { {"tlp_2026-01-01.log", 300 * 1024ULL}, {"tlp_2026-01-02.log", 300 * 1024ULL} } };
 			s.prune(500 * 1024ULL, 4, true);	// 1件(400KB)では届かないので2件目まで
 			check(s.removed == 2, "1件で足りなければ次の古い方も消す");
 			check(s.total - s.used >= 500 * 1024ULL, "消したあとは条件を満たす");

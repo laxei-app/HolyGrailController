@@ -1,4 +1,4 @@
-﻿package app.laxei.holygrail
+﻿package app.laxei.twylapse
 
 import android.content.Context
 import android.graphics.ImageFormat
@@ -605,7 +605,7 @@ object BuiltinCamera {
                             val pl = im.planes[0]
                             if (!HgeNative.nativeRawStackAdd(pl.buffer, pl.rowStride)) {
                                 capAddFail++
-                                Log.w("HGC-RAW", "stack add failed ${im.width}x${im.height} stride ${pl.rowStride}")
+                                Log.w("TLP-RAW", "stack add failed ${im.width}x${im.height} stride ${pl.rowStride}")
                             }
                         }
                     }.onFailure { capAddFail++; runCatching { img.close() } }
@@ -682,7 +682,7 @@ object BuiltinCamera {
                                                  target: android.view.Surface, frameNumber: Long) {
                     // 結果は来るのに画像が来ない(HAL がバッファを落とした)。この1枚はもう揃わないので、
                     //  予算いっぱい待たずに「無し」で戻す(待った分だけ次のコマが遅れる)。
-                    Log.w("HGC-RAW", "capture buffer lost frame=$frameNumber")
+                    Log.w("TLP-RAW", "capture buffer lost frame=$frameNumber")
                     capBufLost++; capMark("bufLost")
                     // 【落ちたぶんは撮り直す(2026-09-07)】同じ要求を 1 枚足す。足りない画像が届けば finish が
                     //  締める。撮り直しも落ちたら諦める(予算切れで LOST になる)。
@@ -694,7 +694,7 @@ object BuiltinCamera {
                 override fun onCaptureFailed(ss: CameraCaptureSession, rq: CaptureRequest,
                                              f: android.hardware.camera2.CaptureFailure) {
                     // 1コマでも落ちたら足しても正しい明るさにならない。この1枚は無しにして戻す。
-                    Log.w("HGC-RAW", "capture failed reason=${f.reason}")
+                    Log.w("TLP-RAW", "capture failed reason=${f.reason}")
                     capFail = f.reason; capMark("fail")
                     if (useRaw) { pendingJpeg = null; got.countDown() }
                 }
@@ -764,7 +764,7 @@ object BuiltinCamera {
                 0.0719453f, -0.2289914f, 1.4052427f)
             fbCcm = mul(xyzD50ToSrgb, fm)
         }
-        Log.i("HGC-RAW", "static color: illum1=$il1 gains=${fbGains?.toList()} ccm=${fbCcm?.toList()}")
+        Log.i("TLP-RAW", "static color: illum1=$il1 gains=${fbGains?.toList()} ccm=${fbCcm?.toList()}")
     }
 
     // 足したものを現像して JPEG にする。ホワイトバランス・色行列・黒レベル・周辺減光は
@@ -823,12 +823,12 @@ object BuiltinCamera {
         }
         val bmp = Bitmap.createBitmap(rawW / 2, rawH / 2, Bitmap.Config.ARGB_8888)
         val ok = HgeNative.nativeRawStackDevelop(bmp, whiteLevel, black, gains, ccm, shading, cols, rows)
-        if (!ok) { bmp.recycle(); Log.w("HGC-RAW", "develop failed"); return null }
+        if (!ok) { bmp.recycle(); Log.w("TLP-RAW", "develop failed"); return null }
         val bos = ByteArrayOutputStream(2 shl 20)
         bmp.compress(Bitmap.CompressFormat.JPEG, 92, bos)
         bmp.recycle()
         lastStackMs = (SystemClock.elapsedRealtime() - t0).toInt()
-        Log.i("HGC-RAW", "stack $frames frames -> ${rawW / 2}x${rawH / 2} in ${lastStackMs}ms " +
+        Log.i("TLP-RAW", "stack $frames frames -> ${rawW / 2}x${rawH / 2} in ${lastStackMs}ms " +
                          "wb($wbFrom)=${gains.toList()} ccm=$ccmFrom black=${black.toList()} white=$whiteLevel shading=${cols}x$rows")
         return bos.toByteArray()
     }

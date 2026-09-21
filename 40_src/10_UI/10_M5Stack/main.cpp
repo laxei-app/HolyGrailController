@@ -81,12 +81,12 @@ static std::string g_apSsid;			// APモードのSSID(初回自動生成しNVS保
 static std::string g_apPass;			// APモードのパスワード(初回自動生成しNVS保存)
 static bool        g_apInfoMode = false;	// AP参加情報(SSID/パス)をLCD表示中か
 
-// NVS(Preferences 名前空間 "hgc")から接続情報を読み込む。
+// NVS(Preferences 名前空間 "tlp")から接続情報を読み込む。
 static void loadEdgeCreds(void)
 {
 	bool hasSta = false, hasMode = false;
 	Preferences p;
-	if (p.begin("hgc", true))
+	if (p.begin("tlp", true))
 	{
 		String s = p.getString("ssid", ""), w = p.getString("pass", ""), n = p.getString("devname", "");
 		if (s.length()) { g_ssid = s.c_str(); hasSta = true; }
@@ -98,7 +98,7 @@ static void loadEdgeCreds(void)
 		p.end();
 	}
 	// 出荷時既定=APモード(Phase5)。一度も設定されていない端末(STA資格もモード指定もNVSに無い)は、
-	// 箱出しで自分のAP(HGC-Edge-xxxx+QR)を立てて屋外ルーター無しでも使えるようにする。
+	// 箱出しで自分のAP(TLP-Edge-xxxx+QR)を立てて屋外ルーター無しでも使えるようにする。
 	// プロビジョニング済み/モード切替済みの端末はNVSの値が優先され従来どおり(開発機のSTAも維持)。
 	if (!hasMode && !hasSta) { g_netMode = "ap"; }
 }
@@ -107,10 +107,10 @@ static void saveNetMode(const char* mode)
 {
 	g_netMode = mode ? mode : "sta";
 	Preferences p;
-	if (p.begin("hgc", false)) { p.putString("netmode", g_netMode.c_str()); p.end(); }
+	if (p.begin("tlp", false)) { p.putString("netmode", g_netMode.c_str()); p.end(); }
 }
 // APモードのSSID/パスワードを用意する(無ければ端末固有に自動生成しNVS保存)。
-// SSID=HGC-Edge-<MAC下2桁>、パス=8桁の乱数(英数)。焼き込み共有秘密を避け端末ごとに異なる。
+// SSID=TLP-Edge-<MAC下2桁>、パス=8桁の乱数(英数)。焼き込み共有秘密を避け端末ごとに異なる。
 static void ensureApCreds(void)
 {
 	// 【そのまま使えるか(2026-08-17)】SoftAP は SSID 1〜32文字・パスワード 8〜63文字でないと
@@ -126,19 +126,19 @@ static void ensureApCreds(void)
 	}
 	uint8_t mac[6] = {0};
 	WiFi.macAddress(mac);
-	char ss[24]; std::snprintf(ss, sizeof(ss), "HGC-Edge-%02X%02X", mac[4], mac[5]);
+	char ss[24]; std::snprintf(ss, sizeof(ss), "TLP-Edge-%02X%02X", mac[4], mac[5]);
 	char pw[9];
 	for (int i = 0; i < 8; ++i) { uint32_t r = esp_random() % 36; pw[i] = (r < 10) ? char('0' + r) : char('A' + (r - 10)); }
 	pw[8] = 0;
 	g_apSsid = ss; g_apPass = pw;
 	Preferences p;
-	if (p.begin("hgc", false)) { p.putString("apssid", g_apSsid.c_str()); p.putString("appass", g_apPass.c_str()); p.end(); }
+	if (p.begin("tlp", false)) { p.putString("apssid", g_apSsid.c_str()); p.putString("appass", g_apPass.c_str()); p.end(); }
 }
 // 接続情報を NVS へ保存して反映する(プロビジョニング受信時に呼ぶ)。
 void saveEdgeCreds(const std::string& ssid, const std::string& pass, const std::string& name)
 {
 	Preferences p;
-	if (p.begin("hgc", false))
+	if (p.begin("tlp", false))
 	{
 		p.putString("ssid", ssid.c_str());
 		p.putString("pass", pass.c_str());
@@ -699,7 +699,7 @@ void edgeProvApply(const char* name, const char* ssid, const char* pass, const c
 		// AP資格を受け取ったら保存する(2026-08-08)。従来は端末名だけ保存し SSID/pass を
 		//  捨てていたため、APのSSID/パスワードをユーザーが決められなかった。
 		//  空で送られたときは今の値を保つ。まだ何も無ければ ensureApCreds が
-		//  端末固有の既定値(HGC-Edge-<MAC下2桁> / 8桁乱数)を作る。
+		//  端末固有の既定値(TLP-Edge-<MAC下2桁> / 8桁乱数)を作る。
 		// 【使えない値は受け取らない(2026-08-17)】SoftAP は SSID 1〜32文字・パスワード
 		//  8〜63文字でないと立たない。短いパスワードをそのまま保存すると再起動後に
 		//  APが消え、画面も出ずカメラも繋がらず、BLE以外で到達できなくなる(実機で発生)。
@@ -714,7 +714,7 @@ void edgeProvApply(const char* name, const char* ssid, const char* pass, const c
 		}
 		ensureApCreds();	// 片方でも空なら既定値を用意(既にあれば何もしない)
 		Preferences p;
-		if (p.begin("hgc", false))
+		if (p.begin("tlp", false))
 		{
 			p.putString("devname", g_devName.c_str());
 			p.putString("apssid",  g_apSsid.c_str());
@@ -839,7 +839,7 @@ static void startApAndEtp(void)
 
 // ── 起動画面(項目8) ──────────────────────────────────────────────
 // 電源投入直後は黒画面で「起動したのか分からない」ため、LCDを初期化した直後に即表示する。
-// グレー地に「Holy Grail / Time Lapse」を黒文字+白縁取りで描く。
+// グレー地に「TwyLapse」を黒文字+白縁取りで描く(2026-09-21 改名)。
 // 機種ごとに画像へ差し替えられるようフックを用意する: SPLASH_PX に RGB565 配列(SPLASH_W×SPLASH_H)を
 // 与えればそれを中央に描画し、nullptr のままならテキストで描く(現状)。
 static const uint16_t* SPLASH_PX = nullptr;	// 例: edgeSplashCoreS3.h を include して差し替える
@@ -876,8 +876,7 @@ static void renderSplash(void)
 		g_cv.setTextColor(TFT_BLACK);					// 本体は黒文字
 		g_cv.drawString(s, cx, cy);
 	};
-	outlined("Holy Grail", 160, 100);
-	outlined("Time Lapse", 160, 140);
+	outlined("TwyLapse", 160, 120);
 	g_cv.setTextDatum(textdatum_t::top_left);
 	g_cv.setTextColor(TFT_WHITE);
 	g_cv.setFont(&fonts::Font2);

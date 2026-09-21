@@ -5,7 +5,7 @@
 
 namespace
 {
-	const char* kCls = "app/laxei/holygrail/HgeNative";
+	const char* kCls = "app/laxei/twylapse/HgeNative";
 	jclass g_cls = nullptr;	// 大域参照。bindClass が Java 側のスレッドで作る
 
 	// 呼び返しの定型。attach と後始末をここへ閉じ込める(edgeClient.cpp と同じ形)。

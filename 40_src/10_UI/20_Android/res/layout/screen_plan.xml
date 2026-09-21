@@ -63,7 +63,7 @@
         app:tabIndicatorHeight="3dp" />
 
     <!-- 横スライドのページャ。ページ0=下記フォーム、ページ1..=薄明ページ(コードで追加)。 -->
-    <app.laxei.holygrail.PlanPager
+    <app.laxei.twylapse.PlanPager
         android:id="@+id/plan_pager"
         android:layout_width="match_parent"
         android:layout_height="0dp"
@@ -298,5 +298,5 @@
             </LinearLayout>
             </ScrollView>
         </LinearLayout>
-    </app.laxei.holygrail.PlanPager>
+    </app.laxei.twylapse.PlanPager>
 </LinearLayout>

@@ -1,4 +1,4 @@
-﻿package app.laxei.holygrail
+﻿package app.laxei.twylapse
 
 import android.content.BroadcastReceiver
 import android.content.Context

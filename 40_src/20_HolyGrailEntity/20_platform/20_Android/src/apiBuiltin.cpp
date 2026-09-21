@@ -462,7 +462,7 @@ errCode apiBuiltin::setupShootingModeManual(void)
 		if (oe != ERR_HGC_OK) { return oe; }
 	}
 	// 【動画をここで開く(2026-09-05)】撮影の区切りと動画の区切りを一致させる。
-	//  出来上がりは Movies/HolyGrail/<計画名>_yyyymmddhhmmss.mp4。10分ごとに「そこまでの完成品」が
+	//  出来上がりは Movies/TwyLapse/<計画名>_yyyymmddhhmmss.mp4。10分ごとに「そこまでの完成品」が
 	//  置き換わっていく(BuiltinVideo)。名前と置き場は Kotlin 側が決める。
 	{
 		const std::string name = builtinCam::videoStart(30, sessionLabel_);
@@ -507,7 +507,7 @@ bool apiBuiltin::shootStart(void)
 	const double sub    = sec / frames;
 	const long long ns  = static_cast<long long>(sub * 1e9 + 0.5);
 	// 加算の内訳をファイルのログにも残す(コマ数が変わったときだけ。毎コマ言わない)。
-	//  logcat の HGC-RAW には毎回出るが、PC を外して撮ると残らないため。
+	//  logcat の TLP-RAW には毎回出るが、PC を外して撮ると残らないため。
 	if (frames != lastFrames_)
 	{
 		lastFrames_ = frames;

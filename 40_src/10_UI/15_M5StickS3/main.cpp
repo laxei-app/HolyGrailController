@@ -211,7 +211,7 @@ static void loadEdgeCreds(void)
 {
 	bool hasSta = false, hasMode = false;
 	Preferences p;
-	if (p.begin("hgc", true))
+	if (p.begin("tlp", true))
 	{
 		String s = p.getString("ssid", ""), w = p.getString("pass", ""), n = p.getString("devname", "");
 		if (s.length()) { g_ssid = s.c_str(); hasSta = true; }
@@ -223,7 +223,7 @@ static void loadEdgeCreds(void)
 		p.end();
 	}
 	// 出荷時既定=APモード(Phase5)。一度も設定されていない端末(STA資格もモード指定もNVSに無い)は、
-	// 箱出しで自分のAP(HGC-Edge-xxxx+QR)を立てて屋外ルーター無しでも使えるようにする。
+	// 箱出しで自分のAP(TLP-Edge-xxxx+QR)を立てて屋外ルーター無しでも使えるようにする。
 	// プロビジョニング済み/モード切替済みの端末はNVSの値が優先され従来どおり(開発機のSTAも維持)。
 	if (!hasMode && !hasSta) { g_netMode = "ap"; }
 }
@@ -231,7 +231,7 @@ static void saveNetMode(const char* mode)
 {
 	g_netMode = mode ? mode : "sta";
 	Preferences p;
-	if (p.begin("hgc", false)) { p.putString("netmode", g_netMode.c_str()); p.end(); }
+	if (p.begin("tlp", false)) { p.putString("netmode", g_netMode.c_str()); p.end(); }
 }
 static void ensureApCreds(void)
 {
@@ -248,18 +248,18 @@ static void ensureApCreds(void)
 	}
 	uint8_t mac[6] = {0};
 	WiFi.macAddress(mac);
-	char ss[24]; std::snprintf(ss, sizeof(ss), "HGC-Edge-%02X%02X", mac[4], mac[5]);
+	char ss[24]; std::snprintf(ss, sizeof(ss), "TLP-Edge-%02X%02X", mac[4], mac[5]);
 	char pw[9];
 	for (int i = 0; i < 8; ++i) { uint32_t r = esp_random() % 36; pw[i] = (r < 10) ? char('0' + r) : char('A' + (r - 10)); }
 	pw[8] = 0;
 	g_apSsid = ss; g_apPass = pw;
 	Preferences p;
-	if (p.begin("hgc", false)) { p.putString("apssid", g_apSsid.c_str()); p.putString("appass", g_apPass.c_str()); p.end(); }
+	if (p.begin("tlp", false)) { p.putString("apssid", g_apSsid.c_str()); p.putString("appass", g_apPass.c_str()); p.end(); }
 }
 void saveEdgeCreds(const std::string& ssid, const std::string& pass, const std::string& name)
 {
 	Preferences p;
-	if (p.begin("hgc", false))
+	if (p.begin("tlp", false))
 	{
 		p.putString("ssid", ssid.c_str());
 		p.putString("pass", pass.c_str());
@@ -746,7 +746,7 @@ static void renderPlan(void)
 
 // ── 起動画面(項目8) ──────────────────────────────────────────────
 // 電源投入直後は黒画面で「起動したのか分からない」ため、LCD初期化の直後に即表示する。
-// グレー地に「Holy Grail / Time Lapse」を黒文字+白縁取りで描く。
+// グレー地に「TwyLapse」を黒文字+白縁取りで描く(2026-09-21 改名)。
 // 機種ごとに画像へ差し替えられるようフックを用意する: SPLASH_PX に RGB565 配列を与えればそれを
 // 中央に描画し、nullptr のままならテキストで描く(現状)。
 static const uint16_t* SPLASH_PX = nullptr;	// 例: edgeSplashStickS3.h を include して差し替える
@@ -784,8 +784,7 @@ static void renderSplash(void)
 		g_cv.setTextColor(TFT_BLACK);					// 本体は黒文字
 		g_cv.drawString(s, cx, cy);
 	};
-	outlined("Holy Grail", g_scrW / 2, g_scrH / 2 - 16);
-	outlined("Time Lapse", g_scrW / 2, g_scrH / 2 + 16);
+	outlined("TwyLapse", g_scrW / 2, g_scrH / 2);
 	g_cv.setTextDatum(textdatum_t::top_left);
 	g_cv.setTextColor(TFT_WHITE);
 	g_cv.setFont(&fonts::Font2);
@@ -824,7 +823,7 @@ void edgeProvApply(const char* name, const char* ssid, const char* pass, const c
 		// AP資格を受け取ったら保存する(2026-08-08)。従来は端末名だけ保存し SSID/pass を
 		//  捨てていたため、APのSSID/パスワードをユーザーが決められなかった。
 		//  空で送られたときは今の値を保つ。まだ何も無ければ ensureApCreds が
-		//  端末固有の既定値(HGC-Edge-<MAC下2桁> / 8桁乱数)を作る。
+		//  端末固有の既定値(TLP-Edge-<MAC下2桁> / 8桁乱数)を作る。
 		// 【使えない値は受け取らない(2026-08-17)】SoftAP は SSID 1〜32文字・パスワード
 		//  8〜63文字でないと立たない。短いパスワードをそのまま保存すると再起動後に
 		//  APが消え、画面も出ずカメラも繋がらず、BLE以外で到達できなくなる(実機で発生)。
@@ -839,7 +838,7 @@ void edgeProvApply(const char* name, const char* ssid, const char* pass, const c
 		}
 		ensureApCreds();	// 片方でも空なら既定値を用意(既にあれば何もしない)
 		Preferences p;
-		if (p.begin("hgc", false))
+		if (p.begin("tlp", false))
 		{
 			p.putString("devname", g_devName.c_str());
 			p.putString("apssid",  g_apSsid.c_str());

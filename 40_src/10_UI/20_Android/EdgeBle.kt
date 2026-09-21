@@ -1,7 +1,7 @@
-﻿package app.laxei.holygrail
+﻿package app.laxei.twylapse
 
 // エッジ端末 設定プロビジョニングの BLE セントラル(仕様 8.2.2)。
-//  HGC-Edge(サービスUUID)をスキャン→接続→MTU拡張→STAT通知有効化→
+//  TLP-Edge(サービスUUID)をスキャン→接続→MTU拡張→STAT通知有効化→
 //  {name,ssid,pass} を PoP由来鍵(SHA256)で AES-256-GCM 暗号化([IV12|CT|TAG16])し CRED へ write→
 //  STAT 通知で ok/fail を受領。エッジ(edgeProv.cpp)と対になる。
 
@@ -82,12 +82,12 @@ class EdgeBle(
         const val SCAN_TOO_FREQUENT = 6
         // 端末名が入っていないエッジが広告する名前(端末側の既定 g_devName = "NoName")。
         //  ファームを土台ごと書き直すとこの姿に戻る。
-        const val UNSET_ADV_NAME = "HGC-NoName"
+        const val UNSET_ADV_NAME = "TLP-NoName"
         val CTRL = UUID.fromString("a1b2c3d4-0001-4a5b-8c6d-000000000002")  // write "start": エッジにQR(PoP)を表示させる
         val CRED = UUID.fromString("a1b2c3d4-0001-4a5b-8c6d-000000000003")
         val STAT = UUID.fromString("a1b2c3d4-0001-4a5b-8c6d-000000000004")
         val CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
-        // 直近の startQr で "start" を送ったエッジのBLEアドレス。エッジが複数(どれも HGC-Edge で
+        // 直近の startQr で "start" を送ったエッジのBLEアドレス。エッジが複数(どれも TLP-Edge で
         // 広告名が同一)でも、送信(provision)を「QRを表示させたのと同じエッジ」へ確実に向けるため。
         @Volatile var lastAddress: String? = null
     }
@@ -102,11 +102,11 @@ class EdgeBle(
 
     // 接続したいエッジの端末名(2026-08-08 UI依頼)。空なら「最初に見つけた1台」= 従来動作。
     //
-    // 【なぜ要るか】従来は全エッジが "HGC-Edge" を広告し、スマホは最初に応答した1台へ
+    // 【なぜ要るか】従来は全エッジが "TLP-Edge" を広告し、スマホは最初に応答した1台へ
     //  無条件で接続していた。エッジを複数台起動していると、どれに設定が飛ぶか分からず、
     //  登録済み端末の設定を更新できなかった。エッジ側は名前が決まっていれば
-    //  "HGC-<端末名>" を広告するようにしたので、こちらは名前一致で選ぶ。
-    //  出荷時(名前未設定)のエッジは "HGC-Edge" のままなので、新規登録では空を渡す。
+    //  "TLP-<端末名>" を広告するようにしたので、こちらは名前一致で選ぶ。
+    //  出荷時(名前未設定)のエッジは "TLP-Edge" のままなので、新規登録では空を渡す。
     private var wantName: String = ""
     fun setTargetName(n: String) { wantName = n.trim() }
 
@@ -118,7 +118,7 @@ class EdgeBle(
     // 広告名が目的の端末か。wantName が空なら誰でも可(新規登録)。
     private fun matches(r: ScanResult): Boolean {
         if (wantName.isEmpty()) return true
-        return advName(r) == "HGC-" + wantName
+        return advName(r) == "TLP-" + wantName
     }
 
     // 名前を広告しないエッジ(旧ファーム)を1台だけ覚えておく。名前一致が1件も無いまま
@@ -174,7 +174,7 @@ class EdgeBle(
         scanner = adapter.bluetoothLeScanner
         val filter = ScanFilter.Builder().setServiceUuid(ParcelUuid(SVC)).build()
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
-        log(if (wantName.isEmpty()) "BLEスキャン中 (未設定の端末)..." else "BLEスキャン中 (HGC-$wantName)...")
+        log(if (wantName.isEmpty()) "BLEスキャン中 (未設定の端末)..." else "BLEスキャン中 (TLP-$wantName)...")
         scanCb = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, r: ScanResult) {
                 // 名前が一致するものだけ拾う(2026-08-08 UI依頼)。一致しなければスキャンを続ける。

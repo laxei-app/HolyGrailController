@@ -1099,9 +1099,9 @@ int dataManager::pruneOldLogs(int offMin)
 	gmtime_r(&lt, &g);
 #endif
 	char today[24];
-	std::snprintf(today, sizeof(today), "hg_%04d-%02d-%02d.log", g.tm_year + 1900, g.tm_mon + 1, g.tm_mday);
+	std::snprintf(today, sizeof(today), "tlp_%04d-%02d-%02d.log", g.tm_year + 1900, g.tm_mon + 1, g.tm_mday);
 
-	std::vector<std::string> all = osfile::logFileNames();	// hg_YYYY-MM-DD.log 群
+	std::vector<std::string> all = osfile::logFileNames();	// tlp_YYYY-MM-DD.log 群
 	std::vector<std::string> others;
 	for (const auto& f : all) { if (f != today) { others.push_back(f); } }
 	std::sort(others.begin(), others.end());	// 名前=日付昇順 → 先頭が最古
@@ -1613,7 +1613,7 @@ namespace
 
 		std::string dir = osfile::logDir();
 		if (dir.empty()) { return; }
-		std::string path = dir + "/hg_" + dateStr + ".log";
+		std::string path = dir + "/tlp_" + dateStr + ".log";
 		osfile::append(path, rec.data(), rec.size());
 	}
 
@@ -1821,7 +1821,7 @@ std::string dataManager::currentLogPath(void)
 	nowLocal(timeStr, dateStr);
 	std::string dir = osfile::logDir();
 	if (dir.empty()) { return ""; }
-	return dir + "/hg_" + dateStr + ".log";
+	return dir + "/tlp_" + dateStr + ".log";
 }
 
 void dataManager::logShot(int frame, const hgc::exposure& e, double lumStops, const char* ccmName,

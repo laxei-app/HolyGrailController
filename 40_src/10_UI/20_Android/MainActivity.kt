@@ -1,4 +1,4 @@
-﻿package app.laxei.holygrail
+﻿package app.laxei.twylapse
 
 import android.Manifest
 import android.app.DatePickerDialog
@@ -1337,7 +1337,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     val phoneLogs = logDir.listFiles { f -> f.isFile && f.name.endsWith(".log") } ?: emptyArray()
                     for (f in phoneLogs) {
                         if (dlogAbort) break
-                        try { saveToDownloads("hgclog", f.name, f.readBytes()); copied++ }
+                        try { saveToDownloads("tlplog", f.name, f.readBytes()); copied++ }
                         catch (e: Exception) { errors.append("phone/${f.name} ") }
                     }
                     say("スマートフォン: ${phoneLogs.size} 件")
@@ -1356,7 +1356,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         say("$nm: $logName")
                         val bytes = fetchEdgeLog(target, ed.port, logName)
                         if (bytes.isNotEmpty()) {
-                            try { saveToDownloads("hgclog-" + sanitizeFolder(nm), logName, bytes); copied++; n++ }
+                            try { saveToDownloads("tlplog-" + sanitizeFolder(nm), logName, bytes); copied++; n++ }
                             catch (e: Exception) { errors.append("$nm/$logName ") }
                         }
                     }
@@ -1370,7 +1370,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 setDlogEnabled(true)
                 val head = if (stopped) "中断しました。" else "完了しました。"
                 val tail = if (errors.isEmpty()) "" else "\n取れなかったもの: $errors"
-                say(head + "$n 件を Download/hgclog(スマホ)・hgclog-<端末名>(外部端末) へ保存しました。" + tail)
+                say(head + "$n 件を Download/tlplog(スマホ)・tlplog-<端末名>(外部端末) へ保存しました。" + tail)
             }
         }.start()
     }
@@ -4910,7 +4910,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         try {
             if (multicastLock != null) return
             val wifi = applicationContext.getSystemService(android.content.Context.WIFI_SERVICE) as? android.net.wifi.WifiManager ?: return
-            multicastLock = wifi.createMulticastLock("hgc-ssdp").apply { setReferenceCounted(false); acquire() }
+            multicastLock = wifi.createMulticastLock("tlp-ssdp").apply { setReferenceCounted(false); acquire() }
         } catch (e: Exception) { /* 取得失敗時は受動待ち受け無し(60秒能動再探索で復帰) */ }
     }
     private fun releaseMulticastLock() {
@@ -7162,7 +7162,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         edges.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
 
     // --- エッジ端末の登録(prefsに永続化。設定で追加・検索で自動登録。オフラインでも選択可) ---
-    private fun hgcPrefs() = getSharedPreferences("hgc", MODE_PRIVATE)
+    private fun hgcPrefs() = getSharedPreferences("tlp", MODE_PRIVATE)
 
     // ── エッジのネットワーク設定を覚えておく(2026-08-29 UI依頼) ──────────────
     //
@@ -7739,7 +7739,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // STAのSSIDは「その端末へまだ接続先を送っていないとき」だけ必須。一度送ってあれば
         //  空=端末名だけ変更(エッジは接続先を保つ)。以前は「新規登録のとき」で見ていたが、
         //  登録が先に済むようになったので、保存済みの接続先の有無で見る(2026-09-04)。
-        // APは空ならエッジ側が既定値(HGC-Edge-<MAC下2桁> / 8桁乱数)を用意する。
+        // APは空ならエッジ側が既定値(TLP-Edge-<MAC下2桁> / 8桁乱数)を用意する。
         if (mode == "sta" && ssid.isEmpty() && loadEdgeCfg(selectedEdgeName).staSsid.isEmpty()) {
             Toast.makeText(ctx, "SSIDを入力してください(新規登録は接続先が必要です)", Toast.LENGTH_LONG).show(); return
         }
@@ -8072,7 +8072,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // ── APモードのエッジAPへのネットワークバインド(§1.2.1) ──
     // Android は「インターネットゲートウェイの無いWi-Fi(=エッジのSoftAP)」を数十秒で自動的に
     // 見限り、母艦LAN(モバイル/別Wi-Fi)へ切り替える。そのままではスマホがエッジと別網になり、
-    // ETP(TCP/UDP)が届かず制御・監視ができない。そこで、現在スマホが接続中のWi-Fiが "HGC-Edge*"
+    // ETP(TCP/UDP)が届かず制御・監視ができない。そこで、現在スマホが接続中のWi-Fiが "TLP-Edge*"
     // (エッジのSoftAP)のときは、そのNetworkを requestNetwork で確保し bindProcessToNetwork で
     // プロセス全体の通信(ネイティブのソケットも含む)をそのNICへ固定する。これで自動離脱を防ぎ、
     // インターネット判定に依らずエッジと通信できる。別SSID(母艦LAN)に居る間はバインドしない=従来動作。
@@ -8089,11 +8089,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         } catch (_: Exception) { null }
     }
 
-    // SSID が "HGC-Edge" 始まり(=エッジSoftAP)ならバインドを起動、そうでなければ解除する。
+    // SSID が "TLP-Edge" 始まり(=エッジSoftAP)ならバインドを起動、そうでなければ解除する。
     // edgeSweep(30秒毎)から呼ぶ。冪等(多重 requestNetwork を防ぐ)。
     private fun updateEdgeApBinding() {
         val ssid = currentWifiSsid()
-        val onEdgeAp = ssid != null && ssid.startsWith("HGC-Edge")
+        val onEdgeAp = ssid != null && ssid.startsWith("TLP-Edge")
         if (onEdgeAp) {
             if (edgeApCallback != null) return   // 既にバインド機構が稼働中
             val req = NetworkRequest.Builder()
@@ -8106,7 +8106,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     val nc = cm.getNetworkCapabilities(network)
                     val wi = nc?.transportInfo as? WifiInfo
                     val ns = wi?.ssid?.trim('"')
-                    if (ns == null || ns.startsWith("HGC-Edge")) {
+                    if (ns == null || ns.startsWith("TLP-Edge")) {
                         edgeApNetwork = network
                         cm.bindProcessToNetwork(network)
                         android.util.Log.i("EdgeApBind", "bound to $ns")
@@ -8320,13 +8320,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         try {
             val o = JSONObject()
             for ((k, v) in edgeHeldByEdge) { o.put(k, JSONArray(v.toList())) }
-            getSharedPreferences("hgc", MODE_PRIVATE).edit().putString("edgeHeld", o.toString()).apply()
+            getSharedPreferences("tlp", MODE_PRIVATE).edit().putString("edgeHeld", o.toString()).apply()
         } catch (_: Exception) {}
     }
 
     private fun loadEdgeHeld() {
         try {
-            val t = getSharedPreferences("hgc", MODE_PRIVATE).getString("edgeHeld", "") ?: ""
+            val t = getSharedPreferences("tlp", MODE_PRIVATE).getString("edgeHeld", "") ?: ""
             if (t.isEmpty()) return
             val o = JSONObject(t)
             for (k in o.keys()) {

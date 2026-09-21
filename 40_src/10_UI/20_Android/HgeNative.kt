@@ -1,4 +1,4 @@
-﻿package app.laxei.holygrail
+﻿package app.laxei.twylapse
 
 // holyGrailEntity(extern "C") への JNI ブリッジ窓口。
 // ネイティブ実装は 20_platform/20_Android/src/jniBridge.cpp。
@@ -240,7 +240,7 @@ object HgeNative {
     // ── 動画の書き出し(2026-09-05) ───────────────────────────
     // 撮ったコマをその場で1枚ずつ足していく。撮影の終わりに必ず finish を呼ぶこと
     //  (MP4 は閉じないと再生できない)。
-    // 戻り=ギャラリーでの名前(hgt_yymmddhhmmss.mp4)。"" =失敗。
+    // 戻り=ギャラリーでの名前(tlp_yymmddhhmmss.mp4)。"" =失敗。
     @JvmStatic
     fun videoStart(fps: Int, planName: String): String { BuiltinVideo.setPlanName(planName); return BuiltinVideo.start(fps) }
 
@@ -250,7 +250,7 @@ object HgeNative {
     @JvmStatic
     fun videoFinish(): String = BuiltinVideo.finish()
 
-    // ネイティブから呼び返される BLE のエッジ探索。見つかった端末名(HGC- を除く)を返す。
+    // ネイティブから呼び返される BLE のエッジ探索。見つかった端末名(TLP- を除く)を返す。
     //  BLE には UDP ブロードキャストが無いので、検索はアドバタイズのスキャンで代える。
     @JvmStatic
     fun bleScanNames(timeoutMs: Int): Array<String> =
@@ -289,7 +289,7 @@ object HgeNative {
     //  別の場所のカメラのIPを配ることになり有害)。ETPのコマンドとエッジ側の受信処理は互換のため残す。
     external fun nativeEdgeCameraInfo(host: String, port: Int, json: String): Int
     external fun nativeEdgeProgress(host: String, port: Int, planId: String): String // progress の JSON。planId 指定=計画別状態(空=集約)
-    external fun nativeEdgeLogList(host: String, port: Int): String   // ログファイル名一覧の JSON 配列 ["hg_....log",...]
+    external fun nativeEdgeLogList(host: String, port: Int): String   // ログファイル名一覧の JSON 配列 ["tlp_....log",...]
     external fun nativeEdgeLogRead(host: String, port: Int, name: String, offset: Int): ByteArray // ログの1チャンク(最大4KB)。空=EOF/失敗
     // 撮影レポートの回収。30秒スイープが edgeInfo.reports>0 のときだけ使う。
     // 取得→保存できたら削除、の順(取得だけで消さない)。

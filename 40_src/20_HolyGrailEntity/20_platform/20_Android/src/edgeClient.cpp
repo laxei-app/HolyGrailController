@@ -160,7 +160,7 @@ namespace
 	//  スマホ側で戻せる。
 	//
 	// 【host の意味】ここから下では host は「相手の指定」であって IP とは限らない。
-	//  Wi-Fi のときは IP、BLE のときは BLE の端末名(HGC-<名前> の <名前>)が入る。
+	//  Wi-Fi のときは IP、BLE のときは BLE の端末名(TLP-<名前> の <名前>)が入る。
 	//  BLE にはブロードキャストが無く、探索も接続も名前で行うため。どちらを渡すかは
 	//  Kotlin 側が(このフラグと同じ判断で)決める。
 	std::atomic<bool> g_useBle{false};
@@ -184,7 +184,7 @@ namespace
 			if (vm->AttachCurrentThread(&env, nullptr) != JNI_OK) { return; }
 			attached = true;
 		}
-		jclass cls = env->FindClass("app/laxei/holygrail/HgeNative");
+		jclass cls = env->FindClass("app/laxei/twylapse/HgeNative");
 		jmethodID mid = (cls != nullptr) ? env->GetStaticMethodID(cls, "bleDrop", "(Ljava/lang/String;)V") : nullptr;
 		if (mid != nullptr)
 		{
@@ -212,7 +212,7 @@ namespace
 			attached = true;
 		}
 		int result = 0;
-		jclass cls = env->FindClass("app/laxei/holygrail/HgeNative");
+		jclass cls = env->FindClass("app/laxei/twylapse/HgeNative");
 		jmethodID mid = (cls != nullptr)
 		              ? env->GetStaticMethodID(cls, "bleExchange", "(Ljava/lang/String;[BI)[B")
 		              : nullptr;
@@ -257,7 +257,7 @@ namespace
 			if (vm->AttachCurrentThread(&env, nullptr) != JNI_OK) { return names; }
 			attached = true;
 		}
-		jclass cls = env->FindClass("app/laxei/holygrail/HgeNative");
+		jclass cls = env->FindClass("app/laxei/twylapse/HgeNative");
 		jmethodID mid = (cls != nullptr)
 		              ? env->GetStaticMethodID(cls, "bleScanNames", "(I)[Ljava/lang/String;")
 		              : nullptr;
@@ -411,7 +411,7 @@ extern "C" {
 // true = BLE で話す。以降 host 引数には IP ではなく BLE の端末名を渡すこと。
 // エッジ側は常に両方で待ち受けているので、切り替えにエッジへの通知は要らない。
 JNIEXPORT void JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeEdgeSetBle(JNIEnv*, jobject, jboolean useBle)
+Java_app_laxei_twylapse_HgeNative_nativeEdgeSetBle(JNIEnv*, jobject, jboolean useBle)
 {
 	const bool v = (useBle == JNI_TRUE);
 	std::lock_guard<std::mutex> lk(g_connMtx);
@@ -430,7 +430,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeSetBle(JNIEnv*, jobject, jboolean u
 //  返らない。そこでアドバタイズをスキャンして名前を集め、各台へ C_SEARCH を 1 往復させる。
 //  返す JSON の形は Wi-Fi と同じ(呼び側は経路を知らない)。
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeEdgeSearch(JNIEnv* env, jobject, jint timeoutMs)
+Java_app_laxei_twylapse_HgeNative_nativeEdgeSearch(JNIEnv* env, jobject, jint timeoutMs)
 {
 	// 集め方だけ経路に任せ、**受け入れ判定は共通の searchCollector 一本**に通す。
 	//  以前はここに UDP 版と BLE 版の2つの実装があり、検証は UDP 側にしか無かった。
@@ -441,16 +441,16 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeSearch(JNIEnv* env, jobject, jint t
 
 // 直近のエッジ操作でエッジが返した「お知らせコード」(0=なし)。何が悪かったのかを画面に出すのに使う。
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeLastEdgeNotice(JNIEnv*, jobject)
+Java_app_laxei_twylapse_HgeNative_nativeLastEdgeNotice(JNIEnv*, jobject)
 { return (jint)g_lastEdgeNotice.load(); }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeLastEdgeNoticeN1(JNIEnv*, jobject)
+Java_app_laxei_twylapse_HgeNative_nativeLastEdgeNoticeN1(JNIEnv*, jobject)
 { return (jint)g_lastEdgeNoticeN1.load(); }
 
 // エッジ端末へ time→capturePlan→action を送って撮影開始させる。return: 0=成功。
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring host_, jint port,
+Java_app_laxei_twylapse_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring host_, jint port,
                                                    jlong utcSec, jint offMin, jbyteArray nameBmp, jstring planId_,
                                                    jstring planJson_)
 {
@@ -560,7 +560,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeStart(JNIEnv* env, jobject, jstring
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeEdgeStop(JNIEnv* env, jobject, jstring host_, jint port, jstring planId_)
+Java_app_laxei_twylapse_HgeNative_nativeEdgeStop(JNIEnv* env, jobject, jstring host_, jint port, jstring planId_)
 {
 	const char* host = env->GetStringUTFChars(host_, nullptr);
 	const char* pid  = planId_ ? env->GetStringUTFChars(planId_, nullptr) : nullptr;
@@ -578,7 +578,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeStop(JNIEnv* env, jobject, jstring 
 // 項目6: エッジ端末から計画を削除する(C_DELETE_PLAN)。スマホで停止した計画をエッジからも消す用。
 //  エッジは撮影中なら停止してから削除する(項目9)。
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeEdgeDeletePlan(JNIEnv* env, jobject, jstring host_, jint port, jstring planId_)
+Java_app_laxei_twylapse_HgeNative_nativeEdgeDeletePlan(JNIEnv* env, jobject, jstring host_, jint port, jstring planId_)
 {
 	const char* host = env->GetStringUTFChars(host_, nullptr);
 	const char* pid  = planId_ ? env->GetStringUTFChars(planId_, nullptr) : nullptr;
@@ -596,7 +596,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeDeletePlan(JNIEnv* env, jobject, js
 // エッジ端末へ時刻同期(C_TIME)だけを能動的に送る。撮影開始と無関係に定期同期する用
 // (RTC無し機=StickS3が電波悪い所でもスマホが近くにあれば時計を保てるように)。
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeEdgeSyncTime(JNIEnv* env, jobject, jstring host_, jint port, jlong utcSec, jint offMin)
+Java_app_laxei_twylapse_HgeNative_nativeEdgeSyncTime(JNIEnv* env, jobject, jstring host_, jint port, jlong utcSec, jint offMin)
 {
 	const char* host = env->GetStringUTFChars(host_, nullptr);
 	std::string hostS = host ? host : "";
@@ -612,7 +612,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeSyncTime(JNIEnv* env, jobject, jstr
 //  エッジは受け取った配列でそっくり入れ替えるので、追加も変更も削除もこの1本で伝わる。
 //  台帳が無いとエッジはカメラへ挨拶できず(認証が要る)、初回のWi-Fi参加が成立しない。
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeEdgeSendCameraBook(JNIEnv* env, jobject, jstring host_, jint port, jstring book_)
+Java_app_laxei_twylapse_HgeNative_nativeEdgeSendCameraBook(JNIEnv* env, jobject, jstring host_, jint port, jstring book_)
 {
 	const char* host = env->GetStringUTFChars(host_, nullptr);
 	const char* bk   = book_ ? env->GetStringUTFChars(book_, nullptr) : nullptr;
@@ -630,7 +630,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeSendCameraBook(JNIEnv* env, jobject
 
 // 所持カメラから台帳 JSON を作って返す(送る中身)。
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeCameraBookJson(JNIEnv* env, jobject)
+Java_app_laxei_twylapse_HgeNative_nativeCameraBookJson(JNIEnv* env, jobject)
 {
 	return env->NewStringUTF(hge_cameraBookJson());
 }
@@ -639,7 +639,7 @@ Java_app_laxei_holygrail_HgeNative_nativeCameraBookJson(JNIEnv* env, jobject)
 //  台帳 JSON そのものは毎回変わる(暗号文の nonce が毎回ちがうため)ので、
 //  それで比べると「毎回変わった」と誤解して 30 秒ごとに送り直してしまう。
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeCameraBookSig(JNIEnv* env, jobject)
+Java_app_laxei_twylapse_HgeNative_nativeCameraBookSig(JNIEnv* env, jobject)
 {
 	return env->NewStringUTF(hge_cameraBookSig());
 }
@@ -647,7 +647,7 @@ Java_app_laxei_holygrail_HgeNative_nativeCameraBookSig(JNIEnv* env, jobject)
 // デバッグログの取捨をエッジへ送る(C_LOG_OPT)。エッジは不揮発へ残さないので、
 //  スマホは見つけるたびに送り直す(数十バイト)。電源を入れ直せば既定(採らない)へ戻る。
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeEdgeSendLogOpt(JNIEnv* env, jobject, jstring host_, jint port,
+Java_app_laxei_twylapse_HgeNative_nativeEdgeSendLogOpt(JNIEnv* env, jobject, jstring host_, jint port,
                                                         jboolean shot, jboolean batt, jboolean sys)
 {
 	const char* host = env->GetStringUTFChars(host_, nullptr);
@@ -665,7 +665,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeSendLogOpt(JNIEnv* env, jobject, js
 
 // スマホ自身のログの取捨。撮影1コマごとの記録と電池の定期記録を採るかどうか。
 JNIEXPORT void JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetLogOptions(JNIEnv*, jobject, jboolean shot)
+Java_app_laxei_twylapse_HgeNative_nativeSetLogOptions(JNIEnv*, jobject, jboolean shot)
 {
 	// スマホ自身に効くのは撮影ログだけ(電池も STACK/HEAP もエッジ側の話)。
 	dataManager::setLogOptions(shot == JNI_TRUE, false, false);
@@ -673,7 +673,7 @@ Java_app_laxei_holygrail_HgeNative_nativeSetLogOptions(JNIEnv*, jobject, jboolea
 
 // エッジ端末へ「継続(カメラ未検出時の即再探索)」を送る。planId 空=全取得フェーズ。
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeEdgeResearch(JNIEnv* env, jobject, jstring host_, jint port, jstring planId_)
+Java_app_laxei_twylapse_HgeNative_nativeEdgeResearch(JNIEnv* env, jobject, jstring host_, jint port, jstring planId_)
 {
 	const char* host = env->GetStringUTFChars(host_, nullptr);
 	const char* pid  = planId_ ? env->GetStringUTFChars(planId_, nullptr) : nullptr;
@@ -690,7 +690,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeResearch(JNIEnv* env, jobject, jstr
 
 // エッジ端末へ発見中のオンラインカメラ情報(cameraInfo)を送る。json=[{serial,model,ip,online}]。
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeEdgeCameraInfo(JNIEnv* env, jobject, jstring host_, jint port, jstring json_)
+Java_app_laxei_twylapse_HgeNative_nativeEdgeCameraInfo(JNIEnv* env, jobject, jstring host_, jint port, jstring json_)
 {
 	const char* host = env->GetStringUTFChars(host_, nullptr);
 	const char* js   = json_ ? env->GetStringUTFChars(json_, nullptr) : nullptr;
@@ -708,7 +708,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeCameraInfo(JNIEnv* env, jobject, js
 // エッジ端末の進捗を取得する。progress の JSON を返す(失敗時 "")。
 // planId 指定時は「その計画」の状態/進捗を返す(1エッジ複数カメラで誤検出を防ぐ)。空文字は集約(復元/生存確認)。
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeEdgeProgress(JNIEnv* env, jobject, jstring host_, jint port, jstring planId_)
+Java_app_laxei_twylapse_HgeNative_nativeEdgeProgress(JNIEnv* env, jobject, jstring host_, jint port, jstring planId_)
 {
 	const char* host = env->GetStringUTFChars(host_, nullptr);
 	const char* pid  = planId_ ? env->GetStringUTFChars(planId_, nullptr) : nullptr;
@@ -732,9 +732,9 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeProgress(JNIEnv* env, jobject, jstr
 	return env->NewStringUTF(rd.c_str());
 }
 
-// エッジのログファイル名一覧(JSON配列 ["hg_....log",...])を取得する。失敗時 "[]"。
+// エッジのログファイル名一覧(JSON配列 ["tlp_....log",...])を取得する。失敗時 "[]"。
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeEdgeLogList(JNIEnv* env, jobject, jstring host_, jint port)
+Java_app_laxei_twylapse_HgeNative_nativeEdgeLogList(JNIEnv* env, jobject, jstring host_, jint port)
 {
 	const char* host = env->GetStringUTFChars(host_, nullptr);
 	std::string hostS = host ? host : "";
@@ -749,7 +749,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeLogList(JNIEnv* env, jobject, jstri
 // エッジのログファイル name の offset バイト目から1チャンク(最大4KB)を取得する。返り値=生バイト。
 // 空配列=EOF(またはエラー)。応答末尾の番兵(0x01)は除去して返す。
 JNIEXPORT jbyteArray JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeEdgeLogRead(JNIEnv* env, jobject, jstring host_, jint port, jstring name_, jint offset)
+Java_app_laxei_twylapse_HgeNative_nativeEdgeLogRead(JNIEnv* env, jobject, jstring host_, jint port, jstring name_, jint offset)
 {
 	const char* host = env->GetStringUTFChars(host_, nullptr);
 	const char* name = name_ ? env->GetStringUTFChars(name_, nullptr) : nullptr;
@@ -778,7 +778,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeLogRead(JNIEnv* env, jobject, jstri
 
 // レポート一覧(JSON配列)。失敗時 "[]"。
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeEdgeReportList(JNIEnv* env, jobject, jstring host_, jint port)
+Java_app_laxei_twylapse_HgeNative_nativeEdgeReportList(JNIEnv* env, jobject, jstring host_, jint port)
 {
 	const char* host = env->GetStringUTFChars(host_, nullptr);
 	std::string hostS = host ? host : "";
@@ -792,7 +792,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeReportList(JNIEnv* env, jobject, js
 
 // レポート1件の中身(JSON)。失敗時 ""(空)。空なら保存も削除もしない。
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeEdgeReportRead(JNIEnv* env, jobject, jstring host_, jint port, jstring name_)
+Java_app_laxei_twylapse_HgeNative_nativeEdgeReportRead(JNIEnv* env, jobject, jstring host_, jint port, jstring name_)
 {
 	const char* host = env->GetStringUTFChars(host_, nullptr);
 	const char* name = name_ ? env->GetStringUTFChars(name_, nullptr) : nullptr;
@@ -809,7 +809,7 @@ Java_app_laxei_holygrail_HgeNative_nativeEdgeReportRead(JNIEnv* env, jobject, js
 
 // 受領済みレポートの削除を指示する。0=削除された / -2=断られた(次のスイープでまた拾う)。
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeEdgeReportDelete(JNIEnv* env, jobject, jstring host_, jint port, jstring name_)
+Java_app_laxei_twylapse_HgeNative_nativeEdgeReportDelete(JNIEnv* env, jobject, jstring host_, jint port, jstring name_)
 {
 	const char* host = env->GetStringUTFChars(host_, nullptr);
 	const char* name = name_ ? env->GetStringUTFChars(name_, nullptr) : nullptr;

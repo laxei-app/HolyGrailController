@@ -58,7 +58,7 @@ namespace osfile
 	// 指定サブディレクトリ内のファイルを削除する(plan_<id>.json の削除など)。return: 成功。
 	bool removeFile(const std::string& subdir, const std::string& name);
 
-	// ログディレクトリ(logDir)内のログファイル名一覧(例 "hg_2026-06-21.log")。
+	// ログディレクトリ(logDir)内のログファイル名一覧(例 "tlp_2026-06-21.log")。
 	std::vector<std::string> logFileNames(void);
 	// ログディレクトリ内の指定名のログファイルを削除する。return: 成功。
 	bool removeLog(const std::string& name);

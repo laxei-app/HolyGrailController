@@ -44,13 +44,13 @@ BOOT_APP0 = os.path.expanduser(
     r"~\.platformio\packages\framework-arduinoespressif32@src-702d0f93023d86e22d8ef62aa333f0b7"
     r"\tools\partitions\boot_app0.bin")
 
-APP_NAME = "HolyGrailEdge"
+APP_NAME = "TwyLapseEdge"
 
 MODELS = [
     {"id": "stick-s3", "name": "M5StickS3",      "target": "15_M5StickS3",
-     "flash": "8MB",  "file": "hgc-edge-stick-s3.bin"},
+     "flash": "8MB",  "file": "tlp-edge-stick-s3.bin"},
     {"id": "core-s3",  "name": "M5Stack CoreS3", "target": "10_M5Stack",
-     "flash": "16MB", "file": "hgc-edge-core-s3.bin"},
+     "flash": "16MB", "file": "tlp-edge-core-s3.bin"},
 ]
 
 

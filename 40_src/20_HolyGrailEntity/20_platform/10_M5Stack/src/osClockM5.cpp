@@ -7,7 +7,7 @@ namespace osclock
 {
 	namespace
 	{
-		constexpr const char* NS  = "hgc";		// NVS 名前空間
+		constexpr const char* NS  = "tlp";		// NVS 名前空間
 		constexpr const char* KEY = "tzoff";	// UTCオフセット[分]
 
 		int  g_off    = 0;

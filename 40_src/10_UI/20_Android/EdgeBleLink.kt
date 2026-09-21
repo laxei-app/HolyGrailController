@@ -1,4 +1,4 @@
-﻿package app.laxei.holygrail
+﻿package app.laxei.twylapse
 
 // スマホ⇄エッジの ETP を BLE で運ぶ経路(エッジ側は 18_M5Common/etpBle.cpp)。
 //
@@ -161,7 +161,7 @@ object EdgeBleLink {
         val now = System.currentTimeMillis()
         (missUntil[name] ?: 0L).let { if (now < it) return null }   // 直近で見つからなかった端末は待つ
         val scanner = ad.bluetoothLeScanner ?: return null
-        val want = "HGC-" + name
+        val want = "TLP-" + name
         var found: BluetoothDevice? = null
         val latch = CountDownLatch(1)
         val sc = object : ScanCallback() {
@@ -169,7 +169,7 @@ object EdgeBleLink {
                 val n = try { r.scanRecord?.deviceName } catch (_: Exception) { null }
                     ?: try { r.device?.name } catch (_: SecurityException) { null }
                 // 見えた端末はすべて覚える(次回そのぶんスキャンを省ける)
-                if (n != null && n.startsWith("HGC-")) addrCache[n.removePrefix("HGC-")] = r.device.address
+                if (n != null && n.startsWith("TLP-")) addrCache[n.removePrefix("TLP-")] = r.device.address
                 if (n == want) { found = r.device; latch.countDown() }
             }
         }
@@ -333,7 +333,7 @@ object EdgeBleLink {
     }
 
     // BLE モードでのエッジ探索。Wi-Fi のブロードキャスト検索の代わり。
-    //  見つかった端末名(HGC- を除いたもの)を返す。
+    //  見つかった端末名(TLP- を除いたもの)を返す。
     //
     // 【繋がっている端末はスキャンに映らない】接続が張られるとエッジは広告を止めるので、
     //  スキャンだけを答えにすると「いま話せている相手が見つからない」ことになる
@@ -353,8 +353,8 @@ object EdgeBleLink {
             override fun onScanResult(callbackType: Int, r: ScanResult) {
                 val n = try { r.scanRecord?.deviceName } catch (_: Exception) { null }
                     ?: try { r.device?.name } catch (_: SecurityException) { null }
-                if (n != null && n.startsWith("HGC-")) {
-                    val short = n.removePrefix("HGC-")
+                if (n != null && n.startsWith("TLP-")) {
+                    val short = n.removePrefix("TLP-")
                     names.add(short)
                     addrCache[short] = r.device.address     // 見えた端末は次回スキャンを省ける
                     missUntil.remove(short)                 // 居るのが分かった → 待ちを解除

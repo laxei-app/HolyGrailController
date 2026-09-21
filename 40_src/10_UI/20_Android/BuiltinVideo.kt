@@ -1,4 +1,4 @@
-package app.laxei.holygrail
+package app.laxei.twylapse
 
 import android.content.ContentValues
 import android.content.Context
@@ -75,13 +75,13 @@ object BuiltinVideo {
     private var displayName = ""        // ギャラリーでの名前 <計画名>_yyyymmddhhmmss.mp4
     private var planName = ""
 
-    // 動画の名前に使う計画名。撮影を始める側が先に渡す(空なら "hgt")。
+    // 動画の名前に使う計画名。撮影を始める側が先に渡す(空なら "tlp")。
     @JvmStatic
     fun setPlanName(name: String) { planName = name }
 
     // ファイル名に使えない文字を落とす。計画名は自由に付けられるので、区切りや記号が混ざる。
     private fun safeName(s: String): String =
-        s.replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001f]"), "_").trim().ifEmpty { "hgt" }
+        s.replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001f]"), "_").trim().ifEmpty { "tlp" }
     private var publishedUri: Uri? = null   // ギャラリーに出してある完成品(API 29+)
 
     // 作業用。毎コマ確保し直すと 1920x1440 で 11MB を掴んでは捨てることになる。
@@ -282,7 +282,7 @@ object BuiltinVideo {
     }
 
     // ── ギャラリーへ出す ────────────────────────────────────
-    // Movies/HolyGrail/hgt_yymmddhhmmss.mp4。区切りのたびに置き換える。
+    // Movies/TwyLapse/tlp_yymmddhhmmss.mp4。区切りのたびに置き換える。
     //  新しい方を別の項目として書き切ってから古い方を消すので、ギャラリーに見えるのは
     //  常に完全なものだけ。
     private fun publish(full: File) {
@@ -293,7 +293,7 @@ object BuiltinVideo {
                 val values = ContentValues().apply {
                     put(MediaStore.Video.Media.DISPLAY_NAME, "$displayName.part")
                     put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-                    put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/HolyGrail")
+                    put(MediaStore.Video.Media.RELATIVE_PATH, "Movies/TwyLapse")
                     put(MediaStore.Video.Media.IS_PENDING, 1)
                 }
                 val uri = cr.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values) ?: return
@@ -309,7 +309,7 @@ object BuiltinVideo {
                 publishedUri = uri
             } else {
                 val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
-                               "HolyGrail").apply { mkdirs() }
+                               "TwyLapse").apply { mkdirs() }
                 val dst = File(dir, displayName)
                 val tmp = File(dir, "$displayName.part")
                 full.inputStream().use { i -> tmp.outputStream().use { o -> i.copyTo(o) } }

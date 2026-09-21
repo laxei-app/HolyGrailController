@@ -67,7 +67,7 @@ namespace
 			// 【つながっていても広告を続ける(2026-08-17)】NimBLE は接続すると広告を止める。
 			//  ETP を BLE で運ぶ設定にしているとスマホがつなぎっぱなしにするので、エッジが
 			//  広告しなくなり **設定変更のQRを出す経路が使えなくなる**(スマホのプロビジョニング
-			//  画面は "HGC-<端末名>" の広告を名前一致で探すため「見つかりません」になる)。
+			//  画面は "TLP-<端末名>" の広告を名前一致で探すため「見つかりません」になる)。
 			//  屋外のAPモード運用中に SSID/パスワードを変えられなくなるのは詰みなので、
 			//  接続中も広告を出し続ける。同時接続は CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3 まで。
 			NimBLEDevice::startAdvertising();
@@ -131,12 +131,12 @@ namespace edgeProv
 {
 	void begin(const std::string& devName)
 	{
-		// 【広告名に端末名を入れる(2026-08-08 UI依頼)】従来は全機が "HGC-Edge" を広告しており、
+		// 【広告名に端末名を入れる(2026-08-08 UI依頼)】従来は全機が "TLP-Edge" を広告しており、
 		//  スマホは最初に見つけた1台へ無条件で接続していた。エッジを複数台起動していると
 		//  どれに設定が飛ぶか分からず、登録済み端末の設定を更新できなかった。
-		//  端末名が決まっていれば "HGC-<端末名>" を広告し、スマホ側は名前一致で選ぶ。
-		//  出荷時(名前未設定)は従来どおり "HGC-Edge" を広告して新規登録を妨げない。
-		const std::string advName = devName.empty() ? std::string("HGC-Edge") : ("HGC-" + devName);
+		//  端末名が決まっていれば "TLP-<端末名>" を広告し、スマホ側は名前一致で選ぶ。
+		//  出荷時(名前未設定)は従来どおり "TLP-Edge" を広告して新規登録を妨げない。
+		const std::string advName = devName.empty() ? std::string("TLP-Edge") : ("TLP-" + devName);
 		NimBLEDevice::init(advName);
 		NimBLEServer* srv = NimBLEDevice::createServer();
 		srv->setCallbacks(new SrvCb());

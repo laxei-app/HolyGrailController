@@ -1,4 +1,4 @@
-package app.laxei.holygrail
+package app.laxei.twylapse
 
 // 撮影計画の「開始時の撮影方向(方位磁石+矢印)」「開始時の仰角(カメラの絵を回転)」の入力ウィジェット。
 // 仕様書10 §7.3.1 画面330。ドラッグで角度を変え、指を離したとき onCommit を呼ぶ。

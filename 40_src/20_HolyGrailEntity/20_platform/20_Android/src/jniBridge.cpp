@@ -55,7 +55,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* /*reserved*/)
 
 // ログ保存先(アプリ外部ファイル領域)を設定する。hge_init より前に呼ぶこと。
 JNIEXPORT void JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetLogDir(JNIEnv* env, jobject /*thiz*/, jstring dir)
+Java_app_laxei_twylapse_HgeNative_nativeSetLogDir(JNIEnv* env, jobject /*thiz*/, jstring dir)
 {
 	if (dir == nullptr) { return; }
 	const char* d = env->GetStringUTFChars(dir, nullptr);
@@ -64,7 +64,7 @@ Java_app_laxei_holygrail_HgeNative_nativeSetLogDir(JNIEnv* env, jobject /*thiz*/
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeInit(JNIEnv* env, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeInit(JNIEnv* env, jobject /*thiz*/)
 {
 	// 内蔵カメラの呼び返し先クラスを、**Java から呼ばれているこの場で**捕まえる。
 	//  探索はネイティブスレッドで走り、そちらからは FindClass でアプリのクラスを引けない。
@@ -84,14 +84,14 @@ Java_app_laxei_holygrail_HgeNative_nativeInit(JNIEnv* env, jobject /*thiz*/)
 // スマホ内蔵カメラを所持カメラへ足す(まだ無いものだけ)。戻り=足した台数。
 //  端末そのものなので登録可否は聞かない(外付けカメラのプロンプトとは扱いが違う)。
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetSeedPending(JNIEnv* /*env*/, jobject /*thiz*/, jint on)
+Java_app_laxei_twylapse_HgeNative_nativeSetSeedPending(JNIEnv* /*env*/, jobject /*thiz*/, jint on)
 {
 	return hge_setSeedPending(on);
 }
 
 // 標準ひな形(EOS R3 ぶん)を作る(初回起動用)。namesJson: ひな形・撮影制御方法の名前(UI の言語で)。
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSeedStandardTemplates(JNIEnv* env, jobject /*thiz*/, jstring namesJson_)
+Java_app_laxei_twylapse_HgeNative_nativeSeedStandardTemplates(JNIEnv* env, jobject /*thiz*/, jstring namesJson_)
 {
 	const char* j = namesJson_ ? env->GetStringUTFChars(namesJson_, nullptr) : nullptr;
 	const std::string names = j ? j : "";
@@ -101,7 +101,7 @@ Java_app_laxei_holygrail_HgeNative_nativeSeedStandardTemplates(JNIEnv* env, jobj
 
 //  namesJson: スマホ用の撮影制御方法初期値の名前(型ごと。UI の言語で)。
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeRegisterBuiltinCameras(JNIEnv* env, jobject /*thiz*/, jstring namesJson_)
+Java_app_laxei_twylapse_HgeNative_nativeRegisterBuiltinCameras(JNIEnv* env, jobject /*thiz*/, jstring namesJson_)
 {
 	builtinCam::bindClass(env);	// UI スレッドから呼ばれる。ここでも捕まえておく
 	const char* j = namesJson_ ? env->GetStringUTFChars(namesJson_, nullptr) : nullptr;
@@ -111,51 +111,51 @@ Java_app_laxei_holygrail_HgeNative_nativeRegisterBuiltinCameras(JNIEnv* env, job
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeTerm(JNIEnv* /*env*/, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeTerm(JNIEnv* /*env*/, jobject /*thiz*/)
 {
 	return hge_term();
 }
 
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeVersion(JNIEnv* env, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeVersion(JNIEnv* env, jobject /*thiz*/)
 {
 	return env->NewStringUTF(hge_version());
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeCaptureStart(JNIEnv* /*env*/, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeCaptureStart(JNIEnv* /*env*/, jobject /*thiz*/)
 {
 	return hge_captureStart();
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeCaptureStop(JNIEnv* /*env*/, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeCaptureStop(JNIEnv* /*env*/, jobject /*thiz*/)
 {
 	return hge_captureStop();
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeGetState(JNIEnv* /*env*/, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeGetState(JNIEnv* /*env*/, jobject /*thiz*/)
 {
 	return hge_getState();
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeResumeCapture(JNIEnv* /*env*/, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeResumeCapture(JNIEnv* /*env*/, jobject /*thiz*/)
 {
 	return hge_resumeCapture();
 }
 
 // 遅延アームのポンプ(§7.4)。予約(将来窓)計画の開始スレッドを期日に生成する。UIタイマから数秒毎に呼ぶ。
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativePump(JNIEnv* /*env*/, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativePump(JNIEnv* /*env*/, jobject /*thiz*/)
 {
 	return hge_pump();
 }
 
 // --- 並行撮影(計画id指定) ---
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeCaptureStartPlan(JNIEnv* env, jobject /*thiz*/, jstring id)
+Java_app_laxei_twylapse_HgeNative_nativeCaptureStartPlan(JNIEnv* env, jobject /*thiz*/, jstring id)
 {
 	const char* s = id ? env->GetStringUTFChars(id, nullptr) : nullptr;
 	jint r = hge_captureStartPlan(s ? s : "");
@@ -166,7 +166,7 @@ Java_app_laxei_holygrail_HgeNative_nativeCaptureStartPlan(JNIEnv* env, jobject /
 // 直前の撮影開始が失敗した理由の付随数値(同期撮影の上限台数など)。
 //  上限は Entity(=撮影する端末)が持つ。UI は数字を持たず、これを埋めるだけ。
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeLastStartNoticeN1(JNIEnv*, jobject)
+Java_app_laxei_twylapse_HgeNative_nativeLastStartNoticeN1(JNIEnv*, jobject)
 {
 	int32_t code = 0, n1 = 0;
 	hge_lastStartNotice(&code, &n1);
@@ -175,7 +175,7 @@ Java_app_laxei_holygrail_HgeNative_nativeLastStartNoticeN1(JNIEnv*, jobject)
 
 // 直前の撮影開始が失敗した理由(hgc::notice)。0=理由なし。
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeLastStartNotice(JNIEnv*, jobject)
+Java_app_laxei_twylapse_HgeNative_nativeLastStartNotice(JNIEnv*, jobject)
 {
 	int32_t code = 0, n1 = 0;
 	hge_lastStartNotice(&code, &n1);
@@ -183,7 +183,7 @@ Java_app_laxei_holygrail_HgeNative_nativeLastStartNotice(JNIEnv*, jobject)
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeCaptureStopPlan(JNIEnv* env, jobject /*thiz*/, jstring id)
+Java_app_laxei_twylapse_HgeNative_nativeCaptureStopPlan(JNIEnv* env, jobject /*thiz*/, jstring id)
 {
 	const char* s = id ? env->GetStringUTFChars(id, nullptr) : nullptr;
 	jint r = hge_captureStopPlan(s ? s : "");
@@ -192,7 +192,7 @@ Java_app_laxei_holygrail_HgeNative_nativeCaptureStopPlan(JNIEnv* env, jobject /*
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeGetStatePlan(JNIEnv* env, jobject /*thiz*/, jstring id)
+Java_app_laxei_twylapse_HgeNative_nativeGetStatePlan(JNIEnv* env, jobject /*thiz*/, jstring id)
 {
 	const char* s = id ? env->GetStringUTFChars(id, nullptr) : nullptr;
 	jint r = hge_getStatePlan(s ? s : "");
@@ -202,7 +202,7 @@ Java_app_laxei_holygrail_HgeNative_nativeGetStatePlan(JNIEnv* env, jobject /*thi
 
 // スマホ直接撮影で NOCAMERA の計画に即再探索を促す(継続ボタン)。planId 空=全取得フェーズ。
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativePokeAcquire(JNIEnv* env, jobject /*thiz*/, jstring id)
+Java_app_laxei_twylapse_HgeNative_nativePokeAcquire(JNIEnv* env, jobject /*thiz*/, jstring id)
 {
 	const char* s = id ? env->GetStringUTFChars(id, nullptr) : nullptr;
 	jint r = hge_pokeAcquire(s ? s : "");
@@ -211,7 +211,7 @@ Java_app_laxei_holygrail_HgeNative_nativePokeAcquire(JNIEnv* env, jobject /*thiz
 }
 
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeScheduleJson(JNIEnv* env, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeScheduleJson(JNIEnv* env, jobject /*thiz*/)
 {
 	int32_t len = 0;
 	hge_getScheduleJson(nullptr, &len);		// 必要バイト数を取得
@@ -222,7 +222,7 @@ Java_app_laxei_holygrail_HgeNative_nativeScheduleJson(JNIEnv* env, jobject /*thi
 }
 
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeGetPlanJson(JNIEnv* env, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeGetPlanJson(JNIEnv* env, jobject /*thiz*/)
 {
 	int32_t len = 0;
 	hge_getPlanJson(nullptr, &len);
@@ -234,7 +234,7 @@ Java_app_laxei_holygrail_HgeNative_nativeGetPlanJson(JNIEnv* env, jobject /*thiz
 
 // 指定 id の計画JSON。編集対象(画面が表示している計画)を動かさずに取り出す。
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeGetPlanJsonById(JNIEnv* env, jobject /*thiz*/, jstring id)
+Java_app_laxei_twylapse_HgeNative_nativeGetPlanJsonById(JNIEnv* env, jobject /*thiz*/, jstring id)
 {
 	const char* s = id ? env->GetStringUTFChars(id, nullptr) : nullptr;
 	int32_t len = 0;
@@ -249,7 +249,7 @@ Java_app_laxei_holygrail_HgeNative_nativeGetPlanJsonById(JNIEnv* env, jobject /*
 
 // 撮影計画(cs)JSONを現在の編集計画へ復元する(変更の取り消し用)。保存はしない。
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetPlanJson(JNIEnv* env, jobject /*thiz*/, jstring json)
+Java_app_laxei_twylapse_HgeNative_nativeSetPlanJson(JNIEnv* env, jobject /*thiz*/, jstring json)
 {
 	const char* s = json ? env->GetStringUTFChars(json, nullptr) : nullptr;
 	jint r = -1;
@@ -259,7 +259,7 @@ Java_app_laxei_holygrail_HgeNative_nativeSetPlanJson(JNIEnv* env, jobject /*thiz
 
 // 撮影シミュレーション(画面360)。恒星リストを一度読み込む。
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSimLoadStars(JNIEnv* env, jobject /*thiz*/, jstring json)
+Java_app_laxei_twylapse_HgeNative_nativeSimLoadStars(JNIEnv* env, jobject /*thiz*/, jstring json)
 {
 	const char* s = json ? env->GetStringUTFChars(json, nullptr) : nullptr;
 	jint r = hge_simLoadStars(s ? s : "");
@@ -269,7 +269,7 @@ Java_app_laxei_holygrail_HgeNative_nativeSimLoadStars(JNIEnv* env, jobject /*thi
 
 // 撮影シミュレーション。params から画角内の天体を投影した JSON を返す。
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSimulateSky(JNIEnv* env, jobject /*thiz*/, jstring params)
+Java_app_laxei_twylapse_HgeNative_nativeSimulateSky(JNIEnv* env, jobject /*thiz*/, jstring params)
 {
 	const char* p = params ? env->GetStringUTFChars(params, nullptr) : nullptr;
 	int32_t len = 0;
@@ -282,14 +282,14 @@ Java_app_laxei_holygrail_HgeNative_nativeSimulateSky(JNIEnv* env, jobject /*thiz
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSavePlan(JNIEnv* /*env*/, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeSavePlan(JNIEnv* /*env*/, jobject /*thiz*/)
 {
 	return hge_savePlan();
 }
 
 // --- 複数撮影計画(§7.4) ---
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeListPlans(JNIEnv* env, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeListPlans(JNIEnv* env, jobject /*thiz*/)
 {
 	int32_t len = 0;
 	hge_listPlansJson(nullptr, &len);
@@ -300,7 +300,7 @@ Java_app_laxei_holygrail_HgeNative_nativeListPlans(JNIEnv* env, jobject /*thiz*/
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeNewPlan(JNIEnv* env, jobject /*thiz*/, jstring presetName)
+Java_app_laxei_twylapse_HgeNative_nativeNewPlan(JNIEnv* env, jobject /*thiz*/, jstring presetName)
 {
 	const char* p = presetName ? env->GetStringUTFChars(presetName, nullptr) : nullptr;
 	jint r = hge_newPlan(p ? p : "");
@@ -309,7 +309,7 @@ Java_app_laxei_holygrail_HgeNative_nativeNewPlan(JNIEnv* env, jobject /*thiz*/, 
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeCopyPlan(JNIEnv* env, jobject /*thiz*/, jstring id)
+Java_app_laxei_twylapse_HgeNative_nativeCopyPlan(JNIEnv* env, jobject /*thiz*/, jstring id)
 {
 	const char* s = env->GetStringUTFChars(id, nullptr);
 	jint r = hge_copyPlan(s ? s : "");
@@ -318,7 +318,7 @@ Java_app_laxei_holygrail_HgeNative_nativeCopyPlan(JNIEnv* env, jobject /*thiz*/,
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeDeletePlan(JNIEnv* env, jobject /*thiz*/, jstring id)
+Java_app_laxei_twylapse_HgeNative_nativeDeletePlan(JNIEnv* env, jobject /*thiz*/, jstring id)
 {
 	const char* s = env->GetStringUTFChars(id, nullptr);
 	jint r = hge_deletePlan(s ? s : "");
@@ -327,7 +327,7 @@ Java_app_laxei_holygrail_HgeNative_nativeDeletePlan(JNIEnv* env, jobject /*thiz*
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSelectPlan(JNIEnv* env, jobject /*thiz*/, jstring id)
+Java_app_laxei_twylapse_HgeNative_nativeSelectPlan(JNIEnv* env, jobject /*thiz*/, jstring id)
 {
 	const char* s = env->GetStringUTFChars(id, nullptr);
 	jint r = hge_selectPlan(s ? s : "");
@@ -336,7 +336,7 @@ Java_app_laxei_holygrail_HgeNative_nativeSelectPlan(JNIEnv* env, jobject /*thiz*
 }
 
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeCurrentPlanId(JNIEnv* env, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeCurrentPlanId(JNIEnv* env, jobject /*thiz*/)
 {
 	int32_t len = 0;
 	hge_getCurrentPlanId(nullptr, &len);
@@ -347,7 +347,7 @@ Java_app_laxei_holygrail_HgeNative_nativeCurrentPlanId(JNIEnv* env, jobject /*th
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetPlanTimes(JNIEnv* env, jobject /*thiz*/,
+Java_app_laxei_twylapse_HgeNative_nativeSetPlanTimes(JNIEnv* env, jobject /*thiz*/,
                                                       jstring start_, jstring end_, jint offMin)
 {
 	const char* s = env->GetStringUTFChars(start_, nullptr);
@@ -359,33 +359,33 @@ Java_app_laxei_holygrail_HgeNative_nativeSetPlanTimes(JNIEnv* env, jobject /*thi
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetPlanDirection(JNIEnv* /*env*/, jobject /*thiz*/,
+Java_app_laxei_twylapse_HgeNative_nativeSetPlanDirection(JNIEnv* /*env*/, jobject /*thiz*/,
                                                           jdouble azimuth, jdouble elevation)
 {
 	return hge_setPlanDirection(azimuth, elevation);
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetPlanInterval(JNIEnv* /*env*/, jobject /*thiz*/, jdouble seconds)
+Java_app_laxei_twylapse_HgeNative_nativeSetPlanInterval(JNIEnv* /*env*/, jobject /*thiz*/, jdouble seconds)
 {
 	return hge_setPlanInterval(seconds);
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetPlanLandscape(JNIEnv* /*env*/, jobject /*thiz*/, jint landscape)
+Java_app_laxei_twylapse_HgeNative_nativeSetPlanLandscape(JNIEnv* /*env*/, jobject /*thiz*/, jint landscape)
 {
 	return hge_setPlanLandscape(landscape);
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetBandMode(JNIEnv* /*env*/, jobject /*thiz*/,
+Java_app_laxei_twylapse_HgeNative_nativeSetBandMode(JNIEnv* /*env*/, jobject /*thiz*/,
                                                      jint sunriseMode, jint sunsetMode)
 {
 	return hge_setBandMode(sunriseMode, sunsetMode);
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetBoundary(JNIEnv* env, jobject /*thiz*/,
+Java_app_laxei_twylapse_HgeNative_nativeSetBoundary(JNIEnv* env, jobject /*thiz*/,
                                                      jint beforeType, jint afterType, jint occ, jstring whenIso)
 {
 	const char* w = env->GetStringUTFChars(whenIso, nullptr);
@@ -395,20 +395,20 @@ Java_app_laxei_holygrail_HgeNative_nativeSetBoundary(JNIEnv* env, jobject /*thiz
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetBoundaryByAlt(JNIEnv* /*env*/, jobject /*thiz*/,
+Java_app_laxei_twylapse_HgeNative_nativeSetBoundaryByAlt(JNIEnv* /*env*/, jobject /*thiz*/,
                                                           jint beforeType, jint afterType, jint occ, jdouble altDeg, jint rising)
 {
 	return hge_setBoundaryByAlt(beforeType, afterType, occ, altDeg, rising);
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeClearScheduleEdits(JNIEnv* /*env*/, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeClearScheduleEdits(JNIEnv* /*env*/, jobject /*thiz*/)
 {
 	return hge_clearScheduleEdits();
 }
 
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeGetCcmDefaults(JNIEnv* env, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeGetCcmDefaults(JNIEnv* env, jobject /*thiz*/)
 {
 	int32_t len = 0;
 	hge_getCcmDefaultsJson(nullptr, &len);
@@ -419,7 +419,7 @@ Java_app_laxei_holygrail_HgeNative_nativeGetCcmDefaults(JNIEnv* env, jobject /*t
 }
 
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeGetPlanCcm(JNIEnv* env, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeGetPlanCcm(JNIEnv* env, jobject /*thiz*/)
 {
 	int32_t len = 0;
 	hge_getPlanCcmJson(nullptr, &len);
@@ -430,7 +430,7 @@ Java_app_laxei_holygrail_HgeNative_nativeGetPlanCcm(JNIEnv* env, jobject /*thiz*
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetPlanCcm(JNIEnv* env, jobject /*thiz*/, jstring json_)
+Java_app_laxei_twylapse_HgeNative_nativeSetPlanCcm(JNIEnv* env, jobject /*thiz*/, jstring json_)
 {
 	const char* j = env->GetStringUTFChars(json_, nullptr);
 	jint r = hge_setPlanCcmJson(j ? j : "", j ? static_cast<int32_t>(std::strlen(j)) : 0);
@@ -439,7 +439,7 @@ Java_app_laxei_holygrail_HgeNative_nativeSetPlanCcm(JNIEnv* env, jobject /*thiz*
 }
 
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeGetExpoValues(JNIEnv* env, jobject /*thiz*/, jint stepPerStop)
+Java_app_laxei_twylapse_HgeNative_nativeGetExpoValues(JNIEnv* env, jobject /*thiz*/, jint stepPerStop)
 {
 	int32_t len = 0;
 	hge_getExpoValuesJson(stepPerStop, nullptr, &len);
@@ -451,7 +451,7 @@ Java_app_laxei_holygrail_HgeNative_nativeGetExpoValues(JNIEnv* env, jobject /*th
 
 // 初期値のエディタ用(カメラに依らない目盛り。forPhone で 1/12 段・1/3 段を切り替える)。
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeGetPresetExpoValues(JNIEnv* env, jobject /*thiz*/, jboolean forPhone)
+Java_app_laxei_twylapse_HgeNative_nativeGetPresetExpoValues(JNIEnv* env, jobject /*thiz*/, jboolean forPhone)
 {
 	int32_t len = 0;
 	const int32_t ph = forPhone ? 1 : 0;
@@ -463,7 +463,7 @@ Java_app_laxei_holygrail_HgeNative_nativeGetPresetExpoValues(JNIEnv* env, jobjec
 }
 
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSunAltitudeTimes(JNIEnv* env, jobject /*thiz*/, jint altitudeDeg)
+Java_app_laxei_twylapse_HgeNative_nativeSunAltitudeTimes(JNIEnv* env, jobject /*thiz*/, jint altitudeDeg)
 {
 	int32_t len = 0;
 	hge_sunAltitudeTimes(altitudeDeg, nullptr, &len);
@@ -498,27 +498,27 @@ namespace
 }
 
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeGetMasterCameras(JNIEnv* env, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeGetMasterCameras(JNIEnv* env, jobject /*thiz*/)
 { return callBufGetter(env, hge_getMasterCamerasJson); }
 
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeGetMasterLenses(JNIEnv* env, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeGetMasterLenses(JNIEnv* env, jobject /*thiz*/)
 { return callBufGetter(env, hge_getMasterLensesJson); }
 
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeGetOwnedCameras(JNIEnv* env, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeGetOwnedCameras(JNIEnv* env, jobject /*thiz*/)
 { return callBufGetter(env, hge_getOwnedCamerasJson); }
 
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeGetOwnedLenses(JNIEnv* env, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeGetOwnedLenses(JNIEnv* env, jobject /*thiz*/)
 { return callBufGetter(env, hge_getOwnedLensesJson); }
 
 JNIEXPORT void JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeReloadMaster(JNIEnv* /*env*/, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeReloadMaster(JNIEnv* /*env*/, jobject /*thiz*/)
 { hge_reloadMaster(); }
 
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeOwnedCameraAuthPass(JNIEnv* env, jobject /*thiz*/, jstring name)
+Java_app_laxei_twylapse_HgeNative_nativeOwnedCameraAuthPass(JNIEnv* env, jobject /*thiz*/, jstring name)
 {
 	if (name == nullptr) { return env->NewStringUTF(""); }
 	const char* n = env->GetStringUTFChars(name, nullptr);
@@ -535,23 +535,23 @@ Java_app_laxei_holygrail_HgeNative_nativeOwnedCameraAuthPass(JNIEnv* env, jobjec
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeAddOwnedCamera(JNIEnv* env, jobject /*thiz*/, jstring name)
+Java_app_laxei_twylapse_HgeNative_nativeAddOwnedCamera(JNIEnv* env, jobject /*thiz*/, jstring name)
 { return callNameCmd(env, name, hge_addOwnedCamera); }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeAddOwnedLens(JNIEnv* env, jobject /*thiz*/, jstring name)
+Java_app_laxei_twylapse_HgeNative_nativeAddOwnedLens(JNIEnv* env, jobject /*thiz*/, jstring name)
 { return callNameCmd(env, name, hge_addOwnedLens); }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeRemoveOwnedCamera(JNIEnv* env, jobject /*thiz*/, jstring name)
+Java_app_laxei_twylapse_HgeNative_nativeRemoveOwnedCamera(JNIEnv* env, jobject /*thiz*/, jstring name)
 { return callNameCmd(env, name, hge_removeOwnedCamera); }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeRemoveOwnedLens(JNIEnv* env, jobject /*thiz*/, jstring name)
+Java_app_laxei_twylapse_HgeNative_nativeRemoveOwnedLens(JNIEnv* env, jobject /*thiz*/, jstring name)
 { return callNameCmd(env, name, hge_removeOwnedLens); }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetOwnedCameraAutoInsert(JNIEnv* env, jobject /*thiz*/,
+Java_app_laxei_twylapse_HgeNative_nativeSetOwnedCameraAutoInsert(JNIEnv* env, jobject /*thiz*/,
                                                                   jstring name, jint autoInsert)
 {
 	if (name == nullptr) { return -1; }
@@ -562,21 +562,21 @@ Java_app_laxei_holygrail_HgeNative_nativeSetOwnedCameraAutoInsert(JNIEnv* env, j
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetPlanCamera(JNIEnv* env, jobject /*thiz*/, jstring name)
+Java_app_laxei_twylapse_HgeNative_nativeSetPlanCamera(JNIEnv* env, jobject /*thiz*/, jstring name)
 { return callNameCmd(env, name, hge_setPlanCamera); }
 
 // 同期撮影(2026-08-25)
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetPlanSyncShot(JNIEnv* /*env*/, jobject /*thiz*/, jint on)
+Java_app_laxei_twylapse_HgeNative_nativeSetPlanSyncShot(JNIEnv* /*env*/, jobject /*thiz*/, jint on)
 { return hge_setPlanSyncShot(on); }
 
 // 追加カメラを名前の JSON 配列 ["name",...] で差し替える
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetPlanSubCameras(JNIEnv* env, jobject /*thiz*/, jstring json)
+Java_app_laxei_twylapse_HgeNative_nativeSetPlanSubCameras(JNIEnv* env, jobject /*thiz*/, jstring json)
 { return callNameCmd(env, json, hge_setPlanSubCameras); }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetPlanLocation(JNIEnv* env, jobject /*thiz*/, jdouble lat, jdouble lng, jstring name)
+Java_app_laxei_twylapse_HgeNative_nativeSetPlanLocation(JNIEnv* env, jobject /*thiz*/, jdouble lat, jdouble lng, jstring name)
 {
 	const char* n = name ? env->GetStringUTFChars(name, nullptr) : nullptr;
 	jint r = hge_setPlanLocation(static_cast<double>(lat), static_cast<double>(lng), n);
@@ -585,7 +585,7 @@ Java_app_laxei_holygrail_HgeNative_nativeSetPlanLocation(JNIEnv* env, jobject /*
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeRenamePlan(JNIEnv* env, jobject /*thiz*/, jstring id, jstring name)
+Java_app_laxei_twylapse_HgeNative_nativeRenamePlan(JNIEnv* env, jobject /*thiz*/, jstring id, jstring name)
 {
 	const char* i = id   ? env->GetStringUTFChars(id, nullptr)   : nullptr;
 	const char* n = name ? env->GetStringUTFChars(name, nullptr) : nullptr;
@@ -596,11 +596,11 @@ Java_app_laxei_holygrail_HgeNative_nativeRenamePlan(JNIEnv* env, jobject /*thiz*
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetPlanLens(JNIEnv* env, jobject /*thiz*/, jstring name)
+Java_app_laxei_twylapse_HgeNative_nativeSetPlanLens(JNIEnv* env, jobject /*thiz*/, jstring name)
 { return callNameCmd(env, name, hge_setPlanLens); }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetOwnedCameraDetail(JNIEnv* env, jobject /*thiz*/, jstring orig, jstring json)
+Java_app_laxei_twylapse_HgeNative_nativeSetOwnedCameraDetail(JNIEnv* env, jobject /*thiz*/, jstring orig, jstring json)
 {
 	const char* o = env->GetStringUTFChars(orig, nullptr);
 	const char* j = env->GetStringUTFChars(json, nullptr);
@@ -611,7 +611,7 @@ Java_app_laxei_holygrail_HgeNative_nativeSetOwnedCameraDetail(JNIEnv* env, jobje
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetOwnedLensDetail(JNIEnv* env, jobject /*thiz*/, jstring orig, jstring json)
+Java_app_laxei_twylapse_HgeNative_nativeSetOwnedLensDetail(JNIEnv* env, jobject /*thiz*/, jstring orig, jstring json)
 {
 	const char* o = env->GetStringUTFChars(orig, nullptr);
 	const char* j = env->GetStringUTFChars(json, nullptr);
@@ -623,27 +623,27 @@ Java_app_laxei_holygrail_HgeNative_nativeSetOwnedLensDetail(JNIEnv* env, jobject
 
 // --- 撮影計画ひな形(2026-09-04 UI依頼) ---
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeListTemplates(JNIEnv* env, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeListTemplates(JNIEnv* env, jobject /*thiz*/)
 { return callBufGetter(env, hge_listTemplatesJson); }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSelectTemplate(JNIEnv* env, jobject /*thiz*/, jstring id)
+Java_app_laxei_twylapse_HgeNative_nativeSelectTemplate(JNIEnv* env, jobject /*thiz*/, jstring id)
 { return callNameCmd(env, id, hge_selectTemplate); }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSaveTemplateFromPlan(JNIEnv* env, jobject /*thiz*/, jstring name)
+Java_app_laxei_twylapse_HgeNative_nativeSaveTemplateFromPlan(JNIEnv* env, jobject /*thiz*/, jstring name)
 { return callNameCmd(env, name, hge_saveTemplateFromPlan); }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeCopyTemplate(JNIEnv* env, jobject /*thiz*/, jstring id)
+Java_app_laxei_twylapse_HgeNative_nativeCopyTemplate(JNIEnv* env, jobject /*thiz*/, jstring id)
 { return callNameCmd(env, id, hge_copyTemplate); }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeDeleteTemplate(JNIEnv* env, jobject /*thiz*/, jstring id)
+Java_app_laxei_twylapse_HgeNative_nativeDeleteTemplate(JNIEnv* env, jobject /*thiz*/, jstring id)
 { return callNameCmd(env, id, hge_deleteTemplate); }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeRenameTemplate(JNIEnv* env, jobject /*thiz*/, jstring id, jstring name)
+Java_app_laxei_twylapse_HgeNative_nativeRenameTemplate(JNIEnv* env, jobject /*thiz*/, jstring id, jstring name)
 {
 	if (id == nullptr || name == nullptr) { return -1; }
 	const char* i = env->GetStringUTFChars(id, nullptr);
@@ -655,11 +655,11 @@ Java_app_laxei_holygrail_HgeNative_nativeRenameTemplate(JNIEnv* env, jobject /*t
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeNewPlanFromTemplate(JNIEnv* env, jobject /*thiz*/, jstring id)
+Java_app_laxei_twylapse_HgeNative_nativeNewPlanFromTemplate(JNIEnv* env, jobject /*thiz*/, jstring id)
 { return callNameCmd(env, id, hge_newPlanFromTemplate); }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeUpdatePlanFromTemplate(JNIEnv* env, jobject /*thiz*/, jstring planId, jstring tplId)
+Java_app_laxei_twylapse_HgeNative_nativeUpdatePlanFromTemplate(JNIEnv* env, jobject /*thiz*/, jstring planId, jstring tplId)
 {
 	if (planId == nullptr || tplId == nullptr) { return -1; }
 	const char* p = env->GetStringUTFChars(planId, nullptr);
@@ -672,19 +672,19 @@ Java_app_laxei_holygrail_HgeNative_nativeUpdatePlanFromTemplate(JNIEnv* env, job
 
 // --- 撮影場所(§7.9) ---
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeGetPlaces(JNIEnv* env, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeGetPlaces(JNIEnv* env, jobject /*thiz*/)
 { return callBufGetter(env, hge_getPlacesJson); }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeAddPlace(JNIEnv* env, jobject /*thiz*/, jstring name)
+Java_app_laxei_twylapse_HgeNative_nativeAddPlace(JNIEnv* env, jobject /*thiz*/, jstring name)
 { return callNameCmd(env, name, hge_addPlace); }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeRemovePlace(JNIEnv* env, jobject /*thiz*/, jstring name)
+Java_app_laxei_twylapse_HgeNative_nativeRemovePlace(JNIEnv* env, jobject /*thiz*/, jstring name)
 { return callNameCmd(env, name, hge_removePlace); }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetPlaceAutoInsert(JNIEnv* env, jobject /*thiz*/, jstring name, jint autoInsert)
+Java_app_laxei_twylapse_HgeNative_nativeSetPlaceAutoInsert(JNIEnv* env, jobject /*thiz*/, jstring name, jint autoInsert)
 {
 	if (name == nullptr) { return -1; }
 	const char* n = env->GetStringUTFChars(name, nullptr);
@@ -694,7 +694,7 @@ Java_app_laxei_holygrail_HgeNative_nativeSetPlaceAutoInsert(JNIEnv* env, jobject
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetPlaceDetail(JNIEnv* env, jobject /*thiz*/, jstring orig, jstring json)
+Java_app_laxei_twylapse_HgeNative_nativeSetPlaceDetail(JNIEnv* env, jobject /*thiz*/, jstring orig, jstring json)
 {
 	const char* o = env->GetStringUTFChars(orig, nullptr);
 	const char* j = env->GetStringUTFChars(json, nullptr);
@@ -705,31 +705,31 @@ Java_app_laxei_holygrail_HgeNative_nativeSetPlaceDetail(JNIEnv* env, jobject /*t
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetPlanPlace(JNIEnv* env, jobject /*thiz*/, jstring name)
+Java_app_laxei_twylapse_HgeNative_nativeSetPlanPlace(JNIEnv* env, jobject /*thiz*/, jstring name)
 { return callNameCmd(env, name, hge_setPlanPlace); }
 
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSearchDevicesList(JNIEnv* env, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeSearchDevicesList(JNIEnv* env, jobject /*thiz*/)
 { return callBufGetter(env, hge_searchDevicesListJson); }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativePresenceStart(JNIEnv* /*env*/, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativePresenceStart(JNIEnv* /*env*/, jobject /*thiz*/)
 { return hge_presenceStart(); }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativePresenceStop(JNIEnv* /*env*/, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativePresenceStop(JNIEnv* /*env*/, jobject /*thiz*/)
 { return hge_presenceStop(); }
 
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativePresenceJson(JNIEnv* env, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativePresenceJson(JNIEnv* env, jobject /*thiz*/)
 { return callBufGetter(env, hge_presenceJson); }
 
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeGetColors(JNIEnv* env, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeGetColors(JNIEnv* env, jobject /*thiz*/)
 { return callBufGetter(env, hge_getColorsJson); }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetColors(JNIEnv* env, jobject /*thiz*/, jstring json)
+Java_app_laxei_twylapse_HgeNative_nativeSetColors(JNIEnv* env, jobject /*thiz*/, jstring json)
 {
 	if (json == nullptr) { return -1; }
 	const char* j = env->GetStringUTFChars(json, nullptr);
@@ -739,11 +739,11 @@ Java_app_laxei_holygrail_HgeNative_nativeSetColors(JNIEnv* env, jobject /*thiz*/
 }
 
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeGetSmoothing(JNIEnv* env, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeGetSmoothing(JNIEnv* env, jobject /*thiz*/)
 { return callBufGetter(env, hge_getSmoothingJson); }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetSmoothing(JNIEnv* env, jobject /*thiz*/, jstring json)
+Java_app_laxei_twylapse_HgeNative_nativeSetSmoothing(JNIEnv* env, jobject /*thiz*/, jstring json)
 {
 	if (json == nullptr) { return -1; }
 	const char* j = env->GetStringUTFChars(json, nullptr);
@@ -753,16 +753,16 @@ Java_app_laxei_holygrail_HgeNative_nativeSetSmoothing(JNIEnv* env, jobject /*thi
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativePruneOldLogs(JNIEnv* /*env*/, jobject /*thiz*/, jint offMin)
+Java_app_laxei_twylapse_HgeNative_nativePruneOldLogs(JNIEnv* /*env*/, jobject /*thiz*/, jint offMin)
 { return hge_pruneOldLogs(offMin); }
 
 // --- 撮影レポート ---
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeReportList(JNIEnv* env, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeReportList(JNIEnv* env, jobject /*thiz*/)
 { return callBufGetter(env, hge_reportListJson); }
 
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeReportJson(JNIEnv* env, jobject /*thiz*/, jstring name)
+Java_app_laxei_twylapse_HgeNative_nativeReportJson(JNIEnv* env, jobject /*thiz*/, jstring name)
 {
 	if (name == nullptr) { return env->NewStringUTF(""); }
 	const char* n = env->GetStringUTFChars(name, nullptr);
@@ -775,7 +775,7 @@ Java_app_laxei_holygrail_HgeNative_nativeReportJson(JNIEnv* env, jobject /*thiz*
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeRemoveReport(JNIEnv* env, jobject /*thiz*/, jstring name)
+Java_app_laxei_twylapse_HgeNative_nativeRemoveReport(JNIEnv* env, jobject /*thiz*/, jstring name)
 {
 	if (name == nullptr) { return -1; }
 	const char* n = env->GetStringUTFChars(name, nullptr);
@@ -785,7 +785,7 @@ Java_app_laxei_holygrail_HgeNative_nativeRemoveReport(JNIEnv* env, jobject /*thi
 }
 
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeGetCcmPresets(JNIEnv* env, jobject /*thiz*/, jstring type)
+Java_app_laxei_twylapse_HgeNative_nativeGetCcmPresets(JNIEnv* env, jobject /*thiz*/, jstring type)
 {
 	const char* t = env->GetStringUTFChars(type, nullptr);
 	int32_t len = 0;
@@ -797,7 +797,7 @@ Java_app_laxei_holygrail_HgeNative_nativeGetCcmPresets(JNIEnv* env, jobject /*th
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetCcmPreset(JNIEnv* env, jobject /*thiz*/, jstring type, jstring orig, jstring json)
+Java_app_laxei_twylapse_HgeNative_nativeSetCcmPreset(JNIEnv* env, jobject /*thiz*/, jstring type, jstring orig, jstring json)
 {
 	const char* t = env->GetStringUTFChars(type, nullptr);
 	const char* o = env->GetStringUTFChars(orig, nullptr);
@@ -808,7 +808,7 @@ Java_app_laxei_holygrail_HgeNative_nativeSetCcmPreset(JNIEnv* env, jobject /*thi
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeRemoveCcmPreset(JNIEnv* env, jobject /*thiz*/, jstring type, jstring name)
+Java_app_laxei_twylapse_HgeNative_nativeRemoveCcmPreset(JNIEnv* env, jobject /*thiz*/, jstring type, jstring name)
 {
 	const char* t = env->GetStringUTFChars(type, nullptr);
 	const char* n = env->GetStringUTFChars(name, nullptr);
@@ -818,7 +818,7 @@ Java_app_laxei_holygrail_HgeNative_nativeRemoveCcmPreset(JNIEnv* env, jobject /*
 }
 
 JNIEXPORT jstring JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeGetPreferredCcm(JNIEnv* env, jobject /*thiz*/, jstring type)
+Java_app_laxei_twylapse_HgeNative_nativeGetPreferredCcm(JNIEnv* env, jobject /*thiz*/, jstring type)
 {
 	const char* t = env->GetStringUTFChars(type, nullptr);
 	int32_t len = 0;
@@ -830,7 +830,7 @@ Java_app_laxei_holygrail_HgeNative_nativeGetPreferredCcm(JNIEnv* env, jobject /*
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetPreferredCcm(JNIEnv* env, jobject /*thiz*/, jstring type, jstring name)
+Java_app_laxei_twylapse_HgeNative_nativeSetPreferredCcm(JNIEnv* env, jobject /*thiz*/, jstring type, jstring name)
 {
 	const char* t = env->GetStringUTFChars(type, nullptr);
 	const char* n = env->GetStringUTFChars(name, nullptr);
@@ -840,12 +840,12 @@ Java_app_laxei_holygrail_HgeNative_nativeSetPreferredCcm(JNIEnv* env, jobject /*
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeAddOwnedDetected(JNIEnv* /*env*/, jobject /*thiz*/, jint index)
+Java_app_laxei_twylapse_HgeNative_nativeAddOwnedDetected(JNIEnv* /*env*/, jobject /*thiz*/, jint index)
 { return hge_addOwnedDetected(index); }
 
 // 発見/接続したカメラ識別情報を所持カメラへ反映する。allowAdd=1で未一致は自動追加、0なら追加せず区分のみ返す。
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeRecordCameraIdentity(JNIEnv* env, jobject /*thiz*/, jstring model, jstring serial, jstring assignedName, jboolean allowAdd)
+Java_app_laxei_twylapse_HgeNative_nativeRecordCameraIdentity(JNIEnv* env, jobject /*thiz*/, jstring model, jstring serial, jstring assignedName, jboolean allowAdd)
 {
 	const char* m = model    ? env->GetStringUTFChars(model,    nullptr) : nullptr;
 	const char* s = serial   ? env->GetStringUTFChars(serial,   nullptr) : nullptr;
@@ -859,7 +859,7 @@ Java_app_laxei_holygrail_HgeNative_nativeRecordCameraIdentity(JNIEnv* env, jobje
 
 // listener(HgeListener) を登録/解除する。
 JNIEXPORT void JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeSetListener(JNIEnv* env, jobject /*thiz*/, jobject listener)
+Java_app_laxei_twylapse_HgeNative_nativeSetListener(JNIEnv* env, jobject /*thiz*/, jobject listener)
 {
 	if (g_listener != nullptr)
 	{
@@ -887,13 +887,13 @@ Java_app_laxei_holygrail_HgeNative_nativeSetListener(JNIEnv* env, jobject /*thiz
 namespace { rawStack::accumulator g_stack; }
 
 JNIEXPORT void JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeRawStackBegin(JNIEnv* /*env*/, jobject /*thiz*/, jint w, jint h, jint cfa)
+Java_app_laxei_twylapse_HgeNative_nativeRawStackBegin(JNIEnv* /*env*/, jobject /*thiz*/, jint w, jint h, jint cfa)
 {
 	g_stack.begin(static_cast<int>(w), static_cast<int>(h), static_cast<int>(cfa));
 }
 
 JNIEXPORT jboolean JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeRawStackAdd(JNIEnv* env, jobject /*thiz*/, jobject buf, jint rowStride)
+Java_app_laxei_twylapse_HgeNative_nativeRawStackAdd(JNIEnv* env, jobject /*thiz*/, jobject buf, jint rowStride)
 {
 	if (buf == nullptr) { return JNI_FALSE; }
 	const uint8_t* p = static_cast<const uint8_t*>(env->GetDirectBufferAddress(buf));
@@ -903,7 +903,7 @@ Java_app_laxei_holygrail_HgeNative_nativeRawStackAdd(JNIEnv* env, jobject /*thiz
 }
 
 JNIEXPORT jint JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeRawStackFrames(JNIEnv* /*env*/, jobject /*thiz*/)
+Java_app_laxei_twylapse_HgeNative_nativeRawStackFrames(JNIEnv* /*env*/, jobject /*thiz*/)
 {
 	return static_cast<jint>(g_stack.frames());
 }
@@ -911,7 +911,7 @@ Java_app_laxei_holygrail_HgeNative_nativeRawStackFrames(JNIEnv* /*env*/, jobject
 // 足したものを現像して Bitmap(ARGB_8888、幅=RAW幅/2、高さ=RAW高さ/2)へ書く。
 //  black=黒レベル4つ(位置順) gains=WB4つ(R,Gr,Gb,B) ccm=3×3 行優先 shading=周辺減光(4面、無ければ null)。
 JNIEXPORT jboolean JNICALL
-Java_app_laxei_holygrail_HgeNative_nativeRawStackDevelop(JNIEnv* env, jobject /*thiz*/, jobject bitmap,
+Java_app_laxei_twylapse_HgeNative_nativeRawStackDevelop(JNIEnv* env, jobject /*thiz*/, jobject bitmap,
                                                           jint whiteLevel, jfloatArray black, jfloatArray gains,
                                                           jfloatArray ccm, jfloatArray shading, jint cols, jint rows)
 {
