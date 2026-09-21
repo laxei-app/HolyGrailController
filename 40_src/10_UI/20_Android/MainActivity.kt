@@ -3985,6 +3985,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  そこでは押す意味がない(場所は空けたままにして題を中央に保つ)。
         findViewById<View>(R.id.plan_home)?.visibility = if (tplMode) View.VISIBLE else View.INVISIBLE
         updatePagerTitle()
+        // 先頭タブの名前(ひな形/撮影計画)も切り替える(2026-09-21 UI依頼)。ひな形からホームで戻るとき、
+        //  計画の選び直し(EV_SCHEDULE)でタブが作られるのが tplMode を落とす前なので「ひな形」のまま残っていた。
+        rebuildPlanTabs()
     }
 
     private fun buildPlanList(js: String) {
