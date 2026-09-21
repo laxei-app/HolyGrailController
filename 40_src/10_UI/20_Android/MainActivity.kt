@@ -2215,7 +2215,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.addView(editRow("シリアルNo.", "serial", cam.optString("serial")))
         // 未登録(0)は空欄で出す。0.0 と書くと「0という値が入っている」ように見えるため(2026-08-19)。
         // センサー寸法と画素数は機材マスターにある機種しか埋まらない。無い機種はここに手で入れる。
-        fun blankIfZero(v: Double) = if (v > 0.0) v.toString() else ""
+        // センサー寸法[mm]は小数点以下 2 桁固定(2026-09-21 ユーザー指示)。内蔵カメラは端末が float で
+        //  答えるので、そのまま出すと 9.791999816894531 のような桁になる。
+        fun blankIfZero(v: Double) = if (v > 0.0) String.format(java.util.Locale.US, "%.2f", v) else ""
         fun blankIfZeroI(v: Int)   = if (v > 0) v.toString() else ""
         box.addView(editRow2("センサーサイズ", "sensorSize", blankIfZero(cam.optDouble("sensorSize", 0.0)),
             "sensorSizeV", blankIfZero(cam.optDouble("sensorSizeV", 0.0)), "×", "mm", true))

@@ -1526,6 +1526,11 @@ bool dataManager::fillOwnedCameraSensor(const std::string& serial, double sensor
                                         uint32_t pixelW, uint32_t pixelH)
 {
 	if (serial.empty() || sensorWmm <= 0.0 || pixelW == 0) { return false; }
+	// 端末は寸法を float で答える(9.791999816894531 のような桁になる)。0.01mm に丸めて持つ
+	//  (2026-09-21 ユーザー指示: 小数点以下 2 桁固定。NPF への影響は無視できる)。
+	auto r2 = [](double v) { return std::floor(v * 100.0 + 0.5) / 100.0; };
+	sensorWmm = r2(sensorWmm);
+	sensorHmm = r2(sensorHmm);
 	ensureOwned();
 	for (auto& oc : g_ownedCameras)
 	{
