@@ -769,6 +769,8 @@ namespace
 	void clampOwnedToGear(hgc::ccmOwned& own, const hgc::camera& cam, const hgc::lens& lens);
 	std::string ownedCcmToJson(const hgc::ccmOwned& own);
 	void applyCcmSetToPlan(hgc::cs& plan, const astro::ccmSet& set);
+	std::string uniqueName(const std::string& base, const std::vector<std::string>& names);
+	std::vector<std::string> collectPlanNames(const std::string& excludeId);
 
 	// 現在(編集対象)の計画を保存用 JSON にする。
 	// 撮影制御方法は計画自身(g_plan.ccm)が持つので、以前のような別枠 planCcm は書かない。
@@ -932,6 +934,30 @@ namespace
 		buildScheduleJson();
 	}
 
+	// ひな形から撮影計画を作り、編集対象にして保存する(hge_newPlanFromTemplate と最初の計画の両方から)。
+	//  ・開始日は今日(時刻はひな形のまま)。終了は同じ長さを保ってずらす
+	//  ・計画名はひな形と同じ。既にあれば末尾に連番。tplKind は外す(計画は標準ひな形ではない)
+	bool newPlanFromTemplateImpl(const std::string& id)
+	{
+		std::string saved; hgc::cs cs;
+		if (!dataManager::loadTplFile(id, saved) || !csjson::fromJson(saved, cs)) { return false; }
+		cs.name = uniqueName(cs.name, collectPlanNames(""));
+		cs.tplKind.clear();
+		shiftToToday(cs);
+		refreshCameraFromOwned(cs);
+		// ひな形の撮影制御方法をそのまま受け継ぎ、今のカメラ/レンズの目盛りへ合わせる(2026-09-06)。
+		clampOwnedToGear(cs.ccm, cs.camera, cs.lens);
+		g_plan = cs;
+		if (astro::buildSchedule(g_plan) != ERR_HGC_OK) { return false; }
+		{ const int mn = minIntervalSec(g_plan); if (g_plan.interval < static_cast<double>(mn)) { g_plan.interval = mn; } }
+		buildScheduleJson();
+		g_editId    = makePlanId();
+		g_editIsTpl = false;
+		g_planReady = true;
+		dataManager::savePlanFile(g_editId, wrapCurrentPlan());
+		return true;
+	}
+
 	// 起動時の撮影計画準備。旧 plan.json があれば新形式へ移行し、既存計画があれば最新を復元、
 	// 無ければ出荷時の固定計画を新規作成して保存する。
 	errCode loadFixedPlanImpl(void)
@@ -964,6 +990,26 @@ namespace
 		//  内蔵カメラの登録と場所の確定を行う。その前に作ると出荷時のカメラ・場所で固まる。
 		if (g_seedPending) { return ERR_HGC_READY; }
 
+		// 【最初の計画は標準ひな形から(2026-09-21 ユーザー決定)】「撮影計画の初期値にする」カメラ(内蔵の広角)の
+		//  星景(日の出含む)があれば、それから作る(名前・時刻もひな形のまま)。無ければ出荷時の固定計画。
+		{
+			hgc::camera ac;
+			if (dataManager::autoInsertCamera(ac))
+			{
+				for (const std::string& id : dataManager::listTplIds())
+				{
+					std::string saved; hgc::cs t;
+					if (!dataManager::loadTplFile(id, saved) || !csjson::fromJson(saved, t)) { continue; }
+					if (t.tplKind != "star_sunrise" || t.camera.name != ac.name) { continue; }
+					if (newPlanFromTemplateImpl(id))
+					{
+						dataManager::logEvent("PLAN", ("first plan from template: " + g_plan.name).c_str());
+						return ERR_HGC_OK;
+					}
+					break;
+				}
+			}
+		}
 		// 無ければ出荷時の固定計画を作成して保存する。
 		makeFactoryCurrent(nullptr);
 		g_editId    = makePlanId();
@@ -2727,24 +2773,7 @@ int32_t hge_newPlanFromTemplate(const char* id)
 {
 	if (id == nullptr || id[0] == '\0') { return ERR_HGC_INVALID_ARG; }
 	if (!g_planReady) { loadFixedPlanImpl(); }
-	std::string saved; hgc::cs cs;
-	if (!dataManager::loadTplFile(std::string(id), saved) ||
-	    !csjson::fromJson(saved, cs)) { return ERR_HGC_NO_ELEMENT; }
-	cs.name = uniqueName(cs.name, collectPlanNames(""));
-	cs.tplKind.clear();	// 計画は標準ひな形ではない(種類の印はひな形だけが持つ)
-	shiftToToday(cs);
-	refreshCameraFromOwned(cs);
-	// ひな形の撮影制御方法をそのまま受け継ぎ、今のカメラ/レンズの目盛りへ合わせる(2026-09-06)。
-	clampOwnedToGear(cs.ccm, cs.camera, cs.lens);
-	g_plan = cs;
-	const errCode be = astro::buildSchedule(g_plan);
-	if (be != ERR_HGC_OK) { return be; }
-	{ const int mn = minIntervalSec(g_plan); if (g_plan.interval < static_cast<double>(mn)) { g_plan.interval = mn; } }
-	buildScheduleJson();
-	g_editId    = makePlanId();
-	g_editIsTpl = false;
-	g_planReady = true;
-	dataManager::savePlanFile(g_editId, wrapCurrentPlan());
+	if (!newPlanFromTemplateImpl(std::string(id))) { return ERR_HGC_NO_ELEMENT; }
 	notify(HGE_EV_SCHEDULE, g_schedJson);
 	return ERR_HGC_OK;
 }

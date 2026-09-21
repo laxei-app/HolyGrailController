@@ -112,16 +112,28 @@ namespace
 		set.day = day;
 	}
 
-	// 見つかったカメラのうち、焦点距離がいちばん短いもの(スマホ用初期値の元にする)。
+	// 【既定にする内蔵カメラ = 「広角」(2026-09-21 ユーザー決定)】スマホ用初期値の元・新規計画の既定カメラ・
+	//  最初の計画のひな形に使う。以前は最短焦点(超広角)だったが、星景の既定は広角がよい。
+	//  区分は UI の名前付けと同じ 35mm 換算(20mm 未満=超広角 / 45mm 未満=広角 / それ以上=望遠)。
+	//  換算 20〜45mm のものを採り、無ければ換算 24mm に最も近いもの。
 	// 戻りが非 const なのは、呼ぶ側が expoResolve(デバイスの遅延構築に触る)を使うため。
-	apiBuiltin* shortestLens(const std::vector<class device>& cams, const class device** dev)
+	double equivFocalMm(const class device& d, apiBuiltin& api)
 	{
-		apiBuiltin* best = nullptr;
+		double wmm = 0.0, hmm = 0.0; uint32_t px = 0, py = 0;
+		if (d.apiBase->readSensorSpec(wmm, hmm, px, py) != ERR_HGC_OK || wmm <= 0.0) { return api.focalMm(); }
+		return api.focalMm() * 36.0 / wmm;
+	}
+	apiBuiltin* wideLens(const std::vector<class device>& cams, const class device** dev)
+	{
+		apiBuiltin* best = nullptr; double bestScore = 1e9;
 		for (const auto& d : cams)
 		{
 			apiBuiltin* api = dynamic_cast<apiBuiltin*>(d.apiBase.get());
 			if (api == nullptr || api->focalMm() <= 0.0) { continue; }
-			if (best == nullptr || api->focalMm() < best->focalMm()) { best = api; *dev = &d; }
+			const double eq = equivFocalMm(d, *api);
+			// 広角の帯(20〜45mm)は 24mm からの距離、帯の外は +1000 して後回し
+			const double score = std::fabs(eq - 24.0) + ((eq >= 20.0 && eq < 45.0) ? 0.0 : 1000.0);
+			if (best == nullptr || score < bestScore) { best = api; bestScore = score; *dev = &d; }
 		}
 		return best;
 	}
@@ -130,7 +142,7 @@ namespace
 	void makePhonePresets(const std::vector<class device>& cams, const phoneNames& nm)
 	{
 		const class device* dev = nullptr;
-		apiBuiltin* api = shortestLens(cams, &dev);
+		apiBuiltin* api = wideLens(cams, &dev);
 		if (api == nullptr || dev == nullptr) { return; }
 		double wmm = 0.0, hmm = 0.0; uint32_t px = 0, py = 0;
 		dev->apiBase->readSensorSpec(wmm, hmm, px, py);
@@ -286,12 +298,12 @@ namespace builtinCam
 		const phoneNames nm = parseNames(namesJson);
 		makePhonePresets(found, nm);
 		makeTemplate(found, namesJson);
-		// 【新規計画の初期カメラ(2026-09-06 ユーザー指示)】スマホ用初期値の元にした(焦点距離が最短の)
+		// 【新規計画の初期カメラ(2026-09-06 ユーザー指示)】スマホ用初期値の元にした(広角の)
 		//  内蔵カメラに「撮影計画の初期値にする」を入れる。利用者が既に別のカメラを選んでいれば触らない。
 		{
 			hgc::camera cur;
 			const class device* dev = nullptr;
-			if (!dataManager::autoInsertCamera(cur) && shortestLens(found, &dev) != nullptr && dev != nullptr)
+			if (!dataManager::autoInsertCamera(cur) && wideLens(found, &dev) != nullptr && dev != nullptr)
 			{
 				dataManager::setOwnedCameraAutoInsert(dev->model, true);
 				dataManager::logEvent("GEAR", ("plan default camera: " + dev->model).c_str());
