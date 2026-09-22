@@ -163,6 +163,8 @@ errCode apiBuiltin::init(class device& device)
 	nrMinimal_ = j.value("nrMinimal", false);
 	edgeOff_   = j.value("edgeOff", false);
 	rawOk_     = j.value("raw", false);
+	focusMinDpt_  = j.value("focusMinDiopter", 0.0);	// 0=固定焦点。>0 ならピント位置を指定できる
+	hyperfocalDpt_ = j.value("hyperfocalDiopter", 0.0);
 	name_    = j.value("name", std::string("Built-in camera"));
 	apertures_.clear();
 	if (j.contains("apertures") && j["apertures"].is_array())
@@ -182,8 +184,9 @@ errCode apiBuiltin::init(class device& device)
 		              (expMinNs_ > 0 ? expMinNs_ / 1e9 : 0.0), (expMaxNs_ > 0 ? expMaxNs_ / 1e9 : 0.0),
 		              manual_ ? 1 : 0, isoList_.size(), ssList_.size(), fnList_.size());
 		dataManager::logEvent("CAMERA", b);
-		std::snprintf(b, sizeof(b), "builtin %s: nrOff=%d nrMinimal=%d edgeOff=%d raw=%d",
-		              id_.c_str(), nrOff_ ? 1 : 0, nrMinimal_ ? 1 : 0, edgeOff_ ? 1 : 0, rawOk_ ? 1 : 0);
+		std::snprintf(b, sizeof(b), "builtin %s: nrOff=%d nrMinimal=%d edgeOff=%d raw=%d focus=%s",
+		              id_.c_str(), nrOff_ ? 1 : 0, nrMinimal_ ? 1 : 0, edgeOff_ ? 1 : 0, rawOk_ ? 1 : 0,
+		              (focusMinDpt_ > 0.0) ? "infinity(set)" : "fixed");
 		dataManager::logEvent("CAMERA", b);
 	}
 
@@ -620,7 +623,7 @@ void apiBuiltin::saveShot(const std::vector<uint8_t>& jpeg)
 	const std::string dir = osfile::dir("shot");
 	if (dir.empty()) { return; }
 	char name[64];
-	std::snprintf(name, sizeof(name), "/hgc_%05d.jpg", ++shotSeq_);
+	std::snprintf(name, sizeof(name), "/tlp_%05d.jpg", ++shotSeq_);	// 改名の取りこぼし(2026-09-23)
 	if (!osfile::writeAll(dir + name, reinterpret_cast<const char*>(jpeg.data()), jpeg.size()))
 	{
 		// 書けないときは残量不足が疑わしい。毎コマ言っても仕方ないので最初の1回だけ。

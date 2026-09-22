@@ -53,6 +53,11 @@ object BuiltinCamera {
     //  開くときに確かめて覚えておき、使えるときだけ載せる。
     private var canNrOff = false
     private var canEdgeOff = false
+    // 【ピントを無限遠に置く(2026-09-23 ユーザー指示)】AF を切ったまま位置を指定しないと、レンズは
+    //  前に使ったアプリが置いていった位置のまま撮る(SH-M08 の 09-22 朝は全編ピンボケだった)。
+    //  最短撮影距離が 0 の機種は固定焦点なので触らない(指定すると撮影要求ごと弾かれる端末がある)。
+    private var canSetFocus = false
+    @Volatile private var capFocusDpt = -1f    // 直近のコマで端末が申告したピント位置[ディオプタ]
 
     private var openId: String? = null      // いま開いている物理カメラ id
     private var openLogical: String? = null // その入口になっている論理カメラ id
@@ -272,6 +277,9 @@ object BuiltinCamera {
         o.put("apertures", ap)
         val fl = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()
         o.put("focalMm", fl?.toDouble() ?: 0.0)
+        // ピントを動かせるか(最短撮影距離[ディオプタ]。0=固定焦点)と過焦点距離[ディオプタ]。記録用。
+        o.put("focusMinDiopter", (c.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f).toDouble())
+        o.put("hyperfocalDiopter", (c.get(CameraCharacteristics.LENS_INFO_HYPERFOCAL_DISTANCE) ?: 0f).toDouble())
         o.put("name", displayName(id, c))
         // マニュアル露出が使えるか。使えない端末では露出を指定しても効かない。
         val caps = c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
@@ -433,6 +441,8 @@ object BuiltinCamera {
         canNrOff = nrModes?.contains(CameraMetadata.NOISE_REDUCTION_MODE_OFF) ?: false
         val edModes = c.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES)
         canEdgeOff = edModes?.contains(CameraMetadata.EDGE_MODE_OFF) ?: false
+        // 0 = 固定焦点(位置を動かせない)。> 0 ならディオプタ(1/m)で、0 を送ると無限遠。
+        canSetFocus = (c.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f) > 0f
 
         val h = ensureThread()
         openRaw = raw
@@ -553,8 +563,11 @@ object BuiltinCamera {
     @JvmStatic
     fun captureReport(): String {
         val m = synchronized(capMarks) { capMarks.toString() }
-        return String.format(java.util.Locale.US, "req=%dx%.2fs imgs=%d res=%d fail=%d bufLost=%d addFail=%d dev=%dms marks:%s",
-            capFrames, capExpNs / 1e9, capImages, capResults, capFail, capBufLost, capAddFail, capDevMs, m)
+        // focus は端末が申告したピント位置[ディオプタ]。0.00=無限遠。固定焦点の機種と取れない機種は -1。
+        return String.format(java.util.Locale.US,
+            "req=%dx%.2fs imgs=%d res=%d fail=%d bufLost=%d addFail=%d dev=%dms focus=%.2f marks:%s",
+            capFrames, capExpNs / 1e9, capImages, capResults, capFail, capBufLost, capAddFail, capDevMs,
+            capFocusDpt, m)
     }
 
     // 露出を指定して1枚撮り始める。成功=要求を出せた。画像は takeImage で受け取る。
@@ -646,6 +659,8 @@ object BuiltinCamera {
             if (expNs > 0L) { req.set(CaptureRequest.SENSOR_FRAME_DURATION, expNs + 50_000_000L) }
             // 星を撮るので、ぶれ補正と手ぶれ補正は切る(三脚前提)。無い端末では黙って無視される。
             req.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF)
+            // ピントは無限遠(0 ディオプタ)。AF を切っただけでは位置が決まらない(2026-09-23)。
+            if (canSetFocus) { req.set(CaptureRequest.LENS_FOCUS_DISTANCE, 0f) }
             req.set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_DAYLIGHT)
             // 星を消さないための2行。端末が対応しているときだけ載せる(上の canNrOff/canEdgeOff)。
             if (canNrOff)   { req.set(CaptureRequest.NOISE_REDUCTION_MODE, CameraMetadata.NOISE_REDUCTION_MODE_OFF) }
@@ -655,6 +670,14 @@ object BuiltinCamera {
                 runCatching {
                     if (iso > 0)    { req.setPhysicalCameraKey(CaptureRequest.SENSOR_SENSITIVITY, iso, physId) }
                     if (expNs > 0L) { req.setPhysicalCameraKey(CaptureRequest.SENSOR_EXPOSURE_TIME, expNs, physId) }
+                }
+                // ピントも物理カメラ宛てに送る(受け付けない端末では黙って無視される)。上と分けるのは、
+                //  ここで弾かれても露出の指定を落とさないため。
+                if (canSetFocus) {
+                    runCatching {
+                        req.setPhysicalCameraKey(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF, physId)
+                        req.setPhysicalCameraKey(CaptureRequest.LENS_FOCUS_DISTANCE, 0f, physId)
+                    }
                 }
             }
             // RAW は自前で現像するので、周辺減光の地図を撮影結果に付けてもらう(掛け戻しに使う)。
@@ -671,6 +694,8 @@ object BuiltinCamera {
                             res.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID) ?: ""
                         }.getOrDefault("")
                     }
+                    // 端末が実際に置いたピント位置。指定(無限遠=0)どおりかを後から確かめられるようにする。
+                    capFocusDpt = runCatching { res.get(CaptureResult.LENS_FOCUS_DISTANCE) ?: -1f }.getOrDefault(-1f)
                     if (useRaw) {
                         lastRes = res; results++; capResults = results
                         val ae = runCatching { res.get(CaptureResult.SENSOR_EXPOSURE_TIME) }.getOrNull()
