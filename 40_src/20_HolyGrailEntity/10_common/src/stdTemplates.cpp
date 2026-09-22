@@ -81,6 +81,10 @@ namespace stdtpl
 		cs.camera   = g.camera;
 		cs.lens     = g.lens;
 		cs.interval = isStar(k) ? g.starInterval : g.cityInterval;
+		// 撮影方向(シミュレーションの初期値。2026-09-23 ユーザー指示)。
+		//  日の出を含む = 東 90°/ 日の入を含む = 西 270°。仰角はどれも 25°。
+		cs.azimuth   = isSunrise(k) ? 90.0 : 270.0;
+		cs.elevation = 25.0;
 
 		// 窓: 日の出含む=今日 21:00〜翌 09:00 / 日の入含む=今日 15:00〜翌 03:00(場所の時刻)。
 		//  計画を作るときは日付だけ今日へ寄るので、時刻だけが意味を持つ。
