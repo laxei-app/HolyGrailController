@@ -96,7 +96,8 @@ namespace csjson
 		json videoToJsonObj(const hgc::videoSet& v)
 		{
 			return json{ {"make", v.make}, {"size", v.size}, {"aspect", v.aspect},
-			             {"fps", v.fps}, {"quality", v.quality} };
+			             {"fps", v.fps}, {"quality", v.quality},
+			             {"jpg", v.jpg}, {"dng", v.dng} };
 		}
 		hgc::videoSet videoFromJsonObj(const json& j)
 		{
@@ -110,6 +111,10 @@ namespace csjson
 			if (v.size > 2)    { v.size = 0; }
 			if (v.aspect > 2)  { v.aspect = 0; }
 			if (v.quality > 2) { v.quality = 2; }
+			v.jpg = j.value("jpg", false);
+			v.dng = j.value("dng", false);
+			// 何も残らない設定にはしない(動画も静止画も出さない指定は jpg に倒す)。
+			if (!v.make && !v.jpg && !v.dng) { v.jpg = true; }
 			return v;
 		}
 

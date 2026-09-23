@@ -72,6 +72,10 @@ namespace hgc
 		uint8_t aspect = 0;
 		double fps     = 15.0;	// 7.5 / 15 / 30 / 60
 		uint8_t quality = 2;	// 0=低 1=標準 2=高(1画素あたりのビット数で効く)
+		// 静止画の出力(2026-09-23 UI依頼)。**利用者が見える場所**(Pictures/TwyLapse)へ残す。
+		//  動画を作らないときは、どちらか一方を必ず入れる(何も残らない設定にはしない)。
+		bool   jpg     = false;	// 現像した jpg(動画と同じ大きさ)
+		bool   dng     = false;	// 束ねる前のフルサイズ DNG(1コマ 25MB 前後)
 	};
 
 	// 4.5 撮影計画

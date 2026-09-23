@@ -19,6 +19,9 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.PowerManager
 import android.os.SystemClock
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import android.util.Log
 import android.util.Size
 import java.io.ByteArrayOutputStream
@@ -58,6 +61,10 @@ object BuiltinCamera {
     //  最短撮影距離が 0 の機種は固定焦点なので触らない(指定すると撮影要求ごと弾かれる端末がある)。
     private var canSetFocus = false
     @Volatile private var capFocusDpt = -1f    // 直近のコマで端末が申告したピント位置[ディオプタ]
+    // DNG を出すか(2026-09-23 UI依頼)。出すときだけ、束ねる前のフルサイズの和も持つ(50MB)。
+    private var wantDng = false
+    @JvmStatic
+    fun setWantDng(on: Boolean) { wantDng = on }
 
     private var openId: String? = null      // いま開いている物理カメラ id
     private var openLogical: String? = null // その入口になっている論理カメラ id
@@ -608,7 +615,7 @@ object BuiltinCamera {
         }
         var replaced = 0    // 落ちたコマの撮り直し回数
         if (useRaw) {
-            HgeNative.nativeRawStackBegin(rawW, rawH, cfa)
+            HgeNative.nativeRawStackBegin(rawW, rawH, cfa, wantDng)
             rd.setOnImageAvailableListener({ r ->
                 // 通知 1 回に画像が複数あることがある。全部取る(取り残すと上の「枠が埋まる」になる)。
                 while (true) {
@@ -847,6 +854,25 @@ object BuiltinCamera {
             shading = a
         }
         val bmp = Bitmap.createBitmap(rawW / 2, rawH / 2, Bitmap.Config.ARGB_8888)
+        // DNG(束ねる前のフルサイズ)を先に書く。現像で使う値をそのままタグへ渡す。
+        if (wantDng) {
+            val t1 = SystemClock.elapsedRealtime()
+            val fd = BuiltinStill.openDng()
+            var dngOk = false
+            if (fd >= 0) {
+                val stamp = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).format(Date())
+                val expNs = runCatching { res?.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L }.getOrDefault(0L)
+                val iso = runCatching { res?.get(CaptureResult.SENSOR_SENSITIVITY) ?: 0 }.getOrDefault(0)
+                dngOk = runCatching {
+                    HgeNative.nativeRawStackWriteDng(fd, whiteLevel, black, gains, ccm, shading, cols, rows,
+                        android.os.Build.MODEL ?: "phone", stamp,
+                        expNs.toDouble() / 1e9 * frames, iso)
+                }.getOrDefault(false)
+            }
+            BuiltinStill.closeDng(dngOk)
+            Log.i("TLP-RAW", "dng ${if (dngOk) "ok" else "FAILED"} ${rawW}x$rawH in " +
+                             "${SystemClock.elapsedRealtime() - t1}ms")
+        }
         val ok = HgeNative.nativeRawStackDevelop(bmp, whiteLevel, black, gains, ccm, shading, cols, rows)
         if (!ok) { bmp.recycle(); Log.w("TLP-RAW", "develop failed"); return null }
         val bos = ByteArrayOutputStream(2 shl 20)

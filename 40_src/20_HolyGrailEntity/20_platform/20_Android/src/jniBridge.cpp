@@ -4,6 +4,7 @@
 #include <jni.h>
 #include <string>
 #include <vector>
+#include <unistd.h>	// DNG を書いたあと fd を閉じる
 #include <cstring>
 
 #include "holyGrailEntity.h"
@@ -13,6 +14,7 @@
 #include "detectBuiltin.h"
 #include "builtinBridge.h"
 #include "rawStack.h"
+#include "dngWrite.h"
 #include <android/bitmap.h>
 
 namespace
@@ -898,9 +900,53 @@ Java_app_laxei_twylapse_HgeNative_nativeSetListener(JNIEnv* env, jobject /*thiz*
 namespace { rawStack::accumulator g_stack; }
 
 JNIEXPORT void JNICALL
-Java_app_laxei_twylapse_HgeNative_nativeRawStackBegin(JNIEnv* /*env*/, jobject /*thiz*/, jint w, jint h, jint cfa)
+Java_app_laxei_twylapse_HgeNative_nativeRawStackBegin(JNIEnv* /*env*/, jobject /*thiz*/, jint w, jint h, jint cfa,
+                                                      jboolean keepFull)
 {
-	g_stack.begin(static_cast<int>(w), static_cast<int>(h), static_cast<int>(cfa));
+	g_stack.begin(static_cast<int>(w), static_cast<int>(h), static_cast<int>(cfa), keepFull == JNI_TRUE);
+}
+
+// 足したものを DNG(Bayer のままフルサイズ)として fd へ書く。開くのと仕上げは Kotlin 側。
+//  戻り=書けたか。fd はここで閉じる。
+JNIEXPORT jboolean JNICALL
+Java_app_laxei_twylapse_HgeNative_nativeRawStackWriteDng(JNIEnv* env, jobject /*thiz*/, jint fd,
+                                                         jint whiteLevel, jfloatArray black, jfloatArray gains,
+                                                         jfloatArray ccm, jfloatArray shading, jint cols, jint rows,
+                                                         jstring model, jstring dateTime,
+                                                         jdouble expSec, jint iso)
+{
+	const uint32_t* full = g_stack.fullSum();
+	if (fd < 0) { return JNI_FALSE; }
+	if (full == nullptr) { ::close(static_cast<int>(fd)); return JNI_FALSE; }
+
+	rawStack::developParams p;
+	p.frames     = g_stack.frames();
+	p.whiteLevel = static_cast<int>(whiteLevel);
+	if (black != nullptr && env->GetArrayLength(black) >= 4) { env->GetFloatArrayRegion(black, 0, 4, p.black); }
+	if (gains != nullptr && env->GetArrayLength(gains) >= 4) { env->GetFloatArrayRegion(gains, 0, 4, p.gains); }
+	if (ccm   != nullptr && env->GetArrayLength(ccm)   >= 9) { env->GetFloatArrayRegion(ccm,   0, 9, p.ccm);   }
+	std::vector<float> sh;
+	if (shading != nullptr && cols >= 2 && rows >= 2 && env->GetArrayLength(shading) >= 4 * cols * rows)
+	{
+		sh.resize(static_cast<size_t>(4) * cols * rows);
+		env->GetFloatArrayRegion(shading, 0, static_cast<jsize>(sh.size()), sh.data());
+		p.shading = sh.data(); p.shadingCols = static_cast<int>(cols); p.shadingRows = static_cast<int>(rows);
+	}
+
+	rawStack::dngInfo info;
+	const char* m = (model != nullptr) ? env->GetStringUTFChars(model, nullptr) : nullptr;
+	const char* d = (dateTime != nullptr) ? env->GetStringUTFChars(dateTime, nullptr) : nullptr;
+	if (m != nullptr) { info.model = m; }
+	if (d != nullptr) { info.dateTime = d; }
+	info.exposureSec = static_cast<double>(expSec);
+	info.iso         = static_cast<int>(iso);
+
+	const bool ok = rawStack::writeDng(static_cast<int>(fd), full, g_stack.width(), g_stack.height(),
+	                                   g_stack.cfaPattern(), p, info);
+	if (m != nullptr) { env->ReleaseStringUTFChars(model, m); }
+	if (d != nullptr) { env->ReleaseStringUTFChars(dateTime, d); }
+	::close(static_cast<int>(fd));
+	return ok ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL

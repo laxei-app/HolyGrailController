@@ -41,12 +41,17 @@ namespace rawStack
 		int    shadingCols = 0, shadingRows = 0;
 	};
 
+	// 周辺減光の格子を出力座標(0〜1)で引く(両線形)。ch=面番号(R, Gr, Gb, B)。
+	//  現像と DNG 書き出しの両方で使う。
+	float shadingAt(const developParams& p, int ch, float fx, float fy);
+
 	// 足し込み先。1コマ目の前に begin、コマごとに add、最後に develop。
 	class accumulator
 	{
 	public:
 		// 幅・高さは RAW の画素数(偶数へ切り下げて使う)。
-		void begin(int width, int height, int cfaPattern);
+		//  keepFull=真 なら DNG 用にフルサイズの加算(Bayer のまま)も持つ(4080×3072 で 50MB)。
+		void begin(int width, int height, int cfaPattern, bool keepFull = false);
 		// 1コマ足す。data は 16bit little-endian の Bayer。rowStride はバイト単位。
 		//  戻り=足せたか(寸法違いなど)。
 		bool add(const uint8_t* data, size_t bytes, int rowStrideBytes);
@@ -59,11 +64,15 @@ namespace rawStack
 		int  frames(void) const { return frames_; }
 		int  outWidth(void)  const { return w_ / 2; }
 		int  outHeight(void) const { return h_ / 2; }
+		int  cfaPattern(void) const { return cfa_; }
+		// フルサイズの加算(DNG 用)。持っていなければ nullptr。
+		const uint32_t* fullSum(void) const { return full_.empty() ? nullptr : full_.data(); }
 
 	private:
 		int w_ = 0, h_ = 0, cfa_ = RGGB, frames_ = 0;
 		// 束ねた面ごとの和(R, G(2画素の和), B)。uint32 で十分(16bit × 数十コマ)。
 		std::vector<uint32_t> r_, g_, b_;
+		std::vector<uint32_t> full_;	// Bayer のままの和(DNG 用。要るときだけ確保する)
 	};
 }
 

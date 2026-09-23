@@ -278,7 +278,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun rebuildPlanTabs() {
         val names = mutableListOf(if (tplMode) "ひな形" else "撮影計画")
         names.addAll(twilightTitles)
-        if (videoPage != null) names.add("動画設定")
+        if (videoPage != null) names.add("出力設定")
         if (simPage != null) names.add("シミュレーション")
         val tl = findViewById<com.google.android.material.tabs.TabLayout>(R.id.plan_tabs)
         // 【同じ並びなら作り直さない(2026-09-23 UI依頼)】作り直すと選択が一瞬先頭へ動いて戻る。
@@ -456,6 +456,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // スマホ⇄エッジの通信路(2026-08-14 指示)。選ぶのはスマホだけ。エッジは常に両方で待ち受ける。
         EdgeBleLink.init(this)
         BuiltinCamera.init(this)   // スマホ内蔵カメラ(Camera2)の入口へ Context を渡す
+        BuiltinStill.init(this)    // 静止画(jpg/DNG)もギャラリーへ出すので Context が要る
         BuiltinVideo.init(this)    // 動画の書き出し(置き場とギャラリー)に Context が要る
 
         // 【内蔵カメラ一式は初回起動のときだけ用意する(2026-09-05 依頼)】
@@ -7229,6 +7230,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             videoJson = JSONObject(o.optJSONObject("video")?.toString() ?: "{}")
             // 「カメラの1/2」の実寸(目安の表示用)。保存する画像は RAW の縦横を半分にしたもの。
             videoJson.put("halfW", o.optInt("pixelW", 0) / 2).put("halfH", o.optInt("pixelH", 0) / 2)
+            // DNG は束ねる前のフルサイズで出す。1 コマの大きさの目安に使う。
+            videoJson.put("fullW", o.optInt("pixelW", 0)).put("fullH", o.optInt("pixelH", 0))
             // 【中身が変わっていたら作り直す(2026-09-23)】「変更の取り消し」で計画ごと戻したときに、
             //  画面の選択が古いままにならないように。自分で変えたときは同じ値なので作り直さない。
             val sig = videoSig(videoJson)
@@ -7276,9 +7279,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         rebuildPlanTabs()
     }
 
-    // ================= 動画設定ページ(2026-09-23 UI依頼) =================
+    // ================= 出力設定ページ(2026-09-23 UI依頼) =================
     // 内蔵カメラ(カメラの性質 videoOut)の計画にだけ、シミュレーションの手前へ差し込む。
-    //  ・動画を作る/作らない ・大きさ ・縦横比が合わないときの入れ方 ・コマ送り速度 ・品質
+    //  動画: 作る/作らない ・大きさ ・縦横比が合わないときの入れ方 ・コマ送り速度 ・品質
+    //  静止画: DNG(束ねる前のフルサイズ)/ jpg(動画と同じ大きさ)を残すか
+    //  【何も残らない設定は作らない】動画を作らないときは、DNG か jpg のどちらかを必ず残す。
     //  値は計画(cs.video)に入れて永続化する。撮影が始まるとデバイス層へそのまま渡る。
     private var videoPage: LinearLayout? = null
     private var videoPageKey = ""                 // 作り直しの判定(計画名+カメラ+編集可否)
@@ -7309,6 +7314,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  値が始まる。こちらも見出しはそのままの位置に置き、内容だけ 96dp の位置から始める。
         val indent = dp(96)
 
+        // ── 動画 ───────────────────────────────────────────
+        box.addView(videoBand("動画設定"))
         // 動画自動生成(既定=作る)。見出しは他と同じ体裁、つまみは内容の位置へ。
         val sw = android.widget.Switch(this)
         sw.isChecked = videoJson.optBoolean("make", true); sw.isEnabled = ed
@@ -7360,16 +7367,117 @@ class MainActivity : AppCompatActivity(), HgeListener {
         note.text = "動画は " + cam + " で撮ったコマから作ります。保存先は Movies/TwyLapse。"
         note.textSize = 12f; note.setTextColor(Color.parseColor("#616161")); note.setPadding(dp(4), dp(10), dp(4), dp(4))
         box.addView(note)
-        // off にしたら下の項目はまとめて灰色・操作不可(撮影中の読取専用も同じ扱い)。
+        // ── 静止画 ─────────────────────────────────────────
+        // 1コマずつの画像を残すか。**利用者が見える場所**(Pictures/TwyLapse)へ置く。
+        //  動画を作るだけなら中間の jpg は作らない(動画はメモリの上の画像から作っている)ので、
+        //  ここで「残す」と言われたときだけファイルになる。
+        box.addView(videoBand("静止画設定"))
+        val cbDng = videoCheck("DNG出力", videoJson.optBoolean("dng", false), ed)
+        val cbJpg = videoCheck("jpg出力", videoJson.optBoolean("jpg", false), ed)
+        box.addView(videoIndent(cbDng, indent))
+        box.addView(videoIndent(cbJpg, indent))
+        val stillNote = TextView(this)
+        stillNote.textSize = 12f; stillNote.setTextColor(Color.parseColor("#616161"))
+        stillNote.setPadding(dp(4), dp(8), dp(4), dp(4))
+        box.addView(stillNote)
+        refreshStillNote(stillNote)
+
+        // 【何も残らない設定にはしない】動画を作らないときは、どちらか一方は必ず残す。
+        //  最後の1つを外そうとしたら、その場で戻して理由を出す(黙って戻すと壊れて見える)。
+        fun keepSomething(changed: android.widget.CheckBox): Boolean {
+            if (sw.isChecked) { return true }
+            if (cbDng.isChecked || cbJpg.isChecked) { return true }
+            videoSyncing = true; changed.isChecked = true; videoSyncing = false
+            Toast.makeText(this, "動画を作らないときは DNG か jpg のどちらかが要ります",
+                           Toast.LENGTH_SHORT).show()
+            return false
+        }
+        cbDng.setOnCheckedChangeListener { _, v ->
+            if (!videoSyncing) {
+                keepSomething(cbDng)
+                videoJson.put("dng", cbDng.isChecked); pushVideo(); refreshStillNote(stillNote)
+            }
+        }
+        cbJpg.setOnCheckedChangeListener { _, v ->
+            if (!videoSyncing) {
+                keepSomething(cbJpg)
+                videoJson.put("jpg", cbJpg.isChecked); pushVideo(); refreshStillNote(stillNote)
+            }
+        }
+
+        // off にしたら動画の項目はまとめて灰色・操作不可(撮影中の読取専用も同じ扱い)。
         //  作らないときは、作り方の説明(保存先)も出さない(2026-09-23 UI依頼)。
         videoSetEnabled(body, ed && sw.isChecked)
         note.visibility = if (sw.isChecked) View.VISIBLE else View.GONE
+        hint.visibility = if (sw.isChecked) View.VISIBLE else View.GONE
         sw.setOnCheckedChangeListener { _, v ->
             videoSetEnabled(body, ed && v)
             note.visibility = if (v) View.VISIBLE else View.GONE
-            if (!videoSyncing) { videoJson.put("make", v); pushVideo(); refreshVideoHint(hint) }
+            hint.visibility = if (v) View.VISIBLE else View.GONE
+            if (!videoSyncing) {
+                videoJson.put("make", v)
+                // 動画をやめた拍子に何も残らなくなるなら、jpg を入れておく(勝手に消えないように)。
+                if (!v && !cbDng.isChecked && !cbJpg.isChecked) {
+                    videoSyncing = true; cbJpg.isChecked = true; videoSyncing = false
+                    videoJson.put("jpg", true)
+                    Toast.makeText(this, "動画を作らないので jpg 出力を入れました", Toast.LENGTH_SHORT).show()
+                }
+                pushVideo(); refreshVideoHint(hint); refreshStillNote(stillNote)
+            }
         }
         return page
+    }
+
+    // 集まりの見出し(帯)。メニューの帯と同じ体裁。
+    private fun videoBand(title: String): TextView {
+        val tv = TextView(this); tv.text = title; tv.textSize = 14f; tv.setTypeface(null, Typeface.BOLD)
+        tv.setTextColor(Color.WHITE); tv.setBackgroundColor(Color.parseColor("#5C6BC0"))
+        tv.setPadding(dp(12), dp(6), dp(12), dp(6))
+        tv.tag = Color.WHITE
+        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                                           ViewGroup.LayoutParams.WRAP_CONTENT)
+        lp.topMargin = dp(10); lp.bottomMargin = dp(4)
+        tv.layoutParams = lp
+        return tv
+    }
+
+    private fun videoCheck(title: String, checked: Boolean, enabled: Boolean): android.widget.CheckBox {
+        val cb = android.widget.CheckBox(this)
+        cb.text = title; cb.textSize = 15f; cb.tag = Color.BLACK
+        cb.isChecked = checked; cb.isEnabled = enabled
+        return cb
+    }
+
+    // 残す画像の大きさの目安。DNG は束ねる前のフルサイズ(16ビット・無圧縮)なので大きい。
+    private fun refreshStillNote(tv: TextView) {
+        val dng = videoJson.optBoolean("dng", false)
+        val jpg = videoJson.optBoolean("jpg", false)
+        if (!dng && !jpg) {
+            tv.text = "1コマずつの画像は残しません(動画を作るための画像はファイルにしません)。"
+            return
+        }
+        val fw = videoJson.optInt("fullW", 0); val fh = videoJson.optInt("fullH", 0)
+        val hw = videoJson.optInt("halfW", 0); val hh = videoJson.optInt("halfH", 0)
+        val sb = StringBuilder()
+        if (dng) {
+            // 1画素2バイト(16ビット)。加算した結果をそのまま入れるので圧縮しない。
+            val mb = fw.toDouble() * fh * 2.0 / 1.0e6
+            sb.append(if (fw > 0)
+                String.format(java.util.Locale.US,
+                    "DNG はフルサイズ %d × %d(束ねる前・16ビット)。1 コマ 約 %.0f MB、1000 コマで約 %.0f GB。",
+                    fw, fh, mb, mb)
+                else "DNG はフルサイズ(束ねる前・16ビット)で出します。1 コマ 20〜30 MB になります。")
+            sb.append("RAW が撮れるカメラのときだけ出ます。")
+        }
+        if (jpg) {
+            if (sb.isNotEmpty()) { sb.append("\n") }
+            val mb = hw.toDouble() * hh * 0.33 / 1.0e6
+            sb.append(if (hw > 0)
+                String.format(java.util.Locale.US, "jpg は %d × %d(現像したもの)。1 コマ 約 %.1f MB。", hw, hh, mb)
+                else "jpg は現像したもの(カメラの 1/2 の大きさ)です。")
+        }
+        sb.append("\n保存先は Pictures/TwyLapse の中の、撮影ごとのフォルダです。")
+        tv.text = sb.toString()
     }
 
     private fun videoLabel(s: String): TextView {
@@ -7488,7 +7596,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // いまの設定で何が出来るか(大きさとビットレート)を1行で出す。
     private fun refreshVideoHint(tv: TextView) {
-        if (!videoJson.optBoolean("make", true)) { tv.text = "動画は作りません(撮った画像だけ残ります)"; return }
+        if (!videoJson.optBoolean("make", true)) { tv.text = "動画は作りません"; return }
         val size = videoJson.optInt("size", 0)
         val fps = videoJson.optDouble("fps", 15.0)
         val q = videoJson.optInt("quality", 2)
@@ -7524,7 +7632,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun videoSig(o: JSONObject?): String {
         if (o == null) { return "" }
         return "${o.optBoolean("make", true)}|${o.optInt("size", 0)}|${o.optInt("aspect", 0)}|" +
-               "${o.optDouble("fps", 15.0)}|${o.optInt("quality", 2)}"
+               "${o.optDouble("fps", 15.0)}|${o.optInt("quality", 2)}|" +
+               "${o.optBoolean("jpg", false)}|${o.optBoolean("dng", false)}"
     }
 
     // シミュレーションページの下準備: 恒星(fixed_star.json)を一度読み込み、ページを1度だけ生成する。

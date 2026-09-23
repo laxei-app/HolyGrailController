@@ -38,9 +38,11 @@ namespace rawStack
 		};
 		const srgbLut& lut(void) { static const srgbLut t; return t; }
 
-		// 周辺減光の格子を出力座標で引く(両線形)。ch=チャネル番号。
-		inline float shadingAt(const developParams& p, int ch, float fx, float fy)
-		{
+	}
+
+	// 周辺減光の格子を出力座標で引く(両線形)。ch=チャネル番号。
+	float shadingAt(const developParams& p, int ch, float fx, float fy)
+	{
 			if (p.shading == nullptr || p.shadingCols < 2 || p.shadingRows < 2) { return 1.0f; }
 			const float gx = fx * (p.shadingCols - 1);
 			const float gy = fy * (p.shadingRows - 1);
@@ -51,17 +53,19 @@ namespace rawStack
 			const float* m = p.shading + static_cast<size_t>(ch) * p.shadingCols * p.shadingRows;
 			const float a = m[y0 * p.shadingCols + x0],       b = m[y0 * p.shadingCols + x0 + 1];
 			const float c = m[(y0 + 1) * p.shadingCols + x0], d = m[(y0 + 1) * p.shadingCols + x0 + 1];
-			return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
-		}
+		return (a * (1 - tx) + b * tx) * (1 - ty) + (c * (1 - tx) + d * tx) * ty;
 	}
 
-	void accumulator::begin(int width, int height, int cfaPattern)
+	void accumulator::begin(int width, int height, int cfaPattern, bool keepFull)
 	{
 		w_ = width & ~1; h_ = height & ~1;
 		cfa_ = (cfaPattern >= 0 && cfaPattern <= 3) ? cfaPattern : RGGB;
 		frames_ = 0;
 		const size_t n = static_cast<size_t>(w_ / 2) * static_cast<size_t>(h_ / 2);
 		r_.assign(n, 0); g_.assign(n, 0); b_.assign(n, 0);
+		// DNG は Bayer のままフルサイズで出すので、束ねる前の和も持つ(要るときだけ)。
+		if (keepFull) { full_.assign(static_cast<size_t>(w_) * static_cast<size_t>(h_), 0); }
+		else          { full_.clear(); full_.shrink_to_fit(); }
 	}
 
 	bool accumulator::add(const uint8_t* data, size_t bytes, int rowStrideBytes)
@@ -79,9 +83,15 @@ namespace rawStack
 			uint32_t* pr = &r_[static_cast<size_t>(y / 2) * ow];
 			uint32_t* pg = &g_[static_cast<size_t>(y / 2) * ow];
 			uint32_t* pb = &b_[static_cast<size_t>(y / 2) * ow];
+			uint32_t* f0 = full_.empty() ? nullptr : &full_[static_cast<size_t>(y) * w_];
+			uint32_t* f1 = full_.empty() ? nullptr : &full_[static_cast<size_t>(y + 1) * w_];
 			for (int x = 0; x < w_; x += 2)
 			{
 				const uint32_t v[4] = { row0[x], row0[x + 1], row1[x], row1[x + 1] };
+				if (f0 != nullptr)
+				{
+					f0[x] += v[0]; f0[x + 1] += v[1]; f1[x] += v[2]; f1[x + 1] += v[3];
+				}
 				uint32_t r = 0, g = 0, b = 0;
 				for (int k = 0; k < 4; ++k)
 				{

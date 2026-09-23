@@ -13,6 +13,7 @@
 //  呼び返す。このファイルは Android のプラットフォーム層にあり、エッジのビルドには入らない。
 #include "apiBase.h"
 #include "cameraData.h"
+#include "cs.h"		// 出力設定(hgc::videoSet)
 #include "exposureMath.h"
 #include <string>
 #include <vector>
@@ -235,6 +236,7 @@ private:
 	int  lastFrames_  = 0;		// 直前の加算コマ数(変わったときだけログに残す)
 	std::string sessionLabel_;	// 計画名(動画のファイル名の頭)
 	std::string videoOpt_;		// 動画設定の JSON(空=既定。make=false なら動画を作らない)
+	hgc::videoSet out_;			// 出力設定(動画/jpg/DNG)。撮影を始めるときに計画から取り出す
 };
 
 #endif // _API_BUILTIN_H_

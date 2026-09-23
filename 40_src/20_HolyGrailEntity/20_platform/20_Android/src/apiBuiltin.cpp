@@ -473,6 +473,7 @@ errCode apiBuiltin::setupShootingModeManual(void)
 		//  大きさ・縦横比の入れ方・フレームレート・品質も計画から渡す(中身の解釈は Kotlin 側)。
 		hgc::videoSet vs;
 		const bool haveOpt = !videoOpt_.empty() && csjson::videoFromJson(videoOpt_, vs);
+		if (haveOpt) { out_ = vs; }
 		if (haveOpt && !vs.make)
 		{
 			dataManager::logEvent("CAMERA", "builtin video: off (plan)");
@@ -482,6 +483,24 @@ errCode apiBuiltin::setupShootingModeManual(void)
 			const std::string name = builtinCam::videoStart(haveOpt ? videoOpt_ : std::string(), sessionLabel_);
 			if (name.empty()) { dataManager::logEvent("CAMERA", "builtin video: cannot start", true); }
 			else              { dataManager::logEvent("CAMERA", ("builtin video: " + name).c_str()); }
+		}
+	}
+	// 【静止画の出力(2026-09-23 UI依頼)】残す指定のときだけアルバムを開く。
+	//  DNG は束ねる前のフルサイズなので、撮り始める前に「出す」と伝えておく必要がある
+	//  (加算器がフルサイズの和を持つかどうかが、最初のコマで決まる)。
+	{
+		const bool wantDng = out_.dng && rawOk_;
+		if (out_.dng && !rawOk_)
+		{
+			dataManager::logEvent("CAMERA", "builtin: DNG asked but this camera has no RAW", true);
+		}
+		builtinCam::setWantDng(wantDng);
+		if (out_.jpg || wantDng)
+		{
+			builtinCam::stillBegin(sessionLabel_);
+			char b[96];
+			std::snprintf(b, sizeof(b), "builtin stills: jpg=%d dng=%d", out_.jpg ? 1 : 0, wantDng ? 1 : 0);
+			dataManager::logEvent("CAMERA", b);
 		}
 	}
 	if (!manual_)
@@ -626,21 +645,21 @@ bool apiBuiltin::measure(const std::vector<uint8_t>& jpeg, meterResult& out) con
 	return true;
 }
 
-// 撮った画像を残す。連番で書くだけの素朴な作り。
-//  置き場所はログや計画と同じアプリの領域(osfile の下)。撮影のたびに増えるので、
-//  動画の書き出しが入ったらここは既定で切る。
+// 撮ったコマを残す。置き場所は**利用者が見える場所**(Pictures/TwyLapse の下のアルバム)。
+//  【中間の jpg は作らない(2026-09-23 UI依頼)】動画はここに渡ってきたバイト列から
+//  そのまま作っており、ファイルを読み返してはいない。だから「動画だけ」の指定では1枚も残さない。
+//  DNG は現像より前(BuiltinCamera)で書いている。番号を揃えるため、コマの終わりはここで告げる。
 void apiBuiltin::saveShot(const std::vector<uint8_t>& jpeg)
 {
 	if (jpeg.empty()) { return; }
-	const std::string dir = osfile::dir("shot");
-	if (dir.empty()) { return; }
-	char name[64];
-	std::snprintf(name, sizeof(name), "/tlp_%05d.jpg", ++shotSeq_);	// 改名の取りこぼし(2026-09-23)
-	if (!osfile::writeAll(dir + name, reinterpret_cast<const char*>(jpeg.data()), jpeg.size()))
+	if (!out_.jpg && !(out_.dng && rawOk_)) { return; }
+	if (out_.jpg && !builtinCam::stillSaveJpeg(jpeg))
 	{
 		// 書けないときは残量不足が疑わしい。毎コマ言っても仕方ないので最初の1回だけ。
-		if (shotSeq_ == 1) { dataManager::logEvent("CAMERA", "builtin: cannot save shot", true); }
+		if (shotSeq_ == 0) { dataManager::logEvent("CAMERA", "builtin: cannot save shot", true); }
 	}
+	++shotSeq_;
+	builtinCam::stillNextFrame();
 }
 
 errCode apiBuiltin::meterScene(const hgc::exposure& shotExp, meterResult& out,
@@ -666,7 +685,13 @@ errCode apiBuiltin::meterHere(meterResult& out, const std::function<bool()>& kee
 	(void)keepGoing;
 	if (builtinCam::open(logicalId_, id_, rawOk_).empty()) { opened_ = true; }
 	std::vector<uint8_t> jpeg;
-	if (!this->shootStart() || !this->shootTake(jpeg))
+	// 【この1枚は残さない(2026-09-23)】ここは撮影の前の収束で測るためだけに撮る。
+	//  DNG は現像の前に書かれるので、撮る前に切っておかないと収束のぶんまでギャラリーに並ぶ
+	//  (実機で 8 枚ぶん余分に出た)。撮り終えたら元へ戻す。
+	builtinCam::setWantDng(false);
+	const bool tookIt = this->shootStart() && this->shootTake(jpeg);
+	builtinCam::setWantDng(out_.dng && rawOk_);
+	if (!tookIt)
 	{ out.ok = false; out.failStage = 20; return ERR_HGC_RDY_METARING; }
 	if (!this->measure(jpeg, out)) { out.ok = false; return ERR_HGC_RDY_METARING; }
 	// いま載せている露出で撮ったので、それが測光露出そのもの。

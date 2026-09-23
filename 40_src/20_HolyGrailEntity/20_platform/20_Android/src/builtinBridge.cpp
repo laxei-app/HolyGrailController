@@ -261,6 +261,58 @@ namespace builtinCam
 		return out;
 	}
 
+	void setWantDng(bool on)
+	{
+		attach a;
+		if (!a.ok()) { return; }
+		jmethodID mid = a.env->GetStaticMethodID(a.cls, "setWantDng", "(Z)V");
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); mid = nullptr; }
+		if (mid == nullptr) { return; }
+		a.env->CallStaticVoidMethod(a.cls, mid, on ? JNI_TRUE : JNI_FALSE);
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); }
+	}
+
+	void stillBegin(const std::string& planName)
+	{
+		attach a;
+		if (!a.ok()) { return; }
+		jmethodID mid = a.env->GetStaticMethodID(a.cls, "stillBegin", "(Ljava/lang/String;)V");
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); mid = nullptr; }
+		if (mid == nullptr) { return; }
+		jstring jn = a.env->NewStringUTF(planName.c_str());
+		a.env->CallStaticVoidMethod(a.cls, mid, jn);
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); }
+		a.env->DeleteLocalRef(jn);
+	}
+
+	bool stillSaveJpeg(const std::vector<uint8_t>& jpeg)
+	{
+		if (jpeg.empty()) { return false; }
+		attach a;
+		if (!a.ok()) { return false; }
+		jmethodID mid = a.env->GetStaticMethodID(a.cls, "stillSaveJpeg", "([B)Z");
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); mid = nullptr; }
+		if (mid == nullptr) { return false; }
+		jbyteArray ja = a.env->NewByteArray(static_cast<jsize>(jpeg.size()));
+		a.env->SetByteArrayRegion(ja, 0, static_cast<jsize>(jpeg.size()),
+		                          reinterpret_cast<const jbyte*>(jpeg.data()));
+		jboolean r = a.env->CallStaticBooleanMethod(a.cls, mid, ja);
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); r = JNI_FALSE; }
+		a.env->DeleteLocalRef(ja);
+		return r == JNI_TRUE;
+	}
+
+	void stillNextFrame(void)
+	{
+		attach a;
+		if (!a.ok()) { return; }
+		jmethodID mid = a.env->GetStaticMethodID(a.cls, "stillNextFrame", "()V");
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); mid = nullptr; }
+		if (mid == nullptr) { return; }
+		a.env->CallStaticVoidMethod(a.cls, mid);
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); }
+	}
+
 	bool takeImage(int timeoutMs, std::vector<uint8_t>& out)
 	{
 		out.clear();

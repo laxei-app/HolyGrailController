@@ -109,7 +109,11 @@ object HgeNative {
     // 初回起動の種まきの答え待ち(1=待っている)。待っている間は出荷時の固定計画を作らせない。
     external fun nativeSetSeedPending(on: Int): Int
     // RAW 加算(2026-09-06)。Camera2 から受け取った RAW を足して現像する。ループは C++(rawStack)。
-    external fun nativeRawStackBegin(width: Int, height: Int, cfa: Int)
+    external fun nativeRawStackBegin(width: Int, height: Int, cfa: Int, keepFull: Boolean)
+    // 足したものを DNG(フルサイズ)として fd へ書く。fd はネイティブ側が閉じる
+    external fun nativeRawStackWriteDng(fd: Int, whiteLevel: Int, black: FloatArray, gains: FloatArray,
+                                        ccm: FloatArray, shading: FloatArray?, cols: Int, rows: Int,
+                                        model: String, dateTime: String, expSec: Double, iso: Int): Boolean
     external fun nativeRawStackAdd(buf: java.nio.ByteBuffer, rowStride: Int): Boolean
     external fun nativeRawStackFrames(): Int
     external fun nativeRawStackDevelop(bitmap: android.graphics.Bitmap, whiteLevel: Int, black: FloatArray,
@@ -248,6 +252,17 @@ object HgeNative {
     fun videoStart(optJson: String?, planName: String): String {
         BuiltinVideo.setPlanName(planName); return BuiltinVideo.start(optJson)
     }
+
+    // 静止画(利用者が見える場所)。撮影の始めに1回、以後コマごとに保存する。
+    @JvmStatic
+    fun stillBegin(planName: String) { BuiltinStill.begin(planName) }
+    @JvmStatic
+    fun stillSaveJpeg(jpeg: ByteArray?): Boolean = BuiltinStill.saveJpeg(jpeg)
+    @JvmStatic
+    fun stillNextFrame() { BuiltinStill.nextFrame() }
+    // DNG を出すか(撮り始める前に決める。加算器がフルサイズの和を持つかが変わる)
+    @JvmStatic
+    fun setWantDng(on: Boolean) { BuiltinCamera.setWantDng(on) }
 
     @JvmStatic
     fun videoAddJpeg(jpeg: ByteArray?): Boolean = BuiltinVideo.addJpeg(jpeg)
