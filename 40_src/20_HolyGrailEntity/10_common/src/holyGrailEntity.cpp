@@ -2932,8 +2932,10 @@ int32_t hge_setPlanVideo(const char* json)
 	hgc::videoSet v;
 	if (!csjson::videoFromJson(std::string(json), v)) { return ERR_HGC_JSON_PARSE; }
 	g_plan.video = v;
-	buildScheduleJson();
-	notify(HGE_EV_SCHEDULE, g_schedJson);
+	buildScheduleJson();	// 次に読まれるときのために更新はする
+	// 【通知は出さない(2026-09-23)】動画の作り方はスケジュールを変えない。通知を出すと画面が
+	//  ページごと作り直され、スライダーを動かしている途中で操作が切れる・タブがいったん先頭へ
+	//  戻る、という見え方になる(実機で確認)。
 	return saveCurrentPlan();	// 編集を即永続化(他の setter と同じ)
 }
 

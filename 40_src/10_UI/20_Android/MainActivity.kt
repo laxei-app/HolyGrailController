@@ -274,12 +274,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
         tabSyncing = true; tl.getTabAt(idx)?.select(); tabSyncing = false
     }
     // 撮影計画のページのタブ。ページ構成(薄明ページの数)が変わるたびに作り直す。
+    private var planTabNames = listOf<String>()
     private fun rebuildPlanTabs() {
         val names = mutableListOf(if (tplMode) "ひな形" else "撮影計画")
         names.addAll(twilightTitles)
         if (videoPage != null) names.add("動画設定")
         if (simPage != null) names.add("シミュレーション")
         val tl = findViewById<com.google.android.material.tabs.TabLayout>(R.id.plan_tabs)
+        // 【同じ並びなら作り直さない(2026-09-23 UI依頼)】作り直すと選択が一瞬先頭へ動いて戻る。
+        if (names == planTabNames && tl.tabCount == names.size) { selectTabQuiet(tl, planPager.current); return }
+        planTabNames = names.toList()
         fillTabs(tl, names) { i -> planPager.setCurrent(i, true) }
         selectTabQuiet(tl, planPager.current)
     }
@@ -7324,15 +7328,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val curFps = videoJson.optDouble("fps", 15.0)
         var fpsIdx = fpsVals.indexOfFirst { Math.abs(it - curFps) < 0.01 }
         if (fpsIdx < 0) fpsIdx = 1
-        box.addView(videoSlider(arrayOf("7.5", "15", "30", "60"), null, fpsIdx, ed) { i ->
-            videoJson.put("fps", fpsVals[i]); pushVideo(); refreshVideoHint(hint) })
+        box.addView(videoSlider(arrayOf("7.5", "15", "30", "60"), null, fpsIdx, ed) { i, commit ->
+            videoJson.put("fps", fpsVals[i]); refreshVideoHint(hint); if (commit) { pushVideo() } })
 
         // 品質(同じ形のスライダー。両端に何が変わるかを添える)
         box.addView(videoLabel("品質"))
         box.addView(videoSlider(arrayOf("低", "標準", "高"),
                                 arrayOf("ファイルが小さい", "", "夜のノイズに強い"),
-                                videoJson.optInt("quality", 2), ed) { i ->
-            videoJson.put("quality", i); pushVideo(); refreshVideoHint(hint) })
+                                videoJson.optInt("quality", 2), ed) { i, commit ->
+            videoJson.put("quality", i); refreshVideoHint(hint); if (commit) { pushVideo() } })
 
         box.addView(hint)
         refreshVideoHint(hint)
@@ -7366,8 +7370,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 【目盛り付きスライダー(2026-09-23 UI依頼)】上に目盛りの文字を並べ、その位置にだけ止まる。
     //  文字はスライダーのつまみが止まる位置(トラックの 0 / 1/3 / 2/3 / 1)へ実測で合わせる。
     //  等分に並べると端の2つがずれるので、幅が決まってから置き直す。
+    //  onPick(値の位置, 確定したか)。動かしている間は false(表示だけ)、離したら true(保存)。
     private fun videoSlider(labels: Array<String>, subs: Array<String>?, sel: Int,
-                            enabled: Boolean, onPick: (Int) -> Unit): View {
+                            enabled: Boolean, onPick: (Int, Boolean) -> Unit): View {
         val col = LinearLayout(this); col.orientation = LinearLayout.VERTICAL
         val row = FrameLayout(this)
         val tvs = ArrayList<TextView>()
@@ -7394,8 +7399,28 @@ class MainActivity : AppCompatActivity(), HgeListener {
         sl.addOnChangeListener { _, v, fromUser ->
             val i = v.toInt()
             for ((k, tv) in tvs.withIndex()) { tv.setTypeface(null, if (k == i) Typeface.BOLD else Typeface.NORMAL) }
-            if (fromUser && !videoSyncing) { onPick(i) }
+            if (fromUser && !videoSyncing) { onPick(i, false) }		// 表示だけ追従させる
         }
+        // 【横スワイプを取られないようにする(2026-09-23)】Material のスライダーは、縦スクロールの
+        //  入れ物(ScrollView)の中にいるとき、指が滑るまで親へ「横取りしないで」と言わない。
+        //  その滑り幅はページャが横スワイプと判断する幅と同じなので、いつもページャが先に取ってしまい
+        //  つまみが動かない(実機で確認)。触った瞬間に自分で言う。
+        sl.setOnTouchListener { v, e ->
+            when (e.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN ->
+                    v.parent?.requestDisallowInterceptTouchEvent(true)
+                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL ->
+                    v.parent?.requestDisallowInterceptTouchEvent(false)
+            }
+            false	// つまみの処理はスライダー自身に任せる
+        }
+        // 保存は指を離したとき(1目盛りごとに書くと、書き込みのたびに操作が引っかかる)。
+        sl.addOnSliderTouchListener(object : com.google.android.material.slider.Slider.OnSliderTouchListener {
+            override fun onStartTrackingTouch(s: com.google.android.material.slider.Slider) {}
+            override fun onStopTrackingTouch(s: com.google.android.material.slider.Slider) {
+                if (!videoSyncing) { onPick(s.value.toInt(), true) }
+            }
+        })
         col.addView(sl, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         // 幅が決まってから、文字をつまみの止まる位置の真上へ置く。
