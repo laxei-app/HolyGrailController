@@ -7356,16 +7356,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
         box.addView(hint)
         refreshVideoHint(hint)
-        // off にしたら下の項目はまとめて灰色・操作不可(撮影中の読取専用も同じ扱い)。
-        videoSetEnabled(body, ed && sw.isChecked)
-        sw.setOnCheckedChangeListener { _, v ->
-            videoSetEnabled(body, ed && v)
-            if (!videoSyncing) { videoJson.put("make", v); pushVideo(); refreshVideoHint(hint) }
-        }
         val note = TextView(this)
         note.text = "動画は " + cam + " で撮ったコマから作ります。保存先は Movies/TwyLapse。"
         note.textSize = 12f; note.setTextColor(Color.parseColor("#616161")); note.setPadding(dp(4), dp(10), dp(4), dp(4))
         box.addView(note)
+        // off にしたら下の項目はまとめて灰色・操作不可(撮影中の読取専用も同じ扱い)。
+        //  作らないときは、作り方の説明(保存先)も出さない(2026-09-23 UI依頼)。
+        videoSetEnabled(body, ed && sw.isChecked)
+        note.visibility = if (sw.isChecked) View.VISIBLE else View.GONE
+        sw.setOnCheckedChangeListener { _, v ->
+            videoSetEnabled(body, ed && v)
+            note.visibility = if (v) View.VISIBLE else View.GONE
+            if (!videoSyncing) { videoJson.put("make", v); pushVideo(); refreshVideoHint(hint) }
+        }
         return page
     }
 
@@ -7506,6 +7509,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun pushVideo() {
         val s = videoJson.toString()
         videoShown = videoSig(videoJson)	// 自分で変えたぶんは作り直しの対象にしない
+        // 【控えの表示用 JSON も直す(2026-09-23)】動画設定は通知を出さない(画面を作り直さないため)ので、
+        //  latestSchedule が古いままになる。画面の向きを変えたときなど、この控えから作り直す経路があり、
+        //  そこで前の値に戻って見える。ここで同じ値にしておく。
+        runCatching {
+            val o = JSONObject(latestSchedule)
+            o.put("video", JSONObject(s))
+            latestSchedule = o.toString()
+        }
         planExec.execute { runCatching { HgeNative.nativeSetPlanVideo(s) } }
     }
 
