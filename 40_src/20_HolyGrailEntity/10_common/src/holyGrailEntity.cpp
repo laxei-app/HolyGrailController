@@ -617,6 +617,9 @@ namespace
 		std::snprintf(num, sizeof(num), "%.1f", g_plan.elevation);
 		j += ",\"elevation\":" + std::string(num);
 		j += ",\"landscape\":" + std::string(g_plan.landscape ? "true" : "false");
+		// 動画設定(2026-09-23)。ページを出すかどうかは camVideoOut(カメラの性質)で決める。
+		j += ",\"camVideoOut\":" + std::string(g_plan.camera.videoOut ? "true" : "false");
+		j += ",\"video\":" + csjson::videoToJson(g_plan.video);
 		// 機材詳細(センサー/焦点距離)と画角[°](方位磁石・仰角ウィジェットの目安)
 		std::snprintf(num, sizeof(num), "%.1f", g_plan.camera.sensorSize);
 		j += ",\"sensorW\":" + std::string(num);
@@ -625,6 +628,7 @@ namespace
 		std::snprintf(num, sizeof(num), "%.0f", g_plan.lens.focalLength);
 		j += ",\"focalLength\":" + std::string(num);
 		j += ",\"pixelW\":" + std::to_string(g_plan.camera.sensorPixel);
+		j += ",\"pixelH\":" + std::to_string(g_plan.camera.sensorPixelV);
 		std::snprintf(num, sizeof(num), "%.1f", g_plan.lens.fn);
 		j += ",\"fn\":" + std::string(num);
 		astro::fov fovDeg = astro::calcFov(g_plan.camera, g_plan.lens, g_plan.landscape);
@@ -1230,6 +1234,8 @@ namespace
 			//   以前に作った計画だけ短すぎる周期のまま撮ってしまう。
 			if ((oc.readOnly || cam.intervalFactor <= 0.0) && oc.intervalFactor > 0.0)
 			{ cam.intervalFactor = oc.intervalFactor; cam.intervalMargin = oc.intervalMargin; }
+			// 動画を作れるか(2026-09-23)も端末が出す性質。控えが古い計画でも今の値を採る。
+			if (oc.readOnly) { cam.videoOut = oc.videoOut; }
 		}
 	}
 
@@ -2917,6 +2923,18 @@ int32_t hge_setPlanLandscape(int32_t landscape)
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
 	return saveCurrentPlan();	// 編集を即永続化
+}
+
+int32_t hge_setPlanVideo(const char* json)
+{
+	if (json == nullptr || json[0] == '\0') { return ERR_HGC_INVALID_ARG; }
+	if (!g_planReady) { errCode e = loadFixedPlanImpl(); if (e != ERR_HGC_OK) { return e; } }
+	hgc::videoSet v;
+	if (!csjson::videoFromJson(std::string(json), v)) { return ERR_HGC_JSON_PARSE; }
+	g_plan.video = v;
+	buildScheduleJson();
+	notify(HGE_EV_SCHEDULE, g_schedJson);
+	return saveCurrentPlan();	// 編集を即永続化(他の setter と同じ)
 }
 
 int32_t hge_setBandMode(int32_t sunriseMode, int32_t sunsetMode)

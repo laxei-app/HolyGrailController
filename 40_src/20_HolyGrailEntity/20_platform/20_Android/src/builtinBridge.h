@@ -58,7 +58,8 @@ namespace builtinCam
 	// 撮ったコマを1枚ずつ足していく。**撮影の終わりに必ず videoFinish を呼ぶこと**
 	//  (MP4 は最後に閉じないと再生できない)。
 	//  planName=ファイル名の頭に使う計画名(撮影側から渡す。UI に頼ると再起動後の再開で抜ける)。
-	std::string videoStart(int fps, const std::string& planName);	// 戻り=ギャラリーでの名前。"" =失敗
+	// optJson: 計画の動画設定(csjson::videoToJson)。空なら既定(1920x1440・30fps・標準)。
+	std::string videoStart(const std::string& optJson, const std::string& planName);	// 戻り=ギャラリーでの名前。"" =失敗
 	bool        videoAddJpeg(const std::vector<uint8_t>& jpeg);
 	std::string videoFinish(void);								// 出来上がりの場所("" =失敗)
 }

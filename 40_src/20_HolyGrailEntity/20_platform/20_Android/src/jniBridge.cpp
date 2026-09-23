@@ -377,6 +377,17 @@ Java_app_laxei_twylapse_HgeNative_nativeSetPlanLandscape(JNIEnv* /*env*/, jobjec
 	return hge_setPlanLandscape(landscape);
 }
 
+// 動画設定(2026-09-23)。内蔵カメラで撮ったコマから作る動画の作り方。
+JNIEXPORT jint JNICALL
+Java_app_laxei_twylapse_HgeNative_nativeSetPlanVideo(JNIEnv* env, jobject /*thiz*/, jstring json)
+{
+	if (json == nullptr) { return -1; }
+	const char* p = env->GetStringUTFChars(json, nullptr);
+	const jint r = hge_setPlanVideo(p ? p : "");
+	if (p) { env->ReleaseStringUTFChars(json, p); }
+	return r;
+}
+
 JNIEXPORT jint JNICALL
 Java_app_laxei_twylapse_HgeNative_nativeSetBandMode(JNIEnv* /*env*/, jobject /*thiz*/,
                                                      jint sunriseMode, jint sunsetMode)

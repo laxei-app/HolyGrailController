@@ -90,6 +90,8 @@ public:
 	errCode setupShootingModeManual(void) override;
 	// 計画名を受け取る(動画のファイル名に使う)。撮影側が渡すので、再起動後の再開でも抜けない。
 	void setSessionLabel(const std::string& label) override { sessionLabel_ = label; }
+	// 動画の作り方(2026-09-23 UI依頼)。計画の videoSet の JSON をそのまま Kotlin 側へ渡す。
+	void setVideoOption(const std::string& json) override { videoOpt_ = json; }
 	// 所持カメラの記録へ、内蔵カメラの性質を書く。登録時に一度だけ。
 	//  周期の規則のほか、UI が振る舞いを決める4つの性質(レンズ固定・この端末でしか撮れない・
 	//  同期撮影不可・編集不可)。UI は序数の頭("BUILTIN:")を見ず、この欄だけを見る(2026-09-06)。
@@ -97,6 +99,7 @@ public:
 	{
 		cam.intervalFactor = this->minIntervalFactor(); cam.intervalMargin = kMinIntervalMarginSec;
 		cam.lensFixed = true; cam.localOnly = true; cam.noSyncShot = true; cam.readOnly = true;
+		cam.videoOut  = true;	// 撮ったコマから動画を作る(2026-09-23。UI の「動画設定」はこれで出る)
 	}
 	errCode restoreShootingMode(void) override;
 	// 直前の失敗の理由(お知らせ番号)。いまは「カメラの許可が無い」だけ。
@@ -231,6 +234,7 @@ private:
 	int  lastThermal_ = -1;		// 直前に記録した熱の状態(変わったときだけログに残す)
 	int  lastFrames_  = 0;		// 直前の加算コマ数(変わったときだけログに残す)
 	std::string sessionLabel_;	// 計画名(動画のファイル名の頭)
+	std::string videoOpt_;		// 動画設定の JSON(空=既定。make=false なら動画を作らない)
 };
 
 #endif // _API_BUILTIN_H_

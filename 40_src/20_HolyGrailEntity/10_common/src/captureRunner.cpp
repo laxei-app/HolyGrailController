@@ -6,6 +6,7 @@
 #include "astroSched.h"		// ② 太陽高度(sunHoriz)から ev0 中心bmを算出
 #include "dataManager.h"		// 初期収束の診断ログ(CONV)を残すため
 #include "linkDown.h"		// APから抜けた相手を待たない(タイムアウト待ちの短縮)
+#include "csJson.h"			// 動画設定をデバイス層へ渡す(2026-09-23)
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -960,7 +961,11 @@ bool captureRunner::establishSession(void)
 	{
 		ramMark("before shootMode");
 		// 成果物に名前を付ける実装(内蔵カメラの動画)へ計画名を渡す。UI に頼ると再起動後の再開で抜ける。
-		if (dev_->apiBase) { dev_->apiBase->setSessionLabel(plan_.name); }
+		if (dev_->apiBase)
+		{
+			dev_->apiBase->setSessionLabel(plan_.name);
+			dev_->apiBase->setVideoOption(csjson::videoToJson(plan_.video));	// 動画の作り方(内蔵カメラだけ使う)
+		}
 		errCode me = cameraController::setupShootingModeManual(*dev_);
 		if (me == ERR_HGC_OK)            { interruptibleSleep(800); }	// モード変更/ability更新の反映待ち(初回rdyShutterの取りこぼし防止)
 		else if (me == ERR_HGC_NOT_SUPPORTED) { /* モード変更非対応機。そのまま続行 */ }

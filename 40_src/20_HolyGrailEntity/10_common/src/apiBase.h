@@ -114,6 +114,9 @@ public:
 	// 撮影開始時にカメラを当アプリ都合(マニュアル露出)に設定し、終了時に元へ戻す(仕様8/CCAPI)。
 	// 撮影セッションの名札(計画名)。成果物に名前を付ける実装(内蔵カメラの動画)が使う。既定は何もしない。
 	virtual void    setSessionLabel(const std::string& label)	{ (void)label; }
+	// 動画設定(2026-09-23)。撮ったコマから動画を作る実装(内蔵カメラ)だけが使う。
+	//  中身は csjson::videoToJson の JSON。知らない実装は捨てる。
+	virtual void    setVideoOption(const std::string& json)		{ (void)json; }
 	// カメラ本人しか知らない「性質」を所持カメラの記録へ書く(2026-09-06)。登録時に一度だけ呼ばれる。
 	//  例: 撮影周期の下限の規則(intervalFactor/intervalMargin)。ISO/SS の並びやセンサー寸法と同じく
 	//  「カメラが答える諸元」であり、共通部分は書かれた値を使うだけで機種を判断しない。既定は何もしない。

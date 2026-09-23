@@ -4,6 +4,7 @@
 #include "exposureMath.h"
 #include "jpegLuma.h"
 #include "dataManager.h"
+#include "csJson.h"		// 動画設定(計画から渡ってくる JSON)を読む
 #include "notice.h"	// 開けない理由をお知らせ番号で上へ返す(文言は UI)
 #include "osFile.h"
 #include "tool.h"
@@ -468,9 +469,20 @@ errCode apiBuiltin::setupShootingModeManual(void)
 	//  出来上がりは Movies/TwyLapse/<計画名>_yyyymmddhhmmss.mp4。10分ごとに「そこまでの完成品」が
 	//  置き換わっていく(BuiltinVideo)。名前と置き場は Kotlin 側が決める。
 	{
-		const std::string name = builtinCam::videoStart(30, sessionLabel_);
-		if (name.empty()) { dataManager::logEvent("CAMERA", "builtin video: cannot start", true); }
-		else              { dataManager::logEvent("CAMERA", ("builtin video: " + name).c_str()); }
+		// 【作るかどうかは計画が決める(2026-09-23 UI依頼)】作らない指定なら開かない。
+		//  大きさ・縦横比の入れ方・フレームレート・品質も計画から渡す(中身の解釈は Kotlin 側)。
+		hgc::videoSet vs;
+		const bool haveOpt = !videoOpt_.empty() && csjson::videoFromJson(videoOpt_, vs);
+		if (haveOpt && !vs.make)
+		{
+			dataManager::logEvent("CAMERA", "builtin video: off (plan)");
+		}
+		else
+		{
+			const std::string name = builtinCam::videoStart(haveOpt ? videoOpt_ : std::string(), sessionLabel_);
+			if (name.empty()) { dataManager::logEvent("CAMERA", "builtin video: cannot start", true); }
+			else              { dataManager::logEvent("CAMERA", ("builtin video: " + name).c_str()); }
+		}
 	}
 	if (!manual_)
 	{

@@ -202,17 +202,19 @@ namespace builtinCam
 		return static_cast<int>(r);
 	}
 
-	std::string videoStart(int fps, const std::string& planName)
+	std::string videoStart(const std::string& optJson, const std::string& planName)
 	{
 		attach a;
 		if (!a.ok()) { return ""; }
-		jmethodID mid = a.env->GetStaticMethodID(a.cls, "videoStart", "(ILjava/lang/String;)Ljava/lang/String;");
+		jmethodID mid = a.env->GetStaticMethodID(a.cls, "videoStart",
+		                                         "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
 		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); mid = nullptr; }
 		if (mid == nullptr) { return ""; }
+		jstring jo = a.env->NewStringUTF(optJson.c_str());
 		jstring jn = a.env->NewStringUTF(planName.c_str());
-		jobject r = a.env->CallStaticObjectMethod(a.cls, mid, static_cast<jint>(fps), jn);
+		jobject r = a.env->CallStaticObjectMethod(a.cls, mid, jo, jn);
 		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); r = nullptr; }
-		a.env->DeleteLocalRef(jn);
+		a.env->DeleteLocalRef(jn); a.env->DeleteLocalRef(jo);
 		std::string out;
 		if (r != nullptr)
 		{

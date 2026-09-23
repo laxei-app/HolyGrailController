@@ -121,6 +121,10 @@ int32_t hge_renamePlan(const char* id, const char* name);
 
 // 横向き(ランドスケープ)を設定する。画角が変わるためスケジュールを再生成し通知する。
 int32_t hge_setPlanLandscape(int32_t landscape);
+// 動画設定(2026-09-23 UI依頼)。内蔵カメラで撮ったコマから作る動画の作り方。
+//  json: {"make":bool,"size":0|1|2,"aspect":0|1|2,"fps":double,"quality":0|1|2}
+//  size 0=カメラの1/2 1=1920x1440 2=1920x1080 / aspect 0=切り取る 1=全体を入れて余りは黒 2=圧縮する
+int32_t hge_setPlanVideo(const char* json);
 
 // 同期撮影(2026-08-25)。camera で測光した露出を追加カメラへも配り全台で撮る。
 int32_t hge_setPlanSyncShot(int32_t on);

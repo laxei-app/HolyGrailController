@@ -277,6 +277,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun rebuildPlanTabs() {
         val names = mutableListOf(if (tplMode) "ひな形" else "撮影計画")
         names.addAll(twilightTitles)
+        if (videoPage != null) names.add("動画設定")
         if (simPage != null) names.add("シミュレーション")
         val tl = findViewById<com.google.android.material.tabs.TabLayout>(R.id.plan_tabs)
         fillTabs(tl, names) { i -> planPager.setCurrent(i, true) }
@@ -7215,6 +7216,32 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 schedulePages.add(sv)
             }
         }
+        // 動画設定ページ(2026-09-23 UI依頼)。内蔵カメラ(videoOut)のときだけ、シミュレーションの手前へ。
+        //  【作り直すのは中身が変わるときだけ】この処理は設定を変えるたびに走る(保存→EV_SCHEDULE)。
+        //   毎回作り直すと、選んだ拍子にページが差し替わってスクロールが先頭へ戻り、次の操作が
+        //   別の項目へ当たる。計画/カメラ/編集可否が同じなら、今のページをそのまま使う。
+        if (o.optBoolean("camVideoOut", false)) {
+            val key = planName + " " + o.optString("camera") + " " + planReadOnly
+            videoJson = JSONObject(o.optJSONObject("video")?.toString() ?: "{}")
+            // 「カメラの1/2」の実寸(目安の表示用)。保存する画像は RAW の縦横を半分にしたもの。
+            videoJson.put("halfW", o.optInt("pixelW", 0) / 2).put("halfH", o.optInt("pixelH", 0) / 2)
+            var vp = videoPage
+            if (vp == null || videoPageKey != key) {
+                vp?.let { planPager.removeView(it) }
+                videoSyncing = true
+                vp = buildVideoPage(planName, o.optString("camera"))
+                videoSyncing = false
+                videoPageKey = key
+                videoPage = vp
+            } else {
+                planPager.removeView(vp)   // 並び順(シミュレーションの手前)を保つため付け直す
+            }
+            planPager.addView(vp, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        } else {
+            videoPage?.let { planPager.removeView(it) }
+            videoPage = null; videoPageKey = ""
+        }
         // 最終ページ = 撮影シミュレーション(§7.3 画面360)。永続1インスタンスを毎回末尾へ付け直す。
         ensureSimReady()
         simPage?.let { sp ->
@@ -7240,6 +7267,126 @@ class MainActivity : AppCompatActivity(), HgeListener {
         planPager.refreshPages()
         updatePagerTitle()
         rebuildPlanTabs()
+    }
+
+    // ================= 動画設定ページ(2026-09-23 UI依頼) =================
+    // 内蔵カメラ(カメラの性質 videoOut)の計画にだけ、シミュレーションの手前へ差し込む。
+    //  ・動画を作る/作らない ・大きさ ・縦横比が合わないときの入れ方 ・コマ送り速度 ・品質
+    //  値は計画(cs.video)に入れて永続化する。撮影が始まるとデバイス層へそのまま渡る。
+    private var videoPage: LinearLayout? = null
+    private var videoPageKey = ""                 // 作り直しの判定(計画名+カメラ+編集可否)
+    private var videoJson = JSONObject()          // いま画面に出ている設定
+    private var videoSyncing = false              // 表示のための set が native を呼び返さないように
+
+    private fun buildVideoPage(planName: String, cam: String): LinearLayout {
+        val page = LinearLayout(this); page.orientation = LinearLayout.VERTICAL
+        val nameTv = TextView(this)
+        nameTv.text = planName.ifEmpty { "撮影計画" }
+        nameTv.setTypeface(null, Typeface.BOLD); nameTv.textSize = 15f
+        nameTv.maxLines = 1; nameTv.ellipsize = android.text.TextUtils.TruncateAt.END
+        nameTv.setPadding(dp(12), dp(6), dp(12), dp(6))
+        nameTv.setBackgroundColor(0xFFE3F2FD.toInt())
+        page.addView(nameTv, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        val sv = ScrollView(this)
+        val box = LinearLayout(this); box.orientation = LinearLayout.VERTICAL; box.setPadding(dp(12), dp(8), dp(12), dp(12))
+        sv.addView(box, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        page.addView(sv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        val ed = !planReadOnly
+        val hint = TextView(this); hint.textSize = 12f; hint.setTextColor(Color.parseColor("#616161"))
+        hint.setPadding(dp(4), dp(8), dp(4), dp(4))
+
+        // 動画を作る(既定=作る)
+        val sw = android.widget.Switch(this)
+        sw.text = "撮ったコマから動画を作る"; sw.textSize = 16f
+        sw.isChecked = videoJson.optBoolean("make", true); sw.isEnabled = ed
+        sw.setOnCheckedChangeListener { _, v -> if (!videoSyncing) { videoJson.put("make", v); pushVideo(); refreshVideoHint(hint) } }
+        box.addView(sw)
+        box.addView(thinDivider())
+
+        // 大きさ(カメラの1/2 / 1920x1440 / 1920x1080)
+        box.addView(videoLabel("画像サイズ"))
+        val sizeNames = arrayOf("カメラの 1/2(保存した画像のまま)", "1920 × 1440", "1920 × 1080")
+        box.addView(videoChoice(sizeNames, videoJson.optInt("size", 1), ed) { i ->
+            videoJson.put("size", i); pushVideo(); refreshVideoHint(hint) })
+
+        // 縦横比が合わないときの入れ方
+        box.addView(videoLabel("縦横比が合わないとき"))
+        val aspNames = arrayOf("切り取る(画角は狭くなる)", "全体を入れて余りは黒", "圧縮する(縦横比が変わる)")
+        box.addView(videoChoice(aspNames, videoJson.optInt("aspect", 0), ed) { i ->
+            videoJson.put("aspect", i); pushVideo(); refreshVideoHint(hint) })
+
+        // コマ送り速度
+        box.addView(videoLabel("フレームレート"))
+        val fpsVals = doubleArrayOf(7.5, 15.0, 30.0, 60.0)
+        val fpsNames = arrayOf("7.5 fps", "15 fps", "30 fps", "60 fps")
+        val curFps = videoJson.optDouble("fps", 30.0)
+        var fpsIdx = fpsVals.indexOfFirst { Math.abs(it - curFps) < 0.01 }
+        if (fpsIdx < 0) fpsIdx = 2
+        box.addView(videoChoice(fpsNames, fpsIdx, ed) { i ->
+            videoJson.put("fps", fpsVals[i]); pushVideo(); refreshVideoHint(hint) })
+
+        // 品質
+        box.addView(videoLabel("品質"))
+        val qNames = arrayOf("低(ファイルが小さい)", "標準", "高(夜のノイズに強い)")
+        box.addView(videoChoice(qNames, videoJson.optInt("quality", 1), ed) { i ->
+            videoJson.put("quality", i); pushVideo(); refreshVideoHint(hint) })
+
+        box.addView(hint)
+        refreshVideoHint(hint)
+        val note = TextView(this)
+        note.text = "動画は " + cam + " で撮ったコマから作ります。保存先は Movies/TwyLapse。\n" +
+                    "全部のコマをキーフレームにして書き出すので、画質が周期的に揺れることはありません。"
+        note.textSize = 12f; note.setTextColor(Color.parseColor("#616161")); note.setPadding(dp(4), dp(10), dp(4), dp(4))
+        box.addView(note)
+        return page
+    }
+
+    private fun videoLabel(s: String): TextView {
+        val tv = TextView(this); tv.text = s; tv.textSize = 14f; tv.setTypeface(null, Typeface.BOLD)
+        tv.setPadding(dp(4), dp(12), dp(4), dp(2))
+        return tv
+    }
+
+    // 1つ選ぶ並び(ラジオ)。選び直しはその場で計画へ保存する。
+    private fun videoChoice(names: Array<String>, sel: Int, enabled: Boolean, onPick: (Int) -> Unit): View {
+        val g = android.widget.RadioGroup(this)
+        g.orientation = LinearLayout.VERTICAL
+        for ((i, n) in names.withIndex()) {
+            val r = android.widget.RadioButton(this)
+            r.text = n; r.textSize = 15f; r.id = View.generateViewId()
+            r.isChecked = (i == sel); r.isEnabled = enabled
+            r.setOnCheckedChangeListener { _, c -> if (c && !videoSyncing) onPick(i) }
+            g.addView(r)
+        }
+        return g
+    }
+
+    // いまの設定で何が出来るか(大きさとビットレート)を1行で出す。
+    private fun refreshVideoHint(tv: TextView) {
+        if (!videoJson.optBoolean("make", true)) { tv.text = "動画は作りません(撮った画像だけ残ります)"; return }
+        val size = videoJson.optInt("size", 1)
+        val fps = videoJson.optDouble("fps", 30.0)
+        val q = videoJson.optInt("quality", 1)
+        val bpp = doubleArrayOf(0.20, 0.50, 1.20)[q.coerceIn(0, 2)]
+        val wh = when (size) {
+            1 -> Pair(1920, 1440)
+            2 -> Pair(1920, 1080)
+            else -> Pair(videoJson.optInt("halfW", 0), videoJson.optInt("halfH", 0))
+        }
+        val sizeTxt = if (wh.first > 0) "${wh.first} × ${wh.second}" else "カメラの 1/2"
+        val px = if (wh.first > 0) wh.first.toDouble() * wh.second else 2000.0 * 1500.0
+        val mbps = Math.min(px * fps * bpp, 150_000_000.0) / 1_000_000.0
+        val gbPer1000 = px * bpp / 8.0 * 1000.0 / 1.0e9
+        tv.text = String.format(java.util.Locale.US, "%s / %.1f fps / 約 %.0f Mbps(1000 コマで約 %.1f GB)",
+                                sizeTxt, fps, mbps, gbPer1000)
+    }
+
+    private fun pushVideo() {
+        val s = videoJson.toString()
+        planExec.execute { runCatching { HgeNative.nativeSetPlanVideo(s) } }
     }
 
     // シミュレーションページの下準備: 恒星(fixed_star.json)を一度読み込み、ページを1度だけ生成する。

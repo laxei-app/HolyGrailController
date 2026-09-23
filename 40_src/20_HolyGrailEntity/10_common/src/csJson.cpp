@@ -93,6 +93,26 @@ namespace csjson
 			return p;
 		}
 
+		json videoToJsonObj(const hgc::videoSet& v)
+		{
+			return json{ {"make", v.make}, {"size", v.size}, {"aspect", v.aspect},
+			             {"fps", v.fps}, {"quality", v.quality} };
+		}
+		hgc::videoSet videoFromJsonObj(const json& j)
+		{
+			hgc::videoSet v;
+			v.make    = j.value("make", true);
+			v.size    = static_cast<uint8_t>(j.value("size", 1));
+			v.aspect  = static_cast<uint8_t>(j.value("aspect", 0));
+			v.fps     = j.value("fps", 30.0);
+			v.quality = static_cast<uint8_t>(j.value("quality", 1));
+			if (!(v.fps > 0.0)) { v.fps = 30.0; }
+			if (v.size > 2)    { v.size = 1; }
+			if (v.aspect > 2)  { v.aspect = 0; }
+			if (v.quality > 2) { v.quality = 1; }
+			return v;
+		}
+
 		json cameraToJson(const hgc::camera& c)
 		{
 			return json{ {"maker", c.maker}, {"model", c.model}, {"name", c.name},
@@ -103,7 +123,7 @@ namespace csjson
 			             {"intervalFactor", c.intervalFactor}, {"intervalMargin", c.intervalMargin},
 			             {"lensFixed", c.lensFixed}, {"localOnly", c.localOnly},
 			             {"noSyncShot", c.noSyncShot}, {"readOnly", c.readOnly},
-			             {"meterLv", c.meterLv},
+			             {"meterLv", c.meterLv}, {"videoOut", c.videoOut},
 			             {"authUser", c.authUser},
 			             // パスワードは暗号文で載せる。ファイルにも ETP にも平文は出さない
 			             //  (エッジも同じ固定鍵を持っているので、そのまま復号できる)。
@@ -128,6 +148,7 @@ namespace csjson
 			c.lensFixed  = j.value("lensFixed",  false);
 			c.localOnly  = j.value("localOnly",  false);
 			c.noSyncShot = j.value("noSyncShot", false);
+			c.videoOut   = j.value("videoOut",   false);
 			c.readOnly   = j.value("readOnly",   false);
 			c.meterLv     = j.value("meterLv", false);	// 無い=サムネイルだけ(既定)
 			c.authUser    = getStr(j, "authUser");
@@ -362,6 +383,7 @@ namespace csjson
 		}
 		j["ccmList"] = wl;
 		// 夜間の固定露出と移行目標ev(夜間ウィンドウが無くても移行のクランプ/基準に使う。仕様3.7/3.9)。
+		j["video"] = videoToJsonObj(plan.video);
 		j["nightFixedExposure"] = expToJson(plan.nightFixedExposure);
 		j["nightPreNightEv"]    = plan.nightPreNightEv;
 		j["nightPostNightEv"]   = plan.nightPostNightEv;
@@ -377,6 +399,7 @@ namespace csjson
 		plan = hgc::cs{};
 		plan.name      = j.value("planName", std::string());
 		plan.tplKind   = j.value("tplKind", std::string());
+		if (j.contains("video")) { plan.video = videoFromJsonObj(j["video"]); }
 		if (j.contains("start")) { plan.start = dtFromJson(j["start"]); }
 		if (j.contains("end"))   { plan.end   = dtFromJson(j["end"]); }
 		if (j.contains("place"))  { plan.place  = placeFromJson(j["place"]); }
@@ -586,6 +609,15 @@ namespace csjson
 
 	// lenses_list: manufacture/mount/name/f_min/f_max/fnum_min_wide/fnum_min_tele/fnum_max/electronic_contacts
 	// 単一焦点・単一F値モデルへ縮約(焦点=f_min(広角端)、開放F=fnum_min_wide。ズーム/絞り域は後回し)。
+	std::string videoToJson(const hgc::videoSet& v) { return videoToJsonObj(v).dump(); }
+	bool videoFromJson(const std::string& s, hgc::videoSet& out)
+	{
+		json j = json::parse(s, nullptr, false);
+		if (j.is_discarded() || !j.is_object()) { return false; }
+		out = videoFromJsonObj(j);
+		return true;
+	}
+
 	bool lensesFromMasterJson(const std::string& s, std::vector<hgc::lens>& out)
 	{
 		out.clear();

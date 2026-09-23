@@ -66,6 +66,8 @@ object HgeNative {
     external fun nativeSetPlanInterval(seconds: Double): Int   // 撮影周期。最小(最長ss+2)未満は失敗
     external fun nativeRenamePlan(id: String, name: String): Int  // 計画名をid指定で変更(リスト直接リネーム)
     external fun nativeSetPlanLandscape(landscape: Int): Int   // 横向き(ランドスケープ)。再生成
+    // 動画設定(2026-09-23)。{"make","size","aspect","fps","quality"} の JSON を渡す
+    external fun nativeSetPlanVideo(json: String): Int
     // スケジュール手動編集(7.3.2)
     external fun nativeSetBandMode(sunriseMode: Int, sunsetMode: Int): Int  // 0=自動,1=挿入,2=排除
     external fun nativeSetBoundary(beforeType: Int, afterType: Int, occ: Int, whenIso: String): Int
@@ -242,7 +244,10 @@ object HgeNative {
     //  (MP4 は閉じないと再生できない)。
     // 戻り=ギャラリーでの名前(tlp_yymmddhhmmss.mp4)。"" =失敗。
     @JvmStatic
-    fun videoStart(fps: Int, planName: String): String { BuiltinVideo.setPlanName(planName); return BuiltinVideo.start(fps) }
+    //  optJson: 計画の動画設定({"make","size","aspect","fps","quality"})。空なら既定。
+    fun videoStart(optJson: String?, planName: String): String {
+        BuiltinVideo.setPlanName(planName); return BuiltinVideo.start(optJson)
+    }
 
     @JvmStatic
     fun videoAddJpeg(jpeg: ByteArray?): Boolean = BuiltinVideo.addJpeg(jpeg)

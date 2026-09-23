@@ -53,9 +53,21 @@ object BuiltinVideo {
     const val kSegmentMs = 10L * 60L * 1000L
 
     // 【出来上がりの大きさ】撮影は 4080x3072(4:3)。そのままの画素数だと符号化器の上限に
-    //  当たる端末があるので落とす。画角は切らない(空を捨てない)。
+    //  当たる端末があるので落とす。既定は画角を切らない 1920x1440。
+    //  【計画で選べるようにした(2026-09-23 UI依頼)】大きさ・縦横比の入れ方・フレームレート・品質。
+    //   大きさ 0=カメラの1/2(保存した画像そのまま) / 1=1920x1440 / 2=1920x1080
+    //   入れ方 0=切り取る / 1=全体を入れて余りは黒 / 2=圧縮する(縦横比を変える)
     const val kWidth  = 1920
     const val kHeight = 1440
+    private var outW = kWidth
+    private var outH = kHeight
+    private var sizeMode = 1
+    private var aspectMode = 0
+    private var quality = 1
+    // 【1画素あたりのビット数(2026-09-23)】夜のコマはほぼノイズで圧縮が効かない。品質はここで決める。
+    //  低 0.10 / 標準 0.25 / 高 0.60 bit/画素。上限は端末の符号化器が受け付ける現実的な値で止める。
+    private val kBpp = doubleArrayOf(0.20, 0.50, 1.20)
+    private const val kBitrateMax = 150_000_000
 
     // ── 切れ端の符号化 ──────────────────────────────────────
     private var codec: MediaCodec? = null
@@ -64,7 +76,7 @@ object BuiltinVideo {
     private var started = false
     private var segFrames = 0           // いまの切れ端のコマ数
     private var segStartMs = 0L         // いまの切れ端を書き始めた時刻
-    private var fps = 30
+    private var fps = 30.0		// 表示上のコマ送り速度。7.5 のような実数も採る
     private val info = MediaCodec.BufferInfo()
 
     // ── 完成品 ──────────────────────────────────────────────
@@ -87,16 +99,35 @@ object BuiltinVideo {
     // 作業用。毎コマ確保し直すと 1920x1440 で 11MB を掴んでは捨てることになる。
     private var argb: IntArray? = null
     private var scaled: Bitmap? = null
+    private var sizeFixed = true		// 大きさが決まっているか(カメラの1/2 は最初のコマで決まる)
+    private var pendingOpen = false		// 大きさが決まるまで符号化器を開かずに待っている
 
     @JvmStatic
     fun isOpen(): Boolean = codec != null
 
-    // 書き出しを始める。戻り=ギャラリーでの名前("" =失敗)。
+    // 書き出しを始める。optJson = 計画の動画設定(空なら既定)。戻り=ギャラリーでの名前("" =失敗)。
     @JvmStatic
-    fun start(fpsWanted: Int): String {
+    fun start(optJson: String?): String {
         if (codec != null) { return displayName }
         val ctx = appCtx ?: return ""
-        fps = if (fpsWanted > 0) fpsWanted else 30
+        // 既定は今までどおり 1920x1440・30fps・標準品質・切り取る。
+        fps = 30.0; sizeMode = 1; aspectMode = 0; quality = 1
+        if (!optJson.isNullOrEmpty()) {
+            runCatching {
+                val o = org.json.JSONObject(optJson)
+                fps = o.optDouble("fps", 30.0).let { if (it > 0.0) it else 30.0 }
+                sizeMode = o.optInt("size", 1).coerceIn(0, 2)
+                aspectMode = o.optInt("aspect", 0).coerceIn(0, 2)
+                quality = o.optInt("quality", 1).coerceIn(0, 2)
+            }
+        }
+        // 大きさは最初のコマを見てから決める(カメラの1/2 は端末によって違う)。ここでは選択だけ控える。
+        outW = kWidth; outH = kHeight
+        if (sizeMode == 2) { outH = 1080 }
+        // 「カメラの1/2」は保存した画像の大きさそのもの。最初のコマを読むまで分からないので、
+        //  符号化器はそれまで開かない(先に開くと別の大きさで作ってしまい、1コマも書けない)。
+        sizeFixed = (sizeMode != 0)
+        pendingOpen = !sizeFixed
         // 名前は <計画名>_yyyymmddhhmmss。同じ計画をもう一度撮っても日時で別のファイルになる。
         displayName = safeName(planName) + "_" +
                       SimpleDateFormat("yyyyMMddHHmmss", Locale.US).format(Date()) + ".mp4"
@@ -106,21 +137,24 @@ object BuiltinVideo {
         segFile  = File(dir, "seg_$displayName")
         fullFrames = 0; publishedUri = null
         runCatching { fullFile?.delete(); segFile?.delete() }
+        if (!sizeFixed) { return displayName }		// 最初のコマで開く
         return if (openSegment()) displayName else ""
     }
 
     // 1コマ足す。JPEG のバイト列をそのまま渡す。
     @JvmStatic
     fun addJpeg(jpeg: ByteArray?): Boolean {
-        val c = codec ?: return false
         if (jpeg == null || jpeg.isEmpty()) { return false }
-        val bmp = decodeScaled(jpeg) ?: return false
+        if (codec == null && !pendingOpen) { return false }	// 動画を作らない指定・または閉じたあと
+        val bmp = decodeScaled(jpeg) ?: return false		// ここで「カメラの1/2」の大きさが決まる
+        if (codec == null) { pendingOpen = false; if (!openSegment()) { return false } }
+        val c = codec ?: return false
         val ok = try {
             val idx = c.dequeueInputBuffer(2_000_000)
             if (idx < 0) { return false }
             val img = c.getInputImage(idx) ?: run { c.queueInputBuffer(idx, 0, 0, 0, 0); return false }
             fillYuv(bmp, img)
-            val ptsUs = segFrames.toLong() * 1_000_000L / fps
+            val ptsUs = (segFrames.toDouble() * 1_000_000.0 / fps).toLong()
             c.queueInputBuffer(idx, 0, img.planes[0].buffer.capacity() * 3 / 2, ptsUs, 0)
             ++segFrames
             drain(false)
@@ -168,16 +202,26 @@ object BuiltinVideo {
         if (reopen) { openSegment() }
     }
 
+    // 出来上がりの大きさとコマ送り速度と品質から決める。全コマがキーフレームなので、そのぶん要る。
+    private fun bitrate(): Int {
+        val bps = outW.toDouble() * outH.toDouble() * fps * kBpp[quality]
+        return Math.min(bps, kBitrateMax.toDouble()).toInt().coerceAtLeast(2_000_000)
+    }
+
     private fun openSegment(): Boolean {
         val seg = segFile ?: return false
         try {
             runCatching { seg.delete() }
-            val fmt = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, kWidth, kHeight)
+            val fmt = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, outW, outH)
             fmt.setInteger(MediaFormat.KEY_COLOR_FORMAT,
                            MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
-            fmt.setInteger(MediaFormat.KEY_BIT_RATE, 16_000_000)   // タイムラプスは動きが大きい
-            fmt.setInteger(MediaFormat.KEY_FRAME_RATE, fps)
-            fmt.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)    // 1秒ごとにキーフレーム
+            fmt.setInteger(MediaFormat.KEY_BIT_RATE, bitrate())
+            fmt.setInteger(MediaFormat.KEY_FRAME_RATE, Math.max(1, Math.ceil(fps).toInt()))
+            // 【全コマをキーフレームにする(2026-09-23 ユーザー指示)】タイムラプスは隣のコマとの相関が
+            //  無く(特に夜はほぼノイズ)、予測はほとんど効かない。1秒ごとのキーフレームだと GOP の
+            //  後半へ回すビットが尽きてモザイクになり、それが13〜14コマ周期で繰り返し見えていた。
+            //  0 = すべてのコマをキーフレームにする(画質が周期で揺れない)。
+            fmt.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 0)
             val c = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
             c.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
             c.start()
@@ -198,7 +242,7 @@ object BuiltinVideo {
             try {
                 val idx = c.dequeueInputBuffer(1_000_000)
                 if (idx >= 0) { c.queueInputBuffer(idx, 0, 0,
-                    segFrames.toLong() * 1_000_000L / fps, MediaCodec.BUFFER_FLAG_END_OF_STREAM) }
+                    (segFrames.toDouble() * 1_000_000.0 / fps).toLong(), MediaCodec.BUFFER_FLAG_END_OF_STREAM) }
                 drain(true)
             } catch (_: Exception) {}
         }
@@ -270,7 +314,7 @@ object BuiltinVideo {
                 }
                 ex.release()
                 // 次の入力はこのぶんの後ろへ。1コマぶん足すのは最後のコマの長さのため。
-                offsetUs = lastPts + 1_000_000L / fps
+                offsetUs = lastPts + (1_000_000.0 / fps).toLong()
             }
             mux.stop(); mux.release()
             return outTrack >= 0
@@ -329,22 +373,53 @@ object BuiltinVideo {
         val o = BitmapFactory.Options()
         o.inJustDecodeBounds = true
         BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, o)
+        // 「カメラの1/2」= 保存した画像そのまま。最初のコマでその大きさに決める(符号化器は偶数を好む)。
+        if (!sizeFixed && o.outWidth > 0 && o.outHeight > 0) {
+            outW = o.outWidth and 0xFFFFFFFE.toInt(); outH = o.outHeight and 0xFFFFFFFE.toInt()
+            sizeFixed = true
+        }
         var sample = 1
-        while (o.outWidth / (sample * 2) >= kWidth) { sample *= 2 }
+        while (o.outWidth / (sample * 2) >= outW) { sample *= 2 }
         val d = BitmapFactory.Options()
         d.inSampleSize = sample
         d.inPreferredConfig = Bitmap.Config.ARGB_8888
         val src = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, d) ?: return null
-        if (src.width == kWidth && src.height == kHeight) { return src }
+        if (src.width == outW && src.height == outH) { return src }
         var s = scaled
-        if (s == null || s.width != kWidth || s.height != kHeight) {
+        if (s == null || s.width != outW || s.height != outH) {
             try { s?.recycle() } catch (_: Exception) {}
-            s = Bitmap.createBitmap(kWidth, kHeight, Bitmap.Config.ARGB_8888)
+            s = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
             scaled = s
         }
         val cv = android.graphics.Canvas(s)
-        cv.drawBitmap(src, android.graphics.Rect(0, 0, src.width, src.height),
-                      android.graphics.Rect(0, 0, kWidth, kHeight), null)
+        cv.drawColor(android.graphics.Color.BLACK)		// 余白(全体を入れる指定)のための下地
+        // 縦横比が合わないときの入れ方。合っていればどれでも同じ結果になる。
+        val sw = src.width.toDouble(); val sh = src.height.toDouble()
+        val dw = outW.toDouble(); val dh = outH.toDouble()
+        var sr = android.graphics.Rect(0, 0, src.width, src.height)
+        var dr = android.graphics.Rect(0, 0, outW, outH)
+        when (aspectMode) {
+            0 -> {	// 切り取る: 出来上がりの比に合わせて元の中央を切り出す
+                val want = dw / dh
+                if (sw / sh > want) {	// 元が横長 → 左右を落とす
+                    val w = (sh * want).toInt()
+                    val x = (src.width - w) / 2
+                    sr = android.graphics.Rect(x, 0, x + w, src.height)
+                } else {				// 元が縦長 → 上下を落とす
+                    val h = (sw / want).toInt()
+                    val y = (src.height - h) / 2
+                    sr = android.graphics.Rect(0, y, src.width, y + h)
+                }
+            }
+            1 -> {	// 全体を入れて余りは黒
+                val scale = Math.min(dw / sw, dh / sh)
+                val w = (sw * scale).toInt(); val h = (sh * scale).toInt()
+                val x = (outW - w) / 2; val y = (outH - h) / 2
+                dr = android.graphics.Rect(x, y, x + w, y + h)
+            }
+            else -> { /* 2 = 圧縮する: 全面へ引き伸ばす(縦横比が変わる) */ }
+        }
+        cv.drawBitmap(src, sr, dr, null)
         src.recycle()
         return s
     }
@@ -352,7 +427,7 @@ object BuiltinVideo {
     // ARGB を符号化器の受け口(YUV420)へ詰める。面ごとの並びは端末で違うので、
     //  rowStride / pixelStride を必ず見る(決め打ちすると色がずれる端末がある)。
     private fun fillYuv(bmp: Bitmap, img: android.media.Image) {
-        val w = kWidth; val h = kHeight
+        val w = outW; val h = outH
         var px = argb
         if (px == null || px.size != w * h) { px = IntArray(w * h); argb = px }
         bmp.getPixels(px, 0, w, 0, 0, w, h)

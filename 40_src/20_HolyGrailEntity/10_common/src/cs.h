@@ -61,6 +61,19 @@ namespace hgc
 		bool     rising = false;			// 朝(上昇)=true / 夕(下降)=false
 	};
 
+	// 動画設定(2026-09-23 UI依頼)。**内蔵カメラで撮ったときだけ意味を持つ**
+	//  (撮ったコマから動画を作れるカメラ = camera::videoOut)。外部カメラの計画にも入っているが使われない。
+	struct videoSet
+	{
+		bool   make    = true;	// 動画を作る
+		// 出来上がりの大きさ: 0=カメラの1/2(保存した画像そのまま) / 1=1920x1440 / 2=1920x1080
+		uint8_t size   = 1;
+		// 縦横比が合わないときの入れ方: 0=切り取る / 1=全体を入れて余りは黒 / 2=圧縮する(縦横比を変える)
+		uint8_t aspect = 0;
+		double fps     = 30.0;	// 7.5 / 15 / 30 / 60
+		uint8_t quality = 1;	// 0=低 1=標準 2=高(1画素あたりのビット数で効く)
+	};
+
 	// 4.5 撮影計画
 	struct cs
 	{
@@ -98,6 +111,7 @@ namespace hgc
 		// 夜間撮影の固定露出と移行目標ev。スケジュールに夜間ウィンドウが無くても(終了時刻が夜間より前でも)
 		// 夜間前/後移行のクランプ(暗所限界)・基準(home)・ss上限として常に使えるよう、
 		// buildSchedule が夜間プリセットから設定し csJson で永続/転送する(仕様3.7/3.9)。
+		videoSet video;						// 動画設定(内蔵カメラのときだけ使う)
 		exposure nightFixedExposure;		// 夜間撮影の固定露出(=暗所限界/基準/ss上限の基準)
 		double   nightPreNightEv  = 0.0;	// 夜間前移行の目標ev(夜間プリセット由来)
 		double   nightPostNightEv = 0.0;	// 夜間後移行の目標ev(夜間プリセット由来)
