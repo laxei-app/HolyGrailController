@@ -7229,13 +7229,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
             videoJson = JSONObject(o.optJSONObject("video")?.toString() ?: "{}")
             // 「カメラの1/2」の実寸(目安の表示用)。保存する画像は RAW の縦横を半分にしたもの。
             videoJson.put("halfW", o.optInt("pixelW", 0) / 2).put("halfH", o.optInt("pixelH", 0) / 2)
+            // 【中身が変わっていたら作り直す(2026-09-23)】「変更の取り消し」で計画ごと戻したときに、
+            //  画面の選択が古いままにならないように。自分で変えたときは同じ値なので作り直さない。
+            val sig = videoSig(videoJson)
             var vp = videoPage
-            if (vp == null || videoPageKey != key) {
+            if (vp == null || videoPageKey != key || videoShown != sig) {
                 vp?.let { planPager.removeView(it) }
                 videoSyncing = true
                 vp = buildVideoPage(planName, o.optString("camera"))
                 videoSyncing = false
-                videoPageKey = key
+                videoPageKey = key; videoShown = sig
                 videoPage = vp
             } else {
                 planPager.removeView(vp)   // 並び順(シミュレーションの手前)を保つため付け直す
@@ -7279,6 +7282,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  値は計画(cs.video)に入れて永続化する。撮影が始まるとデバイス層へそのまま渡る。
     private var videoPage: LinearLayout? = null
     private var videoPageKey = ""                 // 作り直しの判定(計画名+カメラ+編集可否)
+    private var videoShown = ""                   // いま画面に出ている設定の中身(取り消しで戻ったかの判定)
     private var videoJson = JSONObject()          // いま画面に出ている設定
     private var videoSyncing = false              // 表示のための set が native を呼び返さないように
 
@@ -7463,7 +7467,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun pushVideo() {
         val s = videoJson.toString()
+        videoShown = videoSig(videoJson)	// 自分で変えたぶんは作り直しの対象にしない
         planExec.execute { runCatching { HgeNative.nativeSetPlanVideo(s) } }
+    }
+
+    // 画面に出ている動画設定の中身(halfW/halfH のような表示の目安は含めない)。
+    private fun videoSig(o: JSONObject?): String {
+        if (o == null) { return "" }
+        return "${o.optBoolean("make", true)}|${o.optInt("size", 0)}|${o.optInt("aspect", 0)}|" +
+               "${o.optDouble("fps", 15.0)}|${o.optInt("quality", 2)}"
     }
 
     // シミュレーションページの下準備: 恒星(fixed_star.json)を一度読み込み、ページを1度だけ生成する。
