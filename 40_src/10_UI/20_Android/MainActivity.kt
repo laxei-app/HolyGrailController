@@ -7300,7 +7300,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
         // 動画を作る(既定=作る)
         val sw = android.widget.Switch(this)
-        sw.text = "撮ったコマから動画を作る"; sw.textSize = 16f
+        sw.text = "動画自動生成"; sw.textSize = 16f
         sw.isChecked = videoJson.optBoolean("make", true); sw.isEnabled = ed
         sw.setOnCheckedChangeListener { _, v -> if (!videoSyncing) { videoJson.put("make", v); pushVideo(); refreshVideoHint(hint) } }
         box.addView(sw)
@@ -7308,37 +7308,36 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
         // 大きさ(カメラの1/2 / 1920x1440 / 1920x1080)
         box.addView(videoLabel("画像サイズ"))
-        val sizeNames = arrayOf("カメラの 1/2(保存した画像のまま)", "1920 × 1440", "1920 × 1080")
-        box.addView(videoChoice(sizeNames, videoJson.optInt("size", 1), ed) { i ->
+        val sizeNames = arrayOf("変更なし", "1920 × 1440", "1920 × 1080")
+        box.addView(videoChoice(sizeNames, videoJson.optInt("size", 0), ed) { i ->
             videoJson.put("size", i); pushVideo(); refreshVideoHint(hint) })
 
         // 縦横比が合わないときの入れ方
         box.addView(videoLabel("縦横比が合わないとき"))
-        val aspNames = arrayOf("切り取る(画角は狭くなる)", "全体を入れて余りは黒", "圧縮する(縦横比が変わる)")
+        val aspNames = arrayOf("切り取る", "全体を入れる", "圧縮する")
         box.addView(videoChoice(aspNames, videoJson.optInt("aspect", 0), ed) { i ->
             videoJson.put("aspect", i); pushVideo(); refreshVideoHint(hint) })
 
-        // コマ送り速度
-        box.addView(videoLabel("フレームレート"))
+        // コマ送り速度(目盛り付きスライダー。止まる位置は 7.5 / 15 / 30 / 60 だけ)
+        box.addView(videoLabel("フレームレート(fps)"))
         val fpsVals = doubleArrayOf(7.5, 15.0, 30.0, 60.0)
-        val fpsNames = arrayOf("7.5 fps", "15 fps", "30 fps", "60 fps")
-        val curFps = videoJson.optDouble("fps", 30.0)
+        val curFps = videoJson.optDouble("fps", 15.0)
         var fpsIdx = fpsVals.indexOfFirst { Math.abs(it - curFps) < 0.01 }
-        if (fpsIdx < 0) fpsIdx = 2
-        box.addView(videoChoice(fpsNames, fpsIdx, ed) { i ->
+        if (fpsIdx < 0) fpsIdx = 1
+        box.addView(videoSlider(arrayOf("7.5", "15", "30", "60"), null, fpsIdx, ed) { i ->
             videoJson.put("fps", fpsVals[i]); pushVideo(); refreshVideoHint(hint) })
 
-        // 品質
+        // 品質(同じ形のスライダー。両端に何が変わるかを添える)
         box.addView(videoLabel("品質"))
-        val qNames = arrayOf("低(ファイルが小さい)", "標準", "高(夜のノイズに強い)")
-        box.addView(videoChoice(qNames, videoJson.optInt("quality", 1), ed) { i ->
+        box.addView(videoSlider(arrayOf("低", "標準", "高"),
+                                arrayOf("ファイルが小さい", "", "夜のノイズに強い"),
+                                videoJson.optInt("quality", 2), ed) { i ->
             videoJson.put("quality", i); pushVideo(); refreshVideoHint(hint) })
 
         box.addView(hint)
         refreshVideoHint(hint)
         val note = TextView(this)
-        note.text = "動画は " + cam + " で撮ったコマから作ります。保存先は Movies/TwyLapse。\n" +
-                    "全部のコマをキーフレームにして書き出すので、画質が周期的に揺れることはありません。"
+        note.text = "動画は " + cam + " で撮ったコマから作ります。保存先は Movies/TwyLapse。"
         note.textSize = 12f; note.setTextColor(Color.parseColor("#616161")); note.setPadding(dp(4), dp(10), dp(4), dp(4))
         box.addView(note)
         return page
@@ -7364,12 +7363,65 @@ class MainActivity : AppCompatActivity(), HgeListener {
         return g
     }
 
+    // 【目盛り付きスライダー(2026-09-23 UI依頼)】上に目盛りの文字を並べ、その位置にだけ止まる。
+    //  文字はスライダーのつまみが止まる位置(トラックの 0 / 1/3 / 2/3 / 1)へ実測で合わせる。
+    //  等分に並べると端の2つがずれるので、幅が決まってから置き直す。
+    private fun videoSlider(labels: Array<String>, subs: Array<String>?, sel: Int,
+                            enabled: Boolean, onPick: (Int) -> Unit): View {
+        val col = LinearLayout(this); col.orientation = LinearLayout.VERTICAL
+        val row = FrameLayout(this)
+        val tvs = ArrayList<TextView>()
+        for ((i, s) in labels.withIndex()) {
+            val tv = TextView(this)
+            val sub = subs?.getOrNull(i) ?: ""
+            tv.text = if (sub.isEmpty()) s else s + "\n" + sub
+            tv.textSize = 13f
+            tv.gravity = Gravity.CENTER_HORIZONTAL
+            tv.setTextColor(Color.parseColor("#424242"))
+            tv.setTypeface(null, if (i == sel) Typeface.BOLD else Typeface.NORMAL)
+            row.addView(tv, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            tvs.add(tv)
+        }
+        col.addView(row, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        val sl = com.google.android.material.slider.Slider(this)
+        sl.valueFrom = 0f; sl.valueTo = (labels.size - 1).toFloat(); sl.stepSize = 1f
+        sl.value = sel.coerceIn(0, labels.size - 1).toFloat()
+        sl.isEnabled = enabled
+        sl.labelBehavior = LabelFormatter.LABEL_GONE
+        sl.isTickVisible = true
+        sl.addOnChangeListener { _, v, fromUser ->
+            val i = v.toInt()
+            for ((k, tv) in tvs.withIndex()) { tv.setTypeface(null, if (k == i) Typeface.BOLD else Typeface.NORMAL) }
+            if (fromUser && !videoSyncing) { onPick(i) }
+        }
+        col.addView(sl, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        // 幅が決まってから、文字をつまみの止まる位置の真上へ置く。
+        val place = Runnable {
+            val pad = sl.trackSidePadding.toFloat()
+            val track = (sl.width - pad * 2).toFloat()
+            if (track <= 0f) { return@Runnable }
+            for ((i, tv) in tvs.withIndex()) {
+                val frac = if (labels.size > 1) i.toFloat() / (labels.size - 1) else 0f
+                var x = pad + track * frac - tv.width / 2f
+                if (x < 0f) { x = 0f }
+                if (x > row.width - tv.width) { x = (row.width - tv.width).toFloat() }
+                tv.translationX = x
+            }
+        }
+        sl.post(place)
+        sl.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> sl.post(place) }
+        return col
+    }
+
     // いまの設定で何が出来るか(大きさとビットレート)を1行で出す。
     private fun refreshVideoHint(tv: TextView) {
         if (!videoJson.optBoolean("make", true)) { tv.text = "動画は作りません(撮った画像だけ残ります)"; return }
-        val size = videoJson.optInt("size", 1)
-        val fps = videoJson.optDouble("fps", 30.0)
-        val q = videoJson.optInt("quality", 1)
+        val size = videoJson.optInt("size", 0)
+        val fps = videoJson.optDouble("fps", 15.0)
+        val q = videoJson.optInt("quality", 2)
         val bpp = doubleArrayOf(0.20, 0.50, 1.20)[q.coerceIn(0, 2)]
         val wh = when (size) {
             1 -> Pair(1920, 1440)

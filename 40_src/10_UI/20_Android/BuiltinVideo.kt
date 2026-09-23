@@ -110,15 +110,15 @@ object BuiltinVideo {
     fun start(optJson: String?): String {
         if (codec != null) { return displayName }
         val ctx = appCtx ?: return ""
-        // 既定は今までどおり 1920x1440・30fps・標準品質・切り取る。
-        fps = 30.0; sizeMode = 1; aspectMode = 0; quality = 1
+        // 既定は「変更なし(保存した画像のまま)・15fps・高・切り取る」(2026-09-23 ユーザー決定)。
+        fps = 15.0; sizeMode = 0; aspectMode = 0; quality = 2
         if (!optJson.isNullOrEmpty()) {
             runCatching {
                 val o = org.json.JSONObject(optJson)
-                fps = o.optDouble("fps", 30.0).let { if (it > 0.0) it else 30.0 }
-                sizeMode = o.optInt("size", 1).coerceIn(0, 2)
+                fps = o.optDouble("fps", 15.0).let { if (it > 0.0) it else 15.0 }
+                sizeMode = o.optInt("size", 0).coerceIn(0, 2)
                 aspectMode = o.optInt("aspect", 0).coerceIn(0, 2)
-                quality = o.optInt("quality", 1).coerceIn(0, 2)
+                quality = o.optInt("quality", 2).coerceIn(0, 2)
             }
         }
         // 大きさは最初のコマを見てから決める(カメラの1/2 は端末によって違う)。ここでは選択だけ控える。

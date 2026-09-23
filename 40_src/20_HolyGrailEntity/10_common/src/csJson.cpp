@@ -102,14 +102,14 @@ namespace csjson
 		{
 			hgc::videoSet v;
 			v.make    = j.value("make", true);
-			v.size    = static_cast<uint8_t>(j.value("size", 1));
+			v.size    = static_cast<uint8_t>(j.value("size", 0));
 			v.aspect  = static_cast<uint8_t>(j.value("aspect", 0));
-			v.fps     = j.value("fps", 30.0);
-			v.quality = static_cast<uint8_t>(j.value("quality", 1));
-			if (!(v.fps > 0.0)) { v.fps = 30.0; }
-			if (v.size > 2)    { v.size = 1; }
+			v.fps     = j.value("fps", 15.0);
+			v.quality = static_cast<uint8_t>(j.value("quality", 2));
+			if (!(v.fps > 0.0)) { v.fps = 15.0; }
+			if (v.size > 2)    { v.size = 0; }
 			if (v.aspect > 2)  { v.aspect = 0; }
-			if (v.quality > 2) { v.quality = 1; }
+			if (v.quality > 2) { v.quality = 2; }
 			return v;
 		}
 
