@@ -7305,45 +7305,63 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val ed = !planReadOnly
         val hint = TextView(this); hint.textSize = 12f; hint.setTextColor(Color.parseColor("#616161"))
         hint.setPadding(dp(4), dp(8), dp(4), dp(4))
+        // 【内容の位置を撮影計画の画面と揃える(2026-09-23 UI依頼)】あちらは見出し 96dp のすぐ右から
+        //  値が始まる。こちらも見出しはそのままの位置に置き、内容だけ 96dp の位置から始める。
+        val indent = dp(96)
 
-        // 動画を作る(既定=作る)
+        // 動画自動生成(既定=作る)。見出しは他と同じ体裁、つまみは内容の位置へ。
         val sw = android.widget.Switch(this)
-        sw.text = "動画自動生成"; sw.textSize = 16f
         sw.isChecked = videoJson.optBoolean("make", true); sw.isEnabled = ed
-        sw.setOnCheckedChangeListener { _, v -> if (!videoSyncing) { videoJson.put("make", v); pushVideo(); refreshVideoHint(hint) } }
-        box.addView(sw)
+        run {
+            val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL
+            row.gravity = Gravity.CENTER_VERTICAL
+            val lab = videoLabel("動画自動生成")
+            lab.width = indent
+            row.addView(lab); row.addView(sw)
+            box.addView(row)
+        }
         box.addView(thinDivider())
 
-        // 大きさ(カメラの1/2 / 1920x1440 / 1920x1080)
-        box.addView(videoLabel("画像サイズ"))
+        // ここから下は「動画自動生成」が off のとき、まとめて灰色にして触れなくする。
+        val body = LinearLayout(this); body.orientation = LinearLayout.VERTICAL
+        box.addView(body)
+
+        // 大きさ(変更なし / 1920x1440 / 1920x1080)
+        body.addView(videoLabel("画像サイズ"))
         val sizeNames = arrayOf("変更なし", "1920 × 1440", "1920 × 1080")
-        box.addView(videoChoice(sizeNames, videoJson.optInt("size", 0), ed) { i ->
-            videoJson.put("size", i); pushVideo(); refreshVideoHint(hint) })
+        body.addView(videoIndent(videoChoice(sizeNames, videoJson.optInt("size", 0), ed) { i ->
+            videoJson.put("size", i); pushVideo(); refreshVideoHint(hint) }, indent))
 
         // 縦横比が合わないときの入れ方
-        box.addView(videoLabel("縦横比が合わないとき"))
+        body.addView(videoLabel("縦横比が合わないとき"))
         val aspNames = arrayOf("切り取る", "全体を入れる", "圧縮する")
-        box.addView(videoChoice(aspNames, videoJson.optInt("aspect", 0), ed) { i ->
-            videoJson.put("aspect", i); pushVideo(); refreshVideoHint(hint) })
+        body.addView(videoIndent(videoChoice(aspNames, videoJson.optInt("aspect", 0), ed) { i ->
+            videoJson.put("aspect", i); pushVideo(); refreshVideoHint(hint) }, indent))
 
         // コマ送り速度(目盛り付きスライダー。止まる位置は 7.5 / 15 / 30 / 60 だけ)
-        box.addView(videoLabel("フレームレート(fps)"))
+        body.addView(videoLabel("フレームレート(fps)"))
         val fpsVals = doubleArrayOf(7.5, 15.0, 30.0, 60.0)
         val curFps = videoJson.optDouble("fps", 15.0)
         var fpsIdx = fpsVals.indexOfFirst { Math.abs(it - curFps) < 0.01 }
         if (fpsIdx < 0) fpsIdx = 1
-        box.addView(videoSlider(arrayOf("7.5", "15", "30", "60"), null, fpsIdx, ed) { i, commit ->
-            videoJson.put("fps", fpsVals[i]); refreshVideoHint(hint); if (commit) { pushVideo() } })
+        body.addView(videoIndent(videoSlider(arrayOf("7.5", "15", "30", "60"), null, fpsIdx, ed) { i, commit ->
+            videoJson.put("fps", fpsVals[i]); refreshVideoHint(hint); if (commit) { pushVideo() } }, indent))
 
         // 品質(同じ形のスライダー。両端に何が変わるかを添える)
-        box.addView(videoLabel("品質"))
-        box.addView(videoSlider(arrayOf("低", "標準", "高"),
+        body.addView(videoLabel("品質"))
+        body.addView(videoIndent(videoSlider(arrayOf("低", "標準", "高"),
                                 arrayOf("ファイルが小さい", "", "夜のノイズに強い"),
                                 videoJson.optInt("quality", 2), ed) { i, commit ->
-            videoJson.put("quality", i); refreshVideoHint(hint); if (commit) { pushVideo() } })
+            videoJson.put("quality", i); refreshVideoHint(hint); if (commit) { pushVideo() } }, indent))
 
         box.addView(hint)
         refreshVideoHint(hint)
+        // off にしたら下の項目はまとめて灰色・操作不可(撮影中の読取専用も同じ扱い)。
+        videoSetEnabled(body, ed && sw.isChecked)
+        sw.setOnCheckedChangeListener { _, v ->
+            videoSetEnabled(body, ed && v)
+            if (!videoSyncing) { videoJson.put("make", v); pushVideo(); refreshVideoHint(hint) }
+        }
         val note = TextView(this)
         note.text = "動画は " + cam + " で撮ったコマから作ります。保存先は Movies/TwyLapse。"
         note.textSize = 12f; note.setTextColor(Color.parseColor("#616161")); note.setPadding(dp(4), dp(10), dp(4), dp(4))
@@ -7354,7 +7372,27 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun videoLabel(s: String): TextView {
         val tv = TextView(this); tv.text = s; tv.textSize = 14f; tv.setTypeface(null, Typeface.BOLD)
         tv.setPadding(dp(4), dp(12), dp(4), dp(2))
+        tv.tag = Color.BLACK		// 灰色から戻すときの色(videoSetEnabled)
         return tv
+    }
+
+    // 内容を撮影計画の画面と同じ位置(見出し 96dp のすぐ右)から始める。
+    private fun videoIndent(v: View, indent: Int): View {
+        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                                           ViewGroup.LayoutParams.WRAP_CONTENT)
+        lp.leftMargin = indent
+        v.layoutParams = lp
+        return v
+    }
+
+    // まとめて有効/無効にする。文字は灰色に落とし、戻すときは作ったときの色へ戻す。
+    private fun videoSetEnabled(v: View, on: Boolean) {
+        if (v is ViewGroup) { for (i in 0 until v.childCount) { videoSetEnabled(v.getChildAt(i), on) } }
+        v.isEnabled = on
+        if (v is TextView) {
+            val normal = (v.tag as? Int) ?: Color.BLACK
+            v.setTextColor(if (on) normal else Color.parseColor("#BBBBBB"))
+        }
     }
 
     // 1つ選ぶ並び(ラジオ)。選び直しはその場で計画へ保存する。
@@ -7363,7 +7401,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         g.orientation = LinearLayout.VERTICAL
         for ((i, n) in names.withIndex()) {
             val r = android.widget.RadioButton(this)
-            r.text = n; r.textSize = 15f; r.id = View.generateViewId()
+            r.text = n; r.textSize = 15f; r.id = View.generateViewId(); r.tag = Color.BLACK
             r.isChecked = (i == sel); r.isEnabled = enabled
             r.setOnCheckedChangeListener { _, c -> if (c && !videoSyncing) onPick(i) }
             g.addView(r)
@@ -7386,7 +7424,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             tv.text = if (sub.isEmpty()) s else s + "\n" + sub
             tv.textSize = 13f
             tv.gravity = Gravity.CENTER_HORIZONTAL
-            tv.setTextColor(Color.parseColor("#424242"))
+            tv.setTextColor(Color.parseColor("#424242")); tv.tag = Color.parseColor("#424242")
             tv.setTypeface(null, if (i == sel) Typeface.BOLD else Typeface.NORMAL)
             row.addView(tv, FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
