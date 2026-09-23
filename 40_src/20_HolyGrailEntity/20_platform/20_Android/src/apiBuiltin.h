@@ -179,6 +179,13 @@ private:
 
 	// いま載っている露出で1枚撮り始める(露光の終わりは待たない)。
 	bool shootStart(void);
+	// 【測光のための1枚(2026-09-23)】撮影用とは別の露出で撮って受け取る。
+	//  撮影露出は触らない(この機種はカメラに状態を残さず、要求ごとに露出を渡すため)。
+	bool meterShot(double sec, double iso, double fn, std::vector<uint8_t>& out);
+	// 測光露出を stops 段ぶん動かす(戻り=実際に動けた段数)。
+	//  明るくするときは ISO から(時間が延びない)、暗くするときは ss から(測光が速くなる)。
+	//  加算はしない = 1コマで撮れる範囲に収める。
+	double shiftMeterExposure(double stops, double& sec, double& iso) const;
 	// 撮り始めた1枚を受け取る。露光の長さから待ち時間を決める。
 	bool shootTake(std::vector<uint8_t>& out);
 	// いまの露出の露光時間[秒](待ち時間の見積もりに使う)。
@@ -213,6 +220,11 @@ private:
 
 	// いま載せている露出(要求ごとに渡すので、ここが唯一の状態)
 	std::string curSs_, curIso_, curFn_;
+	// 【測光に使う露出(2026-09-23)】撮影露出とは別に持つ。
+	//  初期収束は「撮る露出」をまだ決めていない段階で場面の明るさを訊いてくる。そのとき
+	//  ここが白飛び/黒潰れしない露出へ自分で寄っていく(キヤノン機のライブビュー測光と同じ役目)。
+	//  0 = まだ決めていない(最初の1回は撮影露出、それも無ければ既定値から始める)。
+	double meterSec_ = 0.0, meterIso_ = 0.0;
 
 	// カメラを開く(開けたら opened_ を立てる)。開けない理由が権限なら failNotice_ に残す。
 	errCode openCamera(void);

@@ -614,21 +614,36 @@ object BuiltinCamera {
             if (stale > 0) { capMark("stale$stale") }
         }
         var replaced = 0    // 落ちたコマの撮り直し回数
+        // 【撮り直しの口(2026-09-23)】画像を受け取る側からも同じ要求をもう1枚出せるようにする。
+        //  要求とコールバックは下で作るので、入れ物だけ先に置く。
+        var reshoot: (() -> Boolean)? = null
         if (useRaw) {
             HgeNative.nativeRawStackBegin(rawW, rawH, cfa, wantDng)
             rd.setOnImageAvailableListener({ r ->
                 // 通知 1 回に画像が複数あることがある。全部取る(取り残すと上の「枠が埋まる」になる)。
                 while (true) {
                     val img = runCatching { r.acquireNextImage() }.getOrNull() ?: break
+                    var added = false
                     runCatching {
                         img.use { im ->
                             val pl = im.planes[0]
-                            if (!HgeNative.nativeRawStackAdd(pl.buffer, pl.rowStride)) {
+                            added = HgeNative.nativeRawStackAdd(pl.buffer, pl.rowStride)
+                            if (!added) {
                                 capAddFail++
-                                Log.w("TLP-RAW", "stack add failed ${im.width}x${im.height} stride ${pl.rowStride}")
+                                Log.w("TLP-RAW", "stack add rejected ${im.width}x${im.height} stride ${pl.rowStride}")
                             }
                         }
                     }.onFailure { capAddFail++; runCatching { img.close() } }
+                    // 【足せなかったコマは数えない(2026-09-23)】書きかけの画像を1枚として数えると、
+                    //  欠けたまま現像して測光まで狂う。落ちたコマと同じ扱いで撮り直す。
+                    if (!added) {
+                        if (replaced < MAX_RETRY_PER_BURST && reshoot?.invoke() == true) {
+                            replaced++; capMark("retryAdd")
+                        } else {
+                            pendingJpeg = null; got.countDown()
+                        }
+                        continue
+                    }
                     images++; capImages = images; capMark("img")
                 }
                 finish()
@@ -732,6 +747,8 @@ object BuiltinCamera {
                 }
             }
             val built = req.build()
+            // 受け取る側からの撮り直し(書きかけの画像が届いたとき)。同じ要求を1枚足す。
+            reshoot = { runCatching { s.capture(built, cb, h) }.isSuccess }
             if (n > 1) {
                 // 続けて撮る。要求をまとめて渡すので、読み出しの隙間は端末の最小で済む。
                 s.captureBurst(List(n) { built }, cb, h)

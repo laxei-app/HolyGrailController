@@ -73,6 +73,24 @@ namespace rawStack
 		if (w_ <= 0 || h_ <= 0 || data == nullptr) { return false; }
 		if (rowStrideBytes < w_ * 2) { return false; }
 		if (bytes < static_cast<size_t>(rowStrideBytes) * static_cast<size_t>(h_ - 1) + static_cast<size_t>(w_) * 2) { return false; }
+		// 【書きかけのコマは足さない(2026-09-23)】HAL がバッファを落とすと、上の方だけ書かれた
+		//  画像がそのまま届くことがある(実測: 3072 行のうち 660 行だけ。logcat の
+		//  "capture buffer lost" と同時刻)。足すと上の方だけ二重露光になり、現像も測光も狂う。
+		//  最後の行が丸ごと 0 で、先頭の行が 0 でなければ「書きかけ」と見て断る
+		//  (黒レベルは 64 前後あるので、本当に暗い夜空でも 0 一色にはならない)。
+		{
+			const uint16_t* first = reinterpret_cast<const uint16_t*>(data);
+			const uint16_t* last  = reinterpret_cast<const uint16_t*>(
+			                            data + static_cast<size_t>(h_ - 1) * rowStrideBytes);
+			bool lastZero = true, firstZero = true;
+			for (int x = 0; x < w_; ++x)
+			{
+				if (last[x]  != 0) { lastZero  = false; }
+				if (first[x] != 0) { firstZero = false; }
+				if (!lastZero) { break; }
+			}
+			if (lastZero && !firstZero) { return false; }
+		}
 		const int* pc = kPosToChan[cfa_];
 		// 4 位置のうちどれが R / B か、残り2つが G。位置→面 の振り分けを行の外で決める。
 		const int ow = w_ / 2;

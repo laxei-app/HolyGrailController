@@ -26,6 +26,21 @@ namespace
 	constexpr int    kFallbackIsoMin = 50;
 	constexpr int    kFallbackIsoMax = 3200;
 	constexpr double kFallbackFn     = 1.8;
+
+	// 【測光の当て方(2026-09-23)】撮影前の初期収束は「どう測るか」を知らない。白飛び/黒潰れを
+	//  どうずらして抜けるかは、この層の仕事(captureRunner::initialConverge の説明を参照)。
+	//  以前はここが無く、載っていない撮影露出の既定値(1秒)で毎回撮っていたため、屋内では
+	//  何段動かしても飽和したまま = 「まだ明るすぎる」と誤判定し、下限まで暗くしてから
+	//  撮り始めていた(2026-09-23 実機で 13 段アンダー・全コマ真っ黒)。
+	constexpr double kMeterSatX     = 0.94;		// これ以上なら白飛び(測り直す)
+	constexpr double kMeterDarkX    = 0.02;		// これ以下なら黒潰れ(測り直す)
+	constexpr double kMeterPegStep  = 4.0;		// 張り付きから抜ける1歩[段]
+	constexpr int    kMeterMaxShots = 4;		// 1回の測光で撮る上限(抜けきれなければ失敗を返す)
+	//  暗い場面では1枚が長い(上限 8.3 秒)。呼び出し側の予算(25秒)を1回で食い潰さないよう、
+	//  ここでも時間で区切る。抜けきれなければ 23 を返し、続きは次の呼び出しで再開する。
+	constexpr int    kMeterBudgetMs = 9000;
+	constexpr double kMeterSeedSs   = 1.0 / 60.0;	// 出発点(屋内・屋外のどちらからでも数歩で入る)
+	constexpr double kMeterSeedIso  = 400.0;
 }
 
 // ── 値の文字列 ──────────────────────────────────────────────
@@ -680,23 +695,118 @@ errCode apiBuiltin::meterScene(const hgc::exposure& shotExp, meterResult& out,
 	return ERR_HGC_OK;
 }
 
+// 測光のための1枚。撮影露出(curSs_ ほか)には触らず、渡された値だけで撮る。
+bool apiBuiltin::meterShot(double sec, double iso, double fn, std::vector<uint8_t>& out)
+{
+	out.clear();
+	if (!(sec > 0.0)) { return false; }
+	const int       frames = this->stackFrames(sec);
+	const double    sub    = sec / frames;
+	const long long ns     = static_cast<long long>(sub * 1e9 + 0.5);
+	if (!builtinCam::capture(logicalId_, id_, (iso > 0.0) ? static_cast<int>(iso + 0.5) : 0,
+	                         ns, (fn > 0.0) ? fn : 0.0, 0, frames, rawOk_))
+	{
+		return false;
+	}
+	// 待ち時間は撮影と同じ見積もり(露光 + 現像と転送 + 撮り直し2コマぶん)。
+	const int budget = static_cast<int>(sec * 1000.0) + 8000 + 2 * static_cast<int>(sub * 1000.0);
+	return builtinCam::takeImage(budget, out);
+}
+
+double apiBuiltin::shiftMeterExposure(double stops, double& sec, double& iso) const
+{
+	const double ssMax  = (this->maxSsSec() > 0.0) ? this->maxSsSec() : kFallbackSsMax;
+	const double ssMin  = (expMinNs_ > 0) ? (static_cast<double>(expMinNs_) / 1e9) : kFallbackSsMin;
+	const double isoLo  = (isoMin_ > 0) ? static_cast<double>(isoMin_) : kFallbackIsoMin;
+	const double isoHi  = (isoMax_ > 0) ? static_cast<double>(isoMax_) : kFallbackIsoMax;
+	if (!(sec > 0.0) || !(iso > 0.0)) { return 0.0; }
+	// まず範囲へ収める(stops=0 で呼べば「丸めるだけ」になる)。
+	sec = std::min(std::max(sec, ssMin), ssMax);
+	iso = std::min(std::max(iso, isoLo), isoHi);
+	double left = stops, moved = 0.0;
+	if (stops > 0.0)
+	{
+		// 明るくする: ISO を先に上げる(1枚に掛かる時間が延びない)。足りなければ ss を伸ばす。
+		const double dIso = std::min(left, std::max(0.0, std::log2(isoHi / iso)));
+		iso *= std::pow(2.0, dIso); left -= dIso; moved += dIso;
+		const double dSs  = std::min(left, std::max(0.0, std::log2(ssMax / sec)));
+		sec *= std::pow(2.0, dSs); moved += dSs;
+	}
+	else if (stops < 0.0)
+	{
+		// 暗くする: ss を先に詰める(測光が速く終わる)。足りなければ ISO を下げる。
+		const double dSs  = std::min(-left, std::max(0.0, std::log2(sec / ssMin)));
+		sec /= std::pow(2.0, dSs); left += dSs; moved -= dSs;
+		const double dIso = std::min(-left, std::max(0.0, std::log2(iso / isoLo)));
+		iso /= std::pow(2.0, dIso); moved -= dIso;
+	}
+	return moved;
+}
+
+// 【測る露出はこの層が決める(2026-09-23)】呼び出し側(初期収束)は「場面の明るさ」だけを
+//  受け取る約束で、白飛び/黒潰れの抜け方は実装の都合として隠す(captureRunner の説明どおり)。
+//  この機種にはライブビューが無いので、測光そのものが1枚撮ることになる。撮ってみて
+//  飽和/黒潰れなら露出を動かしてもう一度撮る。抜けきれなければ 23 を返す(呼び出し側は
+//  「異常ではないやり直し」として扱い、続きはここに残した露出から再開する)。
 errCode apiBuiltin::meterHere(meterResult& out, const std::function<bool()>& keepGoing)
 {
-	(void)keepGoing;
 	if (builtinCam::open(logicalId_, id_, rawOk_).empty()) { opened_ = true; }
-	std::vector<uint8_t> jpeg;
-	// 【この1枚は残さない(2026-09-23)】ここは撮影の前の収束で測るためだけに撮る。
-	//  DNG は現像の前に書かれるので、撮る前に切っておかないと収束のぶんまでギャラリーに並ぶ
-	//  (実機で 8 枚ぶん余分に出た)。撮り終えたら元へ戻す。
+	// 出発点: 前回の測光露出 → いま載っている撮影露出 → 既定値。
+	double sec = meterSec_, iso = meterIso_;
+	if (!(sec > 0.0) || !(iso > 0.0))
+	{
+		sec = realOf(ssList_,  ssReal_,  curSs_,  expo::expoKind::ss);
+		iso = realOf(isoList_, isoReal_, curIso_, expo::expoKind::iso);
+	}
+	if (!(sec > 0.0)) { sec = kMeterSeedSs; }
+	if (!(iso > 0.0)) { iso = kMeterSeedIso; }
+	double fn = realOf(fnList_, fnReal_, curFn_, expo::expoKind::fn);
+	if (!(fn > 0.0)) { fn = apertures_.empty() ? kFallbackFn : apertures_.front(); }
+	// 1コマで撮れる範囲へ収める(測光で加算はしない。待たせるだけで精度は上がらない)。
+	this->shiftMeterExposure(0.0, sec, iso);
+
+	// 【この1枚は残さない】DNG は現像の前に書かれるので、撮る前に切る(切らないと収束の
+	//  ぶんまでギャラリーに並ぶ。実機で 8 枚ぶん余分に出た)。
 	builtinCam::setWantDng(false);
-	const bool tookIt = this->shootStart() && this->shootTake(jpeg);
+	std::vector<uint8_t> jpeg;
+	int  shots  = 0;
+	bool pegged = false;
+	errCode rc  = ERR_HGC_OK;
+	void* tAll  = tool::startElapse();
+	while (shots < kMeterMaxShots)
+	{
+		if (keepGoing && !keepGoing()) { rc = ERR_HGC_RDY_METARING; out.failStage = 20; break; }
+		if (shots > 0 && static_cast<int>(tool::getElapse(tAll)) >= kMeterBudgetMs) { break; }	// 続きは次回
+		++shots;
+		if (!this->meterShot(sec, iso, fn, jpeg))
+		{ rc = ERR_HGC_RDY_METARING; out.failStage = 20; break; }
+		if (!this->measure(jpeg, out))
+		{ rc = ERR_HGC_RDY_METARING; break; }	// failStage は measure が入れる
+		// 白飛び/黒潰れなら、その方向へ大きく動かして測り直す。
+		const double want = (out.x >= kMeterSatX)  ? -kMeterPegStep
+		                  : (out.x <= kMeterDarkX) ? +kMeterPegStep : 0.0;
+		if (want == 0.0) { pegged = false; break; }
+		pegged = true;
+		// 動けない(露出限界)なら、それがこのカメラの見える限界。その値をそのまま使う。
+		if (std::fabs(this->shiftMeterExposure(want, sec, iso)) < 1e-6) { pegged = false; break; }
+	}
+	meterSec_ = sec; meterIso_ = iso;	// 次の測光はここから始める(やり直しでも進みが残る)
 	builtinCam::setWantDng(out_.dng && rawOk_);
-	if (!tookIt)
-	{ out.ok = false; out.failStage = 20; return ERR_HGC_RDY_METARING; }
-	if (!this->measure(jpeg, out)) { out.ok = false; return ERR_HGC_RDY_METARING; }
-	// いま載せている露出で撮ったので、それが測光露出そのもの。
-	hgc::exposure me; me.iso = curIso_; me.ss = curSs_; me.fn = curFn_;
+
+	// 測った露出を申告する。割り戻す分母になるので、ここが空だと場面の明るさを取り違える。
+	hgc::exposure me;
+	me.ss  = ssText(sec);
+	me.iso = isoText(static_cast<int>(iso + 0.5));
+	me.fn  = fnText(fn);
 	out.meterExp = me;
+	out.tries    = shots;
+	out.rdyMs    = static_cast<int>(tool::getElapse(tAll));
+	if (rc != ERR_HGC_OK) { out.ok = false; out.usable = false; return rc; }
+	if (pegged)
+	{	// 23 = 張り付きを抜けきれなかった(異常ではない。呼び出し側が予算内でやり直す)
+		out.ok = false; out.usable = false; out.failStage = 23;
+		return ERR_HGC_RDY_METARING;
+	}
 	out.sceneRef = out.linear / std::pow(2.0, this->brightnessOf(me));
 	lastJpeg_ = jpeg;	// 続けて meterScene が呼ばれても材料が揃っている
 	return ERR_HGC_OK;
