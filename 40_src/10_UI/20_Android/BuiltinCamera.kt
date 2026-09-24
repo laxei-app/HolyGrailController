@@ -317,6 +317,29 @@ object BuiltinCamera {
         return o.toString()
     }
 
+    // 【出来上がる1コマの大きさ(2026-09-24 UI依頼)】撮影せずに答える。出力設定の画面が
+    //  「変更なし」ではなく実寸を出すために使う。
+    //  ・RAW で撮る端末: 受け取る RAW の**縦横半分**(2×2 束ねで現像するため)
+    //  ・RAW が無い端末: カメラが出す JPEG の最大の大きさ(そのまま使う)
+    //  センサーの有効画素の枠(諸元の pixelW/H)とは数画素ずれることがあるので、
+    //  ここは撮影と同じ「出力の大きさ」から出す(SH-M08: 枠 4016x3016 / RAW 4000x3000)。
+    //  戻り = "幅x高さ"。分からなければ空文字。
+    @JvmStatic
+    fun frameSize(physId: String): String {
+        val m = mgr() ?: return ""
+        val c = runCatching { m.getCameraCharacteristics(physId) }.getOrNull() ?: return ""
+        val map = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return ""
+        val raw = map.getOutputSizes(ImageFormat.RAW_SENSOR)?.maxByOrNull { it.width.toLong() * it.height }
+        if (raw != null && rawSupported(c)) {
+            val w = (raw.width and 1.inv()) / 2
+            val h = (raw.height and 1.inv()) / 2
+            return if (w > 0 && h > 0) "${w}x$h" else ""
+        }
+        val jp = map.getOutputSizes(ImageFormat.JPEG)?.maxByOrNull { it.width.toLong() * it.height }
+            ?: return ""
+        return "${jp.width and 1.inv()}x${jp.height and 1.inv()}"
+    }
+
     // ── 物理カメラを名指しできるかの実験(2026-09-05) ────────
     // 【なぜ確かめるか】論理カメラを普通に開くと、どの物理センサーで撮るかは端末側の
     //  制御ソフトが決める。露出制御を成り立たせるには「狙ったセンサーで、指定した露出で

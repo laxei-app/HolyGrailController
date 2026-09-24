@@ -7228,8 +7228,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (o.optBoolean("camVideoOut", false)) {
             val key = planName + " " + o.optString("camera") + " " + planReadOnly
             videoJson = JSONObject(o.optJSONObject("video")?.toString() ?: "{}")
-            // 「カメラの1/2」の実寸(目安の表示用)。保存する画像は RAW の縦横を半分にしたもの。
+            // 【出来上がる1コマの実寸(2026-09-24 UI依頼)】画面には「変更なし」ではなく実際の
+            //  大きさを出す。端末ごとに違うので、カメラ層へ訊いて本当の値を使う。
+            //  訊けないときだけ、諸元の画素数の半分(2×2 束ねぶん)を目安に置く。
             videoJson.put("halfW", o.optInt("pixelW", 0) / 2).put("halfH", o.optInt("pixelH", 0) / 2)
+            runCatching {
+                val ser = o.optString("camSerial")
+                if (ser.startsWith("BUILTIN:")) {
+                    val wh = HgeNative.builtinFrameSize(ser.removePrefix("BUILTIN:")).split("x")
+                    if (wh.size == 2) {
+                        val w = wh[0].toInt(); val h = wh[1].toInt()
+                        if (w > 0 && h > 0) { videoJson.put("halfW", w).put("halfH", h) }
+                    }
+                }
+            }
             // DNG は束ねる前のフルサイズで出す。1 コマの大きさの目安に使う。
             videoJson.put("fullW", o.optInt("pixelW", 0)).put("fullH", o.optInt("pixelH", 0))
             // 【中身が変わっていたら作り直す(2026-09-23)】「変更の取り消し」で計画ごと戻したときに、
@@ -7335,7 +7347,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
         // 大きさ(変更なし / 1920x1440 / 1920x1080)
         body.addView(videoLabel("画像サイズ"))
-        val sizeNames = arrayOf("変更なし", "1920 × 1440", "1920 × 1080")
+        // 先頭は「撮ったまま(拡大縮小しない)」。**端末ごとに違う**ので実寸を出す
+        //  (「変更なし」だと普通のカメラの最大画素と同じに見える、という指摘 2026-09-24)。
+        val nw = videoJson.optInt("halfW", 0); val nh = videoJson.optInt("halfH", 0)
+        val sizeNames = arrayOf(if (nw > 0 && nh > 0) "$nw × $nh" else "変更なし",
+                                "1920 × 1440", "1920 × 1080")
         body.addView(videoIndent(videoChoice(sizeNames, videoJson.optInt("size", 0), ed) { i ->
             videoJson.put("size", i); pushVideo(); refreshVideoHint(hint) }, indent))
 
@@ -7606,7 +7622,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             2 -> Pair(1920, 1080)
             else -> Pair(videoJson.optInt("halfW", 0), videoJson.optInt("halfH", 0))
         }
-        val sizeTxt = if (wh.first > 0) "${wh.first} × ${wh.second}" else "カメラの 1/2"
+        val sizeTxt = if (wh.first > 0) "${wh.first} × ${wh.second}" else "撮ったまま"
         val px = if (wh.first > 0) wh.first.toDouble() * wh.second else 2000.0 * 1500.0
         val mbps = Math.min(px * fps * bpp, 150_000_000.0) / 1_000_000.0
         val gbPer1000 = px * bpp / 8.0 * 1000.0 / 1.0e9

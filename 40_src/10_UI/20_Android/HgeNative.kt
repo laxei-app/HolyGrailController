@@ -227,6 +227,9 @@ object HgeNative {
     // 端末の熱の状態(PowerManager の THERMAL_STATUS_*)。-1=取れない端末。
     @JvmStatic
     fun builtinThermal(): Int = BuiltinCamera.thermalStatus()
+    // 出来上がる1コマの大きさ("幅x高さ"。分からなければ空)。出力設定の表示に使う
+    @JvmStatic
+    fun builtinFrameSize(physId: String): String = BuiltinCamera.frameSize(physId)
 
     @JvmStatic
     fun builtinHasPermission(): Boolean = BuiltinCamera.hasPermission()

@@ -629,6 +629,11 @@ namespace
 		j += ",\"focalLength\":" + std::string(num);
 		j += ",\"pixelW\":" + std::to_string(g_plan.camera.sensorPixel);
 		j += ",\"pixelH\":" + std::to_string(g_plan.camera.sensorPixelV);
+		// 【出力設定の「大きさ」表示に使う(2026-09-24 UI依頼)】センサーの画素数(上の pixelW/H)は
+		//  有効画素の枠で、実際に受け取る RAW の大きさとは数画素ずれることがある
+		//  (SH-M08: 枠 4016x3016 / RAW 4000x3000)。画面には**実際に出来る大きさ**を出したいので、
+		//  カメラを名指しできるようにこれを渡す。UI 側がカメラ層へ訊いて実寸を出す。
+		j += ",\"camSerial\":\"" + jesc(g_plan.camera.serial) + "\"";
 		std::snprintf(num, sizeof(num), "%.1f", g_plan.lens.fn);
 		j += ",\"fn\":" + std::string(num);
 		astro::fov fovDeg = astro::calcFov(g_plan.camera, g_plan.lens, g_plan.landscape);
