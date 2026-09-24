@@ -5,6 +5,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaCodec
+import android.util.Log
 import android.media.MediaCodecInfo
 import android.media.MediaExtractor
 import android.media.MediaFormat
@@ -68,6 +69,17 @@ object BuiltinVideo {
     //  低 0.10 / 標準 0.25 / 高 0.60 bit/画素。上限は端末の符号化器が受け付ける現実的な値で止める。
     private val kBpp = doubleArrayOf(0.20, 0.50, 1.20)
     private const val kBitrateMax = 150_000_000
+    // 【予算は「1秒あたり」ではなく「1コマあたり」で渡す(2026-09-24)】
+    //  符号化器はビットレートを fps で割って1コマの予算にし、**数秒の窓**で帳尻を合わせる。
+    //  SH-M08 の符号化器はこの窓のせいで、最初の2コマに 2.5MB ずつ使って1秒ぶんを使い切り、
+    //  続く十数コマを 21KB まで絞る、という往復をしていた(実測: 14コマ周期・最小8KB)。
+    //  絞られたコマがモザイクに見える。同じ設定でも Pixel 6 は平坦(平均457KB)なので、
+    //  予算の大きさではなく**配り方**の問題。
+    //  そこで、申告するコマ送り速度を 1 にして窓を1コマへ縮め、ビットレートには
+    //  「1コマぶんのビット数」を渡す。予算の総量は変わらないが、毎コマ同じ量に収めるしかなくなる。
+    //  再生の速さは MP4 のタイムスタンプ(こちらが付ける)で決まるので、見え方は変わらない。
+    private const val kRcFps = 1
+    private const val kBitrateMin = 100_000
 
     // ── 切れ端の符号化 ──────────────────────────────────────
     private var codec: MediaCodec? = null
@@ -78,6 +90,22 @@ object BuiltinVideo {
     private var segStartMs = 0L         // いまの切れ端を書き始めた時刻
     private var fps = 30.0		// 表示上のコマ送り速度。7.5 のような実数も採る
     private val info = MediaCodec.BufferInfo()
+    // ② 出来上がったコマの大きさを見て、絞られていたらその場で予算を上げる(端末を選ばない)。
+    //  絶対値ではなく**直近の中央値**と比べるので、品質「低」を選んでいても誤検知しない。
+    private var rcBitrate = 0           // いま符号化器へ渡している1コマぶんのビット数(学習する)
+    private var rcWanted  = 0           // 設定から決まる本来の値(上げ幅の上限の基準)
+    private var encMax    = 0           // この端末の符号化器が受け付ける上限
+    private val sizes     = ArrayList<Int>()   // 直近のコマの大きさ
+    private var starveRun = 0           // 続けて絞られたコマ数
+    private var raises    = 0           // 予算を上げた回数
+    private var frameCnt  = 0           // 符号化したコマ数(報告用)
+    private var sizeMin   = 0; private var sizeMax = 0
+    private var sizeSum   = 0L
+    private const val kSizeWindow  = 15   // 中央値を取る窓
+    private const val kStarveRatio = 5    // 中央値のこの割合を下回ったら「絞られた」
+    private const val kStarveRun   = 2    // 続けてこれだけ出たら上げる
+    private const val kMaxRaises   = 6    // 上げ過ぎない(1.5倍ずつ)
+    private const val kRaiseLimit  = 6    // 本来の予算のこの倍までしか上げない
 
     // ── 完成品 ──────────────────────────────────────────────
     private var workDir: File? = null   // アプリの領域(切れ端と完成品の置き場)
@@ -136,6 +164,10 @@ object BuiltinVideo {
         fullFile = File(dir, displayName)
         segFile  = File(dir, "seg_$displayName")
         fullFrames = 0; publishedUri = null
+        // 1回の撮影ごとに見張りをやり直す(学習したビットレートも持ち越さない)。
+        rcBitrate = 0; rcWanted = 0; encMax = 0
+        sizes.clear(); starveRun = 0; raises = 0
+        frameCnt = 0; sizeMin = 0; sizeMax = 0; sizeSum = 0L
         runCatching { fullFile?.delete(); segFile?.delete() }
         if (!sizeFixed) { return displayName }		// 最初のコマで開く
         return if (openSegment()) displayName else ""
@@ -202,10 +234,11 @@ object BuiltinVideo {
         if (reopen) { openSegment() }
     }
 
-    // 出来上がりの大きさとコマ送り速度と品質から決める。全コマがキーフレームなので、そのぶん要る。
-    private fun bitrate(): Int {
-        val bps = outW.toDouble() * outH.toDouble() * fps * kBpp[quality]
-        return Math.min(bps, kBitrateMax.toDouble()).toInt().coerceAtLeast(2_000_000)
+    // 1コマに使ってよいビット数(= 画素数 × 品質)。符号化器には 1fps と申告するので、
+    //  これがそのままビットレートになる。全コマがキーフレームなので、そのぶん要る。
+    private fun frameBits(): Int {
+        val b = outW.toDouble() * outH.toDouble() * kBpp[quality] * kRcFps
+        return Math.min(b, kBitrateMax.toDouble()).toInt().coerceAtLeast(kBitrateMin)
     }
 
     private fun openSegment(): Boolean {
@@ -215,8 +248,11 @@ object BuiltinVideo {
             val fmt = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, outW, outH)
             fmt.setInteger(MediaFormat.KEY_COLOR_FORMAT,
                            MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
-            fmt.setInteger(MediaFormat.KEY_BIT_RATE, bitrate())
-            fmt.setInteger(MediaFormat.KEY_FRAME_RATE, Math.max(1, Math.ceil(fps).toInt()))
+            if (rcWanted <= 0) { rcWanted = frameBits() }
+            if (rcBitrate <= 0) { rcBitrate = rcWanted }	// 切れ端をまたいで学習した値を引き継ぐ
+            fmt.setInteger(MediaFormat.KEY_BIT_RATE, rcBitrate)
+            // 【窓を1コマにする】速さの見え方はタイムスタンプで決まるので、ここは制御用の申告。
+            fmt.setInteger(MediaFormat.KEY_FRAME_RATE, kRcFps)
             // 【全コマをキーフレームにする(2026-09-23 ユーザー指示)】タイムラプスは隣のコマとの相関が
             //  無く(特に夜はほぼノイズ)、予測はほとんど効かない。1秒ごとのキーフレームだと GOP の
             //  後半へ回すビットが尽きてモザイクになり、それが13〜14コマ周期で繰り返し見えていた。
@@ -224,8 +260,15 @@ object BuiltinVideo {
             fmt.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 0)
             val c = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
             c.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            // この端末が受け付ける上限。②で上げるときの頭打ちに使う。
+            encMax = runCatching {
+                c.codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC)
+                    .videoCapabilities.bitrateRange.upper
+            }.getOrDefault(kBitrateMax)
             c.start()
             codec = c
+            Log.i("TLP-VID", "encoder ${c.name} ${outW}x$outH q$quality " +
+                             "${rcBitrate / 1000}kbit/frame (max ${encMax / 1000}k) rcFps=$kRcFps")
             muxer = MediaMuxer(seg.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             track = -1; started = false; segFrames = 0
             segStartMs = System.currentTimeMillis()
@@ -270,10 +313,52 @@ object BuiltinVideo {
                 (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0) {
                 buf.position(info.offset); buf.limit(info.offset + info.size)
                 m.writeSampleData(track, buf, info)
+                watchSize(info.size)
             }
             c.releaseOutputBuffer(idx, false)
             if ((info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) { return }
         }
+    }
+
+    // 出来たコマの大きさを見る。直近の中央値より極端に小さいコマが続いたら、
+    //  符号化器が予算を取り返しにかかっている(=絞っている)。その場で予算を上げる。
+    private fun watchSize(size: Int) {
+        if (size <= 0) { return }
+        ++frameCnt; sizeSum += size
+        if (sizeMin == 0 || size < sizeMin) { sizeMin = size }
+        if (size > sizeMax) { sizeMax = size }
+        sizes.add(size)
+        while (sizes.size > kSizeWindow) { sizes.removeAt(0) }
+        if (sizes.size < 8) { return }		// まだ中央値が当てにならない
+        val med = sizes.sorted()[sizes.size / 2]
+        if (med > 0 && size * kStarveRatio < med) { ++starveRun } else { starveRun = 0 }
+        if (starveRun < kStarveRun) { return }
+        starveRun = 0
+        if (raises >= kMaxRaises) { return }
+        val cap = Math.min(if (encMax > 0) encMax else kBitrateMax, rcWanted * kRaiseLimit)
+        val next = Math.min((rcBitrate.toLong() * 3 / 2).toInt(), cap)
+        if (next <= rcBitrate) { return }	// もう上げられない(端末の上限)
+        rcBitrate = next; ++raises
+        runCatching {
+            val b = android.os.Bundle()
+            b.putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, rcBitrate)
+            codec?.setParameters(b)
+        }
+        Log.i("TLP-VID", "starved frame ${size / 1024}KB (median ${med / 1024}KB) " +
+                         "-> raise to ${rcBitrate / 1000}kbit/frame (#$raises)")
+    }
+
+    // 撮影の終わりに1行だけ残す(PC を外して撮ったときの手掛かり)。英語のみ。
+    @JvmStatic
+    fun report(): String {
+        if (frameCnt <= 0) { return "" }
+        val avg = (sizeSum / frameCnt).toInt()
+        return String.format(Locale.US,
+            "video %dx%d q%d %.1ffps: %d frames, %dKB min / %dKB avg / %dKB max, " +
+            "budget %dk->%dk bit/frame, raised %d",
+            outW, outH, quality, fps, frameCnt,
+            sizeMin / 1024, avg / 1024, sizeMax / 1024,
+            rcWanted / 1000, rcBitrate / 1000, raises)
     }
 
     // ── つなぐ(再符号化しない) ──────────────────────────────

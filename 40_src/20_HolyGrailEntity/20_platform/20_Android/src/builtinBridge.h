@@ -62,6 +62,7 @@ namespace builtinCam
 	std::string videoStart(const std::string& optJson, const std::string& planName);	// 戻り=ギャラリーでの名前。"" =失敗
 	bool        videoAddJpeg(const std::vector<uint8_t>& jpeg);
 	std::string videoFinish(void);								// 出来上がりの場所("" =失敗)
+	std::string videoReport(void);								// コマの大きさの振れ("" =作っていない)
 
 	// 撮ったコマを利用者が見える場所(Pictures/TwyLapse)へ残す。2026-09-23。
 	//  DNG を出すかは**撮影を始める前に**決める(束ねる前のフルサイズの和が要るため)。

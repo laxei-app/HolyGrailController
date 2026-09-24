@@ -263,6 +263,9 @@ object HgeNative {
     fun stillSaveJpeg(jpeg: ByteArray?): Boolean = BuiltinStill.saveJpeg(jpeg)
     @JvmStatic
     fun stillNextFrame() { BuiltinStill.nextFrame() }
+    // 動画の出来(コマの大きさの振れと、予算を上げた回数)。撮影の終わりにログへ残す
+    @JvmStatic
+    fun videoReport(): String = BuiltinVideo.report()
     // DNG を出すか(撮り始める前に決める。加算器がフルサイズの和を持つかが変わる)
     @JvmStatic
     fun setWantDng(on: Boolean) { BuiltinCamera.setWantDng(on) }

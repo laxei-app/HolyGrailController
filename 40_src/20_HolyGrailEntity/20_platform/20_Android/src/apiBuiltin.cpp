@@ -533,6 +533,10 @@ errCode apiBuiltin::restoreShootingMode(void)
 	if (!made.empty())
 	{
 		dataManager::logEvent("CAMERA", ("builtin video done: " + made).c_str());
+		// 【出来をログに残す(2026-09-24)】コマの大きさが振れていないか(モザイクの元)と、
+		//  予算を上げ直した回数。PC を外して撮った夜でも後から確かめられる。
+		const std::string rep = builtinCam::videoReport();
+		if (!rep.empty()) { dataManager::logEvent("CAMERA", ("builtin " + rep).c_str()); }
 	}
 	if (opened_) { builtinCam::close(); opened_ = false; }
 	return ERR_HGC_OK;
