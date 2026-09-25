@@ -68,6 +68,12 @@ object BuiltinCamera {
     private var focusDpt = 0f
     private var hyperfocalDpt = 0f
     private var focusProbed = false
+    // 【3A ごと切る(2026-09-26)】SH-M08 は AF を切って距離を指定しても、撮影結果が毎コマ
+    //  過焦点距離を返す = **指定を見ていない**(実測: 0.00/0.21/0.41 のどれを送っても got=0.41)。
+    //  端末によっては CONTROL_MODE そのものを OFF にしないとレンズの手動指定を受け付けない。
+    //  既定は OFF にしない(Pixel 6 は今のままで無限遠が効いている)。効かない端末でだけ試す。
+    private var ctlOff = false
+    private var canCtlOff = false
     // DNG を出すか(2026-09-23 UI依頼)。出すときだけ、束ねる前のフルサイズの和も持つ(50MB)。
     private var wantDng = false
     @JvmStatic
@@ -364,19 +370,30 @@ object BuiltinCamera {
         val lg = openLogical ?: return ""
         val ph = openId ?: return ""
         if (!(sec > 0.0)) { return "" }
-        val cand = if (hyperfocalDpt > 0f) floatArrayOf(0f, hyperfocalDpt * 0.5f, hyperfocalDpt)
-                   else floatArrayOf(0f)
-        val score = IntArray(cand.size)
-        val got   = FloatArray(cand.size) { -1f }
         val keepDng = wantDng
         val keepFocus = focusDpt
         wantDng = false			// 確かめの1枚は残さない
-        for (i in cand.indices) {
-            focusDpt = cand[i]
-            if (!capture(lg, ph, iso, (sec * 1e9).toLong(), fn, 0, 1, openRaw)) { continue }
-            val b = takeImage((sec * 1000).toInt() + 9000) ?: continue
-            score[i] = b.size
-            got[i] = capFocusDpt
+        var cand = if (hyperfocalDpt > 0f) floatArrayOf(0f, hyperfocalDpt * 0.5f, hyperfocalDpt)
+                   else floatArrayOf(0f)
+        var score = IntArray(cand.size)
+        var got   = FloatArray(cand.size) { -1f }
+        runFocusPass(lg, ph, iso, sec, fn, cand, score, got)
+        var note = ""
+        // 【指定を見ていない端末への一手】要求を変えても申告が動かないなら、3A ごと切って
+        //  もう一度だけ試す。これでも動かなければ手動ピントは諦める(AF を使うしかない)。
+        if (ignoresFocus(cand, got) && canCtlOff) {
+            ctlOff = true
+            val c2 = if (hyperfocalDpt > 0f) floatArrayOf(0f, hyperfocalDpt) else floatArrayOf(0f)
+            val s2 = IntArray(c2.size)
+            val g2 = FloatArray(c2.size) { -1f }
+            runFocusPass(lg, ph, iso, sec, fn, c2, s2, g2)
+            if (!ignoresFocus(c2, g2)) {
+                cand = c2; score = s2; got = g2; note = " [control-mode off]"
+            } else {
+                ctlOff = false; note = " [manual focus ignored by device]"
+            }
+        } else if (ignoresFocus(cand, got)) {
+            note = " [manual focus ignored by device]"
         }
         wantDng = keepDng
         var best = 0
@@ -388,8 +405,33 @@ object BuiltinCamera {
         for (i in cand.indices) {
             sb.append(String.format(Locale.US, " want %.2f=%dKB(got %.2f)", cand[i], score[i] / 1024, got[i]))
         }
-        sb.append(String.format(Locale.US, " -> use %.2f", focusDpt))
+        sb.append(String.format(Locale.US, " -> use %.2f", focusDpt)).append(note)
         return sb.toString()
+    }
+
+    // 候補の位置で1枚ずつ撮り、現像後の大きさと端末の申告を控える。
+    private fun runFocusPass(lg: String, ph: String, iso: Int, sec: Double, fn: Double,
+                             cand: FloatArray, score: IntArray, got: FloatArray) {
+        for (i in cand.indices) {
+            focusDpt = cand[i]
+            if (!capture(lg, ph, iso, (sec * 1e9).toLong(), fn, 0, 1, openRaw)) { continue }
+            val b = takeImage((sec * 1000).toInt() + 9000) ?: continue
+            score[i] = b.size
+            got[i] = capFocusDpt
+        }
+    }
+
+    // 要求を変えても申告が動かない = 端末が手動ピントを見ていない。
+    private fun ignoresFocus(cand: FloatArray, got: FloatArray): Boolean {
+        if (cand.size < 2) { return false }
+        var wMin = Float.MAX_VALUE; var wMax = -Float.MAX_VALUE
+        var gMin = Float.MAX_VALUE; var gMax = -Float.MAX_VALUE
+        for (i in cand.indices) {
+            if (got[i] < 0f) { return false }		// 撮れていないなら判定しない
+            if (cand[i] < wMin) { wMin = cand[i] }; if (cand[i] > wMax) { wMax = cand[i] }
+            if (got[i]  < gMin) { gMin = got[i]  }; if (got[i]  > gMax) { gMax = got[i]  }
+        }
+        return (wMax - wMin) > 0.1f && (gMax - gMin) < 0.02f
     }
 
     private fun focusPrefs() = appCtx?.getSharedPreferences("tlp_focus", Context.MODE_PRIVATE)
@@ -533,6 +575,10 @@ object BuiltinCamera {
         // 0 = 固定焦点(位置を動かせない)。> 0 ならディオプタ(1/m)で、0 を送ると無限遠。
         canSetFocus = (c.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f) > 0f
         hyperfocalDpt = c.get(CameraCharacteristics.LENS_INFO_HYPERFOCAL_DISTANCE) ?: 0f
+        // 一覧を持たない端末もある。**持っていないときは試す**(受け付けなければ黙って無視される)。
+        canCtlOff = c.get(CameraCharacteristics.CONTROL_AVAILABLE_MODES)
+                     ?.any { it.toInt() == CameraMetadata.CONTROL_MODE_OFF } ?: true
+        ctlOff = false
         focusDpt = loadFocus(physId)	// 前に実測で決めた位置(無ければ無限遠)
 
         val h = ensureThread()
@@ -781,6 +827,8 @@ object BuiltinCamera {
             // ピントは focusDpt(既定 0 = 無限遠)。AF を切っただけでは位置が決まらない(2026-09-23)。
             //  端末が無限遠を受け付けないことがあるので、実測で決めた位置を使う(2026-09-26)。
             if (canSetFocus) { req.set(CaptureRequest.LENS_FOCUS_DISTANCE, focusDpt) }
+            // 手動ピントを聞かない端末では 3A ごと切る(focusProbe が必要と判断したときだけ)。
+            if (ctlOff) { req.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_OFF) }
             req.set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_DAYLIGHT)
             // 星を消さないための2行。端末が対応しているときだけ載せる(上の canNrOff/canEdgeOff)。
             if (canNrOff)   { req.set(CaptureRequest.NOISE_REDUCTION_MODE, CameraMetadata.NOISE_REDUCTION_MODE_OFF) }
