@@ -480,6 +480,11 @@ errCode apiBuiltin::setupShootingModeManual(void)
 		const errCode oe = this->openCamera();
 		if (oe != ERR_HGC_OK) { return oe; }
 	}
+	// 【前の撮影の持ち越しを断つ(2026-09-26)】中止したときに露光中だったコマは、後から
+	//  出来上がって受け取り口に残る。次の撮影の最初の回収がそれを拾うと、**4時間前の画像が
+	//  1コマ目として動画と jpg に入る**(実機で確認。以降の番号も1つずれる)。
+	builtinCam::sessionBegin();
+	focusChecked_ = false;
 	// 【動画をここで開く(2026-09-05)】撮影の区切りと動画の区切りを一致させる。
 	//  出来上がりは Movies/TwyLapse/<計画名>_yyyymmddhhmmss.mp4。10分ごとに「そこまでの完成品」が
 	//  置き換わっていく(BuiltinVideo)。名前と置き場は Kotlin 側が決める。
@@ -523,7 +528,30 @@ errCode apiBuiltin::setupShootingModeManual(void)
 		// 露出を指定できない端末では、撮れはするが露出制御が成立しない。黙って進めない。
 		dataManager::logEvent("CAMERA", "builtin camera has no manual sensor control", true);
 	}
+	this->checkFocus();
 	return ERR_HGC_OK;
+}
+
+// 【ピントを実測で決める(2026-09-26)】端末が無限遠の指定を受け付けているとは限らない
+//  (SH-M08 は何を指定しても撮影結果が過焦点距離 0.41 を返し、遠景が甘かった)。
+//  測れる明るさなら候補の位置で撮り比べて決める。暗くて測れない夜は、前に決めた位置を使う。
+//  ここで撮る数枚は残さない(動画にも jpg にも入らない)。
+void apiBuiltin::checkFocus(void)
+{
+	if (focusChecked_) { return; }
+	focusChecked_ = true;
+	// まず1枚だけ測る。ここが失敗する = 暗すぎて比べられない、ということ。
+	meterResult mr;
+	const errCode me = this->meterHere(mr, nullptr);
+	if (me != ERR_HGC_OK || !mr.ok || !mr.usable)
+	{
+		dataManager::logEvent("CAMERA", "builtin focus: scene not measurable, keep remembered focus");
+		return;
+	}
+	double fn = realOf(fnList_, fnReal_, curFn_, expo::expoKind::fn);
+	if (!(fn > 0.0)) { fn = apertures_.empty() ? 0.0 : apertures_.front(); }
+	const std::string rep = builtinCam::focusProbe(meterSec_, static_cast<int>(meterIso_ + 0.5), fn);
+	if (!rep.empty()) { dataManager::logEvent("CAMERA", ("builtin " + rep).c_str()); }
 }
 
 errCode apiBuiltin::restoreShootingMode(void)

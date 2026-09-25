@@ -61,6 +61,13 @@ object BuiltinCamera {
     //  最短撮影距離が 0 の機種は固定焦点なので触らない(指定すると撮影要求ごと弾かれる端末がある)。
     private var canSetFocus = false
     @Volatile private var capFocusDpt = -1f    // 直近のコマで端末が申告したピント位置[ディオプタ]
+    // 【ピント(2026-09-26)】撮影で使う位置[ディオプタ]。0 = 無限遠。
+    //  SH-M08 は無限遠(0)を指定しても、撮影結果は毎コマ hyperfocalDistance(0.41=2.4m)を返す。
+    //  指定を丸めているのか申告が当てにならないのかは外から分からないので、**実際に撮って比べる**
+    //  (focusProbe)。同じ場面・同じ露出なら、細部が残っているコマほど現像後の JPEG が大きい。
+    private var focusDpt = 0f
+    private var hyperfocalDpt = 0f
+    private var focusProbed = false
     // DNG を出すか(2026-09-23 UI依頼)。出すときだけ、束ねる前のフルサイズの和も持つ(50MB)。
     private var wantDng = false
     @JvmStatic
@@ -340,6 +347,58 @@ object BuiltinCamera {
         return "${jp.width and 1.inv()}x${jp.height and 1.inv()}"
     }
 
+    // ── ピントを実測で決める(2026-09-26) ──────────────────
+    // 【なぜ実測か】無限遠(0)を指定しても端末が受け付けているとは限らない。SH-M08 は
+    //  何を指定しても撮影結果が hyperfocalDistance を返す。申告を信じずに、候補の位置で
+    //  1枚ずつ撮って**現像後の JPEG の大きさ**で比べる。場面と露出が同じなら、ピントが
+    //  合っているコマほど細部が残り、JPEG は大きくなる。
+    //  ・候補は 無限遠 / 過焦点の半分 / 過焦点 の3つ(過焦点が分からない端末は無限遠だけ)
+    //  ・無限遠より 5% 以上大きいときだけ乗り換える(誤差で振らせない)
+    //  ・決めた位置は端末に覚えさせ、暗くて測れない夜はそれをそのまま使う
+    //  戻り = ログへ残す1行("" = 何もしなかった)。英語のみ。
+    @JvmStatic
+    fun focusProbe(sec: Double, iso: Int, fn: Double): String {
+        if (focusProbed) { return "" }
+        focusProbed = true
+        if (!canSetFocus) { return "focus: camera has no focus control" }
+        val lg = openLogical ?: return ""
+        val ph = openId ?: return ""
+        if (!(sec > 0.0)) { return "" }
+        val cand = if (hyperfocalDpt > 0f) floatArrayOf(0f, hyperfocalDpt * 0.5f, hyperfocalDpt)
+                   else floatArrayOf(0f)
+        val score = IntArray(cand.size)
+        val got   = FloatArray(cand.size) { -1f }
+        val keepDng = wantDng
+        val keepFocus = focusDpt
+        wantDng = false			// 確かめの1枚は残さない
+        for (i in cand.indices) {
+            focusDpt = cand[i]
+            if (!capture(lg, ph, iso, (sec * 1e9).toLong(), fn, 0, 1, openRaw)) { continue }
+            val b = takeImage((sec * 1000).toInt() + 9000) ?: continue
+            score[i] = b.size
+            got[i] = capFocusDpt
+        }
+        wantDng = keepDng
+        var best = 0
+        for (i in cand.indices) { if (score[i] > score[best]) { best = i } }
+        val pick = if (score[0] > 0 && score[best] < score[0] * 1.05) 0 else best
+        focusDpt = if (score[pick] > 0) cand[pick] else keepFocus
+        saveFocus(ph, focusDpt)
+        val sb = StringBuilder("focus probe:")
+        for (i in cand.indices) {
+            sb.append(String.format(Locale.US, " want %.2f=%dKB(got %.2f)", cand[i], score[i] / 1024, got[i]))
+        }
+        sb.append(String.format(Locale.US, " -> use %.2f", focusDpt))
+        return sb.toString()
+    }
+
+    private fun focusPrefs() = appCtx?.getSharedPreferences("tlp_focus", Context.MODE_PRIVATE)
+    private fun loadFocus(id: String): Float =
+        runCatching { focusPrefs()?.getFloat("f_" + id, 0f) ?: 0f }.getOrDefault(0f)
+    private fun saveFocus(id: String, v: Float) {
+        runCatching { focusPrefs()?.edit()?.putFloat("f_" + id, v)?.apply() }
+    }
+
     // ── 物理カメラを名指しできるかの実験(2026-09-05) ────────
     // 【なぜ確かめるか】論理カメラを普通に開くと、どの物理センサーで撮るかは端末側の
     //  制御ソフトが決める。露出制御を成り立たせるには「狙ったセンサーで、指定した露出で
@@ -473,6 +532,8 @@ object BuiltinCamera {
         canEdgeOff = edModes?.contains(CameraMetadata.EDGE_MODE_OFF) ?: false
         // 0 = 固定焦点(位置を動かせない)。> 0 ならディオプタ(1/m)で、0 を送ると無限遠。
         canSetFocus = (c.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f) > 0f
+        hyperfocalDpt = c.get(CameraCharacteristics.LENS_INFO_HYPERFOCAL_DISTANCE) ?: 0f
+        focusDpt = loadFocus(physId)	// 前に実測で決めた位置(無ければ無限遠)
 
         val h = ensureThread()
         openRaw = raw
@@ -556,6 +617,19 @@ object BuiltinCamera {
         runCatching { camera?.close() }
         runCatching { reader?.close() }
         session = null; camera = null; reader = null; openId = null; openLogical = null
+        // 【受け取り口を空にする(2026-09-26)】撮影を中止したときに露光中だったコマは、
+        //  この後に出来上がって受け取り口へ置かれる。誰も取らないまま残ると、**次の
+        //  セッションの最初の回収がそれを拾う**。
+        //  実測: 09-24 22:31 に中止した室内の白いコマが、翌朝 03:00 の動画の1コマ目に
+        //  そのまま入っていた(バイト単位で同一)。以降の番号も1つずれる。
+        pending = null; pendingJpeg = null
+    }
+
+    // 1回の撮影の始まり。持ち越しを断ち切り、ピントの確かめもやり直す。
+    @JvmStatic
+    fun sessionBegin() {
+        pending = null; pendingJpeg = null
+        focusProbed = false
     }
 
     // ── 撮る ────────────────────────────────────────────────
@@ -704,8 +778,9 @@ object BuiltinCamera {
             if (expNs > 0L) { req.set(CaptureRequest.SENSOR_FRAME_DURATION, expNs + 50_000_000L) }
             // 星を撮るので、ぶれ補正と手ぶれ補正は切る(三脚前提)。無い端末では黙って無視される。
             req.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF)
-            // ピントは無限遠(0 ディオプタ)。AF を切っただけでは位置が決まらない(2026-09-23)。
-            if (canSetFocus) { req.set(CaptureRequest.LENS_FOCUS_DISTANCE, 0f) }
+            // ピントは focusDpt(既定 0 = 無限遠)。AF を切っただけでは位置が決まらない(2026-09-23)。
+            //  端末が無限遠を受け付けないことがあるので、実測で決めた位置を使う(2026-09-26)。
+            if (canSetFocus) { req.set(CaptureRequest.LENS_FOCUS_DISTANCE, focusDpt) }
             req.set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_DAYLIGHT)
             // 星を消さないための2行。端末が対応しているときだけ載せる(上の canNrOff/canEdgeOff)。
             if (canNrOff)   { req.set(CaptureRequest.NOISE_REDUCTION_MODE, CameraMetadata.NOISE_REDUCTION_MODE_OFF) }
@@ -721,7 +796,7 @@ object BuiltinCamera {
                 if (canSetFocus) {
                     runCatching {
                         req.setPhysicalCameraKey(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF, physId)
-                        req.setPhysicalCameraKey(CaptureRequest.LENS_FOCUS_DISTANCE, 0f, physId)
+                        req.setPhysicalCameraKey(CaptureRequest.LENS_FOCUS_DISTANCE, focusDpt, physId)
                     }
                 }
             }

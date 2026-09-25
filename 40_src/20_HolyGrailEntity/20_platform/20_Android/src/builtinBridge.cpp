@@ -280,6 +280,37 @@ namespace builtinCam
 		return out;
 	}
 
+	void sessionBegin(void)
+	{
+		attach a;
+		if (!a.ok()) { return; }
+		jmethodID mid = a.env->GetStaticMethodID(a.cls, "sessionBegin", "()V");
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); mid = nullptr; }
+		if (mid == nullptr) { return; }
+		a.env->CallStaticVoidMethod(a.cls, mid);
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); }
+	}
+
+	std::string focusProbe(double sec, int iso, double fn)
+	{
+		attach a;
+		if (!a.ok()) { return ""; }
+		jmethodID mid = a.env->GetStaticMethodID(a.cls, "focusProbe", "(DID)Ljava/lang/String;");
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); mid = nullptr; }
+		if (mid == nullptr) { return ""; }
+		jobject r = a.env->CallStaticObjectMethod(a.cls, mid, static_cast<jdouble>(sec),
+		                                          static_cast<jint>(iso), static_cast<jdouble>(fn));
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); r = nullptr; }
+		std::string out;
+		if (r != nullptr)
+		{
+			const char* p = a.env->GetStringUTFChars(static_cast<jstring>(r), nullptr);
+			if (p != nullptr) { out = p; a.env->ReleaseStringUTFChars(static_cast<jstring>(r), p); }
+			a.env->DeleteLocalRef(r);
+		}
+		return out;
+	}
+
 	void setWantDng(bool on)
 	{
 		attach a;

@@ -266,6 +266,12 @@ object HgeNative {
     // 動画の出来(コマの大きさの振れと、予算を上げた回数)。撮影の終わりにログへ残す
     @JvmStatic
     fun videoReport(): String = BuiltinVideo.report()
+    // 1回の撮影の始まり(前の撮影の持ち越しを断つ)
+    @JvmStatic
+    fun sessionBegin() { BuiltinCamera.sessionBegin() }
+    // ピントを実測で決める(明るくて測れるときだけ)。戻り=ログ1行
+    @JvmStatic
+    fun focusProbe(sec: Double, iso: Int, fn: Double): String = BuiltinCamera.focusProbe(sec, iso, fn)
     // DNG を出すか(撮り始める前に決める。加算器がフルサイズの和を持つかが変わる)
     @JvmStatic
     fun setWantDng(on: Boolean) { BuiltinCamera.setWantDng(on) }
