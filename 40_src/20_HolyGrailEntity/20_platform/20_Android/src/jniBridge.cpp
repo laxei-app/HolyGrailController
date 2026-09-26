@@ -915,6 +915,18 @@ Java_app_laxei_twylapse_HgeNative_nativePhoneId(JNIEnv* env, jobject /*thiz*/)
 	return env->NewStringUTF(b);
 }
 
+// UI から記録へ1行書く(原因調査用)。detail は英語で書くこと(Entityと通信路の決まり)。
+JNIEXPORT jint JNICALL
+Java_app_laxei_twylapse_HgeNative_nativeLogEvent(JNIEnv* env, jobject /*thiz*/, jstring tag, jstring detail, jboolean isError)
+{
+	const char* t = tag    ? env->GetStringUTFChars(tag,    nullptr) : nullptr;
+	const char* d = detail ? env->GetStringUTFChars(detail, nullptr) : nullptr;
+	jint r = hge_logEvent(t ? t : "INFO", d ? d : "", isError ? 1 : 0);
+	if (t) { env->ReleaseStringUTFChars(tag,    t); }
+	if (d) { env->ReleaseStringUTFChars(detail, d); }
+	return r;
+}
+
 // listener(HgeListener) を登録/解除する。
 JNIEXPORT void JNICALL
 Java_app_laxei_twylapse_HgeNative_nativeSetListener(JNIEnv* env, jobject /*thiz*/, jobject listener)

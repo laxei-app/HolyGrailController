@@ -369,6 +369,17 @@ namespace
 				                    : firstReq(host, port, cmd, method, data, rp);
 				if (m == 0 || rp.cmd != cmd) { return 0; }
 			}
+			// 【名乗り直しても断られたら記録に残す(2026-09-26)】ここを黙って通すと、上位は
+			//  「応答が無い」と区別がつかず、開始したつもりで待ち続ける。原因調査の唯一の
+			//  手掛かりになるので、スマホ側の記録にも必ず1行残す。
+			if (m == etp::M_NAK)
+			{
+				char b[128];
+				std::snprintf(b, sizeof(b), "edge refused cmd=%u: not the owner (%s)",
+				              (unsigned)cmd, host.c_str());
+				dataManager::logEvent("NET", b, true);
+				ELOG("edgeXchg: refused cmd=%u (not the owner)", (unsigned)cmd);
+			}
 		}
 		out = rp.data;
 		return m;

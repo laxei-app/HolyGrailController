@@ -8763,10 +8763,35 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // 1つのエッジ計画の進捗JSONを状態集合へ反映する。表示中の計画(currentPlanId)ならステータス行も更新。
     // ST_IDLE/ST_ERROR ならその計画を各集合から除く(=撮影終了)。
+    // 端末が「この計画は走っていない(IDLE)」と答えたのに、スマホはまだ待っている/撮っている
+    //  つもりでいる状態を覚えておく。これが今回の症状(スマホ=撮影待機中 / 端末=カチンコ)そのもの。
+    private val idleMismatchAt = HashMap<String, Long>()
+
     private fun reconcileEdgePlan(pid: String, pj: String) {
         if (pj.isEmpty()) return
         try {
             val o = JSONObject(pj)
+            // 【食い違いを記録する(2026-09-26)】端末は IDLE、こちらは待機/撮影中。
+            //  表示だけでは原因を追えないので、続いているあいだ1分おきに1行残す。
+            //  (1回だけだと、始まらないまま放置された時間の長さが分からない)
+            run {
+                val st0 = o.optInt("state", HgeNative.ST_IDLE)
+                val meWaiting = waitingPlans.contains(pid) || capturingPlans.contains(pid) ||
+                                startingPlans.contains(pid)
+                if (st0 == HgeNative.ST_IDLE && meWaiting) {
+                    val now = System.currentTimeMillis()
+                    if (now - (idleMismatchAt[pid] ?: 0L) > 60000) {
+                        idleMismatchAt[pid] = now
+                        val notice = try { HgeNative.nativeLastEdgeNotice() } catch (_: Exception) { 0 }
+                        try {
+                            HgeNative.nativeLogEvent("NET",
+                                "edge says IDLE but phone is waiting: plan=" + pid +
+                                " edge=" + (planEdge(pid)?.name ?: "?") + " notice=" + notice, true)
+                        } catch (_: Exception) {}
+                    }
+                } else { idleMismatchAt.remove(pid) }
+                Unit   // run{} の値を確定させる(最後が if だと両分岐を要求される)
+            }
             // ① エッジ書き戻し: エッジが接続確定したカメラの serial/assignedName を所持カメラへ反映する
             //  (エッジ撮影ではスマホがカメラに接続しないため、この経路が唯一の識別情報伝播)。serial単位で1回だけ適用。
             // 認証で弾かれているなら、その理由を覚えておく(「見つかりません」を言い換えるため)。
@@ -9327,11 +9352,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
             // ネットワークI/Oはこのスレッド上で行う(UIを固めない)。
             val running = if (r == 0) true else {
                 val pj = try { HgeNative.nativeEdgeProgress(e.addr(), e.port, planId) } catch (_: Exception) { "" }
+                // 【結果を必ず記録へ(2026-09-26)】ここは「応答が無い＝走っているかもしれない」と
+                //  みなして待機表示を続ける。実際には端末が要求を断っていて IDLE のままでも、
+                //  スマホは待ち続けるので、後から原因を追えない。何が起きたかを1行残す。
+                val nt0 = try { HgeNative.nativeLastEdgeNotice() } catch (_: Exception) { 0 }
+                val st0 = if (pj.isEmpty()) -1 else
+                    (try { JSONObject(pj).optInt("state", HgeNative.ST_IDLE) } catch (_: Exception) { HgeNative.ST_IDLE })
+                try {
+                    HgeNative.nativeLogEvent("NET",
+                        "edge start failed r=" + r + " notice=" + nt0 + " edgeState=" + st0 +
+                        " (-1=no answer) edge=" + e.name + " plan=" + planId, true)
+                } catch (_: Exception) {}
                 if (pj.isEmpty()) true   // エッジ無応答=判定不能 → 除去せず edgePoll に委ねる(誤って開始前へ戻さない)
-                else {
-                    val st = try { JSONObject(pj).optInt("state", HgeNative.ST_IDLE) } catch (_: Exception) { HgeNative.ST_IDLE }
-                    st != HgeNative.ST_IDLE && st != HgeNative.ST_ERROR   // 明示的IDLE/ERROR以外は走っているとみなし維持
-                }
+                else { st0 != HgeNative.ST_IDLE && st0 != HgeNative.ST_ERROR }   // 明示的IDLE/ERROR以外は走っているとみなし維持
             }
             if (running) addHistory("send plan", planId)   // 項目9: 撮影計画をエッジへ送った
             runOnUiThread {

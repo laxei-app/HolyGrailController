@@ -165,6 +165,8 @@ object HgeNative {
     external fun nativeCameraNeedsLists(serial: String): Int
     // このスマホの識別子("tlp-"+32桁16進)。/asset/phoneId.json に保存され、機種変更でも移せる。
     external fun nativePhoneId(): String
+    // 記録へ1行書く(原因調査用)。detail は英語で書く(Entityと通信路に日本語を置かない決まり)。
+    external fun nativeLogEvent(tag: String, detail: String, isError: Boolean): Int
     external fun nativeGetColors(): String                 // システム共通の色 {"night":{"text","bg"},...}
     external fun nativeSetColors(json: String): Int
     external fun nativeGetSmoothing(): String              // 露出平滑化 {"hysteresis":double,"movingAverage":int}

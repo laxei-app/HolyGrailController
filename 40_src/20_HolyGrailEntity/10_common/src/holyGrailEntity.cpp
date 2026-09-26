@@ -2243,6 +2243,15 @@ int32_t hge_phoneIdJson(char* buf, int32_t* inoutLen)
 	return copyOut(phoneIdLoad(), buf, inoutLen);
 }
 
+// UI から記録へ1行書く。原因調査に要る出来事(端末に断られた等)を、スマホのログにも
+//  残すために使う。tag は "NET" のような短い種別、detail は英語で書く。
+int32_t hge_logEvent(const char* tag, const char* detail, int32_t isError)
+{
+	if (tag == nullptr || detail == nullptr) { return ERR_HGC_INVALID_ARG; }
+	dataManager::logEvent(tag, detail, isError != 0);
+	return ERR_HGC_OK;
+}
+
 int32_t hge_cameraNeedsLists(const char* serial)
 {
 	if (serial == nullptr) { return ERR_HGC_INVALID_ARG; }

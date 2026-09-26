@@ -326,6 +326,24 @@ bool applyTime(const std::string& data)
 		if (!allowedPeer(peer))
 		{
 			DBGLN(col::RED, "etpEdge: refused cmd=%u (not the owner)", (unsigned)pk.cmd);
+			// 【必ずログファイルにも残す(2026-09-26)】以前はシリアルにしか出していなかったので、
+			//  後からログを取り寄せても「断った」痕跡がどこにも無く、原因に辿り着けなかった。
+			//  断られた側(スマホ)は開始したつもりで待ち続けるので、ここが唯一の手掛かりになる。
+			//  同じ相手の同じコマンドが続くときは間引く(スイープのたびに何行も出さない)。
+			static uint16_t s_lastCmd = 0xFFFF;
+			static uint32_t s_lastAt  = 0;
+			const uint32_t now = millis();
+			if (pk.cmd != s_lastCmd || (now - s_lastAt) > 10000)
+			{
+				s_lastCmd = pk.cmd; s_lastAt = now;
+				const std::string id = peerId(peer);
+				char b[160];
+				std::snprintf(b, sizeof(b),
+				              "refused cmd=%u method=%u peer=%s named=%s state=%d (not the owner)",
+				              (unsigned)pk.cmd, (unsigned)pk.method, peer.c_str(),
+				              id.empty() ? "no" : "yes", (int)hge_getState());
+				dataManager::logEvent("NET", b, true);
+			}
 			return etp::encode(pk.cmd, etp::M_NAK,
 			                   std::to_string(static_cast<int>(hgc::notice::edgeNotYours)));
 		}

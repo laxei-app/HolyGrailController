@@ -373,6 +373,9 @@ int32_t hge_cameraNeedsLists(const char* serial);
 //  ファイルを移せば機種変更しても同じ札を使い続けられる(**複製すると2台とも持ち主になる**)。
 int32_t hge_phoneIdJson(char* buf, int32_t* inoutLen);
 
+// UI から記録へ1行書く(原因調査用)。tag="NET" など、detail は英語。isError!=0 で ERR 扱い。
+int32_t hge_logEvent(const char* tag, const char* detail, int32_t isError);
+
 // 現在の進捗スナップショットを JSON で取得(バッファ規約)。
 //  {"state","frame","total","remainSec","elapsedSec","ccm","iso","ss","fn"}
 //  エッジ端末が progress(get) 応答に使う。
