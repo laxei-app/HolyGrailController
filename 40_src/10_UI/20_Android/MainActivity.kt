@@ -6162,6 +6162,53 @@ class MainActivity : AppCompatActivity(), HgeListener {
         repBand(box, "ライブビュー")
         repRow(box, "古い映像を破棄", "%d コマ (延べ %d 回)".format(lvw.optInt("staleFrames"), lvw.optInt("staleTotal")))
 
+        // 【カメラ自身の素性と画質(2026-09-26 ユーザー依頼)】内蔵カメラだけが出す。
+        //  端末によって「ピントを指定できない」「1コマを長く開けられない」といった
+        //  差があり、それはアプリではなく端末の性質なので、結果として残す。
+        //  CCAPI のカメラは "device" を書かないので、この帯ごと出さない。
+        val dev = o.optJSONObject("device")
+        if (dev != null) {
+            repBand(box, "カメラの素性と画質")
+            val fc = dev.optString("focusControl")
+            repRow(box, "ピント調整", when (fc) {
+                "manual" -> "指定どおり動く"
+                "afOnly" -> "指定を見ない"
+                "fixed"  -> "動かない"
+                else     -> "不明"
+            }, when (fc) {
+                "manual" -> "毎コマ無限遠を指定している"
+                "afOnly" -> "端末が指定を無視する。ピントはカメラ任せで、遠景が甘くなることがある"
+                "fixed"  -> "この端末にはピントを動かす仕組みがない"
+                else     -> "明るさが足りず確かめられなかった"
+            })
+            val dpt = dev.optDouble("focusDiopter", -1.0)
+            if (dpt >= 0.0) {
+                repRow(box, "ピント位置",
+                       if (dpt < 0.005) "無限遠" else "%.2f dpt (約 %.1f m)".format(dpt, 1.0 / dpt),
+                       "端末が申告している値")
+            }
+            val maxSs = dev.optDouble("maxExposureSec", -1.0)
+            if (maxSs > 0.0) {
+                repRow(box, "1コマの最長露光", "%.2f 秒".format(maxSs),
+                       "これより長いシャッター速度は、この長さのコマを足して作る")
+            }
+            // 撮影中に数コマに1度だけ測った中で、一番悪かった1件。夜と昼では3段以上
+            //  違うので平均には意味がない。値は 0〜255 の目盛り。
+            val wn = dev.optJSONObject("worstNoise")
+            if (wn != null) {
+                repRow(box, "SN比(一番悪いところ)", "%.1f".format(wn.optDouble("snr")),
+                       "大きいほど良い。明るさ %.0f のところで測った (ISO %.0f・%.3f 秒・%d 枚)".format(
+                           wn.optDouble("level"), wn.optDouble("iso"),
+                           wn.optDouble("ssSec"), wn.optInt("stackedFrames")))
+                repRow(box, "時間ノイズ", "%.2f".format(wn.optDouble("temporalSigma")),
+                       "コマごとに暴れる分。0〜255 の目盛りで、小さいほど良い")
+                repRow(box, "固定パターンノイズ", "%.2f".format(wn.optDouble("fixedPatternSigma")),
+                       "いつも同じ場所に出る分。加算しても消えない")
+            } else {
+                repRow(box, "画質の測定", "計測なし", "コマ数が少なく測る回が来なかった")
+            }
+        }
+
         val notes = o.optJSONArray("notes")
         if (notes != null && notes.length() > 0) {
             repBand(box, "所見")
