@@ -2180,6 +2180,26 @@ int32_t hge_seenCameraCount(void)
 	return static_cast<int32_t>(seenCameras().size());
 }
 
+int32_t hge_cameraListsJson(const char* serial, char* buf, int32_t* inoutLen)
+{
+	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
+	std::string s = dataManager::cameraListsJson(serial ? serial : "");
+	if (s.empty()) { s = "{}"; }	// 持っていない = 空オブジェクト(呼び手は長さで判る)
+	return copyOut(s, buf, inoutLen);
+}
+
+int32_t hge_applyCameraLists(const char* serial, const char* json)
+{
+	if (serial == nullptr || json == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return dataManager::applyCameraLists(serial, json) ? 1 : 0;
+}
+
+int32_t hge_cameraNeedsLists(const char* serial)
+{
+	if (serial == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return dataManager::cameraNeedsLists(serial) ? 1 : 0;
+}
+
 int32_t hge_loadFixedPlan(void)
 {
 	return loadFixedPlanImpl();

@@ -396,6 +396,15 @@ bool applyTime(const std::string& data)
 			else                                            { rd = "[]"; }
 			break;
 		}
+		case etp::C_CAMERA_SPEC:	// data=serial。そのカメラの ISO/SS の並びを返す
+		{
+			// 1台ぶんで 600〜800 バイト。名指しなので1回の応答はこれだけ。
+			char b[2048];
+			int32_t len = sizeof(b);
+			if (!pk.data.empty() && hge_cameraListsJson(pk.data.c_str(), b, &len) == ERR_HGC_OK) { rd = b; }
+			else                                                                                 { rd = "{}"; }
+			break;
+		}
 		case etp::C_REPORT_DELETE:	// data=ファイル名。スマホが保存できたものだけを消す
 			if (pk.data.empty() || hge_removeReport(pk.data.c_str()) != ERR_HGC_OK) { rm = etp::M_NAK; }
 			break;

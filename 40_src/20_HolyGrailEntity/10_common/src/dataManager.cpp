@@ -1500,6 +1500,70 @@ int dataManager::recordConnectedCameraStatus(const device& dev, bool allowAdd)
 	return static_cast<int>(camApply::isNew);
 }
 
+// --- ISO/SS の並びだけを、カメラに触らずに受け渡す(2026-09-26) ---
+//
+// 【なぜ要るか】スマホ⇄外部端末を BLE にすると、カメラは端末のAPの中だけに居てスマホからは
+//  一生届かない。ISO/SS の並びを知っているのは実際に繋いでいる端末だけなので、そこから貰う。
+//  機材マスタに載っている機種なら上下限から並びを作れるが、載っていない機種は作れない。
+//
+// serial の所持カメラの並びを返す。持っていなければ空文字(呼び手は「貰えなかった」と扱う)。
+std::string dataManager::cameraListsJson(const std::string& serial)
+{
+	if (serial.empty()) { return std::string(); }
+	ensureOwned();
+	for (const auto& oc : g_ownedCameras)
+	{
+		if (oc.cam.serial != serial) { continue; }
+		if (oc.cam.isoList.empty() && oc.cam.ssList.empty()) { return std::string(); }
+		nlohmann::json j;
+		j["isoList"] = oc.cam.isoList;
+		j["ssList"]  = oc.cam.ssList;
+		return j.dump();
+	}
+	return std::string();
+}
+
+// serial の所持カメラが並びを持っていないか(=貰う価値があるか)。
+bool dataManager::cameraNeedsLists(const std::string& serial)
+{
+	if (serial.empty()) { return false; }
+	ensureOwned();
+	for (const auto& oc : g_ownedCameras)
+	{
+		if (oc.cam.serial == serial) { return oc.cam.isoList.empty() || oc.cam.ssList.empty(); }
+	}
+	return false;	// 所持していないカメラは対象外(登録してから貰う)
+}
+
+// 貰った並びを入れる。**空のときだけ**入れる: カメラが答えた並びを後から上書きしないという
+// 既存の約束(2026-09-19 ユーザー指示)に合わせる。実際に設定できる値を知っているのはカメラだけ。
+bool dataManager::applyCameraLists(const std::string& serial, const std::string& json)
+{
+	if (serial.empty() || json.empty()) { return false; }
+	nlohmann::json j = nlohmann::json::parse(json, nullptr, false);
+	if (j.is_discarded() || !j.is_object()) { return false; }
+	std::vector<std::string> iso, ss;
+	if (j.contains("isoList") && j["isoList"].is_array()) { iso = j["isoList"].get<std::vector<std::string>>(); }
+	if (j.contains("ssList")  && j["ssList"].is_array())  { ss  = j["ssList"].get<std::vector<std::string>>(); }
+	if (iso.empty() && ss.empty()) { return false; }
+
+	ensureOwned();
+	for (auto& oc : g_ownedCameras)
+	{
+		if (oc.cam.serial != serial) { continue; }
+		bool changed = false;
+		if (oc.cam.isoList.empty() && !iso.empty()) { oc.cam.isoList = iso; changed = true; }
+		if (oc.cam.ssList.empty()  && !ss.empty())  { oc.cam.ssList  = ss;  changed = true; }
+		if (changed)
+		{
+			saveOwnedCameras();
+			logEvent("GEAR", (oc.cam.model + " iso/ss taken from edge (S/N " + serial + ")").c_str());
+		}
+		return changed;
+	}
+	return false;
+}
+
 // §4b: 計画カメラの assignedName から所持リストを引き、実シリアルを解決する(接続済みなら serial が入っている)。
 bool dataManager::serialForAssignedName(const std::string& assignedName, std::string& outSerial)
 {

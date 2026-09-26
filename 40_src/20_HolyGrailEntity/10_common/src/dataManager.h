@@ -159,6 +159,18 @@ public:
 	enum class camApply { updated = 0, filled = 1, isNew = 2 };
 	static int recordConnectedCameraStatus(const device& dev, bool allowAdd);
 
+	// --- ISO/SS の並びだけを、カメラに触らずに受け渡す(2026-09-26) ---
+	//  スマホ⇄外部端末が BLE のとき、カメラは端末のAPの中だけに居てスマホからは届かない。
+	//  並びを知っているのは実際に繋いでいる端末だけなので、そこから貰って埋める。
+	//  【なぜ機材マスタで足りないか】マスタに無い機種は上下限が無く、並びが作れない。
+	// serial の所持カメラの並びを {"isoList":[...],"ssList":[...]} で返す(無い/空なら "")。
+	static std::string cameraListsJson(const std::string& serial);
+	// serial の所持カメラへ並びを入れる。**空のときだけ**入れる(カメラが答えた並びを上書きしない
+	// という既存の約束に合わせる)。true=変わった(保存済み)。
+	static bool applyCameraLists(const std::string& serial, const std::string& json);
+	// serial の所持カメラが並びを持っていない(=貰う価値がある)か。
+	static bool cameraNeedsLists(const std::string& serial);
+
 	// --- §4b 撮影開始時の特定カメラ照合(同機種が複数あっても serial/assignedName で1台を選ぶ) ---
 	// 計画カメラの assignedName から所持リストを引き実シリアルを解決(接続済みなら serial が入る)。true=解決。
 	static bool serialForAssignedName(const std::string& assignedName, std::string& outSerial);

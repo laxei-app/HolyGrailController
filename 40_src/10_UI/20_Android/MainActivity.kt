@@ -5998,6 +5998,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // 外部端末ごとの「前回見えていたカメラの台数」。変わったときだけ身元を取りに行く。
     private val edgeCamsSeen = HashMap<String, Int>()
+    // 外部端末ごとの「最後に見えていたカメラの serial」。ISO/SS を貰う相手を決めるのに使う。
+    private val edgeCamSerials = HashMap<String, List<String>>()
+    // serial ごとの「最後に並びを聞いた時刻」。貰えるようになるのは端末がカメラへ繋いだ後なので、
+    //  貰えなくても諦めずに間をあけて聞き直す(毎スイープ聞くと無駄な往復が増える)。
+    private val camSpecAskedAt = HashMap<String, Long>()
+    private val kCamSpecRetryMs = 10 * 60 * 1000L
 
     // 外部端末が見つけたカメラを所持カメラへ反映する(edgeSweep のワーカースレッドから呼ぶ)。
     //
@@ -6011,15 +6017,41 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun collectEdgeCameras(edge: Edge) {
         val arr = try { JSONArray(HgeNative.nativeEdgeSeenCameras(edge.addr(), edge.port)) } catch (_: Exception) { return }
         val toPrompt = ArrayList<Triple<String, String, String>>()   // model, serial, assignedName
+        val serials = ArrayList<String>()
         for (i in 0 until arr.length()) {
             val c = arr.optJSONObject(i) ?: continue
             val serial = c.optString("serial"); if (serial.isEmpty()) continue
+            serials.add(serial)
             if (declinedCamSerials.contains(serial)) continue        // 「いいえ」済みは自動では聞かない
             val model = c.optString("model"); val assignedName = c.optString("assignedName")
             val r = try { HgeNative.nativeRecordRemoteCameraIdentity(model, serial, assignedName, false) } catch (_: Exception) { -1 }
             if (r == 2) { toPrompt.add(Triple(model, serial, assignedName)) }   // 2=新規個体(未追加)
         }
+        edgeCamSerials[edge.name] = serials
         if (toPrompt.isNotEmpty()) runOnUiThread { promptRegisterCameras(toPrompt, edge.name) }
+    }
+
+    // 所持カメラの ISO/SS の並びを外部端末から貰う(edgeSweep のワーカースレッドから呼ぶ)。
+    //
+    // 【なぜ端末から貰うか】そのカメラはスマホから届かないので、スマホは並びを自分で読めない。
+    //  機材マスタに載っている機種なら上下限から作れるが、**載っていない機種は作れない**。
+    //  実際に繋いでいる端末だけが知っているので、そこから貰う。
+    //
+    // 【いつ貰えるか】端末が並びを知るのは認証付きでカメラへ繋いだ後(撮影か挨拶)。つまり
+    //  登録 → 台帳を押す → 端末が繋ぐ、の後になる。それまでは空が返るので、間をあけて聞き直す。
+    private fun fetchEdgeCameraLists(edge: Edge) {
+        val serials = edgeCamSerials[edge.name] ?: return
+        val now = System.currentTimeMillis()
+        var got = 0
+        for (serial in serials) {
+            if (try { HgeNative.nativeCameraNeedsLists(serial) } catch (_: Exception) { 0 } != 1) continue
+            if (now - (camSpecAskedAt[serial] ?: 0L) < kCamSpecRetryMs) continue
+            camSpecAskedAt[serial] = now
+            val spec = try { HgeNative.nativeEdgeCameraSpec(edge.addr(), edge.port, serial) } catch (_: Exception) { "{}" }
+            if (spec.length <= 2) continue                            // "{}" = 端末もまだ知らない
+            if (try { HgeNative.nativeApplyCameraLists(serial, spec) } catch (_: Exception) { 0 } == 1) { got++ }
+        }
+        if (got > 0) runOnUiThread { if (flipper.displayedChild == 6) buildCameraList() }   // 6=所持カメラ一覧
     }
 
     // エッジに溜まった撮影レポートを引き取る(edgeSweep のワーカースレッドから呼ぶ)。
@@ -9003,9 +9035,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 //  台数が前回と変わったときだけ聞く(1往復ぶんの通信を増やさないため)。
                 if (edgeUseBle()) {
                     for ((nm, f) in found) {
-                        if (f.cams == (edgeCamsSeen[nm] ?: -1)) continue
-                        edgeCamsSeen[nm] = f.cams
-                        if (f.cams > 0) collectEdgeCameras(f.edge)
+                        if (f.cams != (edgeCamsSeen[nm] ?: -1)) {
+                            edgeCamsSeen[nm] = f.cams
+                            if (f.cams > 0) collectEdgeCameras(f.edge)
+                        }
+                        // ISO/SS の並びは、台数が変わらなくても「まだ空の所持カメラ」があるときだけ貰う。
+                        //  貰えるようになるのは端末がカメラへ繋いだ後なので、間をあけて聞き直す。
+                        if (f.cams > 0) fetchEdgeCameraLists(f.edge)
                     }
                 }
             }.start()

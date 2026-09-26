@@ -359,6 +359,15 @@ int32_t hge_recordRemoteCameraIdentity(const char* model, const char* serial, co
 int32_t hge_seenCamerasJson(char* buf, int32_t* inoutLen);
 int32_t hge_seenCameraCount(void);
 
+// --- ISO/SS の並びを外部端末から貰う(カメラに触らない) ---
+// serial の所持カメラの並びを {"isoList":[...],"ssList":[...]} で返す(持っていなければ "{}")。
+//  外部端末が C_CAMERA_SPEC の応答に使う。
+int32_t hge_cameraListsJson(const char* serial, char* buf, int32_t* inoutLen);
+// 貰った並びを所持カメラへ入れる。**空のときだけ**入る。1=入った / 0=変わらず / <0=エラー。
+int32_t hge_applyCameraLists(const char* serial, const char* json);
+// その serial の所持カメラが並びを持っていない(=貰う価値がある)か。1=要る / 0=不要。
+int32_t hge_cameraNeedsLists(const char* serial);
+
 // 現在の進捗スナップショットを JSON で取得(バッファ規約)。
 //  {"state","frame","total","remainSec","elapsedSec","ccm","iso","ss","fn"}
 //  エッジ端末が progress(get) 応答に使う。

@@ -884,6 +884,28 @@ Java_app_laxei_twylapse_HgeNative_nativeRecordRemoteCameraIdentity(JNIEnv* env, 
 	return r;
 }
 
+// 外部端末から貰った ISO/SS の並びを所持カメラへ入れる(空のときだけ入る)。1=入った。
+JNIEXPORT jint JNICALL
+Java_app_laxei_twylapse_HgeNative_nativeApplyCameraLists(JNIEnv* env, jobject /*thiz*/, jstring serial, jstring json)
+{
+	const char* s = serial ? env->GetStringUTFChars(serial, nullptr) : nullptr;
+	const char* j = json   ? env->GetStringUTFChars(json,   nullptr) : nullptr;
+	jint r = hge_applyCameraLists(s ? s : "", j ? j : "");
+	if (s) { env->ReleaseStringUTFChars(serial, s); }
+	if (j) { env->ReleaseStringUTFChars(json,   j); }
+	return r;
+}
+
+// その所持カメラが ISO/SS の並びを持っていないか(=貰う価値があるか)。1=要る。
+JNIEXPORT jint JNICALL
+Java_app_laxei_twylapse_HgeNative_nativeCameraNeedsLists(JNIEnv* env, jobject /*thiz*/, jstring serial)
+{
+	const char* s = serial ? env->GetStringUTFChars(serial, nullptr) : nullptr;
+	jint r = hge_cameraNeedsLists(s ? s : "");
+	if (s) { env->ReleaseStringUTFChars(serial, s); }
+	return r;
+}
+
 // listener(HgeListener) を登録/解除する。
 JNIEXPORT void JNICALL
 Java_app_laxei_twylapse_HgeNative_nativeSetListener(JNIEnv* env, jobject /*thiz*/, jobject listener)
