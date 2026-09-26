@@ -99,6 +99,7 @@ class EdgeBle(
     private var payload: ByteArray = ByteArray(0)
     private var startOnly = false   // true=CTRL に "start" を書くだけ(QR表示要求) / false=CRED送信
     private var done = false
+    private var sent = false        // 購読の後、送信まで進んだか(保険と本筋の二重送信を防ぐ)
 
     // 接続したいエッジの端末名(2026-08-08 UI依頼)。空なら「最初に見つけた1台」= 従来動作。
     //
@@ -233,6 +234,10 @@ class EdgeBle(
 
     private fun connect(dev: BluetoothDevice) {
         lastAddress = dev.address   // このエッジを覚えておき、送信時に同じ端末へ向ける
+        // 【必ず終わらせる(2026-09-26)】以前は「書いたら5秒で閉じる」保険しか無く、その手前
+        //  (サービス探索・通知の購読)で止まると**何も起きないまま画面が固まった**(実機で発生)。
+        //  途中どこで詰まっても、ここで打ち切って理由を出す。
+        handler.postDelayed({ if (!done) finish(false, "外部端末が応答しません(接続はできたが手順が進みませんでした)") }, 15000)
         gatt = dev.connectGatt(ctx, false, object : BluetoothGattCallback() {
             override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
                 if (newState == BluetoothProfile.STATE_CONNECTED) { log("接続。MTU要求..."); g.requestMtu(247) }
@@ -240,6 +245,9 @@ class EdgeBle(
             }
             override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) { log("MTU=$mtu。サービス探索..."); g.discoverServices() }
             override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+                // 【どこまで進んだか見えるようにする(2026-09-26)】ここが無く、「サービス探索...」で
+                //  止まったときに探索が終わったのかどうかも分からなかった。
+                log("サービス発見(status=$status)。通知を購読...")
                 val svc = g.getService(SVC) ?: run { finish(false, "サービスが見つかりません"); return }
                 // 【QR要求でも状態通知を購読する(2026-09-26)】以前は「QR表示要求は応答が要らない」
                 //  として購読せずに書いていた。端末が**断った理由("deny")を返すようになった**ので、
@@ -248,11 +256,19 @@ class EdgeBle(
                 if (stat != null) {
                     g.setCharacteristicNotification(stat, true)
                     val d = stat.getDescriptor(CCCD)
-                    if (d != null) writeDescriptor(g, d, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                    if (d != null) {
+                        writeDescriptor(g, d, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                        // 購読の応答が来ない実装もある。2秒で見切って先へ進む(通知は来ないかも
+                        //  しれないが、要求自体は届けられる)。
+                        handler.postDelayed({ if (!done && !sent) nextAfterSubscribe(g) }, 2000)
+                    }
                     else nextAfterSubscribe(g)
                 } else nextAfterSubscribe(g)
             }
-            override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) { nextAfterSubscribe(g) }
+            override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) {
+                log("購読できました(status=$status)")
+                nextAfterSubscribe(g)
+            }
             override fun onCharacteristicWrite(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
                 if (c.uuid == CTRL) {
                     // 【書けた＝成功、にしない(2026-09-26)】端末は持ち主でなければQRを出さず
@@ -291,6 +307,8 @@ class EdgeBle(
 
     // 状態通知を購読し終えたら、用事に応じて送る。QR要求も認証情報も同じ入口を通す。
     private fun nextAfterSubscribe(g: BluetoothGatt) {
+        if (sent) { return }   // 保険と本筋の両方から来ても1度だけ
+        sent = true
         if (startOnly) { writeCtrlStart(g) } else { writeCred(g) }
     }
 
