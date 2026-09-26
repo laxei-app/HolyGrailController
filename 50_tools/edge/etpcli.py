@@ -32,6 +32,10 @@ C_SEARCH, C_LOG_LIST, C_LOG_READ = 1000, 11, 12
 # ツールとして覚え、以後の要求を通す。**意図的な裏口**なので、公開後に締めるならここ。
 TOOL_ID = b'tlp-tool-0000000000000000000000000000'
 
+# 名乗る札。--as <札> で別の札に化けられる。持ち主でない相手として扱われるか
+# (= 端末が要求を断るか)を確かめる試験用。既定はツールの札。
+MY_ID = TOOL_ID
+
 C_REPORT_LIST, C_REPORT_READ = 14, 15
 M_GET, M_ACK, M_NAK = 1, 100, 200
 CHUNK = 4096			# エッジ側 C_LOG_READ の 1 回あたり最大バイト数
@@ -82,7 +86,7 @@ class session:
         #  ツールとして覚え(IP単位・90秒)、続く要求を通す。
         if hello:
             try:
-                self.call(C_SEARCH, M_GET, TOOL_ID)
+                self.call(C_SEARCH, M_GET, MY_ID)
             except OSError:
                 pass
 
@@ -162,6 +166,13 @@ def find(lo=2, hi=60, net="192.168.1"):
 
 
 def main():
+    global MY_ID
+    # --as <札> : 別のスマホのふりをする(持ち主でない要求が断られるかの確認用)。
+    if '--as' in sys.argv:
+        i = sys.argv.index('--as')
+        MY_ID = sys.argv[i + 1].encode()
+        del sys.argv[i:i + 2]
+        print("名乗り: %s" % MY_ID.decode())
     if len(sys.argv) < 2:
         print(__doc__ or "usage: etpcli.py <ip> <info|logs|log|reports|report> ...")
         return 2
@@ -169,7 +180,7 @@ def main():
         lo = int(sys.argv[2]) if len(sys.argv) > 2 else 2
         hi = int(sys.argv[3]) if len(sys.argv) > 3 else 60
         for ip in find(lo, hi):
-            p = call(ip, C_SEARCH, M_GET, TOOL_ID)
+            p = call(ip, C_SEARCH, M_GET, MY_ID)
             name = '?'
             if p:
                 try:
@@ -183,11 +194,13 @@ def main():
     what = sys.argv[2] if len(sys.argv) > 2 else 'info'
 
     if what == 'info':
-        p = call(ip, C_SEARCH, M_GET, TOOL_ID)
+        p = call(ip, C_SEARCH, M_GET, MY_ID)
         if not p:
             print("応答がありません"); return 1
         d = json.loads(p[2].decode('utf-8', 'replace'))
         print("name     :", d.get('name'))
+        # 登録の状態。owned=持ち主が居る / mine=名乗った札が持ち主。
+        print("owned    :", d.get('owned'), " mine:", d.get('mine'))
         print("ip       :", d.get('ip'), " state:", d.get('state'))
         print("fw       :", d.get('fw'))
         print("plans    :", d.get('heldPlans'))
@@ -198,6 +211,10 @@ def main():
         p = call(ip, C_LOG_LIST, M_GET)
         if not p:
             print("応答がありません"); return 1
+        # 持ち主でない札で投げると端末が断る(M_NAK + お知らせコード)。
+        if p[1] == M_NAK:
+            print("断られました(NAK) 理由コード:", p[2].decode('utf-8', 'replace').strip() or "(なし)")
+            return 1
         for n in json.loads(p[2].decode('utf-8', 'replace')):
             print(n)
     elif what == 'log':

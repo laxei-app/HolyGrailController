@@ -22,6 +22,11 @@ namespace
 	portMUX_TYPE          g_mux = portMUX_INITIALIZER_UNLOCKED;
 	std::vector<uint8_t>  g_rx;			// 受信バッファ(フレーミング用)
 	constexpr size_t      RX_MAX = 16384;	// 想定外の流入でメモリを食い潰さないための上限
+	// 【いま積んでいるのは誰の分か(2026-09-26)】受信バッファは1本しかないので、
+	//  2台のスマホが同時につないでいると書き込みが混ざってフレームが壊れる。さらに、
+	//  持ち主かどうかの判定も相手ごとに要る。接続の番号で見分け、**相手が変わったら
+	//  途中のフレームは捨てる**(他人の断片と繋げない)。
+	uint16_t              g_rxConn = 0xFFFF;	// 0xFFFF=まだ誰からも受けていない
 
 	// 1回に送れる量。MTU-3(ATTヘッダ)。接続時に更新する。
 	size_t                g_chunk = 20;
@@ -45,12 +50,15 @@ namespace
 
 	class RxCb : public NimBLECharacteristicCallbacks
 	{
-		void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& /*info*/) override
+		void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& info) override
 		{
 			// ここは BLE タスク。積むだけにして、処理は loop() へ回す。
 			const std::string v = c->getValue();
 			if (v.empty()) { return; }
+			const uint16_t conn = info.getConnHandle();
 			portENTER_CRITICAL(&g_mux);
+			if (!g_rx.empty() && conn != g_rxConn) { g_rx.clear(); }	// 相手が変わった=別人の断片
+			g_rxConn = conn;
 			if (g_rx.size() + v.size() <= RX_MAX)
 			{
 				g_rx.insert(g_rx.end(), v.begin(), v.end());
@@ -145,6 +153,7 @@ namespace etpBle
 		std::vector<uint8_t> buf;
 		portENTER_CRITICAL(&g_mux);
 		if (!g_rx.empty()) { buf.swap(g_rx); }
+		const uint16_t conn = g_rxConn;
 		portEXIT_CRITICAL(&g_mux);
 		if (buf.empty()) { return; }
 
@@ -157,7 +166,7 @@ namespace etpBle
 			{
 				DBGLN(col::YEL, "etpBle: rx cmd=%u m=%u len=%u",
 				      (unsigned)pk.cmd, (unsigned)pk.method, (unsigned)pk.data.size());
-				sendReply(etpEdge::handleFrame(pk));	// TCP と同じ処理を通る
+				sendReply(etpEdge::handleFrame(pk, conn));	// TCP と同じ処理を通る
 				pos += static_cast<size_t>(c);
 			}
 			else if (c == 0) { break; }		// データ不足 → 続きを待つ

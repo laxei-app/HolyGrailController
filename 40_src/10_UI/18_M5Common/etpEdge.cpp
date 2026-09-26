@@ -606,11 +606,13 @@ bool applyTime(const std::string& data)
 namespace etpEdge
 {
 	// BLE 経路から呼ぶ。1フレームを処理して応答フレームを返す(トランスポート非依存)。
-	std::vector<uint8_t> handleFrame(const etp::packet& pk)
+	std::vector<uint8_t> handleFrame(const etp::packet& pk, uint16_t conn)
 	{
-		// BLE は接続が1本ずつ順に処理されるので、相手の鍵は固定でよい。
-		//  スマホは必ず最初に C_SEARCH を投げるので、そこで識別子がひも付く。
-		return buildReply(pk, "b");
+		// 【接続ごとに見分ける(2026-09-26)】固定の鍵にしていたら、2台つないでいるとき
+		//  後から名乗ったほうへ鍵が移り、持ち主の要求が断られることがあった(実測で
+		//  検索と送信の間は約1.4秒あり、30秒に1度の他機の検索が5%ほどの確率で割り込む)。
+		char b[16]; std::snprintf(b, sizeof(b), "b:%u", (unsigned)conn);
+		return buildReply(pk, b);
 	}
 
 	// 検索応答と同じ edgeInfo。BLE でも同じものを返すので公開する。
