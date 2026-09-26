@@ -274,11 +274,27 @@ class EdgeBle(
                     // 【書けた＝成功、にしない(2026-09-26)】端末は持ち主でなければQRを出さず
                     //  "deny" を返す。ここで終わらせると理由が届く前に画面が閉じてしまう。
                     //  答えを少し待ち、来なければ従来どおり「要求した」で終わる(古い端末向け)。
-                    if (status == BluetoothGatt.GATT_SUCCESS) { log("QR表示を要求。端末の応答待ち...") }
+                    if (status == BluetoothGatt.GATT_SUCCESS) {
+                        log("QR表示を要求。端末の応答待ち...")
+                        // 【通知に頼らない(2026-09-26 実機 SH-M08)】Android 10 の機種で通知の
+                        //  購読(CCCD書込)の応答が返らず、端末が返す理由("deny")を受け取れなかった。
+                        //  STAT は読み出しもできるので、少し待って**読みに行く**。何度か試すのは、
+                        //  端末が答えを書くのが自分のループ1周ぶん遅れることがあるため。
+                        readStatSoon(g, 400); readStatSoon(g, 1200); readStatSoon(g, 2500)
+                    }
                     else finish(false, "start書込失敗 status=$status")
                 } else if (c.uuid == CRED) {
                     if (status == BluetoothGatt.GATT_SUCCESS) log("認証情報を送信。応答待ち...")
                     else finish(false, "書込失敗 status=$status")
+                }
+            }
+            override fun onCharacteristicRead(g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
+                if (c.uuid == STAT && status == BluetoothGatt.GATT_SUCCESS) handleStat(String(value))
+            }
+            @Deprecated("Deprecated in API 33")
+            override fun onCharacteristicRead(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
+                if (c.uuid == STAT && status == BluetoothGatt.GATT_SUCCESS) {
+                    handleStat(String(@Suppress("DEPRECATION") (c.value ?: ByteArray(0))))
                 }
             }
             override fun onCharacteristicChanged(g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray) {
@@ -293,6 +309,10 @@ class EdgeBle(
 
     private fun handleStat(s: String) {
         log("端末の応答: $s")
+        // 【読み出しでは古い値を掴むことがある(2026-09-26)】STAT は前回の結果を保持している。
+        //  QR要求のときは、その用事の答え("qr"/"deny"/"busy")だけを受け取る。前回の "ok" を
+        //  読んで「設定を保存しました」と誤って閉じないようにする。
+        if (startOnly && !(s.startsWith("qr") || s.startsWith("deny") || s.startsWith("busy"))) { return }
         when {
             // QR要求の答え。出たなら成功として閉じ、読み取りへ進んでもらう。
             s.startsWith("qr")   -> if (startOnly) finish(true, "端末にQRを表示しました。読み取ってください")
@@ -341,6 +361,15 @@ class EdgeBle(
         }
         // 応答(STAT通知)が来ない実装でも完了扱いにする保険。
         handler.postDelayed({ if (!done) finish(true, "送信完了(端末の応答待ちタイムアウト)") }, 7000)
+    }
+
+    // 少し待ってから STAT を読む。通知が来ない機種でも端末の答えを拾える。
+    private fun readStatSoon(g: BluetoothGatt, delayMs: Long) {
+        handler.postDelayed({
+            if (done) return@postDelayed
+            val stat = g.getService(SVC)?.getCharacteristic(STAT) ?: return@postDelayed
+            try { g.readCharacteristic(stat) } catch (_: Exception) {}
+        }, delayMs)
     }
 
     private fun writeDescriptor(g: BluetoothGatt, d: BluetoothGattDescriptor, v: ByteArray) {
