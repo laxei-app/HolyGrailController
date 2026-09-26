@@ -870,6 +870,20 @@ Java_app_laxei_twylapse_HgeNative_nativeRecordCameraIdentity(JNIEnv* env, jobjec
 	return r;
 }
 
+// エッジが見つけたカメラを所持カメラへ反映する。実機を探しに行かない(別ネットワークに居るため)。
+JNIEXPORT jint JNICALL
+Java_app_laxei_twylapse_HgeNative_nativeRecordRemoteCameraIdentity(JNIEnv* env, jobject /*thiz*/, jstring model, jstring serial, jstring assignedName, jboolean allowAdd)
+{
+	const char* m = model    ? env->GetStringUTFChars(model,    nullptr) : nullptr;
+	const char* s = serial   ? env->GetStringUTFChars(serial,   nullptr) : nullptr;
+	const char* f = assignedName ? env->GetStringUTFChars(assignedName, nullptr) : nullptr;
+	jint r = hge_recordRemoteCameraIdentity(m ? m : "", s ? s : "", f ? f : "", allowAdd ? 1 : 0);
+	if (m) { env->ReleaseStringUTFChars(model,    m); }
+	if (s) { env->ReleaseStringUTFChars(serial,   s); }
+	if (f) { env->ReleaseStringUTFChars(assignedName, f); }
+	return r;
+}
+
 // listener(HgeListener) を登録/解除する。
 JNIEXPORT void JNICALL
 Java_app_laxei_twylapse_HgeNative_nativeSetListener(JNIEnv* env, jobject /*thiz*/, jobject listener)

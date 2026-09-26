@@ -490,6 +490,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         loadExpoValues()
         buildExposureEditors()
         loadRegisteredEdges()   // 設定で登録したエッジ端末(オフラインでも選択可)
+        // BLE が既定になったので、**外部端末を登録している人にだけ**権限を確かめる(2026-09-26)。
+        //  無いまま走ると探索が黙って空を返し、「端末が全部消えた」ように見えてしまう。
+        //  1台も登録していない人には何も聞かない(外部端末を使わないなら要らない権限のため)。
+        if (edgeUseBle() && edges.isNotEmpty()) { ensureBlePermissions {} }
         loadEdgeHeld()          // エッジが持っている計画(=編集ロック)。アプリを終了しても保つ
         applyLogOptsToSelf()    // デバッグログの取捨(既定は採らない)を自分の記録へ効かせる
         refreshEdgeSpinner()
@@ -982,7 +986,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // --- スマホ⇄エッジの通信路(BLE か Wi-Fi か)。スマホだけが決める ---
-    private fun edgeUseBle(): Boolean = hgcPrefs().getBoolean("edgeUseBle", false)
+    // 【既定は BLE(2026-09-26 ユーザー判断)】APモードの外部端末を Wi-Fi で相手にすると、
+    //  スマホがその端末のAPへ入る必要があり、SSIDの切り替えが要るうえ**1台ずつ**しか扱えず、
+    //  その間スマホはインターネットから切り離される。BLE なら端末を何台でも同時に見られ、
+    //  スマホは普段の回線のまま。Wi-Fi の道は残してあるので、このスイッチで戻せる。
+    private fun edgeUseBle(): Boolean = hgcPrefs().getBoolean("edgeUseBle", true)
     private fun setEdgeUseBle(on: Boolean) {
         hgcPrefs().edit().putBoolean("edgeUseBle", on).apply()
         EdgeBleLink.close()                 // 経路を変えるので掴んでいた接続は捨てる
@@ -5074,18 +5082,25 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // 新規個体ごとに「登録しますか？」ダイアログを出す(どの画面でも表示)。登録=所持へ追加、いいえ=以後自動プロンプト抑止。
-    private fun promptRegisterCameras(list: List<Triple<String, String, String>>) {
+    //  via = 見つけた外部端末の名前(空=スマホ自身が見つけた)。**どこのカメラかを必ず出す**:
+    //   端末を離れた場所に置く使い方では、文面に名前が無いと利用者はどのカメラか判断できない。
+    private fun promptRegisterCameras(list: List<Triple<String, String, String>>, via: String = "") {
         for ((model, serial, assignedName) in list) {
             if (!promptingCamSerials.add(serial)) continue               // 既に表示中のserialは二重に出さない
             val label = if (assignedName.isNotEmpty()) assignedName else if (model.isNotEmpty()) model else serial
+            val where = if (via.isEmpty()) "" else "「$via」が見つけた"
             androidx.appcompat.app.AlertDialog.Builder(this)
                 .setTitle("カメラの登録")
-                .setMessage("未登録のカメラ「$label」が見つかりました。所持カメラに登録しますか？")
+                .setMessage("${where}未登録のカメラ「$label」が見つかりました。所持カメラに登録しますか？")
                 .setCancelable(false)
                 .setPositiveButton("登録") { _, _ ->
                     promptingCamSerials.remove(serial)
                     Thread {
-                        try { HgeNative.nativeRecordCameraIdentity(model, serial, assignedName, true) } catch (_: Exception) {}
+                        // 外部端末が見つけたカメラはスマホから届かないので、実機を探しに行かない版で登録する。
+                        try {
+                            if (via.isEmpty()) { HgeNative.nativeRecordCameraIdentity(model, serial, assignedName, true) }
+                            else               { HgeNative.nativeRecordRemoteCameraIdentity(model, serial, assignedName, true) }
+                        } catch (_: Exception) {}
                         runOnUiThread { if (flipper.displayedChild == 6) buildCameraList() }   // 6=所持カメラ一覧(openCameraList)
                     }.start()
                 }
@@ -5979,6 +5994,32 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 { selectedReport = name; buildReportList(); buildReportDetail() }, menu))
             box.addView(thinDivider())
         }
+    }
+
+    // 外部端末ごとの「前回見えていたカメラの台数」。変わったときだけ身元を取りに行く。
+    private val edgeCamsSeen = HashMap<String, Int>()
+
+    // 外部端末が見つけたカメラを所持カメラへ反映する(edgeSweep のワーカースレッドから呼ぶ)。
+    //
+    // 【なぜ要るか】スマホ⇄外部端末を BLE にすると、スマホはその端末のAPに入らない。カメラは
+    //  APの中だけに居るので、**スマホ自身では一生見つけられない**。端末が見たものを伝えてもらう。
+    //  受け取るのは身元(serial/model/愛称)だけで、IPは受け取らない(どの端末のAPも 192.168.4.x で、
+    //  スマホから見ると意味が無いどころか有害)。
+    //
+    // 【カメラは触らない】そのカメラはスマホから届かないので、実機を探しに行く版は使わない。
+    //  ISO/SS は機材マスタの上下限から作られる(マスタに無い機種は空のまま)。
+    private fun collectEdgeCameras(edge: Edge) {
+        val arr = try { JSONArray(HgeNative.nativeEdgeSeenCameras(edge.addr(), edge.port)) } catch (_: Exception) { return }
+        val toPrompt = ArrayList<Triple<String, String, String>>()   // model, serial, assignedName
+        for (i in 0 until arr.length()) {
+            val c = arr.optJSONObject(i) ?: continue
+            val serial = c.optString("serial"); if (serial.isEmpty()) continue
+            if (declinedCamSerials.contains(serial)) continue        // 「いいえ」済みは自動では聞かない
+            val model = c.optString("model"); val assignedName = c.optString("assignedName")
+            val r = try { HgeNative.nativeRecordRemoteCameraIdentity(model, serial, assignedName, false) } catch (_: Exception) { -1 }
+            if (r == 2) { toPrompt.add(Triple(model, serial, assignedName)) }   // 2=新規個体(未追加)
+        }
+        if (toPrompt.isNotEmpty()) runOnUiThread { promptRegisterCameras(toPrompt, edge.name) }
     }
 
     // エッジに溜まった撮影レポートを引き取る(edgeSweep のワーカースレッドから呼ぶ)。
@@ -8878,7 +8919,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 //  utc/tzOff はエッジ自身の時計(新FWのみ)。0=未設定または旧FW→ずれの判定はしない。
                 data class Found(val edge: Edge, val hasSessions: Boolean, val sessions: Map<String, Int>,
                                  val hasHeld: Boolean, val heldPlans: Set<String>, val reports: Int,
-                                 val utc: Long, val tzOff: Int)
+                                 val utc: Long, val tzOff: Int, val cams: Int)
                 val found = HashMap<String, Found>()
                 try {
                     val arr = JSONArray(js)
@@ -8903,7 +8944,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         }
                         // 溜まっている撮影レポートの件数(新FWのみ)。>0 のときだけ引き取りに行く。
                         found[nm] = Found(Edge(nm, o.optString("ip"), o.optInt("port", 50506)), has, sess, hasHeld, held,
-                                          o.optInt("reports", 0), o.optLong("utc", 0L), o.optInt("tzOff", 0))
+                                          o.optInt("reports", 0), o.optLong("utc", 0L), o.optInt("tzOff", 0),
+                                          o.optInt("cams", 0))
                     }
                 } catch (_: Exception) {}
                 // UDP無応答の登録エッジ: 連続2回でTCP生存確認(取りこぼし救済)→それも不応答ならオフライン。
@@ -8956,6 +8998,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 // エッジに溜まった撮影レポートを引き取る。件数が入っているときだけ通信するので、
                 // 定常(レポート0件)ではこのスイープの通信量は従来と変わらない。
                 for (f in found.values) { if (f.reports > 0 && f.edge.ip.isNotEmpty()) collectEdgeReports(f.edge) }
+                // 外部端末が見つけたカメラを引き取る(2026-09-26)。**BLE のときだけ**行う:
+                //  Wi-Fi で話しているなら、そのカメラはスマホ自身の在否監視にも映っているので要らない。
+                //  台数が前回と変わったときだけ聞く(1往復ぶんの通信を増やさないため)。
+                if (edgeUseBle()) {
+                    for ((nm, f) in found) {
+                        if (f.cams == (edgeCamsSeen[nm] ?: -1)) continue
+                        edgeCamsSeen[nm] = f.cams
+                        if (f.cams > 0) collectEdgeCameras(f.edge)
+                    }
+                }
             }.start()
             handler.postDelayed(this, 30000)   // 30秒ごと(常時)
         }

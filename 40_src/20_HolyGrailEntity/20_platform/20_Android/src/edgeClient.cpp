@@ -777,6 +777,21 @@ Java_app_laxei_twylapse_HgeNative_nativeEdgeLogRead(JNIEnv* env, jobject, jstrin
 // 引き取り→保存できたことを確認→削除、の順で進めるので、途中で切れても失われない。
 
 // レポート一覧(JSON配列)。失敗時 "[]"。
+// エッジがいま見えているカメラの身元 [{"serial","model","assignedName"}]。失敗="[]"。
+//  スマホ⇄エッジが BLE のときだけ意味がある(Wi-Fi なら同じカメラをスマホ自身が見ている)。
+JNIEXPORT jstring JNICALL
+Java_app_laxei_twylapse_HgeNative_nativeEdgeSeenCameras(JNIEnv* env, jobject, jstring host_, jint port)
+{
+	const char* host = env->GetStringUTFChars(host_, nullptr);
+	std::string hostS = host ? host : "";
+	env->ReleaseStringUTFChars(host_, host);
+
+	std::lock_guard<std::mutex> lk(g_connMtx);
+	std::string rd;
+	int m = edgeXchg(hostS, port, etp::C_CAMERA_SEEN, etp::M_GET, "", rd);
+	return env->NewStringUTF((m == etp::M_ACK) ? rd.c_str() : "[]");
+}
+
 JNIEXPORT jstring JNICALL
 Java_app_laxei_twylapse_HgeNative_nativeEdgeReportList(JNIEnv* env, jobject, jstring host_, jint port)
 {

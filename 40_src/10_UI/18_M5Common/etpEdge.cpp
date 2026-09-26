@@ -204,6 +204,15 @@ bool applyTime(const std::string& data)
 			const int32_t rc = hge_reportCount();
 			if (rc > 0) { j["reports"] = rc; }
 		}
+		// いま見えているカメラの台数(2026-09-26)。スマホ⇄エッジが BLE のとき、スマホはエッジのAPに
+		// 入らないのでカメラを自分では見つけられない。**件数だけ**をここに載せ、スマホは前回と
+		// 変わったときだけ C_CAMERA_SEEN で身元を取りに行く(レポート回収と同じ)。
+		// 一覧そのものをここへ入れてはいけない: 検索応答は UDP 1発で返しており、
+		// sessions(512B)+heldPlans(768B) で既に上限が近い。
+		{
+			const int32_t cc = hge_seenCameraCount();
+			if (cc > 0) { j["cams"] = cc; }
+		}
 		// 項目6: 保有計画ロスター(走行中に限らずエッジが持つ全計画id)。スマホは自分のエッジ担当割り当てと
 		//  突き合わせ、ここに無い=エッジ側で削除された計画のロックを解除する。
 		{
@@ -376,6 +385,15 @@ bool applyTime(const std::string& data)
 			{ rm = etp::M_NAK; break; }
 			if (body.size() >= MAX_REPORT) { rm = etp::M_NAK; break; }	// 途中で切れている疑い
 			rd = body;
+			break;
+		}
+		case etp::C_CAMERA_SEEN:	// いま見えているカメラの身元(IPは載せない)
+		{
+			// 1台あたり約100バイト。AP に繋げられる台数(実測10)でも1KBに収まる。
+			char b[1280];
+			int32_t len = sizeof(b);
+			if (hge_seenCamerasJson(b, &len) == ERR_HGC_OK) { rd = b; }
+			else                                            { rd = "[]"; }
 			break;
 		}
 		case etp::C_REPORT_DELETE:	// data=ファイル名。スマホが保存できたものだけを消す

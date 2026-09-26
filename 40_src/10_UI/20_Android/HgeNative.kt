@@ -158,6 +158,8 @@ object HgeNative {
     // 発見/接続カメラ識別情報を所持へ反映。allowAdd=true:未一致は自動追加 / false:追加せず区分のみ返す(裏の発見→登録可否UI)。
     // 返り値: 0=既存にassignedName反映, 1=未定義枠へserial確定, 2=新規(allowAdd時は追加済/非allowAdd時は未追加), <0=エラー。
     external fun nativeRecordCameraIdentity(model: String, serial: String, assignedName: String, allowAdd: Boolean): Int
+    // 同じだが実機を探しに行かない。エッジ(別ネットワーク)が見つけたカメラを登録するとき専用。
+    external fun nativeRecordRemoteCameraIdentity(model: String, serial: String, assignedName: String, allowAdd: Boolean): Int
     external fun nativeGetColors(): String                 // システム共通の色 {"night":{"text","bg"},...}
     external fun nativeSetColors(json: String): Int
     external fun nativeGetSmoothing(): String              // 露出平滑化 {"hysteresis":double,"movingAverage":int}
@@ -330,6 +332,7 @@ object HgeNative {
     external fun nativeEdgeLogRead(host: String, port: Int, name: String, offset: Int): ByteArray // ログの1チャンク(最大4KB)。空=EOF/失敗
     // 撮影レポートの回収。30秒スイープが edgeInfo.reports>0 のときだけ使う。
     // 取得→保存できたら削除、の順(取得だけで消さない)。
+    external fun nativeEdgeSeenCameras(host: String, port: Int): String           // [{"serial","model","assignedName"}]。失敗="[]"
     external fun nativeEdgeReportList(host: String, port: Int): String            // [{"name",...},...]。失敗="[]"
     external fun nativeEdgeReportRead(host: String, port: Int, name: String): String // 1件のJSON本文。失敗=""
     external fun nativeEdgeReportDelete(host: String, port: Int, name: String): Int  // 0=削除済み

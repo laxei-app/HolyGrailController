@@ -350,6 +350,14 @@ int32_t hge_addOwnedDetected(int32_t index);
 //  allowAdd=1: 未一致(新規)は自動追加(撮影接続/明示登録)。allowAdd=0: 追加せず ISNEW を返す(裏の発見→UIが登録可否を問う)。
 //  返り値: >=0 は区分(0=既存にassignedName反映/1=未定義枠へserial確定/2=新規)、<0 はエラー。
 int32_t hge_recordCameraIdentity(const char* model, const char* serial, const char* assignedName, int32_t allowAdd);
+// 同じだが、新規追加でも**実機を探しに行かない**。エッジ(別ネットワーク)が見つけたカメラ用。
+int32_t hge_recordRemoteCameraIdentity(const char* model, const char* serial, const char* assignedName,
+                                       int32_t allowAdd);
+
+// いま見えているカメラ(身元だけ。IPは載せない)。[{"serial","model","assignedName"}]
+//  エッジが C_CAMERA_SEEN の応答に、検索応答(edgeInfo)の "cams" が件数に使う。
+int32_t hge_seenCamerasJson(char* buf, int32_t* inoutLen);
+int32_t hge_seenCameraCount(void);
 
 // 現在の進捗スナップショットを JSON で取得(バッファ規約)。
 //  {"state","frame","total","remainSec","elapsedSec","ccm","iso","ss","fn"}

@@ -2002,6 +2002,30 @@ namespace
 	}
 }
 
+namespace
+{
+	// 在否マップのうち「いま見えているもの」だけを、身元3つに絞って並べ直す。
+	//  ・**IPは落とす**。エッジのAPはどれも 192.168.4.x なので、スマホから見ると意味が無いどころか、
+	//    別の場所のカメラのIPを配ることになる(2026-08-06 に C_CAMERA_INFO を捨てたのと同じ理由)。
+	//  ・身元が割れないもの(serial 空)は載せない。相手を特定できないので登録にも使えない。
+	nlohmann::json seenCameras(void)
+	{
+		nlohmann::json out = nlohmann::json::array();
+		nlohmann::json j = nlohmann::json::parse(hge::role::presenceJson(), nullptr, false);
+		if (j.is_discarded() || !j.is_array()) { return out; }
+		for (const auto& e : j)
+		{
+			if (!e.is_object() || !e.value("online", false)) { continue; }
+			const std::string serial = e.value("serial", std::string());
+			if (serial.empty()) { continue; }
+			out.push_back({ {"serial", serial},
+			                {"model", e.value("model", std::string())},
+			                {"assignedName", e.value("assignedName", std::string())} });
+		}
+		return out;
+	}
+}
+
 // ============================================================================
 //  extern "C" インターフェース
 // ============================================================================
@@ -2140,6 +2164,20 @@ int32_t hge_presenceJson(char* buf, int32_t* inoutLen)
 {
 	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
 	return copyOut(hge::role::presenceJson(), buf, inoutLen);
+}
+
+// いま見えているカメラ(身元だけ)。エッジが C_CAMERA_SEEN の応答に使う。
+int32_t hge_seenCamerasJson(char* buf, int32_t* inoutLen)
+{
+	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return copyOut(seenCameras().dump(), buf, inoutLen);
+}
+
+// いま見えているカメラの台数。検索応答(edgeInfo)へ載せる件数で、スマホはこれが変わったときだけ
+// 本体を取りに行く。数えるだけなので毎回聞かれても負荷にならない。
+int32_t hge_seenCameraCount(void)
+{
+	return static_cast<int32_t>(seenCameras().size());
 }
 
 int32_t hge_loadFixedPlan(void)
@@ -3610,6 +3648,22 @@ int32_t hge_addOwnedDetected(int32_t index)
 //  model は型番だけ("EOS R100"。探索元が揃えた綴りがそのまま届く)。メーカー名は型番から作らない
 //  (2026-09-06: 以前は先頭語を取っていたが、型番だけになった今は "EOS" になってしまう)。
 //  マスタに載っている機種は登録時にマスタの maker が入り、載っていなければ空のままにする。
+// 【探しに行かない版(2026-09-26)】エッジが見つけたカメラを登録するときに使う。
+//  スマホ⇄エッジが BLE のとき、そのカメラは**エッジのAPの中だけ**に居るので、スマホからは
+//  どうやっても届かない。実機を探しても見つからないまま数秒待つだけなので探索を省く。
+//  ISO/SS は機材マスタの上下限から作られる(マスタに無い機種は空のまま。後でそのカメラへ
+//  繋いだときに埋まる)。
+int32_t hge_recordRemoteCameraIdentity(const char* model, const char* serial, const char* assignedName,
+                                       int32_t allowAdd)
+{
+	device d;
+	d.model        = (model        != nullptr) ? model        : "";
+	d.serialno     = (serial       != nullptr) ? serial       : "";
+	d.assignedName = (assignedName != nullptr) ? assignedName : "";
+	if (d.model.empty() && d.serialno.empty()) { return ERR_HGC_INVALID_ARG; }
+	return dataManager::recordConnectedCameraStatus(d, allowAdd != 0);
+}
+
 int32_t hge_recordCameraIdentity(const char* model, const char* serial, const char* assignedName, int32_t allowAdd)
 {
 	device d;
