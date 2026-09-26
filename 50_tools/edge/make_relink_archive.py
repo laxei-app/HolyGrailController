@@ -205,6 +205,11 @@ def arduino_parts(tdir, bdir, stage, mapping):
         cmd = re.sub(pkg + r"framework-arduinoespressif32-libs", "@IDF_LIBS@", cmd)
         cmd = re.sub(pkg + r"framework-arduinoespressif32(@[^/\\\" ]*)?", "@ARDUINO@", cmd)
         cmd = re.sub(pkg + r"toolchain-xtensa-esp-elf(@[^/\\\" ]*)?", "@TOOLCHAIN@", cmd)
+        # 【こちらの -I を落とす】PlatformIO は全てのコンパイルに自分の include 先を足すので、
+        #  Arduino-ESP32 のファイルにもこちらのソースの場所(絶対パス)が付いてくる。
+        #  arduino-esp32 はこちらのヘッダを読まないので外して構わない。配る物に開発機の
+        #  パスと内部の構成を載せない(残っていないことは下で数えて確かめる)。
+        cmd = re.sub(r'\s-I"?' + re.escape(REPO.replace("\\", "/")) + r'[^\s"]*"?', " ", cmd)
         ard.append({"source": "@ARDUINO@" + rest, "command": cmd,
                     "object": os.path.basename(f) + ".o"})
 
@@ -223,6 +228,13 @@ def arduino_parts(tdir, bdir, stage, mapping):
         if ar:
             r = subprocess.run([ar, "t", p], capture_output=True)
             members[rel] = r.stdout.decode("utf-8", "replace").split()
+    # 開発機のパスが1つでも残っていたら作らない(公開物なので)
+    leaked = [a["source"] for a in ard
+              if re.search(re.escape(REPO.replace("\\", "/")), a["command"], re.I)]
+    if leaked:
+        raise SystemExit("こちらのパスがコンパイル行に残っています(%d件): %s" %
+                         (len(leaked), leaked[0]))
+
     d = os.path.join(stage, "arduino")
     os.makedirs(d, exist_ok=True)
     io.open(os.path.join(d, "compile_commands.json"), "w", encoding="utf-8", newline="\n").write(
