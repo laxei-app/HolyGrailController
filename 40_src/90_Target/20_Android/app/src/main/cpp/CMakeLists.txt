@@ -33,6 +33,13 @@ target_include_directories(HolyGrailEntity PRIVATE
 
 # 端末時刻に依存しない(時刻は自前で渡す)。fast-math は付けない(astronomy.c が #error)。
 target_compile_definitions(HolyGrailEntity PRIVATE ASTRONOMY_ENGINE_NO_CURRENT_TIME)
+
+# 【配る物に開発機のパスを埋めない(2026-09-27)】__FILE__ はコンパイル時の絶対パスを
+#  そのまま文字列にするので、何もしないと .so の中に開発機のディレクトリ構成が残る。
+#  -ffile-prefix-map は __FILE__ とデバッグ情報の両方を書き換える(clang/gcc 共通)。
+#  エッジ側は 18_M5Common/strip_paths.py が同じことをしている。
+get_filename_component(HGC_REPO_ROOT ${ENTITY}/.. ABSOLUTE)
+target_compile_options(HolyGrailEntity PRIVATE "-ffile-prefix-map=${HGC_REPO_ROOT}=/app")
 # 注: Debug で _DEBUG を定義すると DBGLN(logcat)が有効になるが、既存コードに
 #     std::string/std::exception を可変長引数へ渡す箇所(clangでエラー)があるため現状は無効。
 #     状態/進捗/エラー/スケジュールは通知CB経由でUIに届くので観測には支障なし。

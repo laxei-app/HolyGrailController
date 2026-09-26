@@ -205,6 +205,16 @@ def arduino_parts(tdir, bdir, stage, mapping):
         cmd = re.sub(pkg + r"framework-arduinoespressif32-libs", "@IDF_LIBS@", cmd)
         cmd = re.sub(pkg + r"framework-arduinoespressif32(@[^/\\\" ]*)?", "@ARDUINO@", cmd)
         cmd = re.sub(pkg + r"toolchain-xtensa-esp-elf(@[^/\\\" ]*)?", "@TOOLCHAIN@", cmd)
+        # 【-ffile-prefix-map の中身も直す】この旗は「置き換え元」として開発機の絶対パスを
+        #  そのまま持つ(strip_paths.py が付けている)。中身まで目印に直さないと、旗の形で
+        #  パスが漏れる。リポジトリ側の対応付けは Arduino のファイルには効かないので外す。
+        pkgs_fwd = PKGS.replace("\\", "/")
+        cmd = cmd.replace(
+            "-ffile-prefix-map=%s=/pkg" % pkgs_fwd,
+            "-ffile-prefix-map=@ARDUINO@=/pkg/arduino-esp32"
+            " -ffile-prefix-map=@IDF_LIBS@=/pkg/esp-idf-libs")
+        cmd = re.sub(r'\s-ffile-prefix-map=' + re.escape(REPO.replace("\\", "/")) + r'=\S+',
+                     " ", cmd)
         # 【こちらの -I を落とす】PlatformIO は全てのコンパイルに自分の include 先を足すので、
         #  Arduino-ESP32 のファイルにもこちらのソースの場所(絶対パス)が付いてくる。
         #  arduino-esp32 はこちらのヘッダを読まないので外して構わない。配る物に開発機の
