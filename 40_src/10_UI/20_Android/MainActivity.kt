@@ -8458,8 +8458,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
             EdgeBle(ctx,
                 log = { m -> runOnUiThread { edgePopView?.text = m } },
                 result = { ok, m -> runOnUiThread {
+                    // 【トーストは出さない(2026-09-26 UI依頼)】同じ文言が画面に残るので、
+                    //  すぐ消えるトーストは邪魔なだけだった。
                     if (ok) { edgePopView?.text = "QR表示OK。カメラでスキャンしてください"; scanEdgeQr() }
-                    else { edgePopView?.text = m; Toast.makeText(ctx, "QR表示要求に失敗: " + m, Toast.LENGTH_LONG).show() }
+                    else { edgePopView?.text = m }
                 } }
             ).also { it.setTargetName(selectedEdgeName) }.startQr()
         }
@@ -8554,8 +8556,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             EdgeBle(ctx,
                 log = { m -> runOnUiThread { edgePopView?.text = m } },
                 result = { ok, m -> runOnUiThread {
-                    Toast.makeText(ctx, m, Toast.LENGTH_LONG).show()
-                    edgePopView?.text = m
+                    edgePopView?.text = m   // 同上。画面に残るのでトーストは出さない
                     if (ok) {
                         // 送信できた端末を登録へ反映する。既存なら改名に追従、新規なら追加。
                         unhideEdge(name)   // 登録し直した=また出す
