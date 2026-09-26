@@ -580,7 +580,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
             } catch (_: Exception) {}
             runOnUiThread { pruneOrphanPlanEdges(localPlans.toSet()) }   // 消えた計画のエッジ割当を掃除
             for (ed in found) {
-                runOnUiThread { noteDiscoveredEdge(ed.name, ed.ip, ed.port) }   // 見つけた控えだけ(登録はQRの明示操作)
                 if (!edgeIsMine(ed.name)) continue   // 持ち主でない端末には進捗も聞かない(断られる)
                 for (pid in localPlans) {
                     val pj = try { HgeNative.nativeEdgeProgress(ed.addr(), ed.port, pid) } catch (_: Exception) { "" }
@@ -1054,14 +1053,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  ・屋外でエッジが AP のときは BLE にすると SSID を切り替えずに全台と話せる
         //  ・エッジ側にモードを持たせないので、戻せなくなって現地へ行く経路は無い
         gearSwitchItem(box, "外部端末とBLEで通信する", edgeUseBle()) { on -> setEdgeUseBle(on) }
-        // 削除した端末は一覧から伏せている(消したのに戻ってくるのを防ぐため)。戻す道をここに置く。
-        if (hiddenEdges.isNotEmpty()) {
-            gearItem(box, "削除した端末をまた表示する(" + hiddenEdges.size + "台)") {
-                hiddenEdges.clear(); saveHiddenEdges()
-                Toast.makeText(this, "次の探索でまた一覧に出ます", Toast.LENGTH_SHORT).show()
-                buildGearMenu()
-            }
-        }
         gearBand(box, "権限、端末設定")
         gearItem(box, "権限、端末設定") { openPermCheck() }
         gearBand(box, "ログ")
@@ -8056,10 +8047,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             // 並びはアルファベット順(大文字小文字を区別しない)。登録した順だと、増えたときに
             //  どこにあるか分からなくなる。**表示の並びだけ**で、保存の順は変えない。
             rows = {
-                // 【見つけただけの端末も出す(2026-09-26)】自動登録をやめたので、一覧に出さないと
-                //  登録の入口が無くなる。登録済みと合わせて名前順に並べる。
-                val all = (edges + discoveredEdges.values.filter { d -> edges.none { it.name == d.name } })
-                all.sortedBy { it.name.lowercase() }.map { e ->
+                edges.sortedBy { it.name.lowercase() }.map { e ->
                     // 副行は**いま届いているか**。IP は普段読んでも何もできないのでやめた
                     //  (2026-08-29 UI依頼)。押す前に「送っても無駄」と分かるのが要点。
                     // 【登録の状態を先に出す(2026-09-26)】持ち主でない端末は操作できないので、
@@ -8099,6 +8087,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  他の一覧(撮影場所/所持カメラ/所持レンズ)は押した時点で作って行で名前を直す形なので
     //  そちらへ揃えた。できる状態は旧「登録だけする」と同じ(IPは空・ポートは既定値)。
     //  名前は仮なので、行をタップして実機に合わせて直す。半角英数字だけ(エッジのLCDに出る)。
+    // 「＋ 新規端末」が自動で付ける仮の名前か(Edge00 / Edge01 …)。QRで本当の名前に
+    //  差し替えてよいのはこれだけ。ユーザーが自分で付けた名前は勝手に変えない。
+    private fun isPlaceholderEdgeName(n: String): Boolean =
+        n.length == 6 && n.startsWith("Edge") && n[4].isDigit() && n[5].isDigit()
+
     private fun addEdge() {
         var n = 0
         var nm = "Edge%02d".format(n)
@@ -8160,7 +8153,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 if (e.reachable() && edgeIsMine(e.name)) {
                     Thread { try { HgeNative.nativeEdgeRelease(e.addr(), e.port) } catch (_: Exception) {} }.start()
                 }
-                edgeOwn.remove(e.name); discoveredEdges.remove(e.name); hideEdge(e.name)
+                edgeOwn.remove(e.name)
                 edges.remove(e); saveRegisteredEdges(); refreshEdgeSpinner()
                 // 【逃げ道】この端末が持っていた計画の縛りも一緒に解く。壊れた/失くした
                 //  端末の分がいつまでも残ると、そのカメラを永久に変更も削除もできなくなる。
@@ -8180,14 +8173,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .setTitle("すべて削除")
             .setMessage("登録している" + edges.size + "台をすべて削除しますか？(端末本体の設定は変わりません)")
             .setPositiveButton("すべて削除") { _, _ ->
-                // 見つかっている端末も含めて伏せる。そうしないと次のスイープで戻ってくる。
-                val names = (edges.map { it.name } + discoveredEdges.keys).distinct()
+                val names = edges.map { it.name }
+                // 持ち主だった端末は手放しておく。そうしないと端末側に持ち主が残り、
+                //  他のスマホ(や自分)が登録し直すのに電源の入れ直しが要る。
                 for (e in edges.toList()) {
                     if (e.reachable() && edgeIsMine(e.name)) {
                         Thread { try { HgeNative.nativeEdgeRelease(e.addr(), e.port) } catch (_: Exception) {} }.start()
                     }
                 }
-                for (n in names) { hideEdge(n); edgeOwn.remove(n); discoveredEdges.remove(n) }
+                for (n in names) { edgeOwn.remove(n) }
                 edges.clear(); saveRegisteredEdges(); refreshEdgeSpinner()
                 val ed = hgcPrefs().edit()
                 for (n in names) { edgeHeldByEdge.remove(n); ed.remove(edgeCfgKey(n)) }
@@ -8483,9 +8477,22 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     val o = JSONObject(contents)
                     scannedPop = o.optString("pop", "")
                     scannedName = o.optString("n", "")
-                    // QR に入っているエッジ側の名前は**採用しない**(2026-09-04)。名前は一覧の行が
-                    //  持ち主で、送信すればこちらの名前がエッジへ入る。読んだ名前で上書きすると
-                    //  一覧の表示と食い違う。違う名前にしたければ行で直す。
+                    // QR に入っているエッジ側の名前は、**新しく足した行のときだけ**採用する。
+                    //  ・既存の行 … 採用しない(2026-09-04)。名前は一覧の行が持ち主で、送信すれば
+                    //    こちらの名前がエッジへ入る。読んだ名前で上書きすると表示と食い違う
+                    //  ・新しく足した行 … 採用する(2026-09-26)。一覧に見つけた端末を出すのを
+                    //    やめたので、新規は「＋ 新規端末」から入る。そこで付く名前は仮なので、
+                    //    手で実機に合わせさせるのは酷。QRが本当の名前を運んでくる
+                    if (scannedName.isNotEmpty() && isAsciiEdgeName(scannedName) &&
+                        edges.none { it.name == scannedName }) {
+                        val was = selectedEdgeName
+                        if (was.isNotEmpty() && isPlaceholderEdgeName(was)) {
+                            renameRegisteredEdge(was, scannedName)
+                            selectedEdgeName = scannedName
+                            edgeNameEt?.setText(scannedName)
+                            buildEdgeList()
+                        }
+                    }
                     // エッジの現在値を入力欄へ入れる(2026-08-08 UI依頼)。読んだ値をそのまま送れば
                     //  変わらず、書き換えて送れば変えた値が設定される。旧版のQRには m/s/p が
                     //  無いので、その場合は今の入力を触らない(空文字で上書きしない)。
@@ -8559,7 +8566,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     edgePopView?.text = m   // 同上。画面に残るのでトーストは出さない
                     if (ok) {
                         // 送信できた端末を登録へ反映する。既存なら改名に追従、新規なら追加。
-                        unhideEdge(name)   // 登録し直した=また出す
                         if (selectedEdgeName.isEmpty()) {
                             if (edges.none { it.name == name }) edges.add(Edge(name, "", 50506))
                             saveRegisteredEdges(); refreshEdgeSpinner()
@@ -8634,26 +8640,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
         saveRegisteredEdges()
     }
 
-    // 【自動登録はしない(2026-09-26)】以前はここで見つけた端末を黙って自分の一覧へ入れ、
-    //  そのまま台帳やログ設定を送り始めていた。近くで別の人が同じアプリを使っていると、
-    //  登録してもいない他人の端末を壊してしまう。**登録は QR を読む明示の操作だけ**にした。
-    //  見つけた端末は「未登録」として一覧に出すために控えるだけにする。
-    private val discoveredEdges = HashMap<String, Edge>()
-    // 【消した端末は伏せる(2026-09-26)】見つけた端末を一覧に出すようにしたので、削除しても
-    //  次のスイープ(30秒)で「未登録」として戻ってきてしまう。**消したのに復帰する**ように
-    //  しか見えないので、消した名前を覚えて伏せる。登録し直せば戻る。
-    private val hiddenEdges: MutableSet<String> by lazy {
-        (hgcPrefs().getStringSet("hiddenEdges", emptySet()) ?: emptySet()).toMutableSet()
-    }
-    private fun saveHiddenEdges() { hgcPrefs().edit().putStringSet("hiddenEdges", hiddenEdges).apply() }
-    private fun hideEdge(name: String)   { if (hiddenEdges.add(name)) saveHiddenEdges() }
-    private fun unhideEdge(name: String) { if (hiddenEdges.remove(name)) saveHiddenEdges() }
-
-    private fun noteDiscoveredEdge(name: String, ip: String, port: Int) {
-        if (name.isEmpty() || !isAsciiEdgeName(name)) return   // エッジのLCDに出せない名前は端末名ではない
-        if (hiddenEdges.contains(name)) return                 // 消した端末は出さない
-        discoveredEdges[name] = Edge(name, ip, port)
-    }
+    // 【一覧に出すのは「このスマホが登録した端末」だけ(2026-09-26 ユーザー決定)】
+    //  以前は見つけた端末も一覧へ混ぜていたが、そうすると削除しても次の探索で戻ってきて
+    //  しまい、「消した記録」を別に持つ羽目になっていた(記録が二重)。
+    //  登録済み(edges)だけを出すことにしたので、**その二重持ちがまるごと要らなくなった**。
+    //  ・他人が登録した端末は最初から出ない(まっさらなスマホに他人の端末名が並ばない)
+    //  ・削除すれば行ごと消え、二度と出てこない
+    //  ・「以前登録していたものだけ説明を出す」は、edges に残っていること自体が証拠になる
+    //  新しい端末は「＋ 新規端末」から登録する(一覧に勝手に現れない)。
 
     // 実在しない計画に紐づくエッジ割当(pe_<計画id>)を落とす。計画を消しても残り続けるため。
     private fun pruneOrphanPlanEdges(liveIds: Set<String>) {
@@ -9107,15 +9101,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         edgeMiss[nm] = 0
                         // 【持ち主でなければ何も送らない(2026-09-26)】近くで別の人が同じアプリを
                         //  使っていても、その端末の設定を壊さないため。見つけたことだけは一覧へ出す。
-                        noteDiscoveredEdge(nm, f.edge.ip, f.edge.port)   // 一覧に「未登録」で出すための控え
-                        if (hiddenEdges.contains(nm)) continue           // 消した端末には触らない
                         val ownWas = edgeOwn[nm]
                         if (ownWas == null || ownWas.owned != f.owned || ownWas.mine != f.mine) {
                             edgeOwn[nm] = EdgeOwn(f.owned, f.mine); uiDirty = true
                         }
                         if (!edgeIsMine(nm)) {
-                            // 未登録・他人のもの。一覧の副行を出すために見えたことだけ記録する。
-                            if (edgeOnline[nm] != true) { edgeOnline[nm] = true; uiDirty = true }
+                            // 未登録・他人のもの。登録済みの行があれば副行を出すために生存だけ控える。
+                            if (edges.any { it.name == nm } && edgeOnline[nm] != true) {
+                                edgeOnline[nm] = true; uiDirty = true
+                            }
                             continue
                         }
                         // 居なかったものが見えた瞬間に時刻を送る(電源を入れた直後がこれ)。
