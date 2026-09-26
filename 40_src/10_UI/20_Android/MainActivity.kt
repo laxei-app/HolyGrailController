@@ -5705,6 +5705,21 @@ class MainActivity : AppCompatActivity(), HgeListener {
             // 地図は残り全部(高さ0＋weight)。ダイアログ自体を画面いっぱいにするので、
             //  題とボタンを除いた分を地図が使う(2026-09-04 UI依頼)。
             addView(map, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+            // 【帰属表示は必須(2026-09-27)】osmdroid のコードは Apache-2.0 だが、
+            //  ここに出しているタイルは OpenStreetMap のデータ(ODbL)。
+            //  「著作権表示」の画面に載せるだけでは足りず、**地図そのものに添えて**
+            //  見えていることが条件なので、地図のすぐ下に常に出す。押すと出典へ。
+            addView(TextView(this@MainActivity).apply {
+                text = "地図データ © OpenStreetMap contributors"
+                textSize = 11f; setTextColor(0xFF555555.toInt())
+                setPadding(dp(16), dp(4), dp(16), dp(8))
+                setOnClickListener {
+                    try {
+                        startActivity(Intent(Intent.ACTION_VIEW,
+                            android.net.Uri.parse("https://www.openstreetmap.org/copyright")))
+                    } catch (_: Exception) { }
+                }
+            })
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                                                  ViewGroup.LayoutParams.MATCH_PARENT)
         }
