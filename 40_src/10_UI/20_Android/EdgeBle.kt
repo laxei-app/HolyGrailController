@@ -100,6 +100,13 @@ class EdgeBle(
     private var startOnly = false   // true=CTRL に "start" を書くだけ(QR表示要求) / false=CRED送信
     private var done = false
     private var sent = false        // 購読の後、送信まで進んだか(保険と本筋の二重送信を防ぐ)
+    // 【サービス探索は1回だけ(2026-09-26 実機)】MTU の通知が2回来る機種があり、そのたびに
+    //  探索を掛け直していた。**探索をやり直すと、それまでに出した書き込みが無効になる**ので、
+    //  CTRL への書き込みが毎回消えていた(記録で ctrl write ok が一度も出なかった)。
+    private var svcRequested = false
+    // 書き込みが完了したか。**受理された(ret=true)だけでは届いていない**ことが実機であった
+    //  (MTU交渉が二重に走ると、その最中の書き込みが完了しないまま捨てられる)。
+    private var ctrlAcked = false
 
     // 接続したいエッジの端末名(2026-08-08 UI依頼)。空なら「最初に見つけた1台」= 従来動作。
     //
@@ -232,8 +239,16 @@ class EdgeBle(
 
     private fun stopScan() { try { scanCb?.let { scanner?.stopScan(it) } } catch (_: Exception) {}; scanCb = null }
 
+    // 【経過を記録に残す(2026-09-26)】画面の文字はQR読み取り画面に隠れて追えない。
+    //  どの機体へ繋いだか、書けたか、何を読んだかを記録へ残す(英語。Entityの決まり)。
+    private fun rec(msg: String) {
+        try { HgeNative.nativeLogEvent("BLE", "prov: " + msg, false) } catch (_: Exception) {}
+    }
+
     private fun connect(dev: BluetoothDevice) {
         lastAddress = dev.address   // このエッジを覚えておき、送信時に同じ端末へ向ける
+        rec("connect to " + dev.address + " name=" + (try { dev.name } catch (_: Exception) { "?" }) +
+            " want=" + wantName + " startOnly=" + startOnly)
         // 【必ず終わらせる(2026-09-26)】以前は「書いたら5秒で閉じる」保険しか無く、その手前
         //  (サービス探索・通知の購読)で止まると**何も起きないまま画面が固まった**(実機で発生)。
         //  途中どこで詰まっても、ここで打ち切って理由を出す。
@@ -243,25 +258,30 @@ class EdgeBle(
                 if (newState == BluetoothProfile.STATE_CONNECTED) { log("接続。MTU要求..."); g.requestMtu(247) }
                 else if (newState == BluetoothProfile.STATE_DISCONNECTED) { if (!done) finish(false, "切断されました") }
             }
-            override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) { log("MTU=$mtu。サービス探索..."); g.discoverServices() }
+            override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
+                log("MTU=$mtu。サービス探索...")
+                if (svcRequested) { rec("mtu again (ignored)"); return }
+                svcRequested = true
+                g.discoverServices()
+            }
             override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
                 // 【どこまで進んだか見えるようにする(2026-09-26)】ここが無く、「サービス探索...」で
                 //  止まったときに探索が終わったのかどうかも分からなかった。
                 log("サービス発見(status=$status)。通知を購読...")
+                rec("services discovered status=" + status + " svc=" + (g.getService(SVC) != null))
                 val svc = g.getService(SVC) ?: run { finish(false, "サービスが見つかりません"); return }
-                // 【QR要求でも状態通知を購読する(2026-09-26)】以前は「QR表示要求は応答が要らない」
-                //  として購読せずに書いていた。端末が**断った理由("deny")を返すようになった**ので、
-                //  購読していないと理由が受け取れず、利用者には何も起きないように見える(実機で発生)。
+                // 【QR要求では購読しない(2026-09-26 実機で確定)】Android は GATT の操作を
+                //  **1つずつしか受け付けない**。購読(CCCD書込)が終わらないうちに次の書き込みを
+                //  出すと、黙って捨てられてコールバックも来ない。SH-M08 では購読の応答が
+                //  返らないため、続く CTRL の書き込みが毎回捨てられ、**要求が端末に1行も
+                //  届いていなかった**(記録で確認: ctrl write ok が出ない)。
+                //  QR要求は書き込み1回で済むので、購読せずに直接書き、答えは後から読む。
+                if (startOnly) { nextAfterSubscribe(g); return }
                 val stat = svc.getCharacteristic(STAT)
                 if (stat != null) {
                     g.setCharacteristicNotification(stat, true)
                     val d = stat.getDescriptor(CCCD)
-                    if (d != null) {
-                        writeDescriptor(g, d, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
-                        // 購読の応答が来ない実装もある。2秒で見切って先へ進む(通知は来ないかも
-                        //  しれないが、要求自体は届けられる)。
-                        handler.postDelayed({ if (!done && !sent) nextAfterSubscribe(g) }, 2000)
-                    }
+                    if (d != null) writeDescriptor(g, d, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
                     else nextAfterSubscribe(g)
                 } else nextAfterSubscribe(g)
             }
@@ -275,12 +295,15 @@ class EdgeBle(
                     //  "deny" を返す。ここで終わらせると理由が届く前に画面が閉じてしまう。
                     //  答えを少し待ち、来なければ従来どおり「要求した」で終わる(古い端末向け)。
                     if (status == BluetoothGatt.GATT_SUCCESS) {
+                        ctrlAcked = true
+                        rec("ctrl write ok")
                         log("QR表示を要求。端末の応答待ち...")
                         // 【通知に頼らない(2026-09-26 実機 SH-M08)】Android 10 の機種で通知の
                         //  購読(CCCD書込)の応答が返らず、端末が返す理由("deny")を受け取れなかった。
                         //  STAT は読み出しもできるので、少し待って**読みに行く**。何度か試すのは、
                         //  端末が答えを書くのが自分のループ1周ぶん遅れることがあるため。
                         readStatSoon(g, 400); readStatSoon(g, 1200); readStatSoon(g, 2500)
+                        return
                     }
                     else finish(false, "start書込失敗 status=$status")
                 } else if (c.uuid == CRED) {
@@ -309,6 +332,7 @@ class EdgeBle(
 
     private fun handleStat(s: String) {
         log("端末の応答: $s")
+        rec("stat=" + s)
         // 【読み出しでは古い値を掴むことがある(2026-09-26)】STAT は前回の結果を保持している。
         //  QR要求のときは、その用事の答え("qr"/"deny"/"busy")だけを受け取る。前回の "ok" を
         //  読んで「設定を保存しました」と誤って閉じないようにする。
@@ -329,25 +353,39 @@ class EdgeBle(
     private fun nextAfterSubscribe(g: BluetoothGatt) {
         if (sent) { return }   // 保険と本筋の両方から来ても1度だけ
         sent = true
-        if (startOnly) { writeCtrlStart(g) } else { writeCred(g) }
+        // 【探索の直後は少し待つ(2026-09-26 実機)】MTU交渉がもう一度走ることがあり、その最中に
+        //  出した書き込みは受理されても完了しない。落ち着いてから書き、駄目なら投げ直す。
+        if (startOnly) { handler.postDelayed({ if (!done) writeCtrlStart(g) }, 500) } else { writeCred(g) }
     }
 
+    private var ctrlTries = 0
     private fun writeCtrlStart(g: BluetoothGatt) {
         val ctrl = g.getService(SVC)?.getCharacteristic(CTRL) ?: run { finish(false, "CTRL特性無し"); return }
+        ctrlTries += 1
         // 【誰が頼んでいるかを名乗る(2026-09-26)】端末は持ち主以外にはQRを出さない。
         //  名乗らないと、別のスマホに登録済みの端末では断られる(古い端末は中身を見ない)。
         val myId = try { HgeNative.nativePhoneId() } catch (_: Exception) { "" }
         val bytes = (if (myId.isEmpty()) "start" else "start " + myId).toByteArray(Charsets.UTF_8)
-        if (Build.VERSION.SDK_INT >= 33) {
-            g.writeCharacteristic(ctrl, bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
+        // 戻り値を残す。Android は先の操作が終わっていないと**黙って捨てる**ので、
+        //  ここが false/非0 なら「届いていない」とすぐ分かる。
+        val r = if (Build.VERSION.SDK_INT >= 33) {
+            g.writeCharacteristic(ctrl, bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT).toString()
         } else {
             @Suppress("DEPRECATION") ctrl.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
             @Suppress("DEPRECATION") ctrl.value = bytes
-            @Suppress("DEPRECATION") g.writeCharacteristic(ctrl)
+            (@Suppress("DEPRECATION") g.writeCharacteristic(ctrl)).toString()
         }
-        // 端末の答え("qr" / "deny")を待つ。古い端末は何も返さないので、来なければ
-        //  従来どおり「要求した」で閉じる(書込コールバックが来ない実装への保険でもある)。
-        handler.postDelayed({ if (!done) finish(true, "QR表示を要求しました(端末からの応答なし)") }, 5000)
+        rec("ctrl write issued #" + ctrlTries + " len=" + bytes.size + " ret=" + r)
+        // 完了通知が来なければ1度だけ投げ直す。タイマーを重ねないよう、締切と読み出しは
+        //  最初の1回だけ張る。
+        if (ctrlTries == 1) {
+            handler.postDelayed({ if (!done && !ctrlAcked) { writeCtrlStart(g) } }, 1500)
+            // 完了通知が来なくても端末は受けているかもしれない。遅れて状態を読みに行く。
+            readStatSoon(g, 2600); readStatSoon(g, 4000)
+            // 端末の答え("qr" / "deny")が来なければ、従来どおり「要求した」で閉じる
+            //  (答えを返さない古い端末のため)。
+            handler.postDelayed({ if (!done) finish(true, "QR表示を要求しました(端末からの応答なし)") }, 6000)
+        }
     }
 
     private fun writeCred(g: BluetoothGatt) {
@@ -380,6 +418,7 @@ class EdgeBle(
     private fun finish(ok: Boolean, msg: String) {
         if (done) return
         done = true
+        rec("finish ok=" + ok)
         handler.post {
             try { gatt?.disconnect(); gatt?.close() } catch (_: Exception) {}
             gatt = null
