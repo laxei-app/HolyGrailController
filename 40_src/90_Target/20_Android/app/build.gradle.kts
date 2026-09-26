@@ -38,7 +38,7 @@ val hgcPatch = bumpPhonePatch()
 val hgcVersionName = "$hgcMajor.$hgcMinor.$hgcPatch"
 
 android {
-    namespace = "app.laxei.holygrail"
+    namespace = "app.laxei.twylapse"
     compileSdk = 34
 
     // インストール済みNDK(29.0.14206865)を使う。未指定だとAGP既定版を探し
@@ -46,7 +46,7 @@ android {
     ndkVersion = "29.0.14206865"
 
     defaultConfig {
-        applicationId = "app.laxei.holygrail"
+        applicationId = "app.laxei.twylapse"
         minSdk = 26
         targetSdk = 34
         // versionCode は必ず単調増加させる。パッチだけを使うと、マイナーを上げて

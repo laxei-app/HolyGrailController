@@ -93,6 +93,31 @@ namespace csjson
 			return p;
 		}
 
+		json videoToJsonObj(const hgc::videoSet& v)
+		{
+			return json{ {"make", v.make}, {"size", v.size}, {"aspect", v.aspect},
+			             {"fps", v.fps}, {"quality", v.quality},
+			             {"jpg", v.jpg}, {"dng", v.dng} };
+		}
+		hgc::videoSet videoFromJsonObj(const json& j)
+		{
+			hgc::videoSet v;
+			v.make    = j.value("make", true);
+			v.size    = static_cast<uint8_t>(j.value("size", 0));
+			v.aspect  = static_cast<uint8_t>(j.value("aspect", 0));
+			v.fps     = j.value("fps", 15.0);
+			v.quality = static_cast<uint8_t>(j.value("quality", 2));
+			if (!(v.fps > 0.0)) { v.fps = 15.0; }
+			if (v.size > 2)    { v.size = 0; }
+			if (v.aspect > 2)  { v.aspect = 0; }
+			if (v.quality > 2) { v.quality = 2; }
+			v.jpg = j.value("jpg", false);
+			v.dng = j.value("dng", false);
+			// 何も残らない設定にはしない(動画も静止画も出さない指定は jpg に倒す)。
+			if (!v.make && !v.jpg && !v.dng) { v.jpg = true; }
+			return v;
+		}
+
 		json cameraToJson(const hgc::camera& c)
 		{
 			return json{ {"maker", c.maker}, {"model", c.model}, {"name", c.name},
@@ -100,7 +125,10 @@ namespace csjson
 			             {"sensorSize", c.sensorSize}, {"sensorSizeV", c.sensorSizeV},
 			             {"sensorPixel", c.sensorPixel}, {"sensorPixelV", c.sensorPixelV},
 			             {"isoList", c.isoList}, {"ssList", c.ssList},
-			             {"meterLv", c.meterLv},
+			             {"intervalFactor", c.intervalFactor}, {"intervalMargin", c.intervalMargin},
+			             {"lensFixed", c.lensFixed}, {"localOnly", c.localOnly},
+			             {"noSyncShot", c.noSyncShot}, {"readOnly", c.readOnly},
+			             {"meterLv", c.meterLv}, {"videoOut", c.videoOut},
 			             {"authUser", c.authUser},
 			             // パスワードは暗号文で載せる。ファイルにも ETP にも平文は出さない
 			             //  (エッジも同じ固定鍵を持っているので、そのまま復号できる)。
@@ -120,6 +148,13 @@ namespace csjson
 			c.sensorPixelV = j.value("sensorPixelV", 0u);
 			if (j.contains("isoList")) { c.isoList = j["isoList"].get<std::vector<std::string>>(); }
 			if (j.contains("ssList"))  { c.ssList  = j["ssList"].get<std::vector<std::string>>(); }
+			c.intervalFactor = j.value("intervalFactor", 0.0);
+			c.intervalMargin = j.value("intervalMargin", 0.0);
+			c.lensFixed  = j.value("lensFixed",  false);
+			c.localOnly  = j.value("localOnly",  false);
+			c.noSyncShot = j.value("noSyncShot", false);
+			c.videoOut   = j.value("videoOut",   false);
+			c.readOnly   = j.value("readOnly",   false);
 			c.meterLv     = j.value("meterLv", false);	// 無い=サムネイルだけ(既定)
 			c.authUser    = getStr(j, "authUser");
 			c.authPass    = secret::decrypt(getStr(j, "authPass"));	// 平文で手書きされていてもそのまま通る
@@ -139,20 +174,25 @@ namespace csjson
 		}
 		json lensToJson(const hgc::lens& l)
 		{
-			return json{ {"maker", l.maker}, {"name", l.name}, {"focalLength", l.focalLength},
+			return json{ {"maker", l.maker}, {"name", l.name}, {"mount", l.mount}, {"focalLength", l.focalLength},
 			             {"fn", l.fn}, {"fnMax", l.fnMax}, {"hasContact", l.hasContact},
-			             {"fisheye", l.fisheye} };
+			             {"fisheye", l.fisheye}, {"readOnly", l.readOnly},
+			             {"fnList", l.fnList} };
 		}
 		hgc::lens lensFromJson(const json& j)
 		{
 			hgc::lens l;
 			l.maker       = j.value("maker", std::string());
 			l.name        = j.value("name", std::string());
+			l.mount       = j.value("mount", std::string());
 			l.focalLength = j.value("focalLength", 0.0);
 			l.fn          = j.value("fn", 0.0);
 			l.fnMax       = j.value("fnMax", 0.0);
 			l.hasContact  = j.value("hasContact", true);
 			l.fisheye     = j.value("fisheye", isFisheyeName(l.name));	// フィールド優先・無ければ名前判定
+			l.readOnly    = j.value("readOnly", false);
+			if (j.contains("fnList") && j["fnList"].is_array())
+			{ l.fnList = j["fnList"].get<std::vector<std::string>>(); }
 			return l;
 		}
 
@@ -169,6 +209,8 @@ namespace csjson
 			j["priority"] = pr;
 			j["hysteresis"]    = c.hysteresis;		// 個別露出平滑化(0=全体設定)
 			j["movingAverage"] = c.movingAverage;
+			j["smoothMin"]     = c.smoothMin;
+			j["forPhone"]      = c.forPhone;		// スマホ向け(エディタの目盛り)
 		}
 		void baseFromJson(const json& j, hgc::ccmBase& c)
 		{
@@ -189,6 +231,8 @@ namespace csjson
 			}
 			c.hysteresis    = j.value("hysteresis", 0.0);		// 個別露出平滑化(0=全体設定)
 			c.movingAverage = j.value("movingAverage", 0u);
+			c.smoothMin     = j.value("smoothMin", 0.0);
+			c.forPhone      = j.value("forPhone", false);
 		}
 
 		json ccmToJsonObj(const hgc::ccmBase& c)
@@ -283,6 +327,7 @@ namespace csjson
 		//  一般名なので、別種のJSONと取り違えたときに見分けが付かなかった。
 		//  **保存ファイルの形式も変わる**(旧い計画ファイルは名前を失う。計画は作り直す)。
 		j["planName"]  = plan.name;
+		if (!plan.tplKind.empty()) { j["tplKind"] = plan.tplKind; }	// 標準ひな形だけが持つ
 		j["start"]     = dtToJson(plan.start);
 		j["end"]       = dtToJson(plan.end);
 		j["place"]     = placeToJson(plan.place);
@@ -343,6 +388,7 @@ namespace csjson
 		}
 		j["ccmList"] = wl;
 		// 夜間の固定露出と移行目標ev(夜間ウィンドウが無くても移行のクランプ/基準に使う。仕様3.7/3.9)。
+		j["video"] = videoToJsonObj(plan.video);
 		j["nightFixedExposure"] = expToJson(plan.nightFixedExposure);
 		j["nightPreNightEv"]    = plan.nightPreNightEv;
 		j["nightPostNightEv"]   = plan.nightPostNightEv;
@@ -357,6 +403,8 @@ namespace csjson
 
 		plan = hgc::cs{};
 		plan.name      = j.value("planName", std::string());
+		plan.tplKind   = j.value("tplKind", std::string());
+		if (j.contains("video")) { plan.video = videoFromJsonObj(j["video"]); }
 		if (j.contains("start")) { plan.start = dtFromJson(j["start"]); }
 		if (j.contains("end"))   { plan.end   = dtFromJson(j["end"]); }
 		if (j.contains("place"))  { plan.place  = placeFromJson(j["place"]); }
@@ -546,6 +594,7 @@ namespace csjson
 			c.sensorPixel = m.value("pixel_w", 0u);		// 横[pixel]
 			c.sensorPixelV = m.value("pixel_h", 0u);	// 縦[pixel]
 			c.meterLv     = m.value("meter_lv", false);	// 測光方式(無い=サムネイルだけ)
+			c.lensFixed   = m.value("lens_fixed", false);	// レンズ固定の機種(コンデジ等。無い=交換式)
 			if (m.contains("iso") && m["iso"].is_array())
 			{
 				for (const auto& v : m["iso"])
@@ -565,6 +614,15 @@ namespace csjson
 
 	// lenses_list: manufacture/mount/name/f_min/f_max/fnum_min_wide/fnum_min_tele/fnum_max/electronic_contacts
 	// 単一焦点・単一F値モデルへ縮約(焦点=f_min(広角端)、開放F=fnum_min_wide。ズーム/絞り域は後回し)。
+	std::string videoToJson(const hgc::videoSet& v) { return videoToJsonObj(v).dump(); }
+	bool videoFromJson(const std::string& s, hgc::videoSet& out)
+	{
+		json j = json::parse(s, nullptr, false);
+		if (j.is_discarded() || !j.is_object()) { return false; }
+		out = videoFromJsonObj(j);
+		return true;
+	}
+
 	bool lensesFromMasterJson(const std::string& s, std::vector<hgc::lens>& out)
 	{
 		out.clear();
@@ -576,6 +634,7 @@ namespace csjson
 			hgc::lens l;
 			l.maker       = m.value("manufacture", std::string());
 			l.name        = m.value("name", std::string());
+			l.mount       = m.value("mount", std::string());
 			l.focalLength = m.value("f_min", 0.0);
 			l.fn          = m.value("fnum_min_wide", 0.0);
 			l.fnMax       = m.value("fnum_max", 0.0);

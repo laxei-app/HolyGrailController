@@ -1,0 +1,274 @@
+﻿#ifndef _API_BUILTIN_H_
+#define _API_BUILTIN_H_
+// スマホ内蔵カメラの apiBase 実装(2026-09-05)。
+//
+// 【キヤノン機との違いをここへ集める】
+//  ・露出は連続に設定できる。上位は「目盛りのテーブル」で動くので、ここで**合成する**
+//    (ss と ISO は無段。露出制御は expoAxes/expoResolve で段のまま扱う)
+//  ・撮った画像はその場で手に入る。CCAPI 実装が苦労した「新しい画像の登録通知を待つ」
+//    「記録中のファイルを掴む」「サムネイル取得の回数制限」は、いずれも存在しない
+//  ・認証も締め出しも無い
+//
+// 【Android 専用】Camera2 は Kotlin にしか無いので、撮影そのものは builtinBridge 経由で
+//  呼び返す。このファイルは Android のプラットフォーム層にあり、エッジのビルドには入らない。
+#include "apiBase.h"
+#include "cameraData.h"
+#include "cs.h"		// 出力設定(hgc::videoSet)
+#include "exposureMath.h"
+#include <string>
+#include <vector>
+
+class apiBuiltin : public apiBase
+{
+public:
+	// 合成する目盛りの刻み[段]。**ここだけ変えれば粗さが変わる**(2026-09-05 ユーザー指示)。
+	//  スマホは連続に設定できるので、キヤノン機の 1/3 段より細かくして性能を引き出す。
+	// 【1/12 段の刻みは廃止(2026-09-19 ユーザー決定)】この端末の ss と ISO は無段である。
+	//  並びを合成して制御に渡すのは、端末の性能をわざわざ落としていた。
+
+	// 【加算で作る長秒露光の上限[秒](2026-09-06 ユーザー決定)】センサーの1コマの上限が何秒でも、
+	//  内蔵カメラはここまで設定できる。上限を超える ss は、上限以下のコマを続けて撮って
+	//  RAW を線形で足して1枚にする(rawStack)。RAW を出せない端末はセンサーの上限まで。
+	static constexpr double kMaxStackSsSec = 48.0;
+	// 【加算の 1 コマはセンサー上限の半分まで(2026-09-07 実測・ユーザー指示)】上限いっぱいの 1 コマだと
+	//  HAL がバッファを落とすことがある(Pixel 6 超広角: 上限 16.2 秒で 12〜15 秒の 1 コマが 1〜2 割落ちる、
+	//  8 秒では落ちない)。端末に依らず「上限の半分」で区切り、長い ss は枚数で稼ぐ。
+	static constexpr double kSubExposureRatio = 0.5;
+	// 【受け取りの予算は ss + 8 秒 + 2 コマ(2026-09-07 実測・ユーザー指示)】開いた直後の最初のバーストは
+	//  2 コマ目が 1 コマぶん遅れる(15.4 秒×2 が 46 秒)。落ちたコマの撮り直しは 2 コマまで。それが収まる長さで待つ。
+	int takeBudgetMs(void) const;
+	// 【フレームを続けて失う=カメラを開き直す(2026-09-07 ユーザー指示)】キヤノン機の「3 回続けて失敗したら
+	//  手を打つ」と同じ境界。1 フレームの中の撮り直しは Kotlin 側(MAX_RETRY_PER_BURST=2 コマ)。
+	static constexpr int kMaxLostFrames = 3;
+	int lostStreak_ = 0;
+
+	// 【撮影周期の下限の規則(2026-09-20 実測しなおし)】倍率の決め打ちをやめ、センサーの
+	//  1 コマ上限から求める。長秒は加算(stackFrames)で作るので、1 周期はこうなる:
+	//    1周期 ≒ ss + 枚数 × コマ間の隙間 + 後処理
+	//    枚数  = ss ÷ (1コマ上限 × kSubExposureRatio)
+	//    → 1周期 ≒ ss × (1 + 隙間 ÷ (1コマ上限 × kSubExposureRatio)) + 後処理
+	//  隙間は「1コマ上限が何秒でも」ほぼ一定で、実測 Pixel 6 広角 0.05 秒 / AQUOS SH-M08 0.09 秒。
+	//  安全側に 0.1 秒を採る。後処理(加算・現像・JPEG・撮り始めの頭)は実測 Pixel 1.5 秒 /
+	//  AQUOS 4.9 秒なので 5.0 秒を余裕に置く。
+	//  【なぜ決め打ちをやめたか】1.25 倍は 1 コマ上限が長い端末(Pixel 6 = 8.31 秒)にしか合わない。
+	//  上限 0.691 秒の AQUOS では ss 31 秒に 90 枚要り、実測 44.5 秒に対して 39 秒しか見ていなかった
+	//  (レポートの余裕 -6.3 秒・遅れ 7/8 コマ)。短い ss でも同じで、1.25 倍だと AQUOS の ss 1 秒に
+	//  周期 1.3 秒を許してしまう(実際は 5.8 秒かかる)。
+	//  共通部分はこの値を所持カメラの記録から読むだけで、内蔵カメラかどうかを判断しない。
+	static constexpr double kFrameGapSec          = 0.1;	// コマ間の隙間(読み出し)[秒]
+	static constexpr double kMinIntervalMarginSec = 5.0;	// 後処理ぶんの余裕[秒]
+
+	// device.serialno に入れる識別子の頭。所持カメラはこれで一意に管理される。
+	static const char* kSerialPrefix;	// "BUILTIN:"
+
+	apiBuiltin(void) {}
+	~apiBuiltin(void) override {}
+
+	// 諸元を読み、設定可能値のテーブルを合成する。カメラは開かない(開くのは撮る直前)。
+	errCode init(class device& device) override;
+	// 身元だけ。内蔵カメラは認証も締め出しも無いので init と同じで害が無い。
+	errCode identify(class device& device) override { return this->init(device); }
+
+	// 撮影を始める合図。ネットワークのカメラでは接続を張る工程だが、内蔵カメラでは
+	//  カメラを開くことに当たる。ここで開けないと以降どの手も通らないので、早く気づけるよう
+	//  この時点で開いてしまう。
+	errCode startShooting(void) override;
+
+	errCode getSettings(cmdt::shotRange& settings) override;
+
+	// 露出を「段」で扱う口(apiBase の説明を参照)。
+	//  ss と ISO はこの端末では無段(notch=0)。F 値は端末が答える並びのぶんだけ離散。
+	errCode expoAxes(axisInfo& iso, axisInfo& ss, axisInfo& fn) override;
+	errCode expoResolve(const expoPoint& want, hgc::exposure& out, expoPoint& got) override;
+	errCode expoStops(const hgc::exposure& e, expoPoint& out) override;
+	errCode setFNumber(const std::string& fNumber) override;
+	errCode setSS(const std::string& ss) override;
+	errCode setIso(const std::string& iso) override;
+	errCode rdyShutter(const cmdt::shotSet& shotSet) override;
+	errCode actShutter(void) override;
+
+	// 撮影モードの概念が無い(要求ごとにマニュアル露出を載せる)。開け閉めだけ受け持つ。
+	errCode setupShootingModeManual(void) override;
+	// 計画名を受け取る(動画のファイル名に使う)。撮影側が渡すので、再起動後の再開でも抜けない。
+	void setSessionLabel(const std::string& label) override { sessionLabel_ = label; }
+	// 動画の作り方(2026-09-23 UI依頼)。計画の videoSet の JSON をそのまま Kotlin 側へ渡す。
+	void setVideoOption(const std::string& json) override { videoOpt_ = json; }
+	// 所持カメラの記録へ、内蔵カメラの性質を書く。登録時に一度だけ。
+	//  周期の規則のほか、UI が振る舞いを決める4つの性質(レンズ固定・この端末でしか撮れない・
+	//  同期撮影不可・編集不可)。UI は序数の頭("BUILTIN:")を見ず、この欄だけを見る(2026-09-06)。
+	void fillCameraProfile(hgc::camera& cam) override
+	{
+		cam.intervalFactor = this->minIntervalFactor(); cam.intervalMargin = kMinIntervalMarginSec;
+		cam.lensFixed = true; cam.localOnly = true; cam.noSyncShot = true; cam.readOnly = true;
+		cam.videoOut  = true;	// 撮ったコマから動画を作る(2026-09-23。UI の「動画設定」はこれで出る)
+	}
+	errCode restoreShootingMode(void) override;
+	// 直前の失敗の理由(お知らせ番号)。いまは「カメラの許可が無い」だけ。
+	int lastFailNotice(void) const override { return failNotice_; }
+	errCode keepAlive(void) override { return ERR_HGC_OK; }	// 切れる線が無い
+
+	// 諸元は端末から取れる。撮る前から分かるので EXIF を待たない。
+	errCode readSensorSpec(double& sensorWmm, double& sensorHmm, uint32_t& pixelW, uint32_t& pixelH) override;
+	// 端末の熱の状態を「カメラの温度」として返す(2026-09-06)。長秒の加算は熱が心配なので、
+	//  5分ごとの状態確認に乗せてログと通知へ出す。
+	errCode readDeviceStatus(deviceStatus& out) override;
+
+	// 直前に撮った1コマから場面の明るさを測る(撮影画像フィードバック)。
+	errCode meterScene(const hgc::exposure& shotExp, meterResult& out,
+	                   const std::function<bool()>& keepGoing) override;
+	// まだ1コマも撮っていないときの測光。ここでは自由に撮ってよい。
+	errCode meterHere(meterResult& out, const std::function<bool()>& keepGoing) override;
+
+	// 撮影画像フィードバック系なので、露光が閉じ次第すぐ測ってよい。
+	meterTiming meterTimingHint(void) const override
+	{ meterTiming t; t.afterShutterClose = true; t.leadMs = 0; return t; }
+
+	// この実装が撮った最後の JPEG(撮影レポートやセンサー諸元の補完で使う)。
+	const std::vector<uint8_t>& lastJpeg(void) const { return lastJpeg_; }
+
+	// カメラ id("0","1",…)。detectBuiltin が作った device から取る。
+	const std::string& cameraId(void) const { return id_; }
+
+	// スマホ用のひな形を組み立てるための諸元。レンズが交換できないので、
+	//  焦点距離と開放F値は「カメラの一部」として端末が答える。
+	double focalMm(void) const { return focalMm_; }
+	// センサーの面積[mm2]。どのカメラが星向きかを機種名に頼らず選ぶのに使う。
+	double sensorArea(void) const { return sensorW_ * sensorH_; }
+	// 【絞りは固定とは限らない(2026-09-19)】iPhone 13 は可変で、Android にもいずれ出る。
+	//  端末が答える並びの最小(=最も明るい)と最大を別々に返す。1 点なら同じ値になる。
+	double aperture(void) const { return this->apertureMin(); }
+	double apertureMin(void) const;
+	double apertureMax(void) const;
+	// 絞りが 2 点以上あるか(レンズ登録で「固定」と書かないための判定)。
+	bool   apertureVariable(void) const { return apertures_.size() > 1; }
+	// センサー1コマの最長露光[秒](端末の申告)。これを超える ss は加算で作る。
+	double maxSsSec(void) const { return (expMaxNs_ > 0) ? (static_cast<double>(expMaxNs_) / 1e9) : 0.0; }
+	// 撮影周期の下限の倍率。1 コマ上限が短いほど加算の枚数が増え、そのぶん隙間が積み上がる。
+	//  上限が分からない端末は従来どおり 1.25 倍(この値だけで安全側になる)。
+	double minIntervalFactor(void) const
+	{
+		const double hw = this->maxSsSec();
+		if (!(hw > 0.0)) { return 1.25; }
+		return 1.0 + kFrameGapSec / (hw * kSubExposureRatio);
+	}
+	// 設定できる最長の ss[秒](加算込み)。RAW が出せれば kMaxStackSsSec、出せなければセンサーの上限。
+	double maxSettableSsSec(void) const;
+	// ss[秒] を撮るのに要るコマ数(1=足さない)。
+	int stackFrames(double sec) const;
+	// 設定可能値(ひな形の露出をこの並びへ吸着させる)。表示用の文字列。
+	const std::vector<std::string>& isoList(void) const { return isoList_; }
+	const std::vector<std::string>& ssList(void)  const { return ssList_; }
+	const std::vector<std::string>& fnList(void)  const { return fnList_; }
+	// 論理値と刻みを含むテーブル(ひな形の吸着はこれで行う。文字列から作り直さない)。
+	// 露出の明るさ[段](この層の中の割り戻し用)。
+
+private:
+	// 【論理値と表示用の文字列を分けて持つ(2026-09-07 ユーザー指示)】キヤノン機と同じ形。
+	//  計算(テーブルの real/apex、カメラへ渡す露光時間)は 1/12 段で計算した実数を使い、
+	//  文字列は表示・ログ・計画の鍵にだけ使う。文字列は読み戻しても同じ升目に落ちる精度で書く
+	//  (以前の「1/整数」は 1/3 秒付近で 0.08 段ずれ、升目を取り違えていた)。
+	static std::string ssText(double sec);
+	static std::string isoText(int iso);
+	static std::string fnText(double fn);
+	// 文字列 → 論理値。並びの中に同じ文字列があればその実数、無ければ読み戻す。
+	static double realOf(const std::vector<std::string>& list, const std::vector<double>& reals,
+	                     const std::string& v, expo::expoKind k);
+
+	// 記録と画面表示のための両端(論理値と文字列)を作る。制御には使わない。
+	void buildTables(void);
+
+	// いま載っている露出で1枚撮り始める(露光の終わりは待たない)。
+	bool shootStart(void);
+	// 【測光のための1枚(2026-09-23)】撮影用とは別の露出で撮って受け取る。
+	//  撮影露出は触らない(この機種はカメラに状態を残さず、要求ごとに露出を渡すため)。
+	bool meterShot(double sec, double iso, double fn, std::vector<uint8_t>& out);
+	// 測光露出を stops 段ぶん動かす(戻り=実際に動けた段数)。
+	//  明るくするときは ISO から(時間が延びない)、暗くするときは ss から(測光が速くなる)。
+	//  加算はしない = 1コマで撮れる範囲に収める。
+	double shiftMeterExposure(double stops, double& sec, double& iso) const;
+	// 撮り始めた1枚を受け取る。露光の長さから待ち時間を決める。
+	bool shootTake(std::vector<uint8_t>& out);
+	// いまの露出の露光時間[秒](待ち時間の見積もりに使う)。
+	double curSsSec(void) const;
+	// JPEG から輝度の中央値とリニア輝度を出す。
+	bool measure(const std::vector<uint8_t>& jpeg, meterResult& out) const;
+
+	// 【入口と実体を分けて持つ(2026-09-05)】超広角などは論理カメラの配下にいて単体では
+	//  開けない。論理カメラを入口にして物理カメラを名指しする。device.urlAccess には
+	//  "論理/物理" の形で入っている(detectBuiltin が作る)。
+	std::string logicalId_;		// 入口になる論理カメラ id
+	std::string id_;			// 実際に使う物理カメラ id
+	std::string name_;			// 表示名
+	// 諸元(取れなければ 0)
+	double   sensorW_ = 0.0, sensorH_ = 0.0, focalMm_ = 0.0;
+	uint32_t pixelW_  = 0,   pixelH_  = 0;
+	int      isoMin_  = 0,   isoMax_  = 0;
+	long long expMinNs_ = 0, expMaxNs_ = 0;
+	std::vector<double> apertures_;
+	bool     manual_  = false;	// マニュアル露出が使える端末か
+	// 星を消すノイズリダクションを切れるか(切れれば端末の映像処理をそのまま使える)。
+	bool     nrOff_ = false, nrMinimal_ = false, edgeOff_ = false, rawOk_ = false;
+	// ピント(2026-09-23)。最短撮影距離と過焦点距離[ディオプタ=1/m]。0=固定焦点。
+	//  撮影は常に無限遠(0 ディオプタ)で撮る。ここは記録と将来の選択肢のために持つ。
+	double   focusMinDpt_ = 0.0, hyperfocalDpt_ = 0.0;
+
+	// 合成した設定可能値(表示用の文字列と論理値。同じ並び・同じ長さ)と、その APEX テーブル。
+	//  テーブルは測光値を「露出非依存の場面の明るさ」へ割り戻すのに要る(apiBase には無い)。
+	std::vector<std::string> ssList_, isoList_, fnList_;
+	std::vector<double>      ssReal_, isoReal_, fnReal_;
+	double brightnessOf(const hgc::exposure& e);
+
+	// いま載せている露出(要求ごとに渡すので、ここが唯一の状態)
+	std::string curSs_, curIso_, curFn_;
+	// 【測光に使う露出(2026-09-23)】撮影露出とは別に持つ。
+	//  初期収束は「撮る露出」をまだ決めていない段階で場面の明るさを訊いてくる。そのとき
+	//  ここが白飛び/黒潰れしない露出へ自分で寄っていく(キヤノン機のライブビュー測光と同じ役目)。
+	//  0 = まだ決めていない(最初の1回は撮影露出、それも無ければ既定値から始める)。
+	double meterSec_ = 0.0, meterIso_ = 0.0;
+	// ピントの確かめ(2026-09-26)。1回の撮影で1度だけ。暗くて測れない窓では走らせない。
+	bool   focusChecked_ = false;
+	// 【一番悪いところを載せる(2026-09-26 ユーザー指示)】撮影中に数コマに1度だけ画質を測り、
+	//  SN比が最も悪かった1件だけを覚えてレポートへ出す。夜と昼では3段以上違うので、
+	//  平均には意味がない。「この撮影のいちばん苦しいところ」を代表値にする。
+	bool   worstOk_ = false;
+	double worstLevel_ = 0.0, worstTemporal_ = 0.0, worstFixed_ = 0.0, worstSnr_ = 0.0;
+	double worstIso_ = 0.0, worstSs_ = 0.0;
+	int    worstFrames_ = 0;
+
+	// カメラを開く(開けたら opened_ を立てる)。開けない理由が権限なら failNotice_ に残す。
+	errCode openCamera(void);
+	int failNotice_ = 0;	// 直前の失敗の理由(hgc::notice。0=特に言うことは無い)
+
+	// ピントを実測で決める(撮影の始めに1度。暗くて測れないときは何もしない)。
+	void checkFocus(void);
+	// 画質の測定結果を取り込む(悪いほうを残す)。毎コマ呼んでよい(測れていなければ何もしない)。
+	void takeNoise(void);
+
+public:
+	// カメラ自身の素性と実績。撮影レポートの "device" 欄へ入る(apiBase の説明を参照)。
+	std::string deviceReportJson(void) override;
+
+private:
+
+	// 撮った画像を残す(2026-09-05)。キヤノン機はカメラ側のSDに残るが、内蔵カメラには
+	//  「カメラ側」が無いので、自分で書かないと何も残らない。
+	//  【将来】最終的な成果物は端末上で作る動画なので、1コマずつの画像は中間物になる。
+	//   動画の書き出しが入ったら、ここは既定で切る(確認したいときだけ残す)想定。
+	void saveShot(const std::vector<uint8_t>& jpeg);
+	// 撮り始めた1枚をまだ受け取っていなければ受け取って保存する。
+	//  【必ず毎コマ呼ぶ】固定露出の窓では測光が呼ばれないので、測光に任せると誰も回収せず、
+	//   受け取り口(ImageReader)の枠が埋まって撮れなくなる。
+	void collectPending(void);
+	int  shotSeq_ = 0;
+
+	std::vector<uint8_t> lastJpeg_;	// 直前に撮った JPEG(測光の材料)
+	bool opened_ = false;
+	bool physWarned_ = false;	// 狙いと違うセンサーで撮れた警告を出したか(1回だけ)
+	int  lastThermal_ = -1;		// 直前に記録した熱の状態(変わったときだけログに残す)
+	int  lastFrames_  = 0;		// 直前の加算コマ数(変わったときだけログに残す)
+	std::string sessionLabel_;	// 計画名(動画のファイル名の頭)
+	std::string videoOpt_;		// 動画設定の JSON(空=既定。make=false なら動画を作らない)
+	hgc::videoSet out_;			// 出力設定(動画/jpg/DNG)。撮影を始めるときに計画から取り出す
+};
+
+#endif // _API_BUILTIN_H_

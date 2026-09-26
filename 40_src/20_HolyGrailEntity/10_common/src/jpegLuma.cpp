@@ -1,4 +1,4 @@
-#include "jpegLuma.h"
+﻿#include "jpegLuma.h"
 #include <jpeg/hgc_tjpgd.h>
 #include <cstring>
 #include <vector>
@@ -11,7 +11,7 @@ namespace
 		const uint8_t* data = nullptr;
 		size_t         len  = 0;
 		size_t         pos  = 0;
-		uint16_t*      hist = nullptr;
+		uint32_t*      hist = nullptr;
 		uint32_t       yTop = 0;	// この行から
 		uint32_t       yEnd = 0;	// この行の手前まで集計(レターボックス除去)
 	};
@@ -51,10 +51,10 @@ namespace
 namespace jpglm
 {
 	bool lumaHistogram(const uint8_t* data, size_t len,
-	                   uint16_t hist[256], int& wOut, int& hOut, double cropRatio)
+	                   uint32_t hist[256], int& wOut, int& hOut, double cropRatio)
 	{
 		wOut = hOut = 0;
-		std::memset(hist, 0, sizeof(uint16_t) * 256);
+		std::memset(hist, 0, sizeof(uint32_t) * 256);
 		if (data == nullptr || len == 0) { return false; }
 
 		std::vector<uint8_t> pool(3900);	// TJpgDecの作業領域(必要量は実測~3.1KB+余裕)

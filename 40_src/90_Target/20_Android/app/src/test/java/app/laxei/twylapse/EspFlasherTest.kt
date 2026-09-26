@@ -1,4 +1,4 @@
-package app.laxei.holygrail
+package app.laxei.twylapse
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals

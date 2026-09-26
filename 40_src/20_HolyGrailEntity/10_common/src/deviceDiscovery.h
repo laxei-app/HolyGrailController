@@ -4,32 +4,26 @@
 #include "common.h"
 #include "netThread.h"
 #include "device.h"
-#include "apiCanonCCAPI.h"
 
 class deviceDiscovery
 {
 
 public:
 
-	// カメラ API インターフェースの定義(サービス識別キーワード → 対応 api)。
+	// このバックエンドが自分のカメラと見なす SSDP のサービス識別語。
 	// 分類テーブルは受信バックエンド(detectCanonCCapi 等)が保持し、search に渡す。
-	// deviceDiscovery 自身は低レベルの SSDP/USN ヘルパに徹する。
+	// deviceDiscovery 自身は低レベルの SSDP/USN ヘルパに徹し、API の種類を知らない(2026-09-06)。
 	class definitionIntereface
 	{
 	public:
 		std::vector<std::string>	keywords;	// サービスを特定するキーワード
-		enum device::apiClass		apiClass;	// 対応する api
 	public:
-		definitionIntereface(std::vector<std::string> keywords, enum device::apiClass apiClass)
-		{
-			this->keywords = keywords;
-			this->apiClass = apiClass;
-		}
+		explicit definitionIntereface(std::vector<std::string> keywords) : keywords(std::move(keywords)) {}
 	};
 
 public:
 	// SSDP(M-SEARCH)で探索する。ifaces に一致した service のデバイスを device に追加。
-	//  ifaces : このバックエンドが対応するサービス定義(キーワード→apiClass)。
+	//  ifaces : このバックエンドが対応するサービス識別語。合ったものだけを device に足す。
 	static int search(std::vector<device> & device, const std::vector<definitionIntereface>& ifaces);
 
 protected:

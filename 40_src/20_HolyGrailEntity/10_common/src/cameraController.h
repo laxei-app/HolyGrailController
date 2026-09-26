@@ -23,6 +23,10 @@ public:
 	//  在否監視のように「そこに居るか」だけ知りたい側が使う。認証が要るカメラを、撮影主体でない側が
 	//  叩くと認証がぶつかってカメラを締め出すため(EOS R50 V 実測 2026-08-16)。
 	static size_t identifyTargets(std::vector<class device>& device);
+	// カメラの在否を探索元に聞く。1=居る / 0=居ない / -1=どの探索元も答えない(在否監視の表で決める)。
+	static int presence(const hgc::camera& cam);
+	// 挨拶を、その device を見つけた探索元(device.origin)に頼む。探索元が無ければ「要らない」。
+	static detectBase::greetResult greet(const class device& d);
 
 	// IP直指定でカメラに接続する(SSDPを使わない。エミュレータ等での手動接続用)。
 	//  host : カメラのIPアドレス(例 "192.168.1.4")。対応バックエンドが接続を試みる。
@@ -44,11 +48,21 @@ public:
 	static errCode setSS(const class device& device, const std::string& ss);
 	static errCode setIso(const class device& device, const std::string& iso);
 	static errCode actShutter(const class device& device);
+	// 直前の失敗の内訳(意味)。カメラ実装が答える。apiBase が無ければ既定(全部偽・空)。
+	static apiBase::failInfo lastFailure(const class device& device);
+	// 直前の失敗の理由(hgc::notice の番号。0=無し)。判断はカメラ層、表示は UI。
+	static int lastFailNotice(const class device& device);
+	// 【バックエンドを外から足す(2026-09-05)】
+	//  スマホ内蔵カメラの検出は Camera2(Android 固有)に依存するので、共通部分から
+	//  そのクラスを include できない(エッジのビルドが壊れる)。役割ごとの初期化から
+	//  ここへ入れてもらう。エッジは呼ばないので、あちらのバイナリには一切入らない。
+	static void addBackend(std::unique_ptr<class detectBase> backend);
+
 	static errCode getSettings(const class device& device, cmdt::shotRange& settings);
 	// カメラ自身の状態(記録メディア/電池/温度)を読む。
 	static errCode readDeviceStatus(const class device& device, apiBase::deviceStatus& out);
 	// 直近に撮れた画像からセンサー実寸[mm]と横画素数を読む(マスターに無い機種の穴埋め)。
-	static errCode readSensorSpec(const class device& device, double& sensorWmm, double& sensorHmm, uint32_t& pixelW);
+	static errCode readSensorSpec(const class device& device, double& sensorWmm, double& sensorHmm, uint32_t& pixelW, uint32_t& pixelH);
 	static errCode rdyMetering(const class device& device);
 	static errCode alzMetering(const class device& device, cmdt::HISTOGRAM& hist);
 	// 測光(場面のリニア輝度の取得)。測り方の実装詳細はカメラ依存(apiBase実装側)。

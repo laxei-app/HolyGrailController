@@ -62,6 +62,20 @@ public:
 	// マスタ(名称一致)から所持へ追加して保存する。return: 成功(追加 or 既存)。
 	static bool addOwnedCameraFromMaster(const std::string& name);
 	static bool addOwnedLensFromMaster(const std::string& name);
+	// 機材マスタから型番/レンズ名で1件(出荷時のひな形などが使う)。無ければ false。
+	static bool masterCameraByName(const std::string& name, hgc::camera& out);
+	static bool masterLensByName(const std::string& name, hgc::lens& out);
+	// 機材マスタから「そのメーカー・そのマウントで、魚眼でない、最も焦点距離の短いレンズ」を1本
+	//  (標準ひな形の既定レンズ。2026-09-21 ユーザー指示)。maker/mount が空なら条件にしない。無ければ false。
+	static bool masterLensShortest(const std::string& maker, const std::string& mount, hgc::lens& out);
+	// マスタに無いレンズを所持レンズへ足す(同じ名前が既にあれば何もしない)。
+	//  スマホ内蔵カメラのように、レンズが交換できず端末が諸元を答える機材のための口。
+	static bool addOwnedLens(const hgc::lens& lens);
+	// 所持カメラの「組み合わせるレンズ」へ1本だけ割り当てる(既に入っていれば何もしない)。
+	//  レンズを交換できない機材(スマホ内蔵カメラ)のための設定。
+	static bool setOwnedCameraLens(const std::string& camName, const std::string& lensName);
+	// 所持カメラに割り当てられたレンズの先頭(=初期値)を返す。無ければ false。
+	static bool findOwnedCameraDefaultLens(const std::string& camName, hgc::lens& out);
 	// 所持から削除して保存する。return: 成功(削除した)。
 	static bool removeOwnedCamera(const std::string& name);
 	static bool removeOwnedLens(const std::string& name);
@@ -75,8 +89,10 @@ public:
 	//  この経路が要る。見つからない/未設定なら空文字。
 	static std::string ownedCameraAuthPass(const std::string& name);
 
-	// 所持カメラの撮影計画への自動挿入フラグを設定して保存する。
+	// 所持カメラの「撮影計画の初期値にする」を設定して保存する。真にした1台だけが残る(他は外れる)。
 	static bool setOwnedCameraAutoInsert(const std::string& name, bool autoInsert);
+	// 「撮影計画の初期値にする」の所持カメラ(最初の1台)。無ければ false。
+	static bool autoInsertCamera(hgc::camera& out);
 
 	// --- 撮影場所(ユーザー資産。/asset/places.json。§5.1/§7.9) ---
 	static std::string placesJson(void);                 // 登録済み場所の配列 JSON
@@ -143,6 +159,18 @@ public:
 	enum class camApply { updated = 0, filled = 1, isNew = 2 };
 	static int recordConnectedCameraStatus(const device& dev, bool allowAdd);
 
+	// --- ISO/SS の並びだけを、カメラに触らずに受け渡す(2026-09-26) ---
+	//  スマホ⇄外部端末が BLE のとき、カメラは端末のAPの中だけに居てスマホからは届かない。
+	//  並びを知っているのは実際に繋いでいる端末だけなので、そこから貰って埋める。
+	//  【なぜ機材マスタで足りないか】マスタに無い機種は上下限が無く、並びが作れない。
+	// serial の所持カメラの並びを {"isoList":[...],"ssList":[...]} で返す(無い/空なら "")。
+	static std::string cameraListsJson(const std::string& serial);
+	// serial の所持カメラへ並びを入れる。**空のときだけ**入れる(カメラが答えた並びを上書きしない
+	// という既存の約束に合わせる)。true=変わった(保存済み)。
+	static bool applyCameraLists(const std::string& serial, const std::string& json);
+	// serial の所持カメラが並びを持っていない(=貰う価値がある)か。
+	static bool cameraNeedsLists(const std::string& serial);
+
 	// --- §4b 撮影開始時の特定カメラ照合(同機種が複数あっても serial/assignedName で1台を選ぶ) ---
 	// 計画カメラの assignedName から所持リストを引き実シリアルを解決(接続済みなら serial が入る)。true=解決。
 	static bool serialForAssignedName(const std::string& assignedName, std::string& outSerial);
@@ -150,7 +178,8 @@ public:
 	static void ownedCameraSerials(std::vector<std::string>& out);
 	// 撮影画像から読めたセンサー実寸/画素数を所持カメラへ入れる(空のときだけ)。true=書いた。
 	//  機材マスターに無い機種の穴埋め。ユーザーが手で入れた値は上書きしない。
-	static bool fillOwnedCameraSensor(const std::string& serial, double sensorWmm, double sensorHmm, uint32_t pixelW);
+	static bool fillOwnedCameraSensor(const std::string& serial, double sensorWmm, double sensorHmm,
+	                                  uint32_t pixelW, uint32_t pixelH);
 	// 同じ機種として登録されている所持カメラの台数(個体が確定しているものだけ)。
 	static int ownedCountForModel(const hgc::camera& cam);
 	// device のモデルが計画/所持カメラ cam と同機種か(メーカー名差を吸収)。
@@ -193,7 +222,7 @@ public:
 
 
 	// --- 動作ログ(データ構造仕様書43 §8) ---
-	// 固定長128Bのテキストレコードを日付ごとのファイル(hg_YYYY-MM-DD.log)へ追記する。
+	// 固定長128Bのテキストレコードを日付ごとのファイル(tlp_YYYY-MM-DD.log)へ追記する。
 	// 保存は osFile 抽象を介す(M5=SD/LittleFS, Android=外部ファイル領域)。
 
 	// ログのタイムスタンプに使う UTCオフセット[分]を設定する(撮影開始時などに呼ぶ)。
@@ -308,6 +337,8 @@ public:
 		// 露出を合わせるために撮影窓の前で余分に撮ったコマ数。frames には入らないので、
 		//  カードの枚数がレポートのコマ数より多くなる。その差の説明として出す。
 		int      cvShots    = 0;
+		// カメラ実装が語る素性と実績(apiBase::deviceReportJson。空=載せない)。
+		std::string deviceJson;
 	};
 	// レポートをファイルへ書く(JSON)。planName/planId/カメラ名と窓・周期は呼び出し側から渡す。
 	// return: 書けたファイルのパス(空=失敗)。

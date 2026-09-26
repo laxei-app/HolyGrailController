@@ -1,4 +1,4 @@
-package app.laxei.holygrail
+package app.laxei.twylapse
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -20,11 +20,11 @@ class EdgeFirmwareTest {
           "updated": "2026-08-26",
           "edge": [
             { "id": "stick-s3", "name": "M5StickS3", "chip": "esp32s3", "flashSize": "8MB",
-              "version": "0.1.425", "build": "debug", "file": "hgc-edge-stick-s3.bin",
+              "version": "0.1.425", "build": "debug", "file": "tlp-edge-stick-s3.bin",
               "offset": 0, "size": 2685504,
               "sha256": "d18d0210aa10013a2657c851063670998fca1a8ec1d33a4f4c8ecdaa5f255fa3" },
             { "id": "core-s3", "name": "M5Stack CoreS3", "chip": "esp32s3", "flashSize": "16MB",
-              "version": "0.1.425", "build": "debug", "file": "hgc-edge-core-s3.bin",
+              "version": "0.1.425", "build": "debug", "file": "tlp-edge-core-s3.bin",
               "offset": 0, "size": 2643376, "sha256": "00" }
           ]
         }
@@ -107,11 +107,11 @@ class EdgeFirmwareTest {
     // ── 何をするかの決め方 ──────────────────────────────────
 
     private fun id(name: String, ver: String, valid: Boolean = true) = FwIdentity(name, ver, valid)
-    private val ours = id("HolyGrailEdge", "0.1.427")
+    private val ours = id("TwyLapseEdge", "0.1.427")
 
     @Test
     fun 同じ版数なら何も書かない() {
-        val a = EdgeFirmware.decide(id("HolyGrailEdge", "0.1.427"), ours, sameBase = true)
+        val a = EdgeFirmware.decide(id("TwyLapseEdge", "0.1.427"), ours, sameBase = true)
         assertEquals(FlashAction.SKIP, a)
         assertNull("SKIP なのに書く段取りができている", EdgeFirmware.planWrite(ByteArray(0x30000), a))
     }
@@ -120,19 +120,19 @@ class EdgeFirmwareTest {
 
     @Test
     fun 版数が上がるときは聞かない() {
-        assertEquals(FlashAsk.NONE, EdgeFirmware.askBefore(id("HolyGrailEdge", "0.1.400"), ours))
+        assertEquals(FlashAsk.NONE, EdgeFirmware.askBefore(id("TwyLapseEdge", "0.1.400"), ours))
     }
 
     @Test
     fun 同じ版数なら聞く() {
         assertEquals(FlashAsk.SAME_VERSION,
-                     EdgeFirmware.askBefore(id("HolyGrailEdge", "0.1.427"), ours))
+                     EdgeFirmware.askBefore(id("TwyLapseEdge", "0.1.427"), ours))
     }
 
     @Test
     fun 古い版へ戻すときは聞く() {
         assertEquals(FlashAsk.DOWNGRADE,
-                     EdgeFirmware.askBefore(id("HolyGrailEdge", "0.1.500"), ours))
+                     EdgeFirmware.askBefore(id("TwyLapseEdge", "0.1.500"), ours))
     }
 
     @Test
@@ -154,7 +154,7 @@ class EdgeFirmwareTest {
 
     @Test
     fun 同じ版数でも承諾すれば書く() {
-        val same = id("HolyGrailEdge", "0.1.427")
+        val same = id("TwyLapseEdge", "0.1.427")
         assertEquals(FlashAction.APP_ONLY,
                      EdgeFirmware.decide(same, ours, sameBase = true, approvedSame = true))
         // 土台が違えば承諾してもまるごと(そうしないと起動しない)
@@ -164,7 +164,7 @@ class EdgeFirmwareTest {
 
     @Test
     fun 版数が違えば本体だけ書く() {
-        val a = EdgeFirmware.decide(id("HolyGrailEdge", "0.1.400"), ours, sameBase = true)
+        val a = EdgeFirmware.decide(id("TwyLapseEdge", "0.1.400"), ours, sameBase = true)
         assertEquals(FlashAction.APP_ONLY, a)
     }
 
@@ -183,14 +183,14 @@ class EdgeFirmwareTest {
 
     @Test
     fun 土台が違えば版数が違っても全部書く() {
-        val a = EdgeFirmware.decide(id("HolyGrailEdge", "0.1.400"), ours, sameBase = false)
+        val a = EdgeFirmware.decide(id("TwyLapseEdge", "0.1.400"), ours, sameBase = false)
         assertEquals(FlashAction.FULL, a)
     }
 
     @Test
     fun 焼く側に素性が無ければ飛ばさない() {
         // まだ刻んでいない公開物。版数を比べようが無いので「同じかも」で飛ばさない
-        val a = EdgeFirmware.decide(id("HolyGrailEdge", "0.1.427"), id("", "", false), sameBase = true)
+        val a = EdgeFirmware.decide(id("TwyLapseEdge", "0.1.427"), id("", "", false), sameBase = true)
         assertEquals(FlashAction.APP_ONLY, a)
     }
 
@@ -254,15 +254,15 @@ class EdgeFirmwareTest {
 
     @Test
     fun 素性が読める() {
-        val i = EdgeFirmware.parseIdentity(descOf("HolyGrailEdge", "0.1.426"))
+        val i = EdgeFirmware.parseIdentity(descOf("TwyLapseEdge", "0.1.426"))
         assertTrue(i.valid)
-        assertEquals("HolyGrailEdge", i.name)
+        assertEquals("TwyLapseEdge", i.name)
         assertEquals("0.1.426", i.version)
     }
 
     @Test
     fun 検査値が壊れていれば無効とする() {
-        assertFalse(EdgeFirmware.parseIdentity(descOf("HolyGrailEdge", "0.1.426", breakCrc = true)).valid)
+        assertFalse(EdgeFirmware.parseIdentity(descOf("TwyLapseEdge", "0.1.426", breakCrc = true)).valid)
     }
 
     @Test

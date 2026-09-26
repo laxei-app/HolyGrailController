@@ -38,4 +38,6 @@ target_compile_definitions(HolyGrailEntity PRIVATE ASTRONOMY_ENGINE_NO_CURRENT_T
 #     状態/進捗/エラー/スケジュールは通知CB経由でUIに届くので観測には支障なし。
 
 find_library(log-lib log)
-target_link_libraries(HolyGrailEntity ${log-lib})
+# jnigraphics: RAW 加算の現像結果を Bitmap へ直接書く(rawStack / jniBridge)
+find_library(jnigraphics-lib jnigraphics)
+target_link_libraries(HolyGrailEntity ${log-lib} ${jnigraphics-lib})

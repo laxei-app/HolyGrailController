@@ -41,6 +41,11 @@ void noteConnected(const std::string& serial, const std::string& model, const st
 // 起動時に不揮発の既知カメラを読み込む(エッジ役)。スマホ役は no-op。
 void loadPersisted();
 
+// この役割が扱うカメラの探索元(detectXxx)を cameraController へ登録する(2026-09-06)。
+//  共通部分はどのメーカーのバックエンドも知らない。何を扱うかは役割(成果物)が決める。
+//  hge_init から1回だけ呼ばれる。成果物固有のもの(スマホの内蔵カメラ)は成果物の初期化が別に足す。
+void registerBackends();
+
 // この端末の所持カメラ台帳が「設定の出所」として権威か。
 //  スマホ役 = true : ユーザーが機材を登録し、測光方式などを設定する場所。
 //  エッジ役 = false: 接続したカメラを自分でも記録する(識別用の控え)が、それは設定の出所ではない。

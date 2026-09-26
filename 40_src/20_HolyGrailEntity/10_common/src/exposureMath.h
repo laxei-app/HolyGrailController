@@ -8,10 +8,13 @@
 // カメラ I/O には依存しない純粋な計算モジュール(単体テスト可能)。
 
 #include "hgcCommon.h"
+#include "cameraData.h"	// cmdt::shotRange(デバイスが答える設定可能値と刻み)
 #include <cmath>
 #include <cstdint>
 #include <string>
 #include <vector>
+
+class apiBase;	// 露出制御はデバイスを指すだけ(実体は .cpp で使う)
 
 namespace expo
 {
@@ -105,13 +108,45 @@ namespace expo
 		return linear0 * std::pow(2.0, ev);
 	}
 
-	// APEX 値を 1/3 段グリッドに量子化する(最近傍)。
+	// 【露出の軸の素性(2026-09-19)】デバイスが答える。上位は刻みという語彙を持たない。
+	//  段の向きはどの軸も「大きいほど明るい」で揃える。
+	//   iso = log2(ISO/100) / ss = log2(秒) / fn = -log2(F^2)
+	struct axisInfo
+	{
+		double lo    = 0.0;	// 動ける下端[段](暗い側)
+		double hi    = 0.0;	// 動ける上端[段](明るい側)。lo==hi なら動かない軸
+		double notch = 0.0;	// **いまの位置での**丸めの粗さ[段]。0 = 無段(丸めない)
+	};
+	// 露出の一点を軸ごとの段で表す。has～ が偽の軸は「指定なし/読めない」。
+	//  撮影制御方法の限界のように軸が欠けた露出を測るために使う。
+	struct expoPoint
+	{
+		double iso = 0.0, ss = 0.0, fn = 0.0;
+		bool   hasIso = false, hasSs = false, hasFn = false;
+		double sum(void) const
+		{ return (hasIso ? iso : 0.0) + (hasSs ? ss : 0.0) + (hasFn ? fn : 0.0); }
+	};
+
+	// 【段⇄実数(2026-09-19)】どの軸も「大きいほど明るい」で揃えた寄与[段]と、
+	//  その軸の実数(ISO 値 / 秒 / F 値)を行き来する。
+	//   iso = log2(ISO/100) / ss = log2(秒) / fn = -log2(F^2)
+	//  **デバイス層が apiBase::expoAxes / expoResolve / expoStops を実装するための道具**。
+	//  制御側(captureRunner / exposureCtl)は段しか扱わないので、ここは呼ばない。
+	double stopsOfReal(double real, expoKind k);
+	double realOfStops(double stops, expoKind k);
+
+	// APEX 値を stepStops 段のグリッドに量子化する(最近傍)。
+	//  【刻みは決め打ちしない(2026-09-07)】1/3 段はキヤノン機の語彙。内蔵カメラは 1/12 段。
+	//  刻みはデバイスが答え(cmdt::shotRange::stepStops)、テーブルがそれを覚える(expoTables::stepStops)。
+	double snapStops(double apex, double stepStops);
+	// 1/3 段(旧来の呼び名。標準テーブルと、刻みを言わない呼び出しの既定)。
 	double snapThird(double apex);
 
 	// --- 設定可能値テーブル(データ構造仕様書43 §3.1.1.1 / 仕様書10 §4.2) ---
 	enum class expoKind : uint8_t { iso, ss, fn };
 
-	// テーブルの1要素。value=カメラ設定値文字列、real=実数、apex=1/3段スナップしたAPEX。
+	// テーブルの1要素。value=表示用の文字列(カメラの語彙)、real=論理値(実数)、apex=刻みに揃えたAPEX。
+	//  計算は real と apex で行い、value は表示・ログ・計画の鍵にだけ使う。
 	struct expoEntry
 	{
 		std::string value;
@@ -127,90 +162,213 @@ namespace expo
 	//  t = (35*N + 30*p) / f、p[µm] = sensorW_mm / pixelW * 1000。算出できなければ 0。
 	double npfShutterSec(double sensorW_mm, double pixelW, double focal_mm, double fn);
 
-	// 値文字列群からテーブルを作る(§4.2)。apexを算出し1/3段にスナップ、apex昇順ソート。無効値は除外。
-	std::vector<expoEntry> buildTable(const std::vector<std::string>& values, expoKind k);
+	// 値文字列群からテーブルを作る(§4.2)。apex を算出し stepStops 段に揃え、real 昇順に並べる。無効値は除外。
+	//  reals: 論理値(文字列と同じ並び)。null か長さ違いなら文字列を読み戻して実数にする。
+	std::vector<expoEntry> buildTable(const std::vector<std::string>& values, expoKind k,
+	                                  double stepStops = 1.0 / 3.0,
+	                                  const std::vector<double>* reals = nullptr);
 
 	// 標準テーブル用の値文字列(カメラ未接続時の編集用)。
 	std::vector<std::string> standardValues(expoKind k);			// iso/ss(fnは下記)
 	std::vector<std::string> standardFn(double fnMin, double fnMax);	// レンズf範囲の1/3段F値
 
-	// iso/ss/fn 三つ分のテーブル。
+	// 【上下限と刻みから編集用の目盛りを作る(2026-09-19)】
+	//  カメラが答える並びをそのまま出すのはやめた。内蔵カメラは無段になり、
+	//  並びが両端だけになったため、そのままでは「2 つしか選べない」状態になる(実機で発覚)。
+	//  範囲はカメラ/レンズの実力、刻みは編集する人の好み、と役割を分ける。
+	//  stepStops: 0.5 / 1/3 / 1/12 など。0 なら 1/3 段。
+	std::vector<std::string> rangeValues(expoKind k, double stepStops, double loReal, double hiReal);
+
+	// 【カメラが自分の並びを持っているならそれを見せる(2026-09-20 ユーザー指示)】
+	//  values からこの刻み以上の間隔で選び直す。刻みがカメラより細かければ並びがそのまま返る
+	//  (カメラより細かくはできない)。両端は必ず残す。数値でない綴り(Bulb/auto)は除く。
+	//  合成した目盛り(rangeValues)はカメラに無い値を作ってしまう: EOS R3 の 8 秒は
+	//  下端 1/64000 から 1/3 段で張ると 8.192 秒になり、実機に無い値が画面に出ていた。
+	std::vector<std::string> pickFromValues(const std::vector<std::string>& values,
+	                                        expoKind k, double stepStops);
+
+	// 初期値(プリセット)のエディタ用の目盛り(2026-09-06 仕様)。カメラに依らない。
+	//  forPhone=真: 1/12 段。ss 48〜1/50000、F1.5〜3.5、ISO20〜12800(数値から作る)
+	//  forPhone=偽: 1/3 段。ss 30〜1/16000、F0.5〜24、ISO100〜24000(慣用の表記を範囲で絞る)
+	//  並びは実数の昇順(ss は速→遅)。
+	std::vector<std::string> presetValues(expoKind k, bool forPhone);
+
+	// iso/ss/fn 三つ分のテーブルと、その刻み[段]。
 	struct expoTables
 	{
 		std::vector<expoEntry> iso, ss, fn;
+		double stepStops = 1.0 / 3.0;	// 既定(軸ごとの指定が無いときに使う)
+		// テーブルに無い値を評価するときも同じ刻みに揃える。軸ごとに違うことがある(2026-09-19)。
+		double isoStep = 1.0 / 3.0;
+		double ssStep  = 1.0 / 3.0;
+		double fnStep  = 1.0 / 3.0;
 	};
-	// 標準テーブル一式(編集用)。fnはレンズの開放〜最小絞り範囲。
+	// 標準テーブル一式(編集用)。fnはレンズの開放〜最小絞り範囲。1/3 段。
 	expoTables standardTables(double fnMin = 1.0, double fnMax = 32.0);
+	// デバイスが答えた設定可能値(文字列・論理値・刻み)からテーブル一式を作る。
+	//  撮影で使うテーブルは必ずここを通す(刻みと論理値を落とさないため)。
+	expoTables tablesFromRange(const cmdt::shotRange& r);
+
+	// 【設定可能値の並びから露出ステップ[段]を測る(2026-09-19)】
+	//  隣り合う値の APEX 差の**中央値**を返す。0=測れない(有効な値が 3 つ未満)。
+	//  中央値にするのは、並びの端や Bulb、拡張感度のような例外に引きずられないため
+	//  (実機 EOS R10 の ISO は 1 段刻みだが 25600→32000 だけ 0.32 段しか離れていない)。
+	double medianStepStops(const std::vector<std::string>& values, expoKind k);
+
+	// 【設定可能値の並びから露出ステップ[段]を見分ける(2026-09-19)】
+	//  キヤノンはカメラ本体の設定で ss を 1/3 段と 1/2 段、ISO を 1/3 段と 1 段に切り替えられる。
+	//  決め打ちにすると、1/2 段のカメラで 1 目盛りあたり 0.17 段の誤差が出る(実機 EOS R10 で確認)。
+	//  中央値がよくある刻み(1/3・1/2・1)に近ければそれと見なす。
+	//  見分けられない(値が少ない/見覚えのない刻み)ときは 0 か中央値をそのまま返す。
+	//  **デバイスが刻みを答えられるならそちらが正**。これはその裏取りと、答えない機種の代替。
+	double detectStepStops(const std::vector<std::string>& values, expoKind k);
+
+	// 【デバイスの申告と並びが矛盾しないか(2026-09-19)】
+	//  キヤノンは CCAPI で「本体に設定されている刻み」を答える(customfunction/...)。
+	//  ただし答えるのは**本体メニューの設定**で、「実際に送れる値の並び」ではない。
+	//  APEX の格子は送れる値と一致していないといけないので、鵜呑みにせずここで確かめる。
+	//  並びの中央値と stepStops がずれていれば false(呼び出し側は測った値へ落とす)。
+	//  値が少なくて測れないときは、否定する根拠が無いので true(申告を信じる)。
+	bool stepMatchesValues(const std::vector<std::string>& values, expoKind k, double stepStops);
 
 	// 露出(文字列)→明るさ(段)。テーブルでapexを引く(無ければ実数から算出)。大きいほど明るい。
 	double brightnessStops(const hgc::exposure& e, const expoTables& t);
+
+	// 【デッドゾーン制御(2026-09-08 ユーザー決定)】ヒステリシス帯からはみ出た分だけを返す[段]。
+	//  predicted=いまの露出で写る明るさ(リニア)、linD/linU=帯の下端/上端(リニア)。
+	//  帯の中なら 0。下に出ていれば +(明るくする量)、上に出ていれば −(暗くする量)。
+	//  「中央まで戻す」のではなく「縁まで戻す」。場面がゆっくり変わる間は縁に沿って小刻みに追従し、
+	//  帯の広さが段差の大きさにならない(以前は帯を越えた瞬間に中央までの差を一度に埋めていた)。
+	double excessStops(double predicted, double linD, double linU);
+
+	// 【飽和ガード(2026-09-20)】最初の補正(仕様 4.4)の1反復ぶんの判断。
+	//  errStops : 測光から投影した誤差[段]。+ = 目標より明るく写る(暗くしたい)。
+	//  medianX  : 測光画像のヒストグラム中央値 0.0～1.0。satMedian 以上なら頭打ち=飽和。
+	//  飽和した画像は輝度が上限に張り付き、場面の明るさを過小評価する。そのため errStops が
+	//  0 付近に見えても「合っている」とは限らない。飽和している間は収束と認めず、投影量に
+	//  関わらず最低 satStepStops 段だけ暗くして飽和を抜けにいく。
+	// 【速度をならす(2026-09-21 ユーザー決定)】自動露出の 1 コマの動きを、はみ出た量から直接ではなく
+	//  「速度」を経由して決める。動画で目立つのは明るさそのものより変わり方の急変なので、
+	//  速度の変化を 1 コマに accel までに抑える。
+	//   need          : 帯からはみ出た量[段](+ 明るくしたい / 帯の内側なら 0)
+	//   vmax          : 速度の上限[段/コマ]
+	//   accel         : 1 コマの速度変化の上限[段/コマ]
+	//   horizonFrames : 見込み時間[コマ]。速度の目標 = need ÷ これ(縁に近いほどゆっくり)
+	//   vel           : いまの速度[段/コマ](入出力)
+	//  戻り値 = このコマで動かす量[段](= 更新後の速度)。呼ぶ側が 1 コマの許容で切る。
+	double shapeVelocity(double& vel, double need, double vmax, double accel, double horizonFrames);
+
+	struct convergeStep
+	{
+		bool   converged = false;	// 収束した(撮影を始めてよい)
+		double delta     = 0.0;		// 動かす量[段]。+ = 明るく
+		bool   saturated = false;	// 測光が頭打ちだった
+	};
+	convergeStep initialConvergeStep(double errStops, double medianX,
+		                             double tolStops, double satMedian, double satStepStops);
 
 	// ヒストグラム(輝度bin列)の中央値を 0.0～1.0(sRGB符号化)で返す。仕様 4.3.1。
 	//  lumBins : 輝度ヒストグラム。nBins 個。
 	//  戻り値  : 中央値の位置 /(nBins-1)。要素が無ければ 0。
 	double histMedian(const uint16_t* lumBins, int nBins);
+	// 32 ビットの受け皿（自前で作るヒストグラム。jpglm::lumaHistogram の出力）。
+	//  カメラが答えるヒストグラムは 16 ビットのままでよい（小さい画像の集計なので溢れない）。
+	double histMedian(const uint32_t* lumBins, int nBins);
 
-	// 露出設定を優先度・限界に従って 1/3 段ずつ増減させる制御。
-	// 仕様 4.4(最初の補正)・4.5(露出補正)・7.4(優先度と限界)。
+	// 露出設定を優先度・限界に従って動かす制御。仕様 4.4 / 4.5 / 7.4。
+	//
+	// 【無段階(ステップレス)制御 2026-09-19】
+	//  内部は無段(実数)。守るのは上下限だけで、その間は計算したとおりの値を持つ。
+	//
+	// 【テーブルを持たない 2026-09-19 ユーザー決定】
+	//  設定できる値の並びと刻みは**カメラの都合**なので、この層は一切持たない。
+	//  デバイス(apiBase)に「段」で聞き、「段」で指示する。
+	//   expoAxes    … 各軸の動ける範囲と、いまの位置での丸めの粗さ
+	//   expoResolve … 望む段 → 実際に送る値(丸めるのはここだけ)
+	//   expoStops   … 値 → 段(計画の限界・基準を同じものさしで測る)
+	//  これにより、
+	//   ・未知の刻みのカメラでも、真に無段のカメラでも、特別扱い無しで通る
+	//   ・刻みを答えないカメラを勝手に 1/3 段と決めつける逃げ道が無くなる
+	//   ・テーブルの複製が消える(以前は tables_ + 制御 4 個 + 同期撮影の台数ぶん)
 	class exposureCtl
 	{
 	public:
-		// 設定可能値テーブルと撮影制御方法の限界・優先度で初期化する。
-		//  tables                : iso/ss/fn の設定可能値テーブル(apex昇順)
-		//  limitBright/limitDark : 明側/暗側の限界(iso/ss/fn の文字列。空="限界なし")
-		//  priority              : 変更する優先度(上位から先に変更)
-		void init(const expoTables& tables,
+		// デバイスと撮影制御方法の限界・優先度で初期化する。
+		//  dev は撮影セッションの間ずっと生きていること(この器は参照を持つだけ)。
+		//  戻り: デバイスが段で答えられなければ false(撮影を始めてはいけない)。
+		bool init(apiBase* dev,
 		          const hgc::exposure& limitBright,
 		          const hgc::exposure& limitDark,
 		          const hgc::exposureType priority[hgc::exposureTypeNum]);
 
-		// 現在値を設定する(各テーブルの最も近い値にスナップする)。
+		// 現在値を設定する(無段。デバイスの範囲の外へは出さない)。
+		//  **撮影制御方法の限界の外にある値はそのまま受け取る**。窓の境目で前の窓の露出を
+		//  引き継ぐときに使うので、ここで限界へ引き戻すと境目で段差になる(2026-08-29)。
+		//  限界の外にいる間は「内へ戻る向き」だけ動ける。
 		void setCurrent(const hgc::exposure& e);
-		// 明側/暗側の限界を基準にする(仕様 4.4)。
 		void setToBrightLimit();
 		void setToDarkLimit();
-
 		// 最長ss(=最も露出の多い側のss)の上限を maxSsSec[秒] に締める(仕様7.4.2)。
-		// 夜間ssや「撮影周期-2秒」を超えてssが伸びないようにする。現在ssが超過していれば引き下げる。
 		void capLongestSs(double maxSsSec);
 
+		// いまの露出。**デバイスが設定できるいちばん近い値**(カメラへ送るのはこれ)。
 		hgc::exposure current() const { return cur_; }
+		// 丸める前の無段の位置[段]。大きいほど明るい。
+		double brightness() const;
+		// 軸ごとの現在位置[段](丸める前)。配分の比較に使う。
+		expoPoint point() const;
+		// 丸めた後の明るさ[段]。current() を実際に乗せたときの明るさ。
+		double appliedBrightness() const { return gotSum_; }
 
-		// 1/3 段 明るく/暗くする。優先度順(reversePriority=true で逆順)に限界まで変更。変更不可なら false。
-		// 逆順は §4.5 の往復対称(基準へ近づくときは優先度の逆で戻す)に使う。
-		bool brighten(bool reversePriority = false);
-		bool darken(bool reversePriority = false);
+		// 丸めの粗さ[段]。いちばん細かい/いちばん粗い(動ける軸だけ)。
+		//  無段の軸は 0 なので数えない。どの軸も無段なら 0 を返す。
+		double minStepStops() const;
+		double maxStepStops() const;
 
-		// home(基準)へ戻る向きの 1/3 段。home からずれている軸を優先度の逆順で先に戻し、
-		// home にある軸は飛び越えない(離れたときと逆順に巻き戻す=往復で同じ組合せ。§4.5)。
-		// bright=戻る向き(home が現在より明るければ true)。
-		bool stepHome(bool bright, const hgc::exposure& home);
+		// 【無段階で動かす】evStops 段ぶん(正=明るく)。優先度順に軸へ配り、上下限で止める。
+		//  home != nullptr: home からずれている軸を優先度の逆順で先に戻す(§4.5 往復対称)。
+		//   戻す軸は home を通り越さない。戻し終えてもまだ残っていれば通常の優先度順で配る。
+		//  戻り: 実際に動いた量[段]。
+		double moveStops(double evStops, const hgc::exposure* home = nullptr);
 
-		// 軸を指名して1目盛りだけ動かす(bright=明るい向き)。優先度は見ない。
-		//  窓の境目で配分だけを組み替えるのに使う(明るい向きと暗い向きを1つずつ動かすと
-		//  明るさが変わらない)。限界の判定は他の経路と同じで、**移動先が限界の外なら動かない**。
-		//  したがって「限界の外からさらに外へ」は起きず、「外から内へ」は通る。
-		//  戻り: 動いたら true。
-		bool stepAxis(hgc::exposureType axis, bool bright);
+		// 1 目盛りだけ明るく/暗くする(優先度順に、動かせる軸を1つ)。
+		//  無段の軸には目盛りが無いので amountStops を代わりに使う(0 なら動かない)。
+		//  窓の境目の配分寄せ(migrateToward)と試験で使う。
+		bool brighten(double amountStops = 0.0);
+		bool darken(double amountStops = 0.0);
+		// 軸を指名して動かす。目盛りがあればその1目盛り、無ければ amountStops。
+		bool stepAxis(hgc::exposureType axis, bool bright, double amountStops = 0.0);
 
-		// evStops 段ぶん露出を変更する(正=明るく)。1/3段刻みで反映。
-		// 戻り値: 反映後の露出設定。
+		// evStops 段ぶん露出を変更する(正=明るく)。無段。戻り値: 反映後の露出設定。
 		hgc::exposure applyStops(double evStops);
 
 	private:
-		struct ladder { std::vector<expoEntry> e; int idx = 0; }; // apex昇順と現在位置
-		ladder iso_, ss_, fn_;	// iso/ss は idx↑で明るい、fn は idx↑で暗い
-		// 限界の実数(0=限界なし)。real が 0 になる露出値は無いので 0 を番兵に使う。
-		double limBIso_ = 0, limDIso_ = 0, limBSs_ = 0, limDSs_ = 0, limBFn_ = 0, limDFn_ = 0;
+		// 軸1本。値の並びは持たない。デバイスが答えた範囲と粗さ、それといまの位置だけ。
+		struct axis
+		{
+			expoKind kind = expoKind::iso;
+			double   b    = 0.0;			// いまの寄与(無段)
+			double   tLo  = 0.0, tHi = 0.0;	// デバイスが出せる範囲
+			double   bLo  = 0.0, bHi = 0.0;	// それを撮影制御方法の限界で締めたもの
+			double   notch = 0.0;			// 丸めの粗さ[段]。0=無段
+			bool     lim   = false;			// 限界が指定されているか(締めたか)
+			double   limB = 0.0, limD = 0.0;	// 限界の段(明側/暗側)
+			bool     hasLimB = false, hasLimD = false;
+		};
+		apiBase* dev_ = nullptr;
+		axis     iso_, ss_, fn_;
+		double   ssCap_ = 0.0;	// capLongestSs で締めた最長 ss[秒](0=無し)
 		hgc::exposureType priority_[hgc::exposureTypeNum] =
 			{ hgc::exposureType::iso, hgc::exposureType::ss, hgc::exposureType::fn };
 		hgc::exposure cur_{};
+		double        gotSum_ = 0.0;	// current() を乗せたときの明るさ[段]
 
-		void rebuildCurrent();
-		bool stepIso(bool bright);
-		bool stepSs(bool bright);
-		bool stepFn(bool bright);
-		bool stepOne(bool bright, bool reverse = false);
+		void   refreshAxes();				// デバイスへ範囲と粗さを聞き直す
+		void   recalcRanges();				// 範囲 ∩ 限界
+		void   rebuildCurrent();			// b → デバイスが出せる値(cur_)
+		double moveAxis(axis& a, double delta);
+		axis&  axisRef(hgc::exposureType t);
+		bool   stepOne(bool bright, double amountStops);
 	};
 
 	// 【窓の境目の配分寄せ 仕様 2026-08-29】いまの明るさを変えずに、iso/ss/fn の配分だけを
@@ -218,12 +376,12 @@ namespace expo
 	//  軸を1つずつ同時に動かすので明るさは変わらず、自動露出の1歩とは別枠で使える。
 	//  もう合っている / 動かせる組が無い ときは false(何も変えない)。
 	//  want は寄せ先を計算するための作業用の器。**呼ぶ側が窓ごとに1回だけ** ctl と同じ
-	//  限界・優先度・ss上限で init しておくこと(init はテーブルを複製するので毎コマ作ると
-	//  内部RAMを削る)。中身は毎回上書きするので値の引き継ぎは不要。
+	//  デバイス・限界・優先度・ss上限で init しておくこと。中身は毎回上書きする。
+	//  amountStops = 目盛りを持たない軸(無段)を動かす量[段]。
 	bool migrateToward(exposureCtl& ctl,
 	                   exposureCtl& want,
-	                   const expoTables& tables,
-	                   const hgc::exposure& initial);
+	                   const hgc::exposure& initial,
+	                   double amountStops);
 }
 
 #endif // _EXPOSURE_MATH_H_

@@ -1,17 +1,29 @@
 ﻿#include "common.h"
 #include "detectCanonCCapi.h"
 #include "apiCanonCCAPI.h"
+#include "netThread.h"
+#include "httpAuth.h"
+#include <cstdio>
 
-// このバックエンドが対応するサービス定義(キーワード→apiClass)。
-// 旧 deviceDiscovery の静的テーブルをそのまま移設(挙動不変)。
-//  ・sony(DigitalImaging)はまだ専用 interface が無いので暫定で CANON_CCAPI に割り当て。
-//    将来 Sony バックエンドを追加する際にこの行は Sony 側へ移す(本改修外・構造のみ)。
+namespace
+{
+	// httpAuth が host を覚えるときの鍵と同じ形("http://ip:port")。net.cpp の endpointOf と揃える。
+	std::string endpointOf(const std::string& url)
+	{
+		const size_t p = url.find("://");
+		if (p == std::string::npos) { return url; }
+		const size_t s = url.find('/', p + 3);
+		return url.substr(0, (s == std::string::npos) ? url.size() : s);
+	}
+}
+
+// このバックエンドが自分のカメラと見なす SSDP のサービス識別語(キヤノン CCAPI)。
+//  他社のカメラはそのバックエンドが自分の語を持つ(2026-09-06: Sony の暫定写像を削除)。
 const std::vector<deviceDiscovery::definitionIntereface>& detectCanonCCapi::interfaces() const
 {
 	static const std::vector<deviceDiscovery::definitionIntereface> ifaces =
 	{
-		{ {"ICPO-CameraControlAPIService","schemas-canon-com"}, device::apiClass::CANON_CCAPI },
-		{ {"DigitalImaging","schemas-sony-com"},                device::apiClass::CANON_CCAPI },
+		deviceDiscovery::definitionIntereface({"ICPO-CameraControlAPIService","schemas-canon-com"}),
 	};
 	return ifaces;
 }
@@ -35,7 +47,7 @@ class apiBase* detectCanonCCapi::makeApi()
 bool detectCanonCCapi::identifyAt(const std::string& host, class device& out)
 {
 	out.clear();
-	out.apiClass = device::apiClass::CANON_CCAPI;
+	out.origin   = this;
 	out.location = "http://" + host + ":49152/upnp/CameraDevDesc.xml";
 
 	apiCanonCCAPI api;
@@ -45,11 +57,42 @@ bool detectCanonCCapi::identifyAt(const std::string& host, class device& out)
 	return true;
 }
 
+// 挨拶(2026-08-28 の知見を在否監視からここへ移動 2026-09-06)。
+//
+// 【何が必要か(実機 EOS R50 V で確定)】
+//  ・SSDP や UPnP の記述子(:49152)では**足りない**。記述子を出しているのは別のサービス
+//  ・CCAPI(:8080)へ**届くだけでも足りない**。認証なしで叩いて 401 を貰っても変わらなかった
+//  ・**200 が返る CCAPI アクセス**で「接続が完了しました」に変わった
+//  機器情報を1回読むだけ。軽く、どの機種にもあり、こちらにも有用な内容が返る。
+//
+// 【まず素で投げる(2026-09-05 ユーザー指示)】認証を使わない設定のカメラでは素の GET が 200 になる。
+//  net の GET は素で投げ、401 を受けたときだけ認証を付けて1度だけ投げ直す。
+//
+// 【やめどき】403 = カメラが締め出した。投げ直すほど悪くなるので即やめる(戻すには本体の接続設定を
+//  入れ直すしかない)。401 なのに手持ちの資格情報が1つも無い = 続けると 403 になる。1回でやめる。
+//  それ以外(届かない・nc の追いつき待ち)は在否監視が間隔をあけて頼み直す。
+detectBase::greetResult detectCanonCCapi::greet(const class device& d)
+{
+	greetResult r;
+	if (d.urlAccess.empty()) { r.giveUp = true; r.detail = "no access url"; return r; }
+	std::string resp;
+	if (netThread::httpGet(d.urlAccess + "/ver100/deviceinformation", resp)) { r.done = true; return r; }
+	int st = 0; std::string body;
+	netThread::lastHttpFailure(st, body);
+	if      (st == 403)                                  { r.giveUp = true; }
+	else if (st == 401 && !httpAuth::hasCandidates())    { r.giveUp = true; }
+	char b[200];
+	std::snprintf(b, sizeof(b), "http=%d %s [%s]", st, d.urlAccess.c_str(),
+	              httpAuth::diagnose(endpointOf(d.urlAccess)).c_str());
+	r.detail = b;
+	return r;
+}
+
 // IP 直指定で CCAPI カメラを構築する(SSDP不使用。エミュレータ/広告停止カメラ対策)。
 bool detectCanonCCapi::makeManualDevice(const std::string& host, class device& out)
 {
 	out.clear();
-	out.apiClass = device::apiClass::CANON_CCAPI;
+	out.origin   = this;
 	out.location = host;
 	out.urlAccess = "http://" + host + ":8080/ccapi";	// CCAPI のアクセスURL
 	out.model = "Canon CCAPI (manual)";

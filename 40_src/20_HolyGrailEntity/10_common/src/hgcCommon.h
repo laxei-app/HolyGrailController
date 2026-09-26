@@ -79,6 +79,22 @@ namespace hgc
 		uint32_t sensorPixelV = 0;		// センサー縦[pixel]
 		std::vector<std::string> isoList;	// 設定可能iso感度(カメラ設定値の文字列)
 		std::vector<std::string> ssList;	// 設定可能シャッター速度(カメラ設定値の文字列)
+		// 撮影周期の下限の規則(2026-09-06)。最小周期 = 最長ss × intervalFactor + intervalMargin[秒]。
+		//  カメラ本人(apiBase::fillCameraProfile)が答え、所持カメラの登録時に入る。
+		//  0 = 未設定 → 既定の 1.0 と 2.0(=最長ss+2秒。キヤノン機の従来の規則)。
+		//  内蔵カメラは RAW 加算の後処理があるので 1.25 と 0 を答える。共通部分は機種を判断しない。
+		double intervalFactor = 0.0;
+		double intervalMargin = 0.0;
+		// 【カメラの性質(2026-09-06)】UI と Entity は「内蔵かどうか」ではなく、この欄で振る舞いを決める。
+		//  出所は2つ: 機材として決まっている性質はマスタ(lens_fixed)、接続・実装の性質は
+		//  api 実装(apiBase::fillCameraProfile)。どちらも所持カメラの登録時に入る。
+		bool lensFixed  = false;	// レンズ交換不可(計画・所持カメラでレンズを変えない)
+		bool localOnly  = false;	// この端末でしか撮れない(外部端末へ送れない)
+		bool noSyncShot = false;	// 同期撮影に参加できない
+		bool readOnly   = false;	// 利用者が所持カメラの欄を編集できない(端末が答える値だから)
+		// 撮ったコマから動画を作れる(2026-09-23)。内蔵カメラ(apiBuiltin)だけが立てる。
+		//  UI はこの欄で「動画設定」のページを出すかどうかを決める(機種名では判断しない)。
+		bool videoOut   = false;
 		// 測光にライブビューを主体で使う機種か。既定(false)は「サムネイルだけ」。
 		//  撮影済みサムネイルの取得は最も正確だが、機種によっては取得回数に上限があり
 		//  (EOS R10 は電源投入あたり 200 回程度で応答しなくなる)一晩持たない。
@@ -98,11 +114,16 @@ namespace hgc
 	{
 		std::string maker;			// メーカー名
 		std::string name;			// レンズ名称
+		std::string mount;			// マウント("RF"/"EF" など。マスタ lenses_list.json の "mount"。空=不明)
 		double focalLength = 0.0;	// 焦点距離[mm]
 		double fn = 0.0;			// 開放F値(F最小)
 		double fnMax = 0.0;			// 最小絞り(F最大)。0=未設定
+		// 【選べる絞りの並び(2026-09-19)】可変絞りのレンズ(iPhone 13 など)が持つ実際の値。
+		//  空 = 並びは無い(固定絞りなら fn==fnMax の 1 点、交換レンズなら fn〜fnMax の連続)。
+		std::vector<std::string> fnList;
 		bool   hasContact = true;	// 電子接点有無
 		bool   fisheye = false;		// 魚眼レンズ(投影方式=等距離)。マスタ lenses_list.json の "fisheye" 由来
+		bool   readOnly = false;	// 利用者が欄を編集できない(端末が答えた値。削除は可)。登録時に api 実装が立てる
 	};
 
 	// 5.5 所持カメラ(camera + 組み合わせるレンズ + 自動挿入)
@@ -117,7 +138,10 @@ namespace hgc
 	struct exposureSmoothing
 	{
 		double   hysteresis    = 1.0;	// ヒステリシス[段]。範囲 1/3～3
-		uint16_t movingAverage = 5;		// 移動平均フレーム数。範囲 1～10
+		uint16_t movingAverage = 5;		// 移動平均フレーム数。範囲 1～10(2026-09-21 に廃止。読み込み互換のため残す)
+		// 【なめらかさ[分](2026-09-21)】露出の変化速度が 0 から上限まで変わるのにかける時間。
+		//  測光の移動平均をやめ、代わりに速度の変化を抑える(加速度の上限)。範囲 1～10、既定 4。
+		double   smoothMin = 4.0;
 	};
 
 	// --- 時刻ユーティリティ(プラットフォーム非依存) ---

@@ -2,6 +2,8 @@
   {
     "manufacture": "Canon",
     "name": "EOS R3",
+    "lens_fixed": false,
+    "meter_lv": false,
     "pixel_h": 4000,
     "pixel_w": 6000,
     "sensor_h": 24.0,
@@ -12,6 +14,8 @@
   {
     "manufacture": "Canon",
     "name": "EOS R5",
+    "lens_fixed": false,
+    "meter_lv": false,
     "pixel_h": 5464,
     "pixel_w": 8192,
     "sensor_h": 24.0,
@@ -22,6 +26,8 @@
   {
     "manufacture": "Canon",
     "name": "EOS R5 C",
+    "lens_fixed": false,
+    "meter_lv": false,
     "pixel_h": 5464,
     "pixel_w": 8192,
     "sensor_h": 24.0,
@@ -32,6 +38,8 @@
   {
     "manufacture": "Canon",
     "name": "EOS R5 Mark II",
+    "lens_fixed": false,
+    "meter_lv": false,
     "pixel_h": 5464,
     "pixel_w": 8192,
     "sensor_h": 24.0,
@@ -42,6 +50,8 @@
   {
     "manufacture": "Canon",
     "name": "EOS R6",
+    "lens_fixed": false,
+    "meter_lv": false,
     "pixel_h": 3648,
     "pixel_w": 5472,
     "sensor_h": 24.0,
@@ -52,6 +62,8 @@
   {
     "manufacture": "Canon",
     "name": "EOS R6 Mark II",
+    "lens_fixed": false,
+    "meter_lv": false,
     "pixel_h": 4000,
     "pixel_w": 6000,
     "sensor_h": 24.0,
@@ -62,6 +74,8 @@
   {
     "manufacture": "Canon",
     "name": "EOS R7",
+    "lens_fixed": false,
+    "meter_lv": false,
     "pixel_h": 4640,
     "pixel_w": 6960,
     "sensor_h": 14.8,
@@ -72,6 +86,8 @@
   {
     "manufacture": "Canon",
     "name": "EOS R8",
+    "lens_fixed": false,
+    "meter_lv": false,
     "pixel_h": 4000,
     "pixel_w": 6000,
     "sensor_h": 24.0,
@@ -81,7 +97,9 @@
   },
   {
     "manufacture": "Canon",
-    "name": "EOS R10", "meter_lv": true,
+    "name": "EOS R10",
+    "lens_fixed": false,
+    "meter_lv": true,
     "pixel_h": 4000,
     "pixel_w": 6000,
     "sensor_h": 15.0,
@@ -92,6 +110,8 @@
   {
     "manufacture": "Canon",
     "name": "EOS R50",
+    "lens_fixed": false,
+    "meter_lv": false,
     "pixel_h": 4000,
     "pixel_w": 6000,
     "sensor_h": 15.0,
@@ -102,6 +122,8 @@
   {
     "manufacture": "Canon",
     "name": "EOS R50 V",
+    "lens_fixed": false,
+    "meter_lv": false,
     "pixel_h": 4000,
     "pixel_w": 6000,
     "sensor_h": 14.9,
@@ -112,6 +134,8 @@
   {
     "manufacture": "Canon",
     "name": "EOS R100",
+    "lens_fixed": false,
+    "meter_lv": false,
     "pixel_h": 4000,
     "pixel_w": 6000,
     "sensor_h": 15.0,
@@ -122,6 +146,8 @@
   {
     "manufacture": "Canon",
     "name": "EOS Kiss M2",
+    "lens_fixed": false,
+    "meter_lv": false,
     "pixel_h": 4000,
     "pixel_w": 6000,
     "sensor_h": 15.0,
@@ -132,6 +158,8 @@
   {
     "manufacture": "Canon",
     "name": "PowerShot G7 X Mark III",
+    "lens_fixed": true,
+    "meter_lv": false,
     "pixel_h": 3648,
     "pixel_w": 5472,
     "sensor_h": 8.8,
@@ -142,6 +170,8 @@
   {
     "manufacture": "Canon",
     "name": "PowerShot G5 X Mark II",
+    "lens_fixed": true,
+    "meter_lv": false,
     "pixel_h": 3648,
     "pixel_w": 5472,
     "sensor_h": 8.8,
@@ -152,6 +182,8 @@
   {
     "manufacture": "Canon",
     "name": "PowerShot SX740 HS",
+    "lens_fixed": true,
+    "meter_lv": false,
     "pixel_h": 3888,
     "pixel_w": 5184,
     "sensor_h": 4.62,
@@ -162,6 +194,8 @@
   {
     "manufacture": "Canon",
     "name": "PowerShot ZOOM",
+    "lens_fixed": true,
+    "meter_lv": false,
     "pixel_h": 3000,
     "pixel_w": 4000,
     "sensor_h": 4.62,
@@ -172,6 +206,8 @@
   {
     "manufacture": "Canon",
     "name": "PowerShot V10",
+    "lens_fixed": true,
+    "meter_lv": false,
     "pixel_h": 3648,
     "pixel_w": 5472,
     "sensor_h": 8.8,

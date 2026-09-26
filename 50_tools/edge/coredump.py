@@ -11,7 +11,7 @@
 
 【ELF が要る】ダンプはファームと1対1で、SHA が合わないと読めない。
   Invalid application image for coredump: coredump SHA256(...) != app SHA256(...)
-ビルドのたびに .pio/build/debug/elf/hgc-<版数>.elf へ控えてある(archive_elf.py)。
+ビルドのたびに .pio/build/debug/elf/tlp-<版数>.elf へ控えてある(archive_elf.py)。
 版数はエッジの画面右下に出ている。
 
   python coredump.py COM7             # 機種は自動(区画表とELFの両方を総当たり)
@@ -69,7 +69,7 @@ def elfCandidates(want):
     out = []
     for t in BUILD_DIRS:
         d = os.path.join(REPO, "40_src", "90_Target", t, ".pio", "build", "debug", "elf")
-        out += glob.glob(os.path.join(d, "hgc-*.elf"))
+        out += glob.glob(os.path.join(d, "tlp-*.elf"))
     out.sort(key=os.path.getmtime, reverse=True)
     if want:
         hit = [e for e in out if want in os.path.basename(e)]

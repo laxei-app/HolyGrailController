@@ -1,4 +1,4 @@
-﻿package app.laxei.holygrail
+﻿package app.laxei.twylapse
 
 // holyGrailEntity(extern "C") への JNI ブリッジ窓口。
 // ネイティブ実装は 20_platform/20_Android/src/jniBridge.cpp。
@@ -66,6 +66,8 @@ object HgeNative {
     external fun nativeSetPlanInterval(seconds: Double): Int   // 撮影周期。最小(最長ss+2)未満は失敗
     external fun nativeRenamePlan(id: String, name: String): Int  // 計画名をid指定で変更(リスト直接リネーム)
     external fun nativeSetPlanLandscape(landscape: Int): Int   // 横向き(ランドスケープ)。再生成
+    // 動画設定(2026-09-23)。{"make","size","aspect","fps","quality"} の JSON を渡す
+    external fun nativeSetPlanVideo(json: String): Int
     // スケジュール手動編集(7.3.2)
     external fun nativeSetBandMode(sunriseMode: Int, sunsetMode: Int): Int  // 0=自動,1=挿入,2=排除
     external fun nativeSetBoundary(beforeType: Int, afterType: Int, occ: Int, whenIso: String): Int
@@ -82,7 +84,9 @@ object HgeNative {
     external fun nativeGetCcmDefaults(): String      // 参照専用の初期値(コード上の出荷時設定)
     external fun nativeGetPlanCcm(): String          // 計画固有ccm(初期値とは別)
     external fun nativeSetPlanCcm(json: String): Int
-    external fun nativeGetExpoValues(): String
+    // 撮影制御方法エディタの選択肢。stepPerStop: 2=1/2段 / 3=1/3段 / 12=1/12段 / 0=おまかせ。
+    external fun nativeGetExpoValues(stepPerStop: Int): String
+    external fun nativeGetPresetExpoValues(forPhone: Boolean): String   // 初期値のエディタ用(スマホ向け=1/12段 / 外部=1/3段)
     external fun nativeSunAltitudeTimes(altitudeDeg: Int): String   // {"start":"MM/dd HH:mm","end":...}
     external fun nativeSetListener(listener: HgeListener?)
 
@@ -97,6 +101,24 @@ object HgeNative {
     // 機材マスタを読み直す(公開リポジトリから取り込んだ直後に呼ぶ)
     external fun nativeReloadMaster()
     external fun nativeAddOwnedCamera(name: String): Int
+    // スマホ内蔵カメラを所持カメラへ足す(まだ無いものだけ)。戻り=足した台数。
+    //  端末そのものなので登録可否は聞かない(外付けカメラのプロンプトとは扱いが違う)。
+    external fun nativeRegisterBuiltinCameras(namesJson: String): Int
+    // 標準ひな形(EOS R3 ぶん 8 種)を作る。初回起動用。namesJson=ひな形と撮影制御方法の名前(UI の言語で)
+    external fun nativeSeedStandardTemplates(namesJson: String): Int
+    // 初回起動の種まきの答え待ち(1=待っている)。待っている間は出荷時の固定計画を作らせない。
+    external fun nativeSetSeedPending(on: Int): Int
+    // RAW 加算(2026-09-06)。Camera2 から受け取った RAW を足して現像する。ループは C++(rawStack)。
+    external fun nativeRawStackBegin(width: Int, height: Int, cfa: Int, keepFull: Boolean)
+    // 足したものを DNG(フルサイズ)として fd へ書く。fd はネイティブ側が閉じる
+    external fun nativeRawStackWriteDng(fd: Int, whiteLevel: Int, black: FloatArray, gains: FloatArray,
+                                        ccm: FloatArray, shading: FloatArray?, cols: Int, rows: Int,
+                                        model: String, dateTime: String, expSec: Double, iso: Int): Boolean
+    external fun nativeRawStackAdd(buf: java.nio.ByteBuffer, rowStride: Int): Boolean
+    external fun nativeRawStackFrames(): Int
+    external fun nativeRawStackDevelop(bitmap: android.graphics.Bitmap, whiteLevel: Int, black: FloatArray,
+                                       gains: FloatArray, ccm: FloatArray, shading: FloatArray?,
+                                       shadingCols: Int, shadingRows: Int): Boolean
     external fun nativeAddOwnedLens(name: String): Int
     external fun nativeRemoveOwnedCamera(name: String): Int
     external fun nativeRemoveOwnedLens(name: String): Int
@@ -136,6 +158,15 @@ object HgeNative {
     // 発見/接続カメラ識別情報を所持へ反映。allowAdd=true:未一致は自動追加 / false:追加せず区分のみ返す(裏の発見→登録可否UI)。
     // 返り値: 0=既存にassignedName反映, 1=未定義枠へserial確定, 2=新規(allowAdd時は追加済/非allowAdd時は未追加), <0=エラー。
     external fun nativeRecordCameraIdentity(model: String, serial: String, assignedName: String, allowAdd: Boolean): Int
+    // 同じだが実機を探しに行かない。エッジ(別ネットワーク)が見つけたカメラを登録するとき専用。
+    external fun nativeRecordRemoteCameraIdentity(model: String, serial: String, assignedName: String, allowAdd: Boolean): Int
+    // 外部端末から貰った ISO/SS の並びを入れる(空のときだけ)。1=入った。要否は needsLists で先に聞く。
+    external fun nativeApplyCameraLists(serial: String, json: String): Int
+    external fun nativeCameraNeedsLists(serial: String): Int
+    // このスマホの識別子("tlp-"+32桁16進)。/asset/phoneId.json に保存され、機種変更でも移せる。
+    external fun nativePhoneId(): String
+    // 記録へ1行書く(原因調査用)。detail は英語で書く(Entityと通信路に日本語を置かない決まり)。
+    external fun nativeLogEvent(tag: String, detail: String, isError: Boolean): Int
     external fun nativeGetColors(): String                 // システム共通の色 {"night":{"text","bg"},...}
     external fun nativeSetColors(json: String): Int
     external fun nativeGetSmoothing(): String              // 露出平滑化 {"hysteresis":double,"movingAverage":int}
@@ -171,7 +202,101 @@ object HgeNative {
     @JvmStatic
     fun bleDrop(target: String) = EdgeBleLink.drop(target)
 
-    // ネイティブから呼び返される BLE のエッジ探索。見つかった端末名(HGC- を除く)を返す。
+    // ── スマホ内蔵カメラ(2026-09-05) ─────────────────────────
+    // Camera2 は Kotlin にしか無いので、Entity(apiBuiltin/detectBuiltin)から呼び返す。
+    //  ここは素通しにして、判断は一切しない(BLE の bleExchange と同じ役目)。
+    @JvmStatic
+    fun builtinList(): String = BuiltinCamera.listCameras()
+
+    // 論理カメラの配下にぶら下がっている物理カメラ(超広角・望遠など)を調べる。触らない。
+    @JvmStatic
+    fun builtinPhysicals(): String = BuiltinCamera.physicalsJson()
+
+    // 物理カメラを名指しして撮れるかの実験(1枚だけ撮って撮影結果を読む)。
+    @JvmStatic
+    fun builtinProbePhysical(logicalId: String, physId: String): String =
+        BuiltinCamera.probePhysical(logicalId, physId)
+
+    @JvmStatic
+    fun builtinDescribe(id: String): String = BuiltinCamera.describe(id)
+
+    @JvmStatic
+    fun builtinOpen(logicalId: String, physId: String, raw: Boolean): String =
+        BuiltinCamera.open(logicalId, physId, raw)
+
+    @JvmStatic
+    fun builtinClose() = BuiltinCamera.close()
+
+    // 露出を載せて1枚撮り始める(露光の終わりは待たない)。frames>1 は RAW を足して1枚にする。
+    @JvmStatic
+    fun builtinCapture(logicalId: String, physId: String, iso: Int, expNs: Long,
+                       aperture: Double, timeoutMs: Int, frames: Int, raw: Boolean): Boolean =
+        BuiltinCamera.capture(logicalId, physId, iso, expNs, aperture, timeoutMs, frames, raw)
+
+    // 端末の熱の状態(PowerManager の THERMAL_STATUS_*)。-1=取れない端末。
+    @JvmStatic
+    fun builtinThermal(): Int = BuiltinCamera.thermalStatus()
+    // 出来上がる1コマの大きさ("幅x高さ"。分からなければ空)。出力設定の表示に使う
+    @JvmStatic
+    fun builtinFrameSize(physId: String): String = BuiltinCamera.frameSize(physId)
+
+    @JvmStatic
+    fun builtinHasPermission(): Boolean = BuiltinCamera.hasPermission()
+
+    // 直前のコマを実際に撮った物理カメラ id(狙いどおりかの確認用)。
+    @JvmStatic
+    fun builtinActivePhysical(): String = BuiltinCamera.activePhysicalId()
+    @JvmStatic
+    fun builtinCaptureReport(): String = BuiltinCamera.captureReport()   // 直近の1コマの経過(調査用ログ)
+
+    // 直前に撮り始めた1枚を受け取る(まだ露光中なら待つ)。
+    //  【2026-09-06 に一度消えていた】試し撮りの入口を外したとき、隣のこの2つまで一緒に消し、
+    //  一晩の撮影で1枚も受け取れなかった(現像は毎コマ成功していたのに保存 0 枚・測光 stage=1)。
+    @JvmStatic
+    fun builtinTakeImage(timeoutMs: Int): ByteArray? = BuiltinCamera.takeImage(timeoutMs)
+
+    // ── 動画の書き出し(2026-09-05) ───────────────────────────
+    // 撮ったコマをその場で1枚ずつ足していく。撮影の終わりに必ず finish を呼ぶこと
+    //  (MP4 は閉じないと再生できない)。
+    // 戻り=ギャラリーでの名前(tlp_yymmddhhmmss.mp4)。"" =失敗。
+    @JvmStatic
+    //  optJson: 計画の動画設定({"make","size","aspect","fps","quality"})。空なら既定。
+    fun videoStart(optJson: String?, planName: String): String {
+        BuiltinVideo.setPlanName(planName); return BuiltinVideo.start(optJson)
+    }
+
+    // 静止画(利用者が見える場所)。撮影の始めに1回、以後コマごとに保存する。
+    @JvmStatic
+    fun stillBegin(planName: String) { BuiltinStill.begin(planName) }
+    @JvmStatic
+    fun stillSaveJpeg(jpeg: ByteArray?): Boolean = BuiltinStill.saveJpeg(jpeg)
+    @JvmStatic
+    fun stillNextFrame() { BuiltinStill.nextFrame() }
+    // 動画の出来(コマの大きさの振れと、予算を上げた回数)。撮影の終わりにログへ残す
+    @JvmStatic
+    fun videoReport(): String = BuiltinVideo.report()
+    // 1回の撮影の始まり(前の撮影の持ち越しを断つ)
+    @JvmStatic
+    fun sessionBegin() { BuiltinCamera.sessionBegin() }
+    // ピントを実測で決める(明るくて測れるときだけ)。戻り=ログ1行
+    @JvmStatic
+    fun focusProbe(sec: Double, iso: Int, fn: Double): String = BuiltinCamera.focusProbe(sec, iso, fn)
+    // ピントを指定できる端末か("manual" / "afOnly" / "fixed")と、端末が申告している位置
+    @JvmStatic
+    fun focusControl(): String = BuiltinCamera.focusControl()
+    @JvmStatic
+    fun focusDiopter(): Double = BuiltinCamera.focusDiopter()
+    // DNG を出すか(撮り始める前に決める。加算器がフルサイズの和を持つかが変わる)
+    @JvmStatic
+    fun setWantDng(on: Boolean) { BuiltinCamera.setWantDng(on) }
+
+    @JvmStatic
+    fun videoAddJpeg(jpeg: ByteArray?): Boolean = BuiltinVideo.addJpeg(jpeg)
+
+    @JvmStatic
+    fun videoFinish(): String = BuiltinVideo.finish()
+
+    // ネイティブから呼び返される BLE のエッジ探索。見つかった端末名(TLP- を除く)を返す。
     //  BLE には UDP ブロードキャストが無いので、検索はアドバタイズのスキャンで代える。
     @JvmStatic
     fun bleScanNames(timeoutMs: Int): Array<String> =
@@ -210,10 +335,13 @@ object HgeNative {
     //  別の場所のカメラのIPを配ることになり有害)。ETPのコマンドとエッジ側の受信処理は互換のため残す。
     external fun nativeEdgeCameraInfo(host: String, port: Int, json: String): Int
     external fun nativeEdgeProgress(host: String, port: Int, planId: String): String // progress の JSON。planId 指定=計画別状態(空=集約)
-    external fun nativeEdgeLogList(host: String, port: Int): String   // ログファイル名一覧の JSON 配列 ["hg_....log",...]
+    external fun nativeEdgeLogList(host: String, port: Int): String   // ログファイル名一覧の JSON 配列 ["tlp_....log",...]
     external fun nativeEdgeLogRead(host: String, port: Int, name: String, offset: Int): ByteArray // ログの1チャンク(最大4KB)。空=EOF/失敗
     // 撮影レポートの回収。30秒スイープが edgeInfo.reports>0 のときだけ使う。
     // 取得→保存できたら削除、の順(取得だけで消さない)。
+    external fun nativeEdgeRelease(host: String, port: Int): Int                  // 持ち主の登録を外す。0=外せた
+    external fun nativeEdgeSeenCameras(host: String, port: Int): String           // [{"serial","model","assignedName"}]。失敗="[]"
+    external fun nativeEdgeCameraSpec(host: String, port: Int, serial: String): String  // {"isoList","ssList"}。無い="{}"
     external fun nativeEdgeReportList(host: String, port: Int): String            // [{"name",...},...]。失敗="[]"
     external fun nativeEdgeReportRead(host: String, port: Int, name: String): String // 1件のJSON本文。失敗=""
     external fun nativeEdgeReportDelete(host: String, port: Int, name: String): Int  // 0=削除済み

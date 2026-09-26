@@ -5,7 +5,7 @@
 
 // ネットワークに接続されているカメラを検索する
 // deviceList:検索したカメラの情報
-// ifaces    :検索するサービスの定義(キーワード→apiClass)。呼び出し側(受信バックエンド)が保持。
+// ifaces    :検索するサービスの識別語。呼び出し側(受信バックエンド)が保持。
 // 　　　サービスの名称は接続するインターフェースごとに決まっている。
 // 　　　canon : ICPO-CameraControlAPIService
 // 　　　sony  : DigitalImaging
@@ -53,15 +53,12 @@ int deviceDiscovery::search(std::vector<device>& deviceList, const std::vector<d
                 DBGLN(col::GRN, "netThread::ssdpRead(%4ums,%u))",tool::getElapse(itvl), deviceInfo.length());
                 itvl = tool::startElapse();
                 class device deviceTmp;
+                bool matched = false;
                 for (const auto& interface : ifaces)
                 {   // 対象の service を探す
-                    if(tool::findKvp(deviceInfo, interface.keywords))
-                    {   // 対象のserviceが見つかった
-                        deviceTmp.apiClass = interface.apiClass;
-                        break;
-                    }
+                    if(tool::findKvp(deviceInfo, interface.keywords)) { matched = true; break; }
                 }
-                if (deviceTmp.apiClass == device::apiClass::NON)                   { continue; } // 対象ではない
+                if (!matched)                                           { continue; } // 対象ではない
 
                 // 対象のデバイスなので LOCATION を探す
                 std::string location = tool::getKvpValue(deviceInfo, "location");

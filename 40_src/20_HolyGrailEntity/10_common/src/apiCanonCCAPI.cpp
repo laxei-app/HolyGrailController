@@ -205,10 +205,39 @@ errCode apiCanonCCAPI::initManual(class device& device)
         } catch (const std::exception&) { /* deviceinformation 無し/解析失敗は無視 */ }
     }
 
+    normalizeIdentity(device);
     this->device = device;
     liveViewInfo.resize(1024 * 8);
     apiMark("init: done");
     return err;
+}
+
+// 【型番とメーカー名を機材マスタの綴りに揃える(2026-09-06)】
+//  UPnP 記述は modelName="Canon EOS R10" / manufacturer="Canon"、CCAPI の deviceinformation は
+//  productname="Canon EOS R10" / manufacturer="Canon.Inc" と、同じ機体でも綴りが違う。
+//  機材マスタと所持カメラは型番だけ("EOS R10")とメーカー1語("Canon")で持つので、ここで揃える。
+//  以前は共通側(dataManager::stripMaker)が毎回この差を吸収していた。綴りの癖はキヤノンの都合なので
+//  キヤノンの実装が正す。共通は device.model / manufacturer をそのまま鍵にする。
+void apiCanonCCAPI::normalizeIdentity(class device& device)
+{
+    auto alnumRun = [](const std::string& s) -> size_t {
+        size_t i = 0;
+        while (i < s.size() && ((s[i] >= 'A' && s[i] <= 'Z') || (s[i] >= 'a' && s[i] <= 'z') ||
+                                (s[i] >= '0' && s[i] <= '9'))) { ++i; }
+        return i;
+    };
+    const size_t mk = alnumRun(device.manufacturer);
+    if (mk > 0)
+    {
+        const std::string maker = device.manufacturer.substr(0, mk);	// "Canon.Inc" → "Canon"
+        std::string& m = device.model;
+        if (m.size() > mk && m.compare(0, mk, maker) == 0 && (m[mk] == ' ' || m[mk] == '\t'))
+        {
+            m.erase(0, mk);
+            while (!m.empty() && (m.front() == ' ' || m.front() == '\t')) { m.erase(0, 1); }
+        }
+        device.manufacturer = maker;
+    }
 }
 
 // DeviceDescriptor の内容を取得する。
@@ -242,6 +271,7 @@ errCode apiCanonCCAPI::getDeviceDescriptor(class device& device)
     device.urlAccess = tool::getXmlTagValue(deviceDescriptor, "ns:X_accessURL");
     device.urlbase = tool::getXmlTagValue(deviceDescriptor, "URLBase");
     device.serialno = tool::getXmlTagValue(deviceDescriptor, "serialNumber");
+    normalizeIdentity(device);
     return ERR_HGC_OK;
 }
 
@@ -354,7 +384,13 @@ errCode apiCanonCCAPI::analizeUseFunction(class device& device, std::string& cat
 
             funcList[func.funcNum] = func;      // 機能リストに登録
             // 必要なものが揃ったら、残りのカタログを読まずに打ち切る。
-            if (funcList.size() == useFunction.size()) { sax.stop = true; }
+            //  無くてもよい機能(optional)は数に入れない。持っていない機種で永久に揃わず、
+            //  毎回カタログを最後まで読むことになるため(2026-09-19)。
+            //  **funcList の件数では数えない**。optional が先に見つかると、必須が揃う前に
+            //  件数だけ届いて打ち切ってしまう。必須が1つずつ見つかったかで数える。
+            size_t need = 0, got = 0;
+            for (const auto& u : useFunction) { if (!u.optional) { ++need; if (u.find) { ++got; } } }
+            if (got >= need) { sax.stop = true; }
         };
         json::sax_parse(catalog, &sax);
     }
@@ -408,6 +444,10 @@ errCode apiCanonCCAPI::probeUseFunction(class device& device)
 		{ funcNum::SHOOTMODE,      "shooting/settings/shootingmode",             verb::GET | verb::PUT },
 		{ funcNum::AUTOPOWEROFF,   "functions/autopoweroff",                     verb::GET | verb::PUT },
 		{ funcNum::EVENT_POLL,     "event/polling",                              verb::GET },
+		// 露出の設定ステップ(GET のみ)。持っていない機種は 404 になり、そのまま「無い」で通る。
+		{ funcNum::EXP_STEP_AV,    "customfunction/exposureincrements/av",       verb::GET },
+		{ funcNum::EXP_STEP_TV,    "customfunction/exposureincrements/tv",       verb::GET },
+		{ funcNum::ISO_STEP,       "customfunction/isoincrements",               verb::GET },
 	};
 	// 【ver140 まで見る(2026-08-14)】R50 V は contents が ver140 にあった。ver130 までで
 	//  打ち切っていたため「contents はどのバージョンにも無い」と誤判定していた。
@@ -557,6 +597,31 @@ errCode apiCanonCCAPI::rdyShutter(const cmdt::shotSet& shotSet)
     return err;
 }
 // シャッターを切る
+// 【カード起因かを見分ける(2026-08-19 の知見をここへ移動)】カメラは 503 の本文で理由を言う。
+//  実測(EOS R50 V, カード満杯): {"message":"Can not write to card"}
+//  仕様上の意味は「撮影中にメディアへ記録できなかった」(CCAPI Reference 3-40)。
+//  カードが無い/入れ替え待ちのときは "Card not available" が来る。
+//  どちらも**通信は成立している**ので、未検出や接続断として扱ってはいけない。
+//  応答なし(status<=0)は本当に届いていない。503 等は接続断ではない。
+apiBase::failInfo apiCanonCCAPI::lastFailure(void) const
+{
+	failInfo f;
+	int status = 0;
+	std::string body;
+	netThread::lastHttpFailure(status, body);
+	for (auto& c : body) { if (c == '\r' || c == '\n' || c == '\t') { c = ' '; } }	// ログは1行
+	f.noReply      = (status <= 0);
+	f.mediaBlocked = (status == 503 &&
+	                  (body.find("Can not write to card") != std::string::npos ||
+	                   body.find("Card not available")   != std::string::npos));
+	char buf[200];
+	if (status > 0)         { std::snprintf(buf, sizeof(buf), "http=%d %s", status, body.c_str()); }
+	else if (!body.empty()) { std::snprintf(buf, sizeof(buf), "http=noreply %s", body.c_str()); }
+	else                    { std::snprintf(buf, sizeof(buf), "http=noreply"); }
+	f.detail = buf;
+	return f;
+}
+
 errCode apiCanonCCAPI::actShutter(void)
 {
     if (!(funcList[funcNum::SHOT].verb == verb::POS)) { return ERR_HGC_NOT_SUPPORTED; }
@@ -631,7 +696,7 @@ std::string apiCanonCCAPI::sendFor(const std::vector<sendMap>& map, double real)
 //  64KB だけ取る(実測: EOS R50 V の CR3 は先頭 64KB に目的のタグが入っていた)。
 //  サムネイルには EXIF が無く、display 画像は解像度が縮小に合わせて書き換えられていて
 //  画素数が縮小後の値になるため、どちらも使えない(実測)。元画像の先頭が要る。
-errCode apiCanonCCAPI::readSensorSpec(double& sensorWmm, double& sensorHmm, uint32_t& pixelW)
+errCode apiCanonCCAPI::readSensorSpec(double& sensorWmm, double& sensorHmm, uint32_t& pixelW, uint32_t& pixelH)
 {
 	if (lastImagePath_.empty()) { return ERR_HGC_NO_ELEMENT; }	// まだ1枚も測光していない
 	const std::string base = apiHostBase();
@@ -648,6 +713,7 @@ errCode apiCanonCCAPI::readSensorSpec(double& sensorWmm, double& sensorHmm, uint
 
 	sensorWmm = s.sensorWmm;
 	sensorHmm = s.sensorHmm;
+	pixelH    = s.pixelH;
 	pixelW    = s.pixelW;
 	return ERR_HGC_OK;
 }
@@ -682,11 +748,50 @@ errCode apiCanonCCAPI::getSettings(cmdt::shotRange& settings)
     build(ssRaw,  expo::expoKind::ss,  settings.ss,   ssSend_);
     build(fnRaw,  expo::expoKind::fn,  settings.fNum, fnSend_);
 
+    // 目盛りの刻みはこの層が答える(2026-09-07)。表示値(0.3 秒=1/3 秒、1/125=1/128)のずれは
+    //  APEX をその刻みへ揃えることで吸収するので、論理値は文字列から作らせてよい(空のまま)。
+    //
+    // 【刻みは決め打ちにしない(2026-09-19)】キヤノンはカメラ本体の設定で ss を 1/3 段と 1/2 段、
+    //  ISO を 1/3 段と 1 段に切り替えられる(EOS R10 で確認)。1/3 段と決め打つと、1/2 段のカメラでは
+    //  1 目盛りあたり 0.17 段ずれた明るさで計算してしまう。答えてきた並びから見分ける。
+    // 【まずカメラ本人に聞く(2026-09-19)】CCAPI ver1.1.0 のカメラカスタム機能で、本体に
+    //  設定されている刻みをそのまま答える機種がある(EOS R10 で確認: av=1/2 tv=1/2 iso=1)。
+    //  答えるのは**本体メニューの設定**であって「実際に送れる値の並び」ではないので、
+    //  鵜呑みにはせず並びで裏を取る(expo::stepMatchesValues)。APEX の格子は送れる値と
+    //  一致していなければならず、食い違ったまま使うと 1 目盛りあたり 0.17 段ずれる。
+    //  聞けない機種(EOS R100 は本体に設定項目が無く API も持たない)は並びから見分ける。
+    settings.stepStops = 1.0 / 3.0;	// どちらでも決まらなかったときの既定
+    struct stepPick { double step; const char* from; };
+    auto pick = [this](funcNum fn, const std::vector<std::string>& vals, expo::expoKind k) -> stepPick
+    {
+        const double told = this->askStepStops(fn);
+        if (told > 0.0 && expo::stepMatchesValues(vals, k, told)) { return { told, "camera" }; }
+        const double seen = expo::detectStepStops(vals, k);
+        if (told > 0.0)
+        {   // 申告と並びが食い違った。並びの方が正(送れる値がすべて)なので、そちらを採る。
+            char w[128];
+            std::snprintf(w, sizeof(w), "exposure step mismatch: camera says %.3f but values look %.3f stops", told, seen);
+            dataManager::logEvent("CAMERA", w, true);
+        }
+        return { seen, "values" };
+    };
+    const stepPick pIso = pick(funcNum::ISO_STEP,    settings.iso,  expo::expoKind::iso);
+    const stepPick pSs  = pick(funcNum::EXP_STEP_TV, settings.ss,   expo::expoKind::ss);
+    const stepPick pFn  = pick(funcNum::EXP_STEP_AV, settings.fNum, expo::expoKind::fn);
+    settings.isoStep = pIso.step;
+    settings.ssStep  = pSs.step;
+    settings.fnStep  = pFn.step;
+    settings.isoReal.clear(); settings.ssReal.clear(); settings.fnReal.clear();
+    {
+        char b[192];
+        std::snprintf(b, sizeof(b), "exposure step: iso=%.3f(%s) ss=%.3f(%s) fn=%.3f(%s) stops",
+                      settings.isoStep, pIso.from, settings.ssStep, pSs.from, settings.fnStep, pFn.from);
+        dataManager::logEvent("CAMERA", b);
+    }
+
     // 測光用のAPEX換算テーブルも自前で構築する(2026-07-27 setExpoTables廃止)。
     // 設定可能値の中身も表記もカメラ依存なので、この層が ability から作るのが自然な置き場。
-    tables_.iso = expo::buildTable(settings.iso,  expo::expoKind::iso);
-    tables_.ss  = expo::buildTable(settings.ss,   expo::expoKind::ss);
-    tables_.fn  = expo::buildTable(settings.fNum, expo::expoKind::fn);
+    tables_ = expo::tablesFromRange(settings);
 
     // いまカメラに乗っている露出を控える。初期収束(meterHere)がライブビュー測光の出発点に使う。
     // これが無いと「測光したいがカメラが何段の設定なのか分からない」ため上位から渡してもらう
@@ -943,6 +1048,147 @@ errCode apiCanonCCAPI::getShotPicture(std::vector<std::byte>& jpg)
     return ERR_HGC_OK;
 }
 
+
+// カメラ本体に設定されている露出の設定ステップを聞く[段]。宣言のところに説明。
+//  応答は {"value":"1/3"} / {"value":"1/2"} / {"value":"1"}(CCAPI Reference 4.6)。
+//  GET 専用で、アプリから刻みを変えることはできない。
+double apiCanonCCAPI::askStepStops(funcNum number)
+{
+	auto it = funcList.find(number);
+	if (it == funcList.end()) { return 0.0; }	// この機種は持っていない(EOS R100 など)
+	std::string answer;
+	if (!netThread::httpGet(it->second.url, answer)) { return 0.0; }
+	std::string v;
+	try
+	{
+		auto j = json::parse(answer);
+		if (!j.contains("value") || !j.at("value").is_string()) { return 0.0; }
+		v = j.at("value").get<std::string>();
+	}
+	catch (json::exception&) { return 0.0; }
+	// "1/3" → 0.333 / "1/2" → 0.5 / "1" → 1.0
+	const size_t slash = v.find('/');
+	double step = 0.0;
+	if (slash != std::string::npos)
+	{
+		const double num = std::atof(v.substr(0, slash).c_str());
+		const double den = std::atof(v.substr(slash + 1).c_str());
+		if (den != 0.0) { step = num / den; }
+	}
+	else { step = std::atof(v.c_str()); }
+	// 見覚えのない答えは使わない(1 段より粗い刻みも、0 以下もありえない)。
+	return (step > 0.0 && step <= 1.0 + 1e-9) ? step : 0.0;
+}
+
+// ── 露出を「段」で扱う口 ─────────────────────────────────────
+// テーブル(tables_)はこの層の持ち物で、外へは段だけを出す。上位は刻みを知らない。
+namespace
+{
+	// テーブル1要素の寄与[段]。大きいほど明るい。
+	double entryStops(const expo::expoEntry& e, expo::expoKind k)
+	{
+		return (k == expo::expoKind::iso) ? e.apex : -e.apex;
+	}
+	// b にいちばん近い要素の番号。空なら -1。
+	int nearestByStops(const std::vector<expo::expoEntry>& t, expo::expoKind k, double b)
+	{
+		int best = -1; double bd = 1e300;
+		for (int i = 0; i < static_cast<int>(t.size()); ++i)
+		{
+			const double d = std::fabs(entryStops(t[i], k) - b);
+			if (d < bd) { bd = d; best = i; }
+		}
+		return best;
+	}
+	// 軸の素性。notch は at(いまの設定)の隣との差。
+	void axisOf(const std::vector<expo::expoEntry>& t, expo::expoKind k,
+	            const std::string& at, apiBase::axisInfo& out)
+	{
+		out = apiBase::axisInfo{};
+		if (t.empty()) { return; }
+		double lo = 1e300, hi = -1e300;
+		for (const auto& e : t)
+		{
+			const double b = entryStops(e, k);
+			if (b < lo) { lo = b; }
+			if (b > hi) { hi = b; }
+		}
+		out.lo = lo; out.hi = hi;
+		// いまの位置(分からなければ真ん中)の隣との差。重複(差0)は目盛りではないので飛ばす。
+		int i = -1;
+		if (!at.empty()) { for (int n = 0; n < static_cast<int>(t.size()); ++n) { if (t[n].value == at) { i = n; break; } } }
+		if (i < 0) { i = static_cast<int>(t.size()) / 2; }
+		double best = 0.0;
+		for (int j : { i - 1, i + 1 })
+		{
+			if (j < 0 || j >= static_cast<int>(t.size())) { continue; }
+			const double d = std::fabs(t[j].apex - t[i].apex);
+			if (d > 1e-6 && (best <= 0.0 || d < best)) { best = d; }
+		}
+		out.notch = best;	// 1要素しかない軸は 0(動かないので丸めの誤差も生まない)
+	}
+}
+
+errCode apiCanonCCAPI::expoAxes(axisInfo& iso, axisInfo& ss, axisInfo& fn)
+{
+	if (tables_.iso.empty() && tables_.ss.empty() && tables_.fn.empty()) { return ERR_HGC_NOT_FOUND; }
+	axisOf(tables_.iso, expo::expoKind::iso, camExp_.iso, iso);
+	axisOf(tables_.ss,  expo::expoKind::ss,  camExp_.ss,  ss);
+	axisOf(tables_.fn,  expo::expoKind::fn,  camExp_.fn,  fn);
+	return ERR_HGC_OK;
+}
+
+errCode apiCanonCCAPI::expoResolve(const expoPoint& want, hgc::exposure& out, expoPoint& got)
+{
+	out = hgc::exposure{};
+	got = expoPoint{};
+	struct one { const std::vector<expo::expoEntry>* t; expo::expoKind k; bool has; double b;
+	             std::string* val; double* gb; bool* gh; };
+	const one axes[3] = {
+		{ &tables_.iso, expo::expoKind::iso, want.hasIso, want.iso, &out.iso, &got.iso, &got.hasIso },
+		{ &tables_.ss,  expo::expoKind::ss,  want.hasSs,  want.ss,  &out.ss,  &got.ss,  &got.hasSs  },
+		{ &tables_.fn,  expo::expoKind::fn,  want.hasFn,  want.fn,  &out.fn,  &got.fn,  &got.hasFn  },
+	};
+	for (const auto& a : axes)
+	{
+		if (!a.has || a.t->empty()) { continue; }
+		const int i = nearestByStops(*a.t, a.k, a.b);
+		if (i < 0) { continue; }
+		*a.val = (*a.t)[i].value;
+		*a.gb  = entryStops((*a.t)[i], a.k);
+		*a.gh  = true;
+	}
+	return ERR_HGC_OK;
+}
+
+errCode apiCanonCCAPI::expoStops(const hgc::exposure& e, expoPoint& out)
+{
+	out = expoPoint{};
+	struct one { const std::vector<expo::expoEntry>* t; expo::expoKind k; const std::string* v;
+	             double step; double* b; bool* h; };
+	const one axes[3] = {
+		{ &tables_.iso, expo::expoKind::iso, &e.iso, tables_.isoStep, &out.iso, &out.hasIso },
+		{ &tables_.ss,  expo::expoKind::ss,  &e.ss,  tables_.ssStep,  &out.ss,  &out.hasSs  },
+		{ &tables_.fn,  expo::expoKind::fn,  &e.fn,  tables_.fnStep,  &out.fn,  &out.hasFn  },
+	};
+	for (const auto& a : axes)
+	{
+		if (a.v->empty()) { continue; }
+		bool found = false;
+		for (const auto& t : *a.t)
+		{	// テーブルにある値は、その要素の段そのもの(丸めの誤差が入らない)
+			if (t.value == *a.v) { *a.b = entryStops(t, a.k); *a.h = true; found = true; break; }
+		}
+		if (found) { continue; }
+		// テーブルに無い値(撮影制御方法の限界や基準)。理想の格子へ揃えてから測る。
+		const double r = expo::parseValue(*a.v, a.k);
+		if (!(r > 0.0)) { continue; }
+		const double apex = expo::snapStops(expo::stopsOfReal(r, a.k),
+		                                    (a.step > 0.0) ? a.step : (1.0 / 3.0));
+		*a.b = apex; *a.h = true;
+	}
+	return ERR_HGC_OK;
+}
 
 // 機能番号の ability を取得する
 // nunber  : 機能番号
@@ -2030,7 +2276,7 @@ errCode apiCanonCCAPI::thumbMeterCore(meterResult& out, int budgetMs, const std:
 	void* tf = tool::startElapse();
 	const std::string url = base + path + "?kind=thumbnail";
 	std::string jpg;
-	uint16_t hist[256];
+	uint32_t hist[256];
 	int  w = 0, h = 0;
 	bool got = false, dec = false;
 	int  decodeMs = 0;

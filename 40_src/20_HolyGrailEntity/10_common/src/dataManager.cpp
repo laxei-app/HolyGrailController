@@ -527,44 +527,13 @@ namespace
 		return nullptr;
 	}
 
-	// device.model("Canon EOS R10")から先頭のメーカー名を除いた型番を得る("EOS R10")。
-	std::string stripMaker(const std::string& model, const std::string& maker)
-	{
-		std::string m = model;
-		if (!maker.empty() && m.size() >= maker.size() &&
-		    m.compare(0, maker.size(), maker) == 0)
-		{
-			m.erase(0, maker.size());
-			while (!m.empty() && (m.front() == ' ' || m.front() == '\t')) { m.erase(0, 1); }
-			return m;
-		}
-		// メーカー名が model 先頭と完全一致しない場合(例 UPnPは"Canon"だがCCAPI deviceinformation は
-		// "Canon.Inc")、双方の先頭英数字ラン(区切り文字直前まで)が一致すれば、その1語を型番から除く。
-		auto alnumRun = [](const std::string& s) -> size_t {
-			size_t i = 0;
-			while (i < s.size() && ((s[i] >= 'A' && s[i] <= 'Z') || (s[i] >= 'a' && s[i] <= 'z') ||
-			                        (s[i] >= '0' && s[i] <= '9'))) { ++i; }
-			return i;
-		};
-		if (!maker.empty())
-		{
-			size_t mk = alnumRun(maker);
-			size_t md = alnumRun(m);
-			if (mk > 0 && mk == md && m.compare(0, md, maker, 0, mk) == 0)
-			{
-				m.erase(0, md);
-				while (!m.empty() && (m.front() == ' ' || m.front() == '\t')) { m.erase(0, 1); }
-			}
-		}
-		return m;
-	}
-
 	// dev に最も一致するマスタカメラを返す。完全一致優先、無ければ最長部分一致。
 	// ("EOS R6" が "EOS R6 Mark II" を誤って先取りしないよう最長一致を採る)
 	const hgc::camera* matchMasterCamera(const device& dev)
 	{
 		ensureMaster();
-		std::string key = stripMaker(dev.model, dev.manufacturer);
+		// device.model は探索元が機材マスタの綴り(型番だけ)に揃えて渡してくる(2026-09-06)。
+		const std::string& key = dev.model;
 		const hgc::camera* best = nullptr;
 		size_t bestLen = 0;
 		for (const auto& c : g_masterCameras)
@@ -606,12 +575,12 @@ namespace
 		return !cam.isoList.empty() || !cam.ssList.empty();
 	}
 
-// 所持/計画カメラ cam の型番が device dev と同じ機種か(メーカー名差を吸収)。
+	// 所持/計画カメラ cam の型番が device dev と同じ機種か。device.model は探索元が型番だけに揃えている。
 	bool camModelMatchesDev(const hgc::camera& cam, const device& dev)
 	{
-		std::string key = stripMaker(dev.model, dev.manufacturer);
-		if (!cam.name.empty()  && (cam.name  == key || cam.name  == dev.model)) { return true; }
-		if (!cam.model.empty() && (cam.model == key || cam.model == dev.model)) { return true; }
+		if (dev.model.empty()) { return false; }
+		if (!cam.name.empty()  && cam.name  == dev.model) { return true; }
+		if (!cam.model.empty() && cam.model == dev.model) { return true; }
 		return false;
 	}
 
@@ -715,6 +684,47 @@ bool dataManager::addOwnedLensFromMaster(const std::string& name)
 	return saveOwnedLenses();
 }
 
+// マスタに無いレンズを所持レンズへ足す。スマホ内蔵カメラのようにレンズが交換できず、
+//  機材マスタにも載らない機材のために使う(諸元は端末が答える)。
+//  同じ名前が既にあれば何もしない(利用者が値を直していることがある)。
+bool dataManager::addOwnedLens(const hgc::lens& lens)
+{
+	if (lens.name.empty()) { return false; }
+	ensureOwned();
+	for (const auto& l : g_ownedLenses) { if (l.name == lens.name) { return false; } }
+	g_ownedLenses.push_back(lens);
+	return saveOwnedLenses();
+}
+
+// 所持カメラの「組み合わせるレンズ」へ1本割り当てる。先頭が初期値になる。
+//  レンズを交換できない機材(スマホ内蔵カメラ)で使う。既に入っていれば触らない
+//  (利用者が並べ替えたり別のレンズを足していることがある)。
+bool dataManager::setOwnedCameraLens(const std::string& camName, const std::string& lensName)
+{
+	ensureOwned();
+	hgc::lens l;
+	if (!findOwnedLens(lensName, l)) { return false; }
+	for (auto& oc : g_ownedCameras)
+	{
+		if (oc.cam.name != camName) { continue; }
+		for (const auto& e : oc.lensList) { if (e.name == lensName) { return false; } }	// 既にある
+		oc.lensList.insert(oc.lensList.begin(), l);	// 先頭=初期値
+		return saveOwnedCameras();
+	}
+	return false;
+}
+
+// 所持カメラに割り当てられたレンズの先頭(=初期値)。
+bool dataManager::findOwnedCameraDefaultLens(const std::string& camName, hgc::lens& out)
+{
+	ensureOwned();
+	for (const auto& oc : g_ownedCameras)
+	{
+		if (oc.cam.name == camName && !oc.lensList.empty()) { out = oc.lensList.front(); return true; }
+	}
+	return false;
+}
+
 bool dataManager::removeOwnedCamera(const std::string& name)
 {
 	ensureOwned();
@@ -738,10 +748,21 @@ bool dataManager::removeOwnedLens(const std::string& name)
 bool dataManager::setOwnedCameraAutoInsert(const std::string& name, bool autoInsert)
 {
 	ensureOwned();
+	bool found = false;
 	for (auto& oc : g_ownedCameras)
 	{
-		if (oc.cam.name == name) { oc.autoInsert = autoInsert; return saveOwnedCameras(); }
+		if (oc.cam.name == name) { oc.autoInsert = autoInsert; found = true; }
+		else if (autoInsert)     { oc.autoInsert = false; }		// 初期値は1台だけ(場所と同じ考え方)
 	}
+	return found ? saveOwnedCameras() : false;
+}
+
+// 【新規計画のカメラ(2026-09-06)】「撮影計画の初期値にする」は保存されるだけで、計画を作るときに
+//  読む側が無かった(場所の自動挿入だけ読んでいた)。ここで答えて makeFactoryCurrent が使う。
+bool dataManager::autoInsertCamera(hgc::camera& out)
+{
+	ensureOwned();
+	for (const auto& oc : g_ownedCameras) { if (oc.autoInsert) { out = oc.cam; return true; } }
 	return false;
 }
 
@@ -914,26 +935,28 @@ bool dataManager::setOwnedCameraDetailJson(const std::string& origName, const st
 	if (j.contains("authPass")) { cam.authPass = secret::decrypt(j.value("authPass", std::string())); }
 	httpAuth::addCandidate(cam.authUser, cam.authPass);	// 編集直後から 401 に対応できるように
 
-	// ISO/SS: min/max が現状と変わったときだけ標準1/3段で再生成(マスタ/カメラ取得値は維持)。
+	// ISO/SS: 並びが**空のときだけ**上下限から標準1/3段で作る。
+	//
+	// 【カメラから取った値を上書きしない(2026-09-19 ユーザー指示)】以前は「上下限が並びの両端と
+	//  違えば作り直す」だったため、カメラが答えた並びを詳細画面の保存で標準1/3段に置き換えていた。
+	//  カメラ本体を 1/2 段設定にしても、保存した瞬間に 1/3 段へ戻ってしまう。
+	//  実際に設定できる値を知っているのはカメラだけなので、一度入った並びは触らない。
+	//  ここで作るのは、まだ一度も繋いでいない機種の初期値としての並びだけである。
 	std::string isoMin = j.value("isoMin", std::string());
 	std::string isoMax = j.value("isoMax", std::string());
-	if (!isoMin.empty() && !isoMax.empty() &&
-	    (cam.isoList.empty() || isoMin != listMin(cam.isoList) || isoMax != listMax(cam.isoList)))
+	if (!isoMin.empty() && !isoMax.empty() && cam.isoList.empty())
 	{
 		cam.isoList = sliceStd(expo::expoKind::iso, isoMin, isoMax);
 	}
 	std::string ssMin = j.value("ssMin", std::string());
 	std::string ssMax = j.value("ssMax", std::string());
-	if (!ssMin.empty() && !ssMax.empty() &&
-	    (cam.ssList.empty() || ssMin != listMin(cam.ssList) || ssMax != listMax(cam.ssList)))
+	if (!ssMin.empty() && !ssMax.empty() && cam.ssList.empty())
 	{
-		bool keepBulb = false;
-		for (const auto& s : cam.ssList) { if (s == "Bulb") { keepBulb = true; break; } }
 		cam.ssList = sliceStd(expo::expoKind::ss, ssMin, ssMax);
-		if (keepBulb) { cam.ssList.push_back("Bulb"); }
 	}
 
 	oc->autoInsert = j.value("autoInsert", oc->autoInsert);
+	if (oc->autoInsert) { for (auto& other : g_ownedCameras) { if (&other != oc) { other.autoInsert = false; } } }	// 1台だけ
 
 	// 組み合わせるレンズ(先頭が初期値)。所持レンズ名から順に解決する。
 	if (j.contains("lensNames") && j["lensNames"].is_array())
@@ -1026,6 +1049,7 @@ hgc::exposureSmoothing dataManager::currentSmoothing(void)
 		const auto& o = g_settings["smoothing"];
 		s.hysteresis    = o.value("hysteresis", s.hysteresis);
 		s.movingAverage = static_cast<uint16_t>(o.value("movingAverage", static_cast<int>(s.movingAverage)));
+		s.smoothMin     = o.value("smoothMin", s.smoothMin);
 	}
 	return s;
 }
@@ -1033,7 +1057,7 @@ hgc::exposureSmoothing dataManager::currentSmoothing(void)
 std::string dataManager::smoothingJson(void)
 {
 	hgc::exposureSmoothing s = currentSmoothing();
-	json j; j["hysteresis"] = s.hysteresis; j["movingAverage"] = s.movingAverage;
+	json j; j["hysteresis"] = s.hysteresis; j["movingAverage"] = s.movingAverage; j["smoothMin"] = s.smoothMin;
 	return j.dump();
 }
 
@@ -1045,6 +1069,7 @@ bool dataManager::setSmoothingJson(const std::string& jsonStr)
 	json o;
 	o["hysteresis"]    = j.value("hysteresis", 1.0);
 	o["movingAverage"] = j.value("movingAverage", 5);
+	o["smoothMin"]     = j.value("smoothMin", 4.0);
 	g_settings["smoothing"] = o;
 	return saveSettings();
 }
@@ -1074,9 +1099,9 @@ int dataManager::pruneOldLogs(int offMin)
 	gmtime_r(&lt, &g);
 #endif
 	char today[24];
-	std::snprintf(today, sizeof(today), "hg_%04d-%02d-%02d.log", g.tm_year + 1900, g.tm_mon + 1, g.tm_mday);
+	std::snprintf(today, sizeof(today), "tlp_%04d-%02d-%02d.log", g.tm_year + 1900, g.tm_mon + 1, g.tm_mday);
 
-	std::vector<std::string> all = osfile::logFileNames();	// hg_YYYY-MM-DD.log 群
+	std::vector<std::string> all = osfile::logFileNames();	// tlp_YYYY-MM-DD.log 群
 	std::vector<std::string> others;
 	for (const auto& f : all) { if (f != today) { others.push_back(f); } }
 	std::sort(others.begin(), others.end());	// 名前=日付昇順 → 先頭が最古
@@ -1285,6 +1310,7 @@ bool dataManager::setOwnedLensDetailJson(const std::string& origName, const std:
 	//  追加は addOwnedLens が行うので、ここで作る必要はない。
 	//  ※所持カメラの方は手入力の追加でこの経路を使っているので、あちらは作れるままにする。
 	if (!lp) { return false; }
+	if (lp->readOnly) { return false; }	// 編集不可(内蔵カメラのレンズ等)。削除は removeOwnedLens で可
 
 	lp->maker       = j.value("maker", lp->maker);
 	lp->name        = j.value("name", lp->name);
@@ -1293,6 +1319,37 @@ bool dataManager::setOwnedLensDetailJson(const std::string& origName, const std:
 	lp->fnMax       = j.value("fnMax", lp->fnMax);
 	lp->hasContact  = j.value("hasContact", lp->hasContact);
 	return saveOwnedLenses();
+}
+
+bool dataManager::masterCameraByName(const std::string& name, hgc::camera& out)
+{
+	ensureMaster();
+	for (const auto& c : g_masterCameras) { if (c.name == name) { out = c; return true; } }
+	return false;
+}
+
+bool dataManager::masterLensByName(const std::string& name, hgc::lens& out)
+{
+	const hgc::lens* l = findMasterLens(name);
+	if (l == nullptr) { return false; }
+	out = *l;
+	return true;
+}
+
+bool dataManager::masterLensShortest(const std::string& maker, const std::string& mount, hgc::lens& out)
+{
+	ensureMaster();
+	const hgc::lens* best = nullptr;
+	for (const auto& l : g_masterLenses)
+	{
+		if (l.fisheye || l.focalLength <= 0.0) { continue; }
+		if (!maker.empty() && l.maker != maker) { continue; }
+		if (!mount.empty() && l.mount != mount) { continue; }
+		if (best == nullptr || l.focalLength < best->focalLength) { best = &l; }
+	}
+	if (best == nullptr) { return false; }
+	out = *best;
+	return true;
 }
 
 bool dataManager::findOwnedCamera(const std::string& name, hgc::camera& out)
@@ -1317,8 +1374,8 @@ bool dataManager::recordConnectedCamera(const device& dev)
 int dataManager::recordConnectedCameraStatus(const device& dev, bool allowAdd)
 {
 	ensureOwned();
-	// device.model 例 "Canon EOS R10"。所持/マスタは型番のみ("EOS R10")なのでメーカー名を除いて照合。
-	std::string key = stripMaker(dev.model, dev.manufacturer);
+	// device.model は探索元が型番だけ("EOS R10")に揃えて渡してくる。所持/マスタと同じ綴り。
+	const std::string key = dev.model;
 
 	// 1) シリアル一致の所持カメラ → 同一個体。設定名(assignedName)のみ更新する(serialは識別子なので変えない)。
 	if (!dev.serialno.empty())
@@ -1347,10 +1404,39 @@ int dataManager::recordConnectedCameraStatus(const device& dev, bool allowAdd)
 				//  登録の瞬間には取れないことがある。認証が要る機体は、ユーザーが
 				//  ユーザーID/パスワードを入れるまでCCAPIを読めないため(実測 EOS R50 V の1台)。
 				//  撮影で繋いだときは認証を通っているので、そこで埋まる。
-				if ((oc.cam.isoList.empty() || oc.cam.ssList.empty()) && fillListsFromCamera(dev, oc.cam))
+				//  【端末が管理する記録(readOnly)は毎回デバイスに合わせる(2026-09-07)】内蔵カメラの目盛りは
+				//   端末が合成するもので、書式や刻みが変わったら記録も変わるべき。ユーザーが編集できない
+				//   記録なので上書きしてよい。違うときだけ書き換える(毎回保存しない)。
+				if (oc.cam.readOnly || oc.cam.isoList.empty() || oc.cam.ssList.empty())
 				{
-					logEvent("GEAR", (oc.cam.model + " iso/ss taken from camera (S/N " + dev.serialno + ")").c_str());
-					changed = true;
+					hgc::camera fresh = oc.cam;
+					if (fillListsFromCamera(dev, fresh) &&
+					    (fresh.isoList != oc.cam.isoList || fresh.ssList != oc.cam.ssList))
+					{
+						oc.cam.isoList = fresh.isoList; oc.cam.ssList = fresh.ssList;
+						logEvent("GEAR", (oc.cam.model + " iso/ss taken from camera (S/N " + dev.serialno + ")").c_str());
+						changed = true;
+					}
+				}
+				// 【周期の規則もデバイスの答えへ合わせる(2026-09-20)】規則そのものが変わることがある
+				//  (内蔵カメラは「1コマ上限から倍率を出す」形になった)。登録した瞬間の値を持ち続けると
+				//  古い規則のまま撮ってしまう。答えない機種は何も入らないので影響しない。
+				if (dev.apiBase)
+				{
+					hgc::camera probe = oc.cam;
+					dev.apiBase->fillCameraProfile(probe);
+					if (probe.intervalFactor != oc.cam.intervalFactor ||
+					    probe.intervalMargin != oc.cam.intervalMargin)
+					{
+						char b[128];
+						std::snprintf(b, sizeof(b), "%s interval rule %.3fx+%.1fs -> %.3fx+%.1fs",
+						              oc.cam.model.c_str(), oc.cam.intervalFactor, oc.cam.intervalMargin,
+						              probe.intervalFactor, probe.intervalMargin);
+						logEvent("GEAR", b);
+						oc.cam.intervalFactor = probe.intervalFactor;
+						oc.cam.intervalMargin = probe.intervalMargin;
+						changed = true;
+					}
 				}
 				if (changed) { saveOwnedCameras(); }
 				return static_cast<int>(camApply::updated);
@@ -1407,9 +1493,75 @@ int dataManager::recordConnectedCameraStatus(const device& dev, bool allowAdd)
 	oc.cam.name     = uniqueOwnedName(oc.cam.name);	// 同機種2台目以降は名称を一意化(リストのキー)
 	oc.cam.serial   = dev.serialno;
 	oc.cam.assignedName = dev.assignedName;
+	// カメラ本人しか知らない性質(撮影周期の規則など)を記録へ。答えない機種では何も入らない。
+	if (dev.apiBase) { dev.apiBase->fillCameraProfile(oc.cam); }
 	g_ownedCameras.push_back(std::move(oc));
 	saveOwnedCameras();
 	return static_cast<int>(camApply::isNew);
+}
+
+// --- ISO/SS の並びだけを、カメラに触らずに受け渡す(2026-09-26) ---
+//
+// 【なぜ要るか】スマホ⇄外部端末を BLE にすると、カメラは端末のAPの中だけに居てスマホからは
+//  一生届かない。ISO/SS の並びを知っているのは実際に繋いでいる端末だけなので、そこから貰う。
+//  機材マスタに載っている機種なら上下限から並びを作れるが、載っていない機種は作れない。
+//
+// serial の所持カメラの並びを返す。持っていなければ空文字(呼び手は「貰えなかった」と扱う)。
+std::string dataManager::cameraListsJson(const std::string& serial)
+{
+	if (serial.empty()) { return std::string(); }
+	ensureOwned();
+	for (const auto& oc : g_ownedCameras)
+	{
+		if (oc.cam.serial != serial) { continue; }
+		if (oc.cam.isoList.empty() && oc.cam.ssList.empty()) { return std::string(); }
+		nlohmann::json j;
+		j["isoList"] = oc.cam.isoList;
+		j["ssList"]  = oc.cam.ssList;
+		return j.dump();
+	}
+	return std::string();
+}
+
+// serial の所持カメラが並びを持っていないか(=貰う価値があるか)。
+bool dataManager::cameraNeedsLists(const std::string& serial)
+{
+	if (serial.empty()) { return false; }
+	ensureOwned();
+	for (const auto& oc : g_ownedCameras)
+	{
+		if (oc.cam.serial == serial) { return oc.cam.isoList.empty() || oc.cam.ssList.empty(); }
+	}
+	return false;	// 所持していないカメラは対象外(登録してから貰う)
+}
+
+// 貰った並びを入れる。**空のときだけ**入れる: カメラが答えた並びを後から上書きしないという
+// 既存の約束(2026-09-19 ユーザー指示)に合わせる。実際に設定できる値を知っているのはカメラだけ。
+bool dataManager::applyCameraLists(const std::string& serial, const std::string& json)
+{
+	if (serial.empty() || json.empty()) { return false; }
+	nlohmann::json j = nlohmann::json::parse(json, nullptr, false);
+	if (j.is_discarded() || !j.is_object()) { return false; }
+	std::vector<std::string> iso, ss;
+	if (j.contains("isoList") && j["isoList"].is_array()) { iso = j["isoList"].get<std::vector<std::string>>(); }
+	if (j.contains("ssList")  && j["ssList"].is_array())  { ss  = j["ssList"].get<std::vector<std::string>>(); }
+	if (iso.empty() && ss.empty()) { return false; }
+
+	ensureOwned();
+	for (auto& oc : g_ownedCameras)
+	{
+		if (oc.cam.serial != serial) { continue; }
+		bool changed = false;
+		if (oc.cam.isoList.empty() && !iso.empty()) { oc.cam.isoList = iso; changed = true; }
+		if (oc.cam.ssList.empty()  && !ss.empty())  { oc.cam.ssList  = ss;  changed = true; }
+		if (changed)
+		{
+			saveOwnedCameras();
+			logEvent("GEAR", (oc.cam.model + " iso/ss taken from edge (S/N " + serial + ")").c_str());
+		}
+		return changed;
+	}
+	return false;
 }
 
 // §4b: 計画カメラの assignedName から所持リストを引き、実シリアルを解決する(接続済みなら serial が入っている)。
@@ -1434,9 +1586,15 @@ void dataManager::ownedCameraSerials(std::vector<std::string>& out)
 // 撮影画像から読めたセンサー諸元を所持カメラへ入れる。既に値があるものは触らない。
 //  機材マスターに無い機種はセンサー寸法/画素数が空のままで、NPFも撮影シミュレーションも
 //  出せない。カメラのAPIからは取れないが撮影画像のEXIFには入っているので、撮り始めたら埋める。
-bool dataManager::fillOwnedCameraSensor(const std::string& serial, double sensorWmm, double sensorHmm, uint32_t pixelW)
+bool dataManager::fillOwnedCameraSensor(const std::string& serial, double sensorWmm, double sensorHmm,
+                                        uint32_t pixelW, uint32_t pixelH)
 {
 	if (serial.empty() || sensorWmm <= 0.0 || pixelW == 0) { return false; }
+	// 端末は寸法を float で答える(9.791999816894531 のような桁になる)。0.01mm に丸めて持つ
+	//  (2026-09-21 ユーザー指示: 小数点以下 2 桁固定。NPF への影響は無視できる)。
+	auto r2 = [](double v) { return std::floor(v * 100.0 + 0.5) / 100.0; };
+	sensorWmm = r2(sensorWmm);
+	sensorHmm = r2(sensorHmm);
 	ensureOwned();
 	for (auto& oc : g_ownedCameras)
 	{
@@ -1445,12 +1603,13 @@ bool dataManager::fillOwnedCameraSensor(const std::string& serial, double sensor
 		if (oc.cam.sensorSize  <= 0.0 && sensorWmm > 0.0) { oc.cam.sensorSize  = sensorWmm; changed = true; }
 		if (oc.cam.sensorSizeV <= 0.0 && sensorHmm > 0.0) { oc.cam.sensorSizeV = sensorHmm; changed = true; }
 		if (oc.cam.sensorPixel == 0   && pixelW    > 0)   { oc.cam.sensorPixel = pixelW;    changed = true; }
+		if (oc.cam.sensorPixelV == 0  && pixelH    > 0)   { oc.cam.sensorPixelV = pixelH;   changed = true; }
 		if (!changed) { return false; }
 		saveOwnedCameras();
 		char msg[160];
-		std::snprintf(msg, sizeof(msg), "%s sensor from captured image %.2f x %.2f mm / %u px (S/N %s)",
+		std::snprintf(msg, sizeof(msg), "%s sensor from captured image %.2f x %.2f mm / %u x %u px (S/N %s)",
 		              oc.cam.model.c_str(), oc.cam.sensorSize, oc.cam.sensorSizeV,
-		              static_cast<unsigned>(oc.cam.sensorPixel), serial.c_str());
+		              static_cast<unsigned>(oc.cam.sensorPixel), static_cast<unsigned>(oc.cam.sensorPixelV), serial.c_str());
 		logEvent("GEAR", msg);
 		return true;
 	}
@@ -1518,7 +1677,7 @@ namespace
 
 		std::string dir = osfile::logDir();
 		if (dir.empty()) { return; }
-		std::string path = dir + "/hg_" + dateStr + ".log";
+		std::string path = dir + "/tlp_" + dateStr + ".log";
 		osfile::append(path, rec.data(), rec.size());
 	}
 
@@ -1653,6 +1812,12 @@ std::string dataManager::writeCaptureReport(const captureReport& r, const hgc::c
 		else if (margin > 5.0) { notes.push_back(static_cast<int>(NOTE_INTERVAL_ROOM)); }
 	}
 	j["notes"] = notes;
+	// カメラ実装が語る欄。壊れた JSON は黙って捨てる(レポート自体は必ず書く)。
+	if (!r.deviceJson.empty())
+	{
+		json d = json::parse(r.deviceJson, nullptr, false);
+		if (!d.is_discarded()) { j["device"] = d; }
+	}
 
 	const std::string out = j.dump(1, '\t');
 	if (out.empty()) { return ""; }
@@ -1726,7 +1891,7 @@ std::string dataManager::currentLogPath(void)
 	nowLocal(timeStr, dateStr);
 	std::string dir = osfile::logDir();
 	if (dir.empty()) { return ""; }
-	return dir + "/hg_" + dateStr + ".log";
+	return dir + "/tlp_" + dateStr + ".log";
 }
 
 void dataManager::logShot(int frame, const hgc::exposure& e, double lumStops, const char* ccmName,

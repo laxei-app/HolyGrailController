@@ -1,6 +1,5 @@
 ﻿#include "common.h"
 #include "cameraController.h"
-#include "detectCanonCCapi.h"
 #include "netThread.h"
 #include <algorithm>
 #include <mutex>
@@ -16,16 +15,21 @@ static std::string hostOfUrl(const std::string& url)
 	return url.substr(s, e - s);
 }
 
-// 受信バックエンド群(Meyers シングルトン。初回に生成)。
-// 現状は Canon CCAPI のみ。Sony/Nikon/スマホ内蔵は将来ここへ push_back する(構造のみ)。
+// 受信バックエンド群(Meyers シングルトン)。
+// 【共通はどのバックエンドも知らない(2026-09-06)】中身は役割側(hge::role::registerBackends)と
+//  成果物の初期化(スマホの内蔵カメラは jniBridge)が addBackend で入れる。ここは器だけ。
 std::vector<std::unique_ptr<detectBase>>& cameraController::backends()
 {
 	static std::vector<std::unique_ptr<detectBase>> b;
-	if (b.empty())
-	{
-		b.push_back(std::make_unique<detectCanonCCapi>());
-	}
 	return b;
+}
+
+// 外から足すバックエンド。呼ぶのは役割ごとの初期化(hge::role::registerBackends)と、
+//  成果物固有のもの(スマホの内蔵カメラ)。同じ物を二度足さないよう、呼ぶ側が1回だけ呼ぶこと。
+void cameraController::addBackend(std::unique_ptr<class detectBase> backend)
+{
+	if (!backend) { return; }
+	backends().push_back(std::move(backend));
 }
 
 // ネットワークに接続されているカメラを検出する
@@ -33,6 +37,22 @@ std::vector<std::unique_ptr<detectBase>>& cameraController::backends()
 // return  : 検出したカメラの数
 // 身元だけを確かめる検出。CCAPI を叩かないので、認証の有無に関係なく安全に呼べる。
 //  detectTarget と違い、発見キャッシュも apiBase も作らない(撮影の経路には一切影響しない)。
+int cameraController::presence(const hgc::camera& cam)
+{
+	for (auto& be : backends())
+	{
+		const int r = be->presence(cam);
+		if (r >= 0) { return r; }
+	}
+	return -1;
+}
+
+detectBase::greetResult cameraController::greet(const class device& d)
+{
+	if (d.origin == nullptr) { detectBase::greetResult r; r.done = true; return r; }
+	return d.origin->greet(d);
+}
+
 size_t cameraController::identifyTargets(std::vector<class device>& devices)
 {
 	static std::mutex identifyMutex;
@@ -198,6 +218,18 @@ errCode cameraController::actShutter(const class device& device)
 	return device.apiBase->actShutter();
 }
 
+apiBase::failInfo cameraController::lastFailure(const class device& device)
+{
+	if (device.apiBase == nullptr) { return apiBase::failInfo{}; }
+	return device.apiBase->lastFailure();
+}
+
+int cameraController::lastFailNotice(const class device& device)
+{
+	if (device.apiBase == nullptr) { return 0; }
+	return device.apiBase->lastFailNotice();
+}
+
 // 設定を取得する
 // device   :対象デバイス
 // settings :取得した設定
@@ -224,10 +256,10 @@ errCode cameraController::readDeviceStatus(const class device& device, apiBase::
 // sensorHmm  :センサー縦[mm]
 // pixelW     :センサー横[pixel]
 // return     :ERR_HGC_OK:成功
-errCode cameraController::readSensorSpec(const class device& device, double& sensorWmm, double& sensorHmm, uint32_t& pixelW)
+errCode cameraController::readSensorSpec(const class device& device, double& sensorWmm, double& sensorHmm, uint32_t& pixelW, uint32_t& pixelH)
 {
 	if (device.apiBase == nullptr) { return ERR_HGC_READY; }
-	return device.apiBase->readSensorSpec(sensorWmm, sensorHmm, pixelW);
+	return device.apiBase->readSensorSpec(sensorWmm, sensorHmm, pixelW, pixelH);
 }
 
 // 測光の準備をする

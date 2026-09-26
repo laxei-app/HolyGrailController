@@ -1,0 +1,1075 @@
+﻿package app.laxei.twylapse
+
+import android.content.Context
+import android.graphics.ImageFormat
+import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraDevice
+import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CameraMetadata
+import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.params.OutputConfiguration
+import android.hardware.camera2.params.SessionConfiguration
+import android.hardware.camera2.CaptureResult
+import android.hardware.camera2.TotalCaptureResult
+import android.graphics.Bitmap
+import android.media.ImageReader
+import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
+import android.os.PowerManager
+import android.os.SystemClock
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import android.util.Log
+import android.util.Size
+import java.io.ByteArrayOutputStream
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+
+// スマホ内蔵カメラを「1台のカメラ」として扱うための Camera2 実装(2026-09-05)。
+//
+// 【なぜ Kotlin に置くか】Camera2 は Java/Kotlin にしか無い。Entity(C++)からは
+//  HgeNative の静的メソッド経由で呼び返す(BLE の edgeClient.cpp と同じ形)。
+//  この画層は**カメラを開いて撮って JPEG を返すだけ**にし、露出の決め方や測光の解釈は
+//  すべて C++ 側(apiBuiltin)に置く。キヤノン機との違いを1か所に集めるため。
+//
+// 【対象は物理カメラだけ(2026-09-05 ユーザー判断)】論理カメラ(複数の物理カメラを束ねた
+//  もの)は出さない。広角・超広角・望遠がそれぞれ別のカメラとして一覧に並ぶ。
+//
+// 【機種に依存しないこと】Pixel 6 で実装・検証するが、CameraCharacteristics は端末に
+//  よって欠ける項目がある。**取れなかったものは空/0 のままにして落とさない**。
+object BuiltinCamera {
+
+    private var appCtx: Context? = null
+    fun init(ctx: Context) { appCtx = ctx.applicationContext }
+
+    private var thread: HandlerThread? = null
+    private var handler: Handler? = null
+
+    // 【星を消す工程を切る(2026-09-05)】暗い星はノイズリダクションに「ノイズ」と見なされて
+    //  消される。輪郭強調も点光源を不自然にする。どちらも切れる端末では切る。
+    //  切れるかは端末が答える。**対応していない値を要求すると撮影要求ごと弾かれる**ので、
+    //  開くときに確かめて覚えておき、使えるときだけ載せる。
+    private var canNrOff = false
+    private var canEdgeOff = false
+    // 【ピントを無限遠に置く(2026-09-23 ユーザー指示)】AF を切ったまま位置を指定しないと、レンズは
+    //  前に使ったアプリが置いていった位置のまま撮る(SH-M08 の 09-22 朝は全編ピンボケだった)。
+    //  最短撮影距離が 0 の機種は固定焦点なので触らない(指定すると撮影要求ごと弾かれる端末がある)。
+    private var canSetFocus = false
+    @Volatile private var capFocusDpt = -1f    // 直近のコマで端末が申告したピント位置[ディオプタ]
+    // 【ピント(2026-09-26)】撮影で使う位置[ディオプタ]。0 = 無限遠。
+    //  SH-M08 は無限遠(0)を指定しても、撮影結果は毎コマ hyperfocalDistance(0.41=2.4m)を返す。
+    //  指定を丸めているのか申告が当てにならないのかは外から分からないので、**実際に撮って比べる**
+    //  (focusProbe)。同じ場面・同じ露出なら、細部が残っているコマほど現像後の JPEG が大きい。
+    private var focusDpt = 0f
+    private var hyperfocalDpt = 0f
+    private var focusProbed = false
+    // 【3A ごと切る(2026-09-26)】SH-M08 は AF を切って距離を指定しても、撮影結果が毎コマ
+    //  過焦点距離を返す = **指定を見ていない**(実測: 0.00/0.21/0.41 のどれを送っても got=0.41)。
+    //  端末によっては CONTROL_MODE そのものを OFF にしないとレンズの手動指定を受け付けない。
+    //  既定は OFF にしない(Pixel 6 は今のままで無限遠が効いている)。効かない端末でだけ試す。
+    private var ctlOff = false
+    private var canCtlOff = false
+    private var focusIgnored = false	// 実測で「指定を見ていない」と分かった
+    // DNG を出すか(2026-09-23 UI依頼)。出すときだけ、束ねる前のフルサイズの和も持つ(50MB)。
+    private var wantDng = false
+    @JvmStatic
+    fun setWantDng(on: Boolean) { wantDng = on }
+
+    private var openId: String? = null      // いま開いている物理カメラ id
+    private var openLogical: String? = null // その入口になっている論理カメラ id
+    // 直前のコマを実際に撮った物理カメラ id(端末の申告)。狙いどおりか確かめるために持つ。
+    @Volatile private var activePhys: String = ""
+    private var camera: CameraDevice? = null
+    private var session: CameraCaptureSession? = null
+    private var reader: ImageReader? = null
+
+    // ── RAW 加算(2026-09-06) ─────────────────────────────────
+    // 【なぜ RAW か】1コマの露光には上限がある(Pixel 6 広角 8.3秒)。星空には 20〜48 秒が欲しいので、
+    //  上限以下のコマを続けて撮って**線形の画素値で足す**。JPEG は階調カーブ済みの 8bit で暗部が
+    //  潰れているので足せない。足すのも現像も C++(rawStack)で行い、ここは受け渡しだけ。
+    //  1コマで足りる露光でも同じ道を通す(コマ数で色や階調が変わると動画に段差が出る)。
+    //  RAW を出せない端末(または Bayer でない端末)は従来の JPEG に落ちる(足せないので上限はセンサーのまま)。
+    private var openRaw = false          // open に頼まれた形(RAW を望んだか)
+    private var useRaw = false           // 実際に RAW で動いているか
+    private var rawW = 0; private var rawH = 0
+    private var cfa = 0                  // Bayer の並び(SENSOR_INFO_COLOR_FILTER_ARRANGEMENT)
+    private var whiteLevel = 1023
+    private var blackPos = floatArrayOf(64f, 64f, 64f, 64f)   // 黒レベル。位置順(左上,右上,左下,右下)
+    private var canShadingMap = false    // 周辺減光の地図を撮影結果に付けられるか
+    // 【撮影結果が色の情報を答えない端末の控え(2026-09-20 AQUOS SH-M08 で実測)】
+    //  端末によっては COLOR_CORRECTION_GAINS も SENSOR_NEUTRAL_COLOR_POINT も 0 で返る。
+    //  RAW を出せる端末は DNG 用の較正(colorTransform/calibrationTransform/forwardMatrix)を
+    //  静的な諸元として必ず持つので、そこから昼光の白バランスと色行列を作っておく。
+    private var fbGains: FloatArray? = null   // 昼光の白バランス(R, Gr, Gb, B)
+    private var fbCcm: FloatArray? = null     // センサーRGB → 線形sRGB の 3x3(行優先)
+    @Volatile var lastStackMs = 0        // 直前の現像にかかった時間[ms](実測用)
+
+    private fun rawSupported(c: CameraCharacteristics): Boolean {
+        val caps = c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: return false
+        if (!caps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)) return false
+        val map = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return false
+        if (map.getOutputSizes(ImageFormat.RAW_SENSOR).isNullOrEmpty()) return false
+        val f = c.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT) ?: return false
+        return f in 0..3   // Bayer 以外(モノクロ/近赤外)は足し方が違うので JPEG へ
+    }
+
+    // この端末のカメラを使う許可があるか(2026-09-09)。諸元は許可が無くても読めるので、
+    //  「開けない理由が権限かどうか」を分けるのにこれが要る。
+    @JvmStatic
+    fun hasPermission(): Boolean {
+        val c = appCtx ?: return true   // 分からないときは権限のせいにしない
+        return c.checkSelfPermission(android.Manifest.permission.CAMERA) ==
+               android.content.pm.PackageManager.PERMISSION_GRANTED
+    }
+
+    // 端末の熱の状態。PowerManager の THERMAL_STATUS_*(0=平常 … 6=停止直前)。取れない端末は -1。
+    @JvmStatic
+    fun thermalStatus(): Int {
+        if (Build.VERSION.SDK_INT < 29) return -1
+        val pm = appCtx?.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return -1
+        return runCatching { pm.currentThermalStatus }.getOrDefault(-1)
+    }
+
+    private fun mgr(): CameraManager? =
+        appCtx?.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
+
+    private fun ensureThread(): Handler {
+        var h = handler
+        if (h == null) {
+            val t = HandlerThread("builtin-cam").apply { start() }
+            h = Handler(t.looper)
+            thread = t; handler = h
+        }
+        return h
+    }
+
+    // ── 列挙 ────────────────────────────────────────────────
+    // 【背面の物理カメラだけを並べる(2026-09-05 ユーザー指示)】
+    //  ・前面カメラは星景に使えないので出さない
+    //  ・超広角などは論理カメラ(複数を束ねたもの)の配下に隠れていて getCameraIdList に
+    //    出てこない。配下まで辿って**物理カメラを1台ずつ**出す
+    //  ・物理カメラは単体で開けないことが多いが、論理カメラを入口にして名指しすれば使える
+    //    (2026-09-05 実機で確認。狙ったセンサーで撮れ、露出も指定どおり乗る)
+    //  配下を持たない端末では、その論理カメラ自身を1台として扱う。
+    @JvmStatic
+    fun listCameras(): String {
+        val m = mgr() ?: return "[]"
+        val arr = JSONArray()
+        runCatching {
+            for (id in m.cameraIdList) {
+                val c = runCatching { m.getCameraCharacteristics(id) }.getOrNull() ?: continue
+                val subs = if (Build.VERSION.SDK_INT >= 28)
+                    (runCatching { c.physicalCameraIds }.getOrNull() ?: emptySet()) else emptySet()
+                if (subs.isEmpty()) {
+                    if (facingName(c) != "back") { continue }
+                    arr.put(JSONObject().put("id", id).put("logical", id)
+                                        .put("name", displayName(id, c)).put("facing", "back"))
+                    continue
+                }
+                for (sub in subs) {
+                    val pc = runCatching { m.getCameraCharacteristics(sub) }.getOrNull() ?: continue
+                    if (facingName(pc) != "back") { continue }
+                    arr.put(JSONObject().put("id", sub).put("logical", id)
+                                        .put("name", displayName(sub, pc)).put("facing", "back"))
+                }
+            }
+        }
+        return arr.toString()
+    }
+
+    // 【束ねられているカメラを調べる(2026-09-05)】getCameraIdList に出てくるのは、
+    //  端末が「アプリが直に開いてよい」と決めたカメラだけである。超広角や望遠は
+    //  **論理カメラ(複数の物理カメラを束ねたもの)の配下**に隠れていて一覧に出てこない。
+    //  ここでは触らずに、何がぶら下がっていて、それぞれ何ができるかだけを見る。
+    @JvmStatic
+    fun physicalsJson(): String {
+        val m = mgr() ?: return "[]"
+        val arr = JSONArray()
+        if (Build.VERSION.SDK_INT < 28) { return "[]" }
+        runCatching {
+            for (id in m.cameraIdList) {
+                val c = runCatching { m.getCameraCharacteristics(id) }.getOrNull() ?: continue
+                val subs = runCatching { c.physicalCameraIds }.getOrNull() ?: emptySet<String>()
+                for (sub in subs) {
+                    val pc = runCatching { m.getCameraCharacteristics(sub) }.getOrNull() ?: continue
+                    val o = JSONObject()
+                    o.put("logical", id)
+                    o.put("id", sub)
+                    val sz = pc.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+                    o.put("sensorW", sz?.width?.toDouble() ?: 0.0)
+                    o.put("sensorH", sz?.height?.toDouble() ?: 0.0)
+                    o.put("focalMm", pc.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                                       ?.firstOrNull()?.toDouble() ?: 0.0)
+                    // 【絞りは 1 点とは限らない(2026-09-19)】iPhone 13 は可変で、Android にも出てくる。
+                    //  代表値の "fn" は最も明るい絞り、"apertures" に全部を並べる。
+                    val aps = pc.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)
+                    o.put("fn", aps?.minOrNull()?.toDouble() ?: 0.0)
+                    val apArr = JSONArray()
+                    aps?.forEach { apArr.put(it.toDouble()) }
+                    o.put("apertures", apArr)
+                    val exp = pc.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+                    o.put("expMaxNs", exp?.upper ?: 0L)
+                    o.put("expMinNs", exp?.lower ?: 0L)
+                    val ppx = pc.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
+                    o.put("pixelW", ppx?.width ?: 0)
+                    o.put("pixelH", ppx?.height ?: 0)
+                    val piso = pc.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+                    o.put("isoMin", piso?.lower ?: 0)
+                    o.put("isoMax", piso?.upper ?: 0)
+                    o.put("facing", facingName(pc))
+                    val pmap = pc.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                    val pbest = pmap?.getOutputSizes(ImageFormat.JPEG)
+                                    ?.maxByOrNull { it.width.toLong() * it.height }
+                    o.put("jpegW", pbest?.width ?: 0)
+                    o.put("jpegH", pbest?.height ?: 0)
+                    val caps = pc.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+                    o.put("manual", caps?.contains(
+                        CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR) ?: false)
+                    // 一覧に出ている id なら、そのまま単体で開ける
+                    o.put("standalone", m.cameraIdList.contains(sub))
+                    arr.put(o)
+                }
+            }
+        }
+        return arr.toString()
+    }
+
+    private fun facingName(c: CameraCharacteristics): String =
+        when (c.get(CameraCharacteristics.LENS_FACING)) {
+            CameraCharacteristics.LENS_FACING_FRONT -> "front"
+            CameraCharacteristics.LENS_FACING_BACK  -> "back"
+            else -> "external"
+        }
+
+    // 人が見分けられる名前を焦点距離から作る。35mm換算に直してから広角/標準/望遠を当てる。
+    //  換算値が出せない端末では素の焦点距離を出す(それでも区別は付く)。
+    // 【名前に 35mm 判換算の焦点距離を付ける(2026-09-06 ユーザー指示)】
+    //  "Pixel 6 広角 25mm" のように焦点距離まで入れると、知らない端末で同じ区分のカメラが
+    //  複数あっても(広角が2つ等)名前で見分けられる。区分(超広角/広角/望遠)は換算値で決める。
+    private fun displayName(id: String, c: CameraCharacteristics): String {
+        val model = Build.MODEL ?: "Phone"
+        val f = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()
+        val sz = c.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+        var kind = ""
+        var mm = ""
+        if (f != null && sz != null && sz.width > 0f) {
+            // 35mm判の対角 43.27mm に対する比で換算する
+            val diag = Math.hypot(sz.width.toDouble(), sz.height.toDouble())
+            if (diag > 0.0) {
+                val eq = f * (43.27 / diag)
+                kind = when {
+                    eq < 20.0 -> "超広角"
+                    eq < 45.0 -> "広角"
+                    else      -> "望遠"
+                }
+                mm = " " + Math.round(eq).toString() + "mm"
+            }
+        }
+        if (kind.isEmpty()) { kind = "cam$id" }
+        return "$model $kind$mm"
+    }
+
+    // ── 諸元 ────────────────────────────────────────────────
+    // C++ 側が設定可能値のテーブルを合成するための材料。取れないものは 0 / 空で返す。
+    @JvmStatic
+    fun describe(id: String): String {
+        val m = mgr() ?: return "{}"
+        val c = runCatching { m.getCameraCharacteristics(id) }.getOrNull() ?: return "{}"
+        val o = JSONObject()
+        val sz = c.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE)
+        o.put("sensorW", sz?.width?.toDouble() ?: 0.0)
+        o.put("sensorH", sz?.height?.toDouble() ?: 0.0)
+        val px = c.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)
+        o.put("pixelW", px?.width ?: 0)
+        o.put("pixelH", px?.height ?: 0)
+        val iso = c.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+        o.put("isoMin", iso?.lower ?: 0)
+        o.put("isoMax", iso?.upper ?: 0)
+        val exp = c.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+        o.put("expMinNs", exp?.lower ?: 0L)
+        o.put("expMaxNs", exp?.upper ?: 0L)
+        val ap = JSONArray()
+        c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)?.forEach { ap.put(it.toDouble()) }
+        o.put("apertures", ap)
+        val fl = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()
+        o.put("focalMm", fl?.toDouble() ?: 0.0)
+        // ピントを動かせるか(最短撮影距離[ディオプタ]。0=固定焦点)と過焦点距離[ディオプタ]。記録用。
+        o.put("focusMinDiopter", (c.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f).toDouble())
+        o.put("hyperfocalDiopter", (c.get(CameraCharacteristics.LENS_INFO_HYPERFOCAL_DISTANCE) ?: 0f).toDouble())
+        o.put("name", displayName(id, c))
+        // マニュアル露出が使えるか。使えない端末では露出を指定しても効かない。
+        val caps = c.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+        val map  = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        o.put("manual", caps?.contains(
+            CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR) ?: false)
+        // 【ノイズリダクションを切れるか(2026-09-05)】星は暗い点なので、端末の
+        //  ノイズリダクションに「ノイズ」と見なされて消される。切れるなら、端末の映像処理の
+        //  良いところ(デモザイクと色)はそのまま使い、星を消す工程だけ外せる。
+        //  切れない端末では RAW から自前で作るしかないので、その判断材料としてここで返す。
+        val nrModes = c.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES)
+        o.put("nrOff",     nrModes?.contains(CameraMetadata.NOISE_REDUCTION_MODE_OFF) ?: false)
+        o.put("nrMinimal", nrModes?.contains(CameraMetadata.NOISE_REDUCTION_MODE_MINIMAL) ?: false)
+        val edModes = c.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES)
+        o.put("edgeOff",   edModes?.contains(CameraMetadata.EDGE_MODE_OFF) ?: false)
+        o.put("postProc",  caps?.contains(
+            CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_POST_PROCESSING) ?: false)
+        // RAW(DNG)が撮れるか。切れない端末の逃げ道になる。
+        o.put("raw", (caps?.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW) ?: false) &&
+                     (map?.getOutputSizes(ImageFormat.RAW_SENSOR)?.isNotEmpty() ?: false))
+        // 端末の映像処理の水準。LEGACY はマニュアル露出そのものが使えない。
+        o.put("hwLevel", c.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL) ?: -1)
+
+        // 出せる JPEG のうち最大のもの(撮影に使う)
+        val best = map?.getOutputSizes(ImageFormat.JPEG)?.maxByOrNull { it.width.toLong() * it.height }
+        o.put("jpegW", best?.width ?: 0)
+        o.put("jpegH", best?.height ?: 0)
+        return o.toString()
+    }
+
+    // 【出来上がる1コマの大きさ(2026-09-24 UI依頼)】撮影せずに答える。出力設定の画面が
+    //  「変更なし」ではなく実寸を出すために使う。
+    //  ・RAW で撮る端末: 受け取る RAW の**縦横半分**(2×2 束ねで現像するため)
+    //  ・RAW が無い端末: カメラが出す JPEG の最大の大きさ(そのまま使う)
+    //  センサーの有効画素の枠(諸元の pixelW/H)とは数画素ずれることがあるので、
+    //  ここは撮影と同じ「出力の大きさ」から出す(SH-M08: 枠 4016x3016 / RAW 4000x3000)。
+    //  戻り = "幅x高さ"。分からなければ空文字。
+    @JvmStatic
+    fun frameSize(physId: String): String {
+        val m = mgr() ?: return ""
+        val c = runCatching { m.getCameraCharacteristics(physId) }.getOrNull() ?: return ""
+        val map = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return ""
+        val raw = map.getOutputSizes(ImageFormat.RAW_SENSOR)?.maxByOrNull { it.width.toLong() * it.height }
+        if (raw != null && rawSupported(c)) {
+            val w = (raw.width and 1.inv()) / 2
+            val h = (raw.height and 1.inv()) / 2
+            return if (w > 0 && h > 0) "${w}x$h" else ""
+        }
+        val jp = map.getOutputSizes(ImageFormat.JPEG)?.maxByOrNull { it.width.toLong() * it.height }
+            ?: return ""
+        return "${jp.width and 1.inv()}x${jp.height and 1.inv()}"
+    }
+
+    // ── ピントを実測で決める(2026-09-26) ──────────────────
+    // 【なぜ実測か】無限遠(0)を指定しても端末が受け付けているとは限らない。SH-M08 は
+    //  何を指定しても撮影結果が hyperfocalDistance を返す。申告を信じずに、候補の位置で
+    //  1枚ずつ撮って**現像後の JPEG の大きさ**で比べる。場面と露出が同じなら、ピントが
+    //  合っているコマほど細部が残り、JPEG は大きくなる。
+    //  ・候補は 無限遠 / 過焦点の半分 / 過焦点 の3つ(過焦点が分からない端末は無限遠だけ)
+    //  ・無限遠より 5% 以上大きいときだけ乗り換える(誤差で振らせない)
+    //  ・決めた位置は端末に覚えさせ、暗くて測れない夜はそれをそのまま使う
+    //  戻り = ログへ残す1行("" = 何もしなかった)。英語のみ。
+    @JvmStatic
+    fun focusProbe(sec: Double, iso: Int, fn: Double): String {
+        if (focusProbed) { return "" }
+        focusProbed = true
+        if (!canSetFocus) { return "focus: camera has no focus control" }
+        val lg = openLogical ?: return ""
+        val ph = openId ?: return ""
+        if (!(sec > 0.0)) { return "" }
+        val keepDng = wantDng
+        val keepFocus = focusDpt
+        wantDng = false			// 確かめの1枚は残さない
+        var cand = if (hyperfocalDpt > 0f) floatArrayOf(0f, hyperfocalDpt * 0.5f, hyperfocalDpt)
+                   else floatArrayOf(0f)
+        var score = IntArray(cand.size)
+        var got   = FloatArray(cand.size) { -1f }
+        runFocusPass(lg, ph, iso, sec, fn, cand, score, got)
+        var note = ""
+        // 【指定を見ていない端末への一手】要求を変えても申告が動かないなら、3A ごと切って
+        //  もう一度だけ試す。これでも動かなければ手動ピントは諦める(AF を使うしかない)。
+        if (ignoresFocus(cand, got) && canCtlOff) {
+            ctlOff = true
+            val c2 = if (hyperfocalDpt > 0f) floatArrayOf(0f, hyperfocalDpt) else floatArrayOf(0f)
+            val s2 = IntArray(c2.size)
+            val g2 = FloatArray(c2.size) { -1f }
+            runFocusPass(lg, ph, iso, sec, fn, c2, s2, g2)
+            if (!ignoresFocus(c2, g2)) {
+                cand = c2; score = s2; got = g2; note = " [control-mode off]"
+            } else {
+                ctlOff = false; focusIgnored = true; note = " [manual focus ignored by device]"
+            }
+        } else if (ignoresFocus(cand, got)) {
+            focusIgnored = true; note = " [manual focus ignored by device]"
+        }
+        wantDng = keepDng
+        var best = 0
+        for (i in cand.indices) { if (score[i] > score[best]) { best = i } }
+        val pick = if (score[0] > 0 && score[best] < score[0] * 1.05) 0 else best
+        focusDpt = if (score[pick] > 0) cand[pick] else keepFocus
+        saveFocus(ph, focusDpt)
+        val sb = StringBuilder("focus probe:")
+        for (i in cand.indices) {
+            sb.append(String.format(Locale.US, " want %.2f=%dKB(got %.2f)", cand[i], score[i] / 1024, got[i]))
+        }
+        sb.append(String.format(Locale.US, " -> use %.2f", focusDpt)).append(note)
+        return sb.toString()
+    }
+
+    // 候補の位置で1枚ずつ撮り、現像後の大きさと端末の申告を控える。
+    private fun runFocusPass(lg: String, ph: String, iso: Int, sec: Double, fn: Double,
+                             cand: FloatArray, score: IntArray, got: FloatArray) {
+        for (i in cand.indices) {
+            focusDpt = cand[i]
+            if (!capture(lg, ph, iso, (sec * 1e9).toLong(), fn, 0, 1, openRaw)) { continue }
+            val b = takeImage((sec * 1000).toInt() + 9000) ?: continue
+            score[i] = b.size
+            got[i] = capFocusDpt
+        }
+    }
+
+    // 要求を変えても申告が動かない = 端末が手動ピントを見ていない。
+    private fun ignoresFocus(cand: FloatArray, got: FloatArray): Boolean {
+        if (cand.size < 2) { return false }
+        var wMin = Float.MAX_VALUE; var wMax = -Float.MAX_VALUE
+        var gMin = Float.MAX_VALUE; var gMax = -Float.MAX_VALUE
+        for (i in cand.indices) {
+            if (got[i] < 0f) { return false }		// 撮れていないなら判定しない
+            if (cand[i] < wMin) { wMin = cand[i] }; if (cand[i] > wMax) { wMax = cand[i] }
+            if (got[i]  < gMin) { gMin = got[i]  }; if (got[i]  > gMax) { gMax = got[i]  }
+        }
+        return (wMax - wMin) > 0.1f && (gMax - gMin) < 0.02f
+    }
+
+    // ピントを指定できる端末かどうか。撮影レポートに載せる(英語のみ)。
+    //  manual = 指定した位置に動く / afOnly = 指定を無視する(AF任せ) / fixed = そもそも動かない
+    @JvmStatic
+    fun focusControl(): String =
+        if (!canSetFocus) { "fixed" } else if (focusIgnored) { "afOnly" } else { "manual" }
+    @JvmStatic
+    fun focusDiopter(): Double = capFocusDpt.toDouble()
+
+    private fun focusPrefs() = appCtx?.getSharedPreferences("tlp_focus", Context.MODE_PRIVATE)
+    private fun loadFocus(id: String): Float =
+        runCatching { focusPrefs()?.getFloat("f_" + id, 0f) ?: 0f }.getOrDefault(0f)
+    private fun saveFocus(id: String, v: Float) {
+        runCatching { focusPrefs()?.edit()?.putFloat("f_" + id, v)?.apply() }
+    }
+
+    // ── 物理カメラを名指しできるかの実験(2026-09-05) ────────
+    // 【なぜ確かめるか】論理カメラを普通に開くと、どの物理センサーで撮るかは端末側の
+    //  制御ソフトが決める。露出制御を成り立たせるには「狙ったセンサーで、指定した露出で
+    //  撮れている」ことが要る。仕様上は名指しできるが、守るかどうかは端末の実装による。
+    //  ここでは1枚だけ撮って、**撮影結果が申告する物理カメラ id と露出**を読み取る。
+    //  返すのは JSON。使うかどうかの判断材料にするだけで、通常の撮影には影響しない。
+    @JvmStatic
+    fun probePhysical(logicalId: String, physId: String): String {
+        val o = JSONObject()
+        o.put("logical", logicalId); o.put("want", physId)
+        val m = mgr() ?: return o.put("error", "no camera service").toString()
+        if (Build.VERSION.SDK_INT < 28) { return o.put("error", "needs Android 9").toString() }
+        val c = runCatching { m.getCameraCharacteristics(physId) }.getOrNull()
+            ?: return o.put("error", "no characteristics").toString()
+        val map = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        val size = map?.getOutputSizes(ImageFormat.JPEG)?.maxByOrNull { it.width.toLong() * it.height }
+            ?: return o.put("error", "no jpeg size").toString()
+
+        val h = ensureThread()
+        var dev: CameraDevice? = null
+        var ses: CameraCaptureSession? = null
+        var rd: ImageReader? = null
+        try {
+            rd = ImageReader.newInstance(size.width, size.height, ImageFormat.JPEG, 2)
+            val opened = CountDownLatch(1)
+            m.openCamera(logicalId, object : CameraDevice.StateCallback() {
+                override fun onOpened(d: CameraDevice) { dev = d; opened.countDown() }
+                override fun onDisconnected(d: CameraDevice) { d.close(); opened.countDown() }
+                override fun onError(d: CameraDevice, e: Int) {
+                    o.put("error", "open error $e"); d.close(); opened.countDown() }
+            }, h)
+            if (!opened.await(8, TimeUnit.SECONDS) || dev == null) {
+                return o.put("error", o.optString("error", "open timeout")).toString()
+            }
+
+            // 【ここが本題】出力を物理カメラに結び付ける。
+            val oc = OutputConfiguration(rd.surface)
+            oc.setPhysicalCameraId(physId)
+            val cfg = CountDownLatch(1)
+            dev!!.createCaptureSession(SessionConfiguration(
+                SessionConfiguration.SESSION_REGULAR, listOf(oc), { r -> h.post(r) },
+                object : CameraCaptureSession.StateCallback() {
+                    override fun onConfigured(s: CameraCaptureSession) { ses = s; cfg.countDown() }
+                    override fun onConfigureFailed(s: CameraCaptureSession) {
+                        o.put("error", "session configure failed"); cfg.countDown() }
+                }))
+            if (!cfg.await(8, TimeUnit.SECONDS) || ses == null) {
+                return o.put("error", o.optString("error", "session timeout")).toString()
+            }
+
+            val wantNs = 1_000_000_000L / 30   // 1/30秒
+            val wantIso = 800
+            // 物理カメラ宛てに露出を送れるか。送れない端末では論理側に載せる。
+            // 物理カメラ宛てに送れる項目の数(0 なら名指しの設定は受け付けない端末)
+            val lc = runCatching { m.getCameraCharacteristics(logicalId) }.getOrNull()
+            val physKeys = if (Build.VERSION.SDK_INT >= 28)
+                runCatching { lc?.availablePhysicalCameraRequestKeys }.getOrNull() else null
+            o.put("physKeys", physKeys?.size ?: -1)
+            val req = dev!!.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE, setOf(physId))
+            req.addTarget(rd.surface)
+            req.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_OFF)
+            req.set(CaptureRequest.SENSOR_SENSITIVITY, wantIso)
+            req.set(CaptureRequest.SENSOR_EXPOSURE_TIME, wantNs)
+            runCatching {
+                req.setPhysicalCameraKey(CaptureRequest.SENSOR_SENSITIVITY, wantIso, physId)
+                req.setPhysicalCameraKey(CaptureRequest.SENSOR_EXPOSURE_TIME, wantNs, physId)
+                o.put("perPhysicalSet", true)
+            }.onFailure { o.put("perPhysicalSet", false) }
+
+            val got = CountDownLatch(2)   // 画像と撮影結果の両方
+            var bytes = 0
+            rd.setOnImageAvailableListener({ r ->
+                runCatching { r.acquireLatestImage()?.use { bytes = it.planes[0].buffer.remaining() } }
+                got.countDown()
+            }, h)
+            ses!!.capture(req.build(), object : CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureCompleted(s: CameraCaptureSession, rq: CaptureRequest,
+                                                res: android.hardware.camera2.TotalCaptureResult) {
+                    runCatching {
+                        if (Build.VERSION.SDK_INT >= 29) {
+                            o.put("activePhysicalId", res.get(
+                                android.hardware.camera2.CaptureResult
+                                    .LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID) ?: "(none)")
+                            val per = res.physicalCameraTotalResults
+                            o.put("perPhysicalResults", per.keys.joinToString(","))
+                            per[physId]?.let { pr ->
+                                o.put("physExposureNs", pr.get(android.hardware.camera2.CaptureResult.SENSOR_EXPOSURE_TIME) ?: -1L)
+                                o.put("physIso", pr.get(android.hardware.camera2.CaptureResult.SENSOR_SENSITIVITY) ?: -1)
+                            }
+                        }
+                        o.put("exposureNs", res.get(android.hardware.camera2.CaptureResult.SENSOR_EXPOSURE_TIME) ?: -1L)
+                        o.put("iso", res.get(android.hardware.camera2.CaptureResult.SENSOR_SENSITIVITY) ?: -1)
+                    }
+                    got.countDown()
+                }
+                override fun onCaptureFailed(s: CameraCaptureSession, rq: CaptureRequest,
+                                             f: android.hardware.camera2.CaptureFailure) {
+                    o.put("error", "capture failed reason=" + f.reason); got.countDown(); got.countDown()
+                }
+            }, h)
+            val done = got.await(15, TimeUnit.SECONDS)
+            o.put("ok", done && bytes > 0 && !o.has("error"))
+            o.put("jpegBytes", bytes)
+            o.put("size", "${size.width}x${size.height}")
+        } catch (e: Exception) {
+            o.put("error", (e.javaClass.simpleName + ": " + e.message))
+        } finally {
+            runCatching { ses?.close() }
+            runCatching { dev?.close() }
+            runCatching { rd?.close() }
+        }
+        return o.toString()
+    }
+
+    // ── 開く / 閉じる ───────────────────────────────────────
+    // 撮るたびに開き直すと1コマに数秒かかる。撮影の間は開いたままにする。
+    //  logicalId = 入口になる論理カメラ / physId = 実際に使う物理カメラ。
+    //  同じなら普通に開く(配下を持たない端末)。違えば**物理カメラを名指しして**開く。
+    @JvmStatic
+    fun open(logicalId: String, physId: String, raw: Boolean): String {
+        if (openId == physId && openLogical == logicalId && openRaw == raw && camera != null && session != null) { return "" }
+        close()
+        val m = mgr() ?: return "camera service not available"
+        // 諸元も出力の大きさも**物理カメラ本人**から取る(論理カメラのものとは違う)。
+        val c = runCatching { m.getCameraCharacteristics(physId) }.getOrNull()
+            ?: return "unknown camera id: $physId"
+        val map = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        val nrModes = c.get(CameraCharacteristics.NOISE_REDUCTION_AVAILABLE_NOISE_REDUCTION_MODES)
+        canNrOff = nrModes?.contains(CameraMetadata.NOISE_REDUCTION_MODE_OFF) ?: false
+        val edModes = c.get(CameraCharacteristics.EDGE_AVAILABLE_EDGE_MODES)
+        canEdgeOff = edModes?.contains(CameraMetadata.EDGE_MODE_OFF) ?: false
+        // 0 = 固定焦点(位置を動かせない)。> 0 ならディオプタ(1/m)で、0 を送ると無限遠。
+        canSetFocus = (c.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f) > 0f
+        hyperfocalDpt = c.get(CameraCharacteristics.LENS_INFO_HYPERFOCAL_DISTANCE) ?: 0f
+        // 一覧を持たない端末もある。**持っていないときは試す**(受け付けなければ黙って無視される)。
+        canCtlOff = c.get(CameraCharacteristics.CONTROL_AVAILABLE_MODES)
+                     ?.any { it.toInt() == CameraMetadata.CONTROL_MODE_OFF } ?: true
+        ctlOff = false; focusIgnored = false
+        focusDpt = loadFocus(physId)	// 前に実測で決めた位置(無ければ無限遠)
+
+        val h = ensureThread()
+        openRaw = raw
+        useRaw = raw && rawSupported(c)
+        val rd: ImageReader
+        if (useRaw) {
+            val size: Size = map?.getOutputSizes(ImageFormat.RAW_SENSOR)
+                ?.maxByOrNull { it.width.toLong() * it.height }
+                ?: return "no raw output size"
+            rawW = size.width; rawH = size.height
+            cfa = c.get(CameraCharacteristics.SENSOR_INFO_COLOR_FILTER_ARRANGEMENT) ?: 0
+            whiteLevel = c.get(CameraCharacteristics.SENSOR_INFO_WHITE_LEVEL) ?: 1023
+            c.get(CameraCharacteristics.SENSOR_BLACK_LEVEL_PATTERN)?.let { bp ->
+                blackPos = floatArrayOf(bp.getOffsetForIndex(0, 0).toFloat(), bp.getOffsetForIndex(1, 0).toFloat(),
+                                        bp.getOffsetForIndex(0, 1).toFloat(), bp.getOffsetForIndex(1, 1).toFloat())
+            }
+            canShadingMap = c.get(CameraCharacteristics.STATISTICS_INFO_AVAILABLE_LENS_SHADING_MAP_MODES)
+                ?.contains(CameraMetadata.STATISTICS_LENS_SHADING_MAP_MODE_ON) ?: false
+            buildStaticColor(c)
+            // 足す最中に次のコマが届くので、受け取り口は数枚ぶん持つ(1枚 25MB)。
+            rd = ImageReader.newInstance(size.width, size.height, ImageFormat.RAW_SENSOR, 4)
+        } else {
+            val size: Size = map?.getOutputSizes(ImageFormat.JPEG)
+                ?.maxByOrNull { it.width.toLong() * it.height }
+                ?: return "no jpeg output size"
+            rd = ImageReader.newInstance(size.width, size.height, ImageFormat.JPEG, 2)
+        }
+        reader = rd
+
+        val opened = CountDownLatch(1)
+        var err: String = ""
+        try {
+            m.openCamera(logicalId, object : CameraDevice.StateCallback() {
+                override fun onOpened(dev: CameraDevice) { camera = dev; opened.countDown() }
+                override fun onDisconnected(dev: CameraDevice) {
+                    err = "camera disconnected"; dev.close(); camera = null; opened.countDown()
+                }
+                override fun onError(dev: CameraDevice, error: Int) {
+                    err = "camera open error $error"; dev.close(); camera = null; opened.countDown()
+                }
+            }, h)
+        } catch (e: SecurityException) {
+            return "camera permission not granted"
+        } catch (e: Exception) {
+            return "openCamera failed: ${e.message}"
+        }
+        if (!opened.await(8, TimeUnit.SECONDS)) { close(); return "camera open timeout" }
+        val dev = camera ?: run { close(); return if (err.isEmpty()) "camera open failed" else err }
+
+        val configured = CountDownLatch(1)
+        var serr = ""
+        val cb = object : CameraCaptureSession.StateCallback() {
+            override fun onConfigured(s: CameraCaptureSession) { session = s; configured.countDown() }
+            override fun onConfigureFailed(s: CameraCaptureSession) {
+                serr = "session configure failed"; configured.countDown()
+            }
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= 28) {
+                val oc = OutputConfiguration(rd.surface)
+                // 【ここで物理カメラに結び付ける】これをしないと、どのセンサーで撮るかは
+                //  端末側の制御ソフトが決めてしまう(途中で切り替わることもある)。
+                if (physId != logicalId) { oc.setPhysicalCameraId(physId) }
+                dev.createCaptureSession(SessionConfiguration(
+                    SessionConfiguration.SESSION_REGULAR, listOf(oc), { r -> h.post(r) }, cb))
+            } else {
+                @Suppress("DEPRECATION")
+                dev.createCaptureSession(listOf(rd.surface), cb, h)
+            }
+        } catch (e: Exception) { close(); return "createCaptureSession failed: ${e.message}" }
+        if (!configured.await(8, TimeUnit.SECONDS) || session == null) {
+            close(); return if (serr.isEmpty()) "session timeout" else serr
+        }
+        openId = physId; openLogical = logicalId
+        return ""
+    }
+
+    @JvmStatic
+    fun close() {
+        runCatching { session?.close() }
+        runCatching { camera?.close() }
+        runCatching { reader?.close() }
+        session = null; camera = null; reader = null; openId = null; openLogical = null
+        // 【受け取り口を空にする(2026-09-26)】撮影を中止したときに露光中だったコマは、
+        //  この後に出来上がって受け取り口へ置かれる。誰も取らないまま残ると、**次の
+        //  セッションの最初の回収がそれを拾う**。
+        //  実測: 09-24 22:31 に中止した室内の白いコマが、翌朝 03:00 の動画の1コマ目に
+        //  そのまま入っていた(バイト単位で同一)。以降の番号も1つずれる。
+        pending = null; pendingJpeg = null
+    }
+
+    // 1回の撮影の始まり。持ち越しを断ち切り、ピントの確かめもやり直す。
+    @JvmStatic
+    fun sessionBegin() {
+        pending = null; pendingJpeg = null
+        focusProbed = false
+    }
+
+    // ── 撮る ────────────────────────────────────────────────
+    // 【シャッターは待たずに戻る(2026-09-05 実機で判明)】
+    //  露光の終わりまで待つ作りにしたら、6秒露光で1コマ 11.9秒かかり、呼び出し側の
+    //  予算(8秒)を超えて毎コマ失敗した。キヤノンの CCAPI も「シャッターのPOSTは露光を
+    //  待たずに戻る」ので、そちらに合わせる。撮れた画像は takeImage で受け取る
+    //  (露出制御は露光が終わってから測るので、待つ場所はそちらが正しい)。
+    private var pending: CountDownLatch? = null
+    private var pendingJpeg: ByteArray? = null
+    // 【救う範囲(2026-09-07 ユーザー指示)】1 フレーム(1 バースト)で撮り直すのは 2 コマまで。それ以上落ちたら
+    //  そのフレームは諦める(次のフレームは予定どおり)。受け取りの予算(apiBuiltin::takeBudgetMs)も 2 コマぶん。
+    //  キヤノン機の「3 回続けて失敗したら手を打つ」と同じ考えで、フレーム 3 連続の失敗は apiBuiltin が
+    //  カメラを開き直す。
+    const val MAX_RETRY_PER_BURST = 2
+
+    // 【1コマの経過(2026-09-07 調査用)】どこで画像が来なくなるかがファイルのログに残らず、
+    //  夜の失敗(60 コマ中 18 コマ欠け)の原因を追えなかった。要求から受け取りまでの経過を
+    //  控えておき、C++ が受け取りのたびに1行で記録する。
+    @Volatile private var capT0 = 0L            // capture() を呼んだ時刻(elapsedRealtime)
+    @Volatile private var capFrames = 0         // 要求した枚数
+    @Volatile private var capExpNs = 0L         // 要求した1枚の露光
+    @Volatile private var capImages = 0         // 届いた画像
+    @Volatile private var capResults = 0        // 届いた撮影結果
+    @Volatile private var capFail = -1          // onCaptureFailed の reason(-1=無し)
+    @Volatile private var capBufLost = 0        // onCaptureBufferLost の回数(結果は来たのに画像が来ない)
+    @Volatile private var capAddFail = 0        // 加算に失敗した枚数
+    @Volatile private var capDevMs = -1         // 現像時間(-1=未到達)
+    private val capMarks = StringBuilder()      // "+1.2s/15.40" 撮影結果ごとの到着時刻と実露光
+    private fun capMark(tag: String) {
+        val t = (SystemClock.elapsedRealtime() - capT0) / 1000.0
+        synchronized(capMarks) { if (capMarks.length < 400) capMarks.append(String.format(java.util.Locale.US, " %s@%.1fs", tag, t)) }
+    }
+    // 直近の1コマの経過(1行)。C++ がログへ載せる。
+    @JvmStatic
+    fun captureReport(): String {
+        val m = synchronized(capMarks) { capMarks.toString() }
+        // focus は端末が申告したピント位置[ディオプタ]。0.00=無限遠。固定焦点の機種と取れない機種は -1。
+        return String.format(java.util.Locale.US,
+            "req=%dx%.2fs imgs=%d res=%d fail=%d bufLost=%d addFail=%d dev=%dms focus=%.2f marks:%s",
+            capFrames, capExpNs / 1e9, capImages, capResults, capFail, capBufLost, capAddFail, capDevMs,
+            capFocusDpt, m)
+    }
+
+    // 露出を指定して1枚撮り始める。成功=要求を出せた。画像は takeImage で受け取る。
+    @JvmStatic
+    fun capture(logicalId: String, physId: String, iso: Int, expNs: Long,
+                aperture: Double, timeoutMs: Int, frames: Int, raw: Boolean): Boolean {
+        val e = open(logicalId, physId, raw)
+        if (e.isNotEmpty()) { return false }
+        val dev = camera ?: return false
+        val s = session ?: return false
+        val rd = reader ?: return false
+        val h = handler ?: return false
+
+        val got = CountDownLatch(1)
+        pending = got; pendingJpeg = null
+        // 【足す】RAW は届いたそばから足す(足すのは C++)。露光中に前のコマを足せるので、
+        //  最後のコマの後に残るのは現像と JPEG 化だけ。
+        val n = if (useRaw) frames.coerceAtLeast(1) else 1
+        capT0 = SystemClock.elapsedRealtime(); capFrames = n; capExpNs = expNs
+        capImages = 0; capResults = 0; capFail = -1; capAddFail = 0; capDevMs = -1; capBufLost = 0
+        synchronized(capMarks) { capMarks.setLength(0) }
+        var images = 0; var results = 0
+        var lastRes: TotalCaptureResult? = null
+        val finish = {
+            if (images >= n && results >= n) {
+                val td = SystemClock.elapsedRealtime()
+                pendingJpeg = developStack(lastRes, n)
+                capDevMs = (SystemClock.elapsedRealtime() - td).toInt()
+                got.countDown()
+            }
+        }
+        // 【前の残りは捨てて枠を空ける(2026-09-07)】受け取り損ねた画像がリーダーに残ると枠(maxImages)が
+        //  埋まり、次の要求にバッファが無くて HAL が要求ごと落とす(bufLost が要求直後 0.1 秒に出る型)。
+        run {
+            var stale = 0
+            while (true) { val im = runCatching { rd.acquireNextImage() }.getOrNull() ?: break; runCatching { im.close() }; stale++ }
+            if (stale > 0) { capMark("stale$stale") }
+        }
+        var replaced = 0    // 落ちたコマの撮り直し回数
+        // 【撮り直しの口(2026-09-23)】画像を受け取る側からも同じ要求をもう1枚出せるようにする。
+        //  要求とコールバックは下で作るので、入れ物だけ先に置く。
+        var reshoot: (() -> Boolean)? = null
+        if (useRaw) {
+            HgeNative.nativeRawStackBegin(rawW, rawH, cfa, wantDng)
+            rd.setOnImageAvailableListener({ r ->
+                // 通知 1 回に画像が複数あることがある。全部取る(取り残すと上の「枠が埋まる」になる)。
+                while (true) {
+                    val img = runCatching { r.acquireNextImage() }.getOrNull() ?: break
+                    var added = false
+                    runCatching {
+                        img.use { im ->
+                            val pl = im.planes[0]
+                            added = HgeNative.nativeRawStackAdd(pl.buffer, pl.rowStride)
+                            if (!added) {
+                                capAddFail++
+                                Log.w("TLP-RAW", "stack add rejected ${im.width}x${im.height} stride ${pl.rowStride}")
+                            }
+                        }
+                    }.onFailure { capAddFail++; runCatching { img.close() } }
+                    // 【足せなかったコマは数えない(2026-09-23)】書きかけの画像を1枚として数えると、
+                    //  欠けたまま現像して測光まで狂う。落ちたコマと同じ扱いで撮り直す。
+                    if (!added) {
+                        if (replaced < MAX_RETRY_PER_BURST && reshoot?.invoke() == true) {
+                            replaced++; capMark("retryAdd")
+                        } else {
+                            pendingJpeg = null; got.countDown()
+                        }
+                        continue
+                    }
+                    images++; capImages = images; capMark("img")
+                }
+                finish()
+            }, h)
+        } else {
+            rd.setOnImageAvailableListener({ r ->
+                runCatching {
+                    r.acquireLatestImage()?.use { img ->
+                        val buf = img.planes[0].buffer
+                        val b = ByteArray(buf.remaining())
+                        buf.get(b)
+                        pendingJpeg = b
+                    }
+                }
+                got.countDown()
+            }, h)
+        }
+
+        try {
+            // 露出を**その物理カメラ宛て**に送れるよう、要求の宛先に加える(2026-09-05 実機で確認)。
+            val req = if (Build.VERSION.SDK_INT >= 28 && physId != logicalId)
+                dev.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE, setOf(physId))
+            else dev.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE)
+            req.addTarget(rd.surface)
+            // マニュアル露出。AE を切らないと指定した ISO / 露光時間が無視される。
+            req.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_OFF)
+            if (iso > 0)    { req.set(CaptureRequest.SENSOR_SENSITIVITY, iso) }
+            if (expNs > 0L) { req.set(CaptureRequest.SENSOR_EXPOSURE_TIME, expNs) }
+            if (aperture > 0.0) { req.set(CaptureRequest.LENS_APERTURE, aperture.toFloat()) }
+            // 【フレーム時間も伸ばす(長秒の露光が切り詰められないように)】
+            //  SENSOR_FRAME_DURATION が露光より短いと、端末によっては露光が縮む。
+            //  【読み出しの余裕を足す(2026-09-07)】露光ぴったりのフレーム時間は下限で、HAL が
+            //   バッファを落とすことがある(2×15.4 秒で 10 コマに 1 コマ、結果だけ来て画像が来ない)。
+            //   1 コマぶんの読み出し(33ms)+α を足しておく。露光そのものは変わらない。
+            if (expNs > 0L) { req.set(CaptureRequest.SENSOR_FRAME_DURATION, expNs + 50_000_000L) }
+            // 星を撮るので、ぶれ補正と手ぶれ補正は切る(三脚前提)。無い端末では黙って無視される。
+            req.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF)
+            // ピントは focusDpt(既定 0 = 無限遠)。AF を切っただけでは位置が決まらない(2026-09-23)。
+            //  端末が無限遠を受け付けないことがあるので、実測で決めた位置を使う(2026-09-26)。
+            if (canSetFocus) { req.set(CaptureRequest.LENS_FOCUS_DISTANCE, focusDpt) }
+            // 手動ピントを聞かない端末では 3A ごと切る(focusProbe が必要と判断したときだけ)。
+            if (ctlOff) { req.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_OFF) }
+            req.set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_DAYLIGHT)
+            // 星を消さないための2行。端末が対応しているときだけ載せる(上の canNrOff/canEdgeOff)。
+            if (canNrOff)   { req.set(CaptureRequest.NOISE_REDUCTION_MODE, CameraMetadata.NOISE_REDUCTION_MODE_OFF) }
+            if (canEdgeOff) { req.set(CaptureRequest.EDGE_MODE, CameraMetadata.EDGE_MODE_OFF) }
+            // 物理カメラ宛てにも同じ露出を載せる。受け付けない端末では黙って無視される。
+            if (Build.VERSION.SDK_INT >= 28 && physId != logicalId) {
+                runCatching {
+                    if (iso > 0)    { req.setPhysicalCameraKey(CaptureRequest.SENSOR_SENSITIVITY, iso, physId) }
+                    if (expNs > 0L) { req.setPhysicalCameraKey(CaptureRequest.SENSOR_EXPOSURE_TIME, expNs, physId) }
+                }
+                // ピントも物理カメラ宛てに送る(受け付けない端末では黙って無視される)。上と分けるのは、
+                //  ここで弾かれても露出の指定を落とさないため。
+                if (canSetFocus) {
+                    runCatching {
+                        req.setPhysicalCameraKey(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF, physId)
+                        req.setPhysicalCameraKey(CaptureRequest.LENS_FOCUS_DISTANCE, focusDpt, physId)
+                    }
+                }
+            }
+            // RAW は自前で現像するので、周辺減光の地図を撮影結果に付けてもらう(掛け戻しに使う)。
+            if (useRaw && canShadingMap) {
+                req.set(CaptureRequest.STATISTICS_LENS_SHADING_MAP_MODE, CameraMetadata.STATISTICS_LENS_SHADING_MAP_MODE_ON)
+            }
+            // 【狙ったセンサーで撮れたかを毎コマ確かめる】端末が勝手に切り替えていないかは
+            //  推測できないので、撮影結果の申告を控えて上位が見られるようにする。
+            val cb = object : CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureCompleted(ss: CameraCaptureSession, rq: CaptureRequest,
+                                                res: TotalCaptureResult) {
+                    if (Build.VERSION.SDK_INT >= 29) {
+                        activePhys = runCatching {
+                            res.get(CaptureResult.LOGICAL_MULTI_CAMERA_ACTIVE_PHYSICAL_ID) ?: ""
+                        }.getOrDefault("")
+                    }
+                    // 端末が実際に置いたピント位置。指定(無限遠=0)どおりかを後から確かめられるようにする。
+                    capFocusDpt = runCatching { res.get(CaptureResult.LENS_FOCUS_DISTANCE) ?: -1f }.getOrDefault(-1f)
+                    if (useRaw) {
+                        lastRes = res; results++; capResults = results
+                        val ae = runCatching { res.get(CaptureResult.SENSOR_EXPOSURE_TIME) }.getOrNull()
+                        capMark(if (ae != null) String.format(java.util.Locale.US, "res/%.2fs", ae / 1e9) else "res")
+                        finish()
+                    }
+                }
+                override fun onCaptureBufferLost(ss: CameraCaptureSession, rq: CaptureRequest,
+                                                 target: android.view.Surface, frameNumber: Long) {
+                    // 結果は来るのに画像が来ない(HAL がバッファを落とした)。この1枚はもう揃わないので、
+                    //  予算いっぱい待たずに「無し」で戻す(待った分だけ次のコマが遅れる)。
+                    Log.w("TLP-RAW", "capture buffer lost frame=$frameNumber")
+                    capBufLost++; capMark("bufLost")
+                    // 【落ちたぶんは撮り直す(2026-09-07)】同じ要求を 1 枚足す。足りない画像が届けば finish が
+                    //  締める。撮り直しも落ちたら諦める(予算切れで LOST になる)。
+                    if (useRaw && replaced < MAX_RETRY_PER_BURST) {
+                        replaced++; capMark("retry")
+                        runCatching { ss.capture(rq, this, h) }.onFailure { pendingJpeg = null; got.countDown() }
+                    } else if (useRaw) { pendingJpeg = null; got.countDown() }
+                }
+                override fun onCaptureFailed(ss: CameraCaptureSession, rq: CaptureRequest,
+                                             f: android.hardware.camera2.CaptureFailure) {
+                    // 1コマでも落ちたら足しても正しい明るさにならない。この1枚は無しにして戻す。
+                    Log.w("TLP-RAW", "capture failed reason=${f.reason}")
+                    capFail = f.reason; capMark("fail")
+                    if (useRaw) { pendingJpeg = null; got.countDown() }
+                }
+            }
+            val built = req.build()
+            // 受け取る側からの撮り直し(書きかけの画像が届いたとき)。同じ要求を1枚足す。
+            reshoot = { runCatching { s.capture(built, cb, h) }.isSuccess }
+            if (n > 1) {
+                // 続けて撮る。要求をまとめて渡すので、読み出しの隙間は端末の最小で済む。
+                s.captureBurst(List(n) { built }, cb, h)
+            } else {
+                s.capture(built, cb, h)
+            }
+        } catch (ex: Exception) { pending = null; capMark("except:" + (ex.message ?: ex.javaClass.simpleName)); return false }
+        return true
+    }
+
+    // 静的な色較正から「昼光の白バランス」と「センサーRGB→線形sRGB」を作る。
+    //  DNG と同じ手順。ColorTransform は XYZ→センサー参照色、CalibrationTransform は
+    //  参照色→この個体、ForwardMatrix は白を合わせたセンサー値→XYZ(D50)。
+    //  白バランス = 昼光(D65)の白がセンサーでどう写るか(= その逆数)。
+    private fun buildStaticColor(c: CameraCharacteristics) {
+        fbGains = null; fbCcm = null
+        fun mat(k: CameraCharacteristics.Key<android.hardware.camera2.params.ColorSpaceTransform>): FloatArray? {
+            val t = c.get(k) ?: return null
+            val m = FloatArray(9)
+            for (r in 0..2) for (col in 0..2) m[r * 3 + col] = t.getElement(col, r).toFloat()
+            var sum = 0f
+            for (v in m) { sum += kotlin.math.abs(v) }
+            return if (m.all { it.isFinite() } && sum > 0.5f) m else null
+        }
+        // 2 つある較正のうち昼光側を選ぶ(片方は白熱灯 STANDARD_A のことが多い)。
+        val il1 = c.get(CameraCharacteristics.SENSOR_REFERENCE_ILLUMINANT1)
+        val day1 = (il1 == CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_D65 ||
+                    il1 == CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_D55 ||
+                    il1 == CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_D50 ||
+                    il1 == CameraMetadata.SENSOR_REFERENCE_ILLUMINANT1_DAYLIGHT)
+        val cm  = (if (day1) mat(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1) else null)
+                  ?: mat(CameraCharacteristics.SENSOR_COLOR_TRANSFORM2)
+                  ?: mat(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1) ?: return
+        val ct  = (if (day1) mat(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM1) else null)
+                  ?: mat(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM2)
+                  ?: floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
+        fun mul(a: FloatArray, b: FloatArray): FloatArray {
+            val o = FloatArray(9)
+            for (r in 0..2) for (col in 0..2) {
+                var v = 0f
+                for (k in 0..2) { v += a[r * 3 + k] * b[k * 3 + col] }
+                o[r * 3 + col] = v
+            }
+            return o
+        }
+        fun apply(m: FloatArray, v: FloatArray) = floatArrayOf(
+            m[0] * v[0] + m[1] * v[1] + m[2] * v[2],
+            m[3] * v[0] + m[4] * v[1] + m[5] * v[2],
+            m[6] * v[0] + m[7] * v[1] + m[8] * v[2])
+        val n = apply(mul(ct, cm), floatArrayOf(0.9504f, 1.0000f, 1.0888f))   // D65 の白
+        if (n[0] > 1e-4f && n[1] > 1e-4f && n[2] > 1e-4f) {
+            fbGains = floatArrayOf(n[1] / n[0], 1f, 1f, n[1] / n[2])          // 緑を 1 に正規化
+        }
+        // 色行列: ForwardMatrix(→XYZ D50) に XYZ(D50)→線形sRGB を掛ける。
+        val fm = (if (day1) mat(CameraCharacteristics.SENSOR_FORWARD_MATRIX1) else null)
+                 ?: mat(CameraCharacteristics.SENSOR_FORWARD_MATRIX2)
+                 ?: mat(CameraCharacteristics.SENSOR_FORWARD_MATRIX1)
+        if (fm != null) {
+            val xyzD50ToSrgb = floatArrayOf(
+                3.1338561f, -1.6168667f, -0.4906146f,
+                -0.9787684f, 1.9161415f, 0.0334540f,
+                0.0719453f, -0.2289914f, 1.4052427f)
+            fbCcm = mul(xyzD50ToSrgb, fm)
+        }
+        Log.i("TLP-RAW", "static color: illum1=$il1 gains=${fbGains?.toList()} ccm=${fbCcm?.toList()}")
+    }
+
+    // 足したものを現像して JPEG にする。ホワイトバランス・色行列・黒レベル・周辺減光は
+    //  撮影結果(端末の映像処理が使った値)をそのまま使う。
+    private fun developStack(res: TotalCaptureResult?, frames: Int): ByteArray? {
+        val t0 = SystemClock.elapsedRealtime()
+        val black = blackPos.copyOf()
+        res?.get(CaptureResult.SENSOR_DYNAMIC_BLACK_LEVEL)?.let { if (it.size >= 4) for (i in 0..3) black[i] = it[i] }
+        // 【端末の申告を鵜呑みにしない(2026-09-20 AQUOS SH-M08 で実測)】
+        //  COLOR_CORRECTION_GAINS に 0 を返す端末がある。現像はこの値を素直に掛けるので、
+        //  そのまま使うと**全画素 0 の真っ黒**になる(撮れてはいるのに真っ暗に見える)。
+        //  使えない値だったら端末の中立色点から作り直し、それも無ければ等倍で通す。
+        //  緑かぶりはしても、真っ黒よりははるかによい。
+        val gains = floatArrayOf(1f, 1f, 1f, 1f)
+        var wbFrom = "none"
+        res?.get(CaptureResult.COLOR_CORRECTION_GAINS)?.let {
+            val g = floatArrayOf(it.red, it.greenEven, it.greenOdd, it.blue)
+            if (g.all { v -> v.isFinite() && v > 0f }) { g.copyInto(gains); wbFrom = "result" }
+        }
+        if (wbFrom == "none") {
+            // 中立色点 = 無彩色がセンサーで何色に写るか。その逆数が白の揃うゲイン(緑を 1 に正規化)。
+            res?.get(CaptureResult.SENSOR_NEUTRAL_COLOR_POINT)?.let { n ->
+                if (n.size >= 3) {
+                    val r = n[0].toFloat(); val g = n[1].toFloat(); val b = n[2].toFloat()
+                    if (r > 0f && g > 0f && b > 0f) {
+                        gains[0] = g / r; gains[1] = 1f; gains[2] = 1f; gains[3] = g / b
+                        wbFrom = "neutral"
+                    }
+                }
+            }
+        }
+        if (wbFrom == "none") {
+            // 撮影結果が何も答えない端末。静的な較正から作った昼光の白バランスを使う
+            //  (AWB は DAYLIGHT で撮っているので筋は合う)。等倍のままだと緑かぶりする。
+            fbGains?.let { it.copyInto(gains); wbFrom = "static" }
+        }
+        val ccm = floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
+        var ccmFrom = "none"
+        res?.get(CaptureResult.COLOR_CORRECTION_TRANSFORM)?.let { t ->
+            val m = FloatArray(9)
+            for (r in 0..2) for (c in 0..2) m[r * 3 + c] = t.getElement(c, r).toFloat()
+            // 色行列も同じ。全 0 を掛けると色が消える。まともな大きさのときだけ採る(単位行列は和 3)。
+            var sum = 0f
+            for (v in m) { sum += kotlin.math.abs(v) }
+            if (m.all { it.isFinite() } && sum > 0.5f) { m.copyInto(ccm); ccmFrom = "result" }
+        }
+        if (ccmFrom == "none") { fbCcm?.let { it.copyInto(ccm); ccmFrom = "static" } }
+        var shading: FloatArray? = null; var cols = 0; var rows = 0
+        res?.get(CaptureResult.STATISTICS_LENS_SHADING_CORRECTION_MAP)?.let { m ->
+            cols = m.columnCount; rows = m.rowCount
+            val a = FloatArray(4 * cols * rows)
+            for (ch in 0..3) for (y in 0 until rows) for (x in 0 until cols) {
+                a[ch * cols * rows + y * cols + x] = m.getGainFactor(ch, x, y)
+            }
+            shading = a
+        }
+        val bmp = Bitmap.createBitmap(rawW / 2, rawH / 2, Bitmap.Config.ARGB_8888)
+        // DNG(束ねる前のフルサイズ)を先に書く。現像で使う値をそのままタグへ渡す。
+        if (wantDng) {
+            val t1 = SystemClock.elapsedRealtime()
+            val fd = BuiltinStill.openDng()
+            var dngOk = false
+            if (fd >= 0) {
+                val stamp = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).format(Date())
+                val expNs = runCatching { res?.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L }.getOrDefault(0L)
+                val iso = runCatching { res?.get(CaptureResult.SENSOR_SENSITIVITY) ?: 0 }.getOrDefault(0)
+                dngOk = runCatching {
+                    HgeNative.nativeRawStackWriteDng(fd, whiteLevel, black, gains, ccm, shading, cols, rows,
+                        android.os.Build.MODEL ?: "phone", stamp,
+                        expNs.toDouble() / 1e9 * frames, iso)
+                }.getOrDefault(false)
+            }
+            BuiltinStill.closeDng(dngOk)
+            Log.i("TLP-RAW", "dng ${if (dngOk) "ok" else "FAILED"} ${rawW}x$rawH in " +
+                             "${SystemClock.elapsedRealtime() - t1}ms")
+        }
+        val ok = HgeNative.nativeRawStackDevelop(bmp, whiteLevel, black, gains, ccm, shading, cols, rows)
+        if (!ok) { bmp.recycle(); Log.w("TLP-RAW", "develop failed"); return null }
+        val bos = ByteArrayOutputStream(2 shl 20)
+        bmp.compress(Bitmap.CompressFormat.JPEG, 92, bos)
+        bmp.recycle()
+        lastStackMs = (SystemClock.elapsedRealtime() - t0).toInt()
+        Log.i("TLP-RAW", "stack $frames frames -> ${rawW / 2}x${rawH / 2} in ${lastStackMs}ms " +
+                         "wb($wbFrom)=${gains.toList()} ccm=$ccmFrom black=${black.toList()} white=$whiteLevel shading=${cols}x$rows")
+        return bos.toByteArray()
+    }
+
+    // 直前に始めた1枚を受け取る。まだ露光中なら終わるまで待つ。取れなければ null。
+    //  一度受け取ったら捨てる(同じ画像を次のコマの測光へ使い回さないため)。
+    // 直前のコマを実際に撮った物理カメラ id(端末の申告)。空=分からない端末。
+    @JvmStatic
+    fun activePhysicalId(): String = activePhys
+
+    @JvmStatic
+    fun takeImage(timeoutMs: Int): ByteArray? {
+        val got = pending ?: return null
+        val wait = if (timeoutMs > 0) timeoutMs.toLong() else 15000L
+        if (!got.await(wait, TimeUnit.MILLISECONDS)) { return null }
+        pending = null
+        val b = pendingJpeg
+        pendingJpeg = null
+        return b
+    }
+}

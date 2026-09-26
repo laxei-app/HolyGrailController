@@ -16,6 +16,10 @@ public:
 	apiBase(void) {};
 	virtual ~apiBase(void) {};
 	virtual errCode init(class device& device) = 0;
+	// 【カメラ自身の素性と実績(2026-09-26 ユーザー依頼)】撮影レポートの "device" 欄へそのまま入る
+	//  JSON オブジェクト("" =何も載せない)。何を載せるかはカメラ実装が決める(共通部分は中身を見ない)。
+	//  内蔵カメラは「ピントを指定できるか」「1コマの最長露光」「一番荒いところの画質」を載せる。
+	virtual std::string deviceReportJson(void) { return ""; }
 
 	// 身元だけを確かめる(機種名/シリアル/愛称/IP)。**CCAPI は叩かない**。
 	//  在否監視のように「そこに居るか」を知りたいだけの用途で使う。CCAPI の API一覧取得は
@@ -48,18 +52,79 @@ public:
 	// 直近に撮れた画像の EXIF からセンサー実寸[mm]と横画素数を読む(2026-08-19)。
 	//  機材マスターに無い機種はこれらが空のままで、NPFも撮影シミュレーションも出せない。
 	//  カメラのAPIは寸法も画素数も返さないが、撮影画像には入っている。撮ってから埋める。
-	virtual errCode readSensorSpec(double& sensorWmm, double& sensorHmm, uint32_t& pixelW)
-	{ (void)sensorWmm; (void)sensorHmm; (void)pixelW; return ERR_HGC_NOT_SUPPORTED; }
+	//  縦の画素数も返す(2026-09-05)。画素ピッチは縦横同じと決めつけず、取れる値をそのまま持つ。
+	virtual errCode readSensorSpec(double& sensorWmm, double& sensorHmm, uint32_t& pixelW, uint32_t& pixelH)
+	{ (void)sensorWmm; (void)sensorHmm; (void)pixelW; (void)pixelH; return ERR_HGC_NOT_SUPPORTED; }
 	virtual errCode rdyShutter(const cmdt::shotSet& shotSet) { return ERR_HGC_NOT_SUPPORTED; }
 	virtual errCode actShutter(void)						{ return ERR_HGC_NOT_SUPPORTED; }
+
+	// 【直前の失敗の内訳(2026-09-06)】通信の状態や応答本文を知っているのはカメラ実装だけ。
+	//  上位(撮影ループ)は HTTP の状態番号や本文の文言を見ず、ここが答える**意味**だけで動く。
+	//   mediaBlocked : 記録メディア起因で断られた(カード満杯/未挿入)。通信は成立している
+	//   noReply      : 相手に届いていない/返事が無い(接続断の疑い)
+	//   detail       : ログに添える一行(実装が人に読める形で作る。空でもよい)
+	//  HTTP を使わない実装は既定のまま(全部偽・空)でよい。
+	struct failInfo
+	{
+		bool        mediaBlocked = false;
+		bool        noReply      = false;
+		std::string detail;
+	};
+	virtual failInfo lastFailure(void) const { return failInfo{}; }
+	// 【直前の失敗の理由をお知らせ番号で答える(2026-09-09)】0=特に言うことは無い。
+	//  共通部分は番号を上へ流すだけで、何が理由かは判断しない(文言は UI が持つ)。
+	//  例: 内蔵カメラで「この端末のカメラを使う許可が無い」。探し直しても直らないので、
+	//  「見つかりません」ではなく理由を名指しで伝えないと利用者が気づけない。
+	virtual int lastFailNotice(void) const { return 0; }
 	// 露出を1項目ずつ設定する(周期正確化のタイマ方式で、変更のあった項目だけを適用するため)。
 	virtual errCode setFNumber(const std::string& fNumber)	{ (void)fNumber; return ERR_HGC_NOT_SUPPORTED; }
 	virtual errCode setSS(const std::string& ss)			{ (void)ss;      return ERR_HGC_NOT_SUPPORTED; }
 	virtual errCode setIso(const std::string& iso)			{ (void)iso;     return ERR_HGC_NOT_SUPPORTED; }
 	virtual errCode getSettings(cmdt::shotRange& settings)	{ return ERR_HGC_NOT_SUPPORTED; }
+
+	// === 露出を「段」で扱う口(2026-09-19 ユーザー決定) ==========================
+	// 【なぜ要るか】設定できる値の並び(テーブル)と、その刻みは**カメラの都合**である。
+	//  これまでは共通部分がテーブルを持ち、刻みまで受け取って APEX の格子へ丸めていた。
+	//  そのため、
+	//   ・刻みを答えないカメラを勝手に 1/3 段と決めつけていた
+	//   ・もともと無段のスマホ内蔵カメラまで 1/12 段の並びに落としていた
+	//   ・テーブルが制御側で何重にも複製され、エッジの内部RAMを削っていた
+	//  という無理があった。**並びも刻みもこの層に閉じ、上位は「段」だけで話す**ようにする。
+	//  上位は刻みという語彙を持たない。未知の刻みのカメラでも、真に無段のカメラでも通る。
+	//
+	// 【段の向き】どの軸も「大きいほど明るい」で揃える(軸ごとの符号を上位に意識させない)。
+	//   iso = log2(ISO/100) / ss = log2(秒) / fn = -log2(F^2)
+	//  3軸の合計がその露出の明るさ[段]になる。
+	//
+	// 【呼ばれ方】いずれもこの層の中だけで完結する計算であること(カメラ通信をしない)。
+	//  毎コマ呼ばれる。
+	// 型そのものは expo にある(exposureMath.h)。露出制御側もデバイス側も同じものを使う。
+	//  ここで別名を張っておくと、派生クラスは修飾せずに書ける。
+	using axisInfo  = expo::axisInfo;
+	using expoPoint = expo::expoPoint;
+	// 各軸の動ける範囲と、いまの位置での目盛りの粗さ。
+	virtual errCode expoAxes(axisInfo& iso, axisInfo& ss, axisInfo& fn)
+	{ (void)iso; (void)ss; (void)fn; return ERR_HGC_NOT_SUPPORTED; }
+	// 望む段 → 実際に送る値。**丸めるのはここだけ**。got には丸めた結果の段を返す。
+	//  範囲の外を望まれたら端で止める(上位は範囲を守って呼ぶが、保険として)。
+	virtual errCode expoResolve(const expoPoint& want, hgc::exposure& out, expoPoint& got)
+	{ (void)want; (void)out; (void)got; return ERR_HGC_NOT_SUPPORTED; }
+	// 値 → 段。空の軸・読めない軸は has～ を偽にする。
+	virtual errCode expoStops(const hgc::exposure& e, expoPoint& out)
+	{ (void)e; (void)out; return ERR_HGC_NOT_SUPPORTED; }
+	// ============================================================================
 	virtual errCode rdyMetering(void)						{ return ERR_HGC_NOT_SUPPORTED; };
 	virtual errCode alzMetering(cmdt::HISTOGRAM& hist)		{ return ERR_HGC_NOT_SUPPORTED; };
 	// 撮影開始時にカメラを当アプリ都合(マニュアル露出)に設定し、終了時に元へ戻す(仕様8/CCAPI)。
+	// 撮影セッションの名札(計画名)。成果物に名前を付ける実装(内蔵カメラの動画)が使う。既定は何もしない。
+	virtual void    setSessionLabel(const std::string& label)	{ (void)label; }
+	// 動画設定(2026-09-23)。撮ったコマから動画を作る実装(内蔵カメラ)だけが使う。
+	//  中身は csjson::videoToJson の JSON。知らない実装は捨てる。
+	virtual void    setVideoOption(const std::string& json)		{ (void)json; }
+	// カメラ本人しか知らない「性質」を所持カメラの記録へ書く(2026-09-06)。登録時に一度だけ呼ばれる。
+	//  例: 撮影周期の下限の規則(intervalFactor/intervalMargin)。ISO/SS の並びやセンサー寸法と同じく
+	//  「カメラが答える諸元」であり、共通部分は書かれた値を使うだけで機種を判断しない。既定は何もしない。
+	virtual void    fillCameraProfile(hgc::camera& cam)			{ (void)cam; }
 	virtual errCode setupShootingModeManual(void)			{ return ERR_HGC_NOT_SUPPORTED; };
 	virtual errCode restoreShootingMode(void)				{ return ERR_HGC_NOT_SUPPORTED; };
 	// 接続維持用の無害なGET。撮影窓まで待機中などに定期送出し、無通信でカメラの

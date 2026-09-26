@@ -20,6 +20,9 @@ namespace csjson
 
 	// 撮影制御方法 ccm を JSON 文字列にする(controlMethod 個別転送用)。
 	std::string ccmToJson(const hgc::ccmBase& ccm);
+	// 動画設定(2026-09-23)。計画の一部だが、UI と デバイス層へ単体で渡すので出入口を分けて持つ。
+	std::string videoToJson(const hgc::videoSet& v);
+	bool        videoFromJson(const std::string& s, hgc::videoSet& out);
 
 	// JSON 文字列から撮影制御方法 ccm を復元する。失敗時 nullptr。
 	std::shared_ptr<hgc::ccmBase> ccmFromJson(const std::string& s);

@@ -22,4 +22,5 @@
     <include layout="@layout/screen_report" />
     <include layout="@layout/screen_edge" />
     <include layout="@layout/screen_debuglog" />
+    <include layout="@layout/screen_permcheck" />
 </ViewFlipper>

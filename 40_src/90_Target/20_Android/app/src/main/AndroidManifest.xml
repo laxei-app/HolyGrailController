@@ -26,13 +26,15 @@
     <!-- BLE(<31)と撮影場所の現在地取得(§7.9)の両方で使うためSDK上限なし -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+    <!-- 「権限、端末設定」画面から電池の最適化の対象外を頼む(2026-09-21)。長時間の撮影を前面で続けるため -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:allowBackup="true"
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:usesCleartextTraffic="true"
-        android:theme="@style/Theme.HolyGrail">
+        android:theme="@style/Theme.TwyLapse">
 
         <!-- GMSコードスキャナ(QR)モジュールをインストール時に取得 §8.2.2 -->
         <meta-data
@@ -44,7 +46,7 @@
              (ネイティブ初期化・常駐スレッド・プレゼンス開始までやり直しになる)。
              configChanges を宣言し、幅に依存する所だけ onConfigurationChanged で組み直す。 -->
         <activity
-            android:name="app.laxei.holygrail.MainActivity"
+            android:name="app.laxei.twylapse.MainActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:exported="true">
             <intent-filter>
@@ -58,7 +60,7 @@
              同じプロセスだと自分も巻き込まれて何も起動できない。
              ランチャーには出さない(exported=false・intent-filter なし)。 -->
         <activity
-            android:name="app.laxei.holygrail.RestartActivity"
+            android:name="app.laxei.twylapse.RestartActivity"
             android:process=":restart"
             android:theme="@android:style/Theme.Translucent.NoTitleBar"
             android:excludeFromRecents="true"
@@ -73,7 +75,7 @@
              再起動し、そのたびに USB が出直す。標準の起動方法だと画面が作り直され、
              経過の記録が消えて何が起きたのか追えなくなる(実機で踏んだ)。 -->
         <activity
-            android:name="app.laxei.holygrail.EdgeFlashActivity"
+            android:name="app.laxei.twylapse.EdgeFlashActivity"
             android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
             android:exported="true">

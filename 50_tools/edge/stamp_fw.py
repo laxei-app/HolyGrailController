@@ -42,7 +42,7 @@ desc+176 はもう予約領域ではない。ここへ書くとブートロー�
 ブートローダが起動時に照合する。**中身を書き換えたら必ず付け直すこと。**
 忘れると起動しなくなる。
 
-  python stamp_fw.py firmware.bin --name HolyGrailEdge --version 0.1.427
+  python stamp_fw.py firmware.bin --name TwyLapseEdge --version 0.1.427
   python stamp_fw.py firmware.bin -o stamped.bin   (版数はファームから拾えないので必須)
 """
 import argparse
@@ -139,7 +139,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("image", help="アプリイメージ(firmware.bin)")
     ap.add_argument("-o", "--out", help="書き出し先(既定は上書きしない .stamped.bin)")
-    ap.add_argument("--name", default="HolyGrailEdge")
+    ap.add_argument("--name", default="TwyLapseEdge")
     ap.add_argument("--version", default=None, help="既定は edgeVersion.h から拾う")
     args = ap.parse_args()
 

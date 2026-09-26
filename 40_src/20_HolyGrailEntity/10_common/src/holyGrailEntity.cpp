@@ -8,6 +8,7 @@
 #include "dataManager.h"
 #include "notice.h"	// ユーザーへのお知らせはコードで持つ(文言はUI側)
 #include "roleDiscovery.h"	// 役割別の発見(エッジ=IP直結ヒント / スマホ=スタブ)。30_role
+#include "stdTemplates.h"	// 標準ひな形(2026-09-21)
 #include "csJson.h"
 #include "osFile.h"		// カメラ台帳の置き場(/asset/camBook.json)
 #include "secret.h"		// 台帳のパスワードは暗号文で運ぶ
@@ -24,6 +25,7 @@
 #include <cstdio>
 #include <ctime>
 #include <mutex>
+#include <random>	// スマホの識別子(乱数)
 #include <string>
 #include <vector>
 
@@ -39,6 +41,8 @@ namespace
 
 	hgc::cs               g_plan;
 	bool                  g_planReady = false;
+	// 初回起動の種まきの答え待ち(hge_setSeedPending の説明を参照)。
+	bool                  g_seedPending = false;
 	// 端末のタイムゾーン。**ログの時刻とエッジの時計だけ**に使う(2026-09-03)。
 	//  計画の時刻に使ってはいけない(planOff を使うこと)。
 	int                   g_offMin = 0;
@@ -553,7 +557,13 @@ namespace
 			double s = expo::parseValue(w.ccm->limitBright.ss, expo::expoKind::ss);
 			if (s > maxSs) { maxSs = s; }
 		}
-		return static_cast<int>(std::ceil(maxSs)) + 2;
+		// 規則はカメラの記録が持つ(2026-09-06)。未設定(0)は従来の「最長ss + 2秒」。
+		//  内蔵カメラは RAW 加算の後処理があるので 1.25 倍・余裕 0 を答えている(apiBuiltin)。
+		//  ここでは機種を判断せず、書かれた係数と余裕で計算するだけ。
+		const bool   hasRule = (plan.camera.intervalFactor > 0.0);
+		const double factor  = hasRule ? plan.camera.intervalFactor : 1.0;
+		const double margin  = hasRule ? plan.camera.intervalMargin : 2.0;
+		return static_cast<int>(std::ceil(maxSs * factor + margin));
 	}
 
 	// 計画のカメラの控えで空の項目を所持カメラから引き直す(実体は下)。
@@ -608,6 +618,9 @@ namespace
 		std::snprintf(num, sizeof(num), "%.1f", g_plan.elevation);
 		j += ",\"elevation\":" + std::string(num);
 		j += ",\"landscape\":" + std::string(g_plan.landscape ? "true" : "false");
+		// 動画設定(2026-09-23)。ページを出すかどうかは camVideoOut(カメラの性質)で決める。
+		j += ",\"camVideoOut\":" + std::string(g_plan.camera.videoOut ? "true" : "false");
+		j += ",\"video\":" + csjson::videoToJson(g_plan.video);
 		// 機材詳細(センサー/焦点距離)と画角[°](方位磁石・仰角ウィジェットの目安)
 		std::snprintf(num, sizeof(num), "%.1f", g_plan.camera.sensorSize);
 		j += ",\"sensorW\":" + std::string(num);
@@ -616,6 +629,12 @@ namespace
 		std::snprintf(num, sizeof(num), "%.0f", g_plan.lens.focalLength);
 		j += ",\"focalLength\":" + std::string(num);
 		j += ",\"pixelW\":" + std::to_string(g_plan.camera.sensorPixel);
+		j += ",\"pixelH\":" + std::to_string(g_plan.camera.sensorPixelV);
+		// 【出力設定の「大きさ」表示に使う(2026-09-24 UI依頼)】センサーの画素数(上の pixelW/H)は
+		//  有効画素の枠で、実際に受け取る RAW の大きさとは数画素ずれることがある
+		//  (SH-M08: 枠 4016x3016 / RAW 4000x3000)。画面には**実際に出来る大きさ**を出したいので、
+		//  カメラを名指しできるようにこれを渡す。UI 側がカメラ層へ訊いて実寸を出す。
+		j += ",\"camSerial\":\"" + jesc(g_plan.camera.serial) + "\"";
 		std::snprintf(num, sizeof(num), "%.1f", g_plan.lens.fn);
 		j += ",\"fn\":" + std::string(num);
 		astro::fov fovDeg = astro::calcFov(g_plan.camera, g_plan.lens, g_plan.landscape);
@@ -760,6 +779,8 @@ namespace
 	void clampOwnedToGear(hgc::ccmOwned& own, const hgc::camera& cam, const hgc::lens& lens);
 	std::string ownedCcmToJson(const hgc::ccmOwned& own);
 	void applyCcmSetToPlan(hgc::cs& plan, const astro::ccmSet& set);
+	std::string uniqueName(const std::string& base, const std::vector<std::string>& names);
+	std::vector<std::string> collectPlanNames(const std::string& excludeId);
 
 	// 現在(編集対象)の計画を保存用 JSON にする。
 	// 撮影制御方法は計画自身(g_plan.ccm)が持つので、以前のような別枠 planCcm は書かない。
@@ -799,7 +820,7 @@ namespace
 		std::string saved;
 		if (!dataManager::loadTplFile(id, saved) ||
 		    !csjson::fromJson(saved, g_plan)) { return ERR_HGC_NO_ELEMENT; }
-		if (!g_plan.ccm.complete()) { seedPlanCcmFromDefaults(g_plan); }
+		// 撮影制御方法はひな形自身が持つ(作ったときに取り込む)。読み込みで初期値を見に行かない。
 		const errCode be = astro::buildSchedule(g_plan);
 		if (be != ERR_HGC_OK) { return be; }
 		buildScheduleJson();
@@ -872,11 +893,16 @@ namespace
 			g_plan.camera = fp.camera;
 			g_plan.lens   = fp.lens;
 		}
-		// 撮影制御方法は計画のJSONに入っている。欠けている型があるときだけ初期値で補う
-		// (保存が壊れていた場合の保険。正常な計画では取り込み直さない)。
-		if (!g_plan.ccm.complete()) { seedPlanCcmFromDefaults(g_plan); }
+		// 撮影制御方法は計画のJSONに入っている(作ったときに取り込む)。読み込みで初期値を
+		//  見に行かない(2026-09-06 ユーザー指示。欠けた型は「使わない」と同じ扱いになる)。
 		const errCode be = astro::buildSchedule(g_plan);
 		if (be != ERR_HGC_OK) { return be; }
+		// 【周期の規則が変わっていたら締め直す(2026-09-20)】カメラが答える周期の規則は変わりうる
+		//  (内蔵カメラは1コマ上限から倍率を出すようになった)。古い規則で保存された計画は最短周期を
+		//  割ったまま残るので、開いた時点で伸ばす。**短くはしない**(利用者が広げた周期は尊重する)。
+		//  控えを所持カメラの今の値へ引き直してから見る(そうしないと古い規則で計算してしまう)。
+		applyOwnedCameraSettings(g_plan.camera);
+		{ const int mn = minIntervalSec(g_plan); if (g_plan.interval < static_cast<double>(mn)) { g_plan.interval = mn; } }
 		buildScheduleJson();
 		g_editId    = id;
 		g_editIsTpl = false;	// 計画を開いた → ひな形ではない
@@ -892,6 +918,19 @@ namespace
 		time_t now = std::time(nullptr);
 		g_plan = hgc::cs{};
 		dataManager::factoryFixedPlan(g_plan);
+		// 「撮影計画に自動的に挿入する」場所があればそれを使う(出荷時の固定計画も同じ。2026-09-06)。
+		{ hgc::place ap; if (dataManager::autoInsertPlace(ap)) { g_plan.place = ap; } }
+		// 「撮影計画の初期値にする」の所持カメラがあれば、そのカメラと組み合わせレンズ(先頭)で作る。
+		//  無ければ出荷時のカメラ(EOS R10)のまま。撮影制御方法はこの後で取り込み、このカメラの目盛りへ寄る。
+		{
+			hgc::camera ac;
+			if (dataManager::autoInsertCamera(ac))
+			{
+				g_plan.camera = ac;
+				hgc::lens pl;
+				if (dataManager::findOwnedCameraDefaultLens(ac.name, pl)) { g_plan.lens = pl; }
+			}
+		}
 		if (name) { g_plan.name = name; }
 		hgc::dateTime startDt; int o1 = 0; localFromTime(now - 60, startDt, o1);
 		hgc::dateTime endDt;   int o2 = 0; localFromTime(now + 2 * 3600, endDt, o2);
@@ -899,7 +938,34 @@ namespace
 		g_plan.end   = endDt;
 		seedPlanCcmFromDefaults(g_plan);	// 新規作成: ここでだけ4種すべてを初期値から取り込む
 		astro::buildSchedule(g_plan);
+		// 取り込んだ露出(長い ss)で最小周期を割っていたら伸ばす(スマホ用の初期値は 48 秒まで持つ)。
+		//  最小周期は窓(ccmList)の ss から出すので、スケジュールを組んだ後に見る。
+		{ const int mn = minIntervalSec(g_plan); if (g_plan.interval < static_cast<double>(mn)) { g_plan.interval = mn; } }
 		buildScheduleJson();
+	}
+
+	// ひな形から撮影計画を作り、編集対象にして保存する(hge_newPlanFromTemplate と最初の計画の両方から)。
+	//  ・開始日は今日(時刻はひな形のまま)。終了は同じ長さを保ってずらす
+	//  ・計画名はひな形と同じ。既にあれば末尾に連番。tplKind は外す(計画は標準ひな形ではない)
+	bool newPlanFromTemplateImpl(const std::string& id)
+	{
+		std::string saved; hgc::cs cs;
+		if (!dataManager::loadTplFile(id, saved) || !csjson::fromJson(saved, cs)) { return false; }
+		cs.name = uniqueName(cs.name, collectPlanNames(""));
+		cs.tplKind.clear();
+		shiftToToday(cs);
+		refreshCameraFromOwned(cs);
+		// ひな形の撮影制御方法をそのまま受け継ぎ、今のカメラ/レンズの目盛りへ合わせる(2026-09-06)。
+		clampOwnedToGear(cs.ccm, cs.camera, cs.lens);
+		g_plan = cs;
+		if (astro::buildSchedule(g_plan) != ERR_HGC_OK) { return false; }
+		{ const int mn = minIntervalSec(g_plan); if (g_plan.interval < static_cast<double>(mn)) { g_plan.interval = mn; } }
+		buildScheduleJson();
+		g_editId    = makePlanId();
+		g_editIsTpl = false;
+		g_planReady = true;
+		dataManager::savePlanFile(g_editId, wrapCurrentPlan());
+		return true;
 	}
 
 	// 起動時の撮影計画準備。旧 plan.json があれば新形式へ移行し、既存計画があれば最新を復元、
@@ -930,6 +996,30 @@ namespace
 			return ERR_HGC_OK;
 		}
 
+		// 【種まきの答え待ちなら作らない(2026-09-09)】初回起動は位置情報の許可を聞いてから
+		//  内蔵カメラの登録と場所の確定を行う。その前に作ると出荷時のカメラ・場所で固まる。
+		if (g_seedPending) { return ERR_HGC_READY; }
+
+		// 【最初の計画は標準ひな形から(2026-09-21 ユーザー決定)】「撮影計画の初期値にする」カメラ(内蔵の広角)の
+		//  星景(日の出含む)があれば、それから作る(名前・時刻もひな形のまま)。無ければ出荷時の固定計画。
+		{
+			hgc::camera ac;
+			if (dataManager::autoInsertCamera(ac))
+			{
+				for (const std::string& id : dataManager::listTplIds())
+				{
+					std::string saved; hgc::cs t;
+					if (!dataManager::loadTplFile(id, saved) || !csjson::fromJson(saved, t)) { continue; }
+					if (t.tplKind != "star_sunrise" || t.camera.name != ac.name) { continue; }
+					if (newPlanFromTemplateImpl(id))
+					{
+						dataManager::logEvent("PLAN", ("first plan from template: " + g_plan.name).c_str());
+						return ERR_HGC_OK;
+					}
+					break;
+				}
+			}
+		}
 		// 無ければ出荷時の固定計画を作成して保存する。
 		makeFactoryCurrent(nullptr);
 		g_editId    = makePlanId();
@@ -976,23 +1066,44 @@ namespace
 		else                                     { std::snprintf(b, sizeof(b), "%.1f", f); }
 		return std::string(b);
 	}
-	// 露出(iso/ss/fn)1件をカメラ/レンズの範囲へクランプ。範囲を超えた値のみ限界値へ。
-	// 範囲内・リスト未設定・空文字はそのまま(初期値ccm単体=カメラ未規定では呼ばない)。
+	// 露出(iso/ss/fn)1件をカメラ/レンズの目盛りへ合わせる。
+	//  【範囲へ丸めるだけでは足りない(2026-09-06)】以前は「範囲を超えた値だけ端へ」だった。
+	//  範囲内でもそのカメラの目盛りに無い値(内蔵カメラの実測目盛りに "1600" や "8" は無い)が
+	//  残ると、計画側のエディタが位置を見失って別の値に化けた。取り込んだ時点で
+	//  **いちばん近い目盛り**へ寄せ、計画が持つ値は必ずそのカメラで出せる値にする。
+	//  範囲外の値は結果として端の目盛りになる(従来の丸めを含む)。
+	// リスト未設定・空文字はそのまま(初期値ccm単体=カメラ未規定では呼ばない)。
 	void clampExposureToGear(hgc::exposure& e, const hgc::camera& cam, const hgc::lens& lens)
 	{
-		auto clampList = [](std::string& cur, const std::vector<std::string>& list, expo::expoKind k)
+		// 【上下限で止めるだけ。並びへ吸着させない(2026-09-19)】
+		//  以前は「カメラの並びのいちばん近い値」へ寄せていた。並びが短いカメラや、
+		//  無段のカメラ(記録用の並びは両端だけ)では、範囲の内側にある値まで端へ飛ばされる。
+		//  実際、内蔵カメラで ss を 20 秒にしても 48 秒へ戻る、ISO 1600 が 11377 に化ける、
+		//  という形で現れた(2026-09-19 実機)。
+		//  撮影のときはデバイスが自分の出せる値へ解決する(apiBase::expoResolve)ので、
+		//  ここでやるべきことは「そのカメラに無い範囲へはみ出していたら端で止める」だけ。
+		auto clampRange = [](std::string& cur, const std::vector<std::string>& list, expo::expoKind k)
 		{
 			if (cur.empty() || list.empty()) { return; }
-			double v = expo::parseValue(cur, k);
-			if (v <= 0) { return; }
+			const double v = expo::parseValue(cur, k);
+			if (!(v > 0.0)) { return; }
 			const std::string* lo = nullptr; const std::string* hi = nullptr;
-			double loR = 1e300, hiR = -1e300;
-			for (const auto& s : list) { double r = expo::parseValue(s, k); if (r <= 0) { continue; } if (r < loR) { loR = r; lo = &s; } if (r > hiR) { hiR = r; hi = &s; } }
-			if      (lo && v < loR) { cur = *lo; }
-			else if (hi && v > hiR) { cur = *hi; }
+			double loV = 0.0, hiV = 0.0;
+			for (const auto& s : list)
+			{
+				if (s == "Bulb" || s == "auto" || s == "Auto") { continue; }
+				const double r = expo::parseValue(s, k);
+				if (!(r > 0.0)) { continue; }
+				if (lo == nullptr || r < loV) { loV = r; lo = &s; }
+				if (hi == nullptr || r > hiV) { hiV = r; hi = &s; }
+			}
+			if (lo == nullptr || hi == nullptr) { return; }
+			if      (v < loV) { cur = *lo; }
+			else if (v > hiV) { cur = *hi; }
+			// 範囲の内側なら触らない
 		};
-		clampList(e.iso, cam.isoList, expo::expoKind::iso);
-		clampList(e.ss,  cam.ssList,  expo::expoKind::ss);
+		clampRange(e.iso, cam.isoList, expo::expoKind::iso);
+		clampRange(e.ss,  cam.ssList,  expo::expoKind::ss);
 		// fn はレンズの開放(fn)〜最小絞り(fnMax)。fnMax 0=未設定なら下限のみ。
 		// 丸めるときは元の値を fnWish へ控え、入るレンズに戻ったらそこへ復帰させる。
 		// 控えが無いと、暗いレンズを一度選んだだけで F1.4 の指定が F2.8 に化け、
@@ -1001,7 +1112,10 @@ namespace
 		{
 			const double lo = lens.fn;
 			const double hi = lens.fnMax;	// 0=未設定(上限なし)
-			auto fits = [&](double v) { return v > 0.0 && v >= lo && (hi <= 0.0 || v <= hi); };
+			// レンズの F は float 由来(2.200000047)で、文字列の 2.2 と比べると僅かに外れる。
+			//  1/100 段未満の差は「入っている」とみなす(2026-09-06。無駄な fnWish を残さない)。
+			const double eps = 1e-3;
+			auto fits = [&](double v) { return v > 0.0 && v >= lo - eps && (hi <= 0.0 || v <= hi + eps); };
 			// 今のレンズで控えが使えるなら先に戻す。
 			if (!e.fnWish.empty() && fits(expo::parseValue(e.fnWish, expo::expoKind::fn)))
 			{
@@ -1119,6 +1233,15 @@ namespace
 			if (cam.sensorSize  <= 0.0 && oc.sensorSize  > 0.0) { cam.sensorSize  = oc.sensorSize;  }
 			if (cam.sensorSizeV <= 0.0 && oc.sensorSizeV > 0.0) { cam.sensorSizeV = oc.sensorSizeV; }
 			if (cam.sensorPixel == 0   && oc.sensorPixel > 0)   { cam.sensorPixel = oc.sensorPixel; }
+			if (cam.sensorPixelV == 0  && oc.sensorPixelV > 0)  { cam.sensorPixelV = oc.sensorPixelV; }
+			// 撮影周期の規則も同じ扱い(控えが未設定なら所持カメラの値を採る)。
+			//  【端末が管理する記録(readOnly)は毎回引き直す(2026-09-20)】iso/ss の並びと同じ理由。
+			//   規則は端末が出すもので、ユーザーは編集できない。古い規則の控えを持ち続けると、
+			//   以前に作った計画だけ短すぎる周期のまま撮ってしまう。
+			if ((oc.readOnly || cam.intervalFactor <= 0.0) && oc.intervalFactor > 0.0)
+			{ cam.intervalFactor = oc.intervalFactor; cam.intervalMargin = oc.intervalMargin; }
+			// 動画を作れるか(2026-09-23)も端末が出す性質。控えが古い計画でも今の値を採る。
+			if (oc.readOnly) { cam.videoOut = oc.videoOut; }
 		}
 	}
 
@@ -1677,6 +1800,7 @@ namespace
 					R.cvSteps = c.converge.steps; R.cvApplyNg = c.converge.applyNg;
 					R.cvMeterNg = c.converge.meterNg; R.cvOutcome = c.converge.outcome;
 					R.cvShots   = c.converge.shots;
+					if (!c.deviceJson.empty()) { R.deviceJson = c.deviceJson; }
 				}
 			},
 			[S](errCode e, const std::string& m) {
@@ -1879,6 +2003,70 @@ namespace
 	}
 }
 
+namespace
+{
+	// 在否マップのうち「いま見えているもの」だけを、身元3つに絞って並べ直す。
+	//  ・**IPは落とす**。エッジのAPはどれも 192.168.4.x なので、スマホから見ると意味が無いどころか、
+	//    別の場所のカメラのIPを配ることになる(2026-08-06 に C_CAMERA_INFO を捨てたのと同じ理由)。
+	//  ・身元が割れないもの(serial 空)は載せない。相手を特定できないので登録にも使えない。
+	nlohmann::json seenCameras(void)
+	{
+		nlohmann::json out = nlohmann::json::array();
+		nlohmann::json j = nlohmann::json::parse(hge::role::presenceJson(), nullptr, false);
+		if (j.is_discarded() || !j.is_array()) { return out; }
+		for (const auto& e : j)
+		{
+			if (!e.is_object() || !e.value("online", false)) { continue; }
+			const std::string serial = e.value("serial", std::string());
+			if (serial.empty()) { continue; }
+			out.push_back({ {"serial", serial},
+			                {"model", e.value("model", std::string())},
+			                {"assignedName", e.value("assignedName", std::string())} });
+		}
+		return out;
+	}
+}
+
+namespace
+{
+	// 【このスマホの識別子(2026-09-26)】外部端末に「持ち主はこのスマホ」と覚えてもらうための札。
+	//  ・**機種に依存しない乱数**にする。ANDROID_ID のような端末由来の値は機種変更で変わるので、
+	//    「バックアップして新しいスマホへ移す」という要件と矛盾する。
+	//  ・端末の情報を一切含まないので、そのまま電波に載せても身元は漏れない。
+	//  ・置き場所は /asset の専用ファイル1つ。他の設定と寿命が違う(移行のとき「これを持っていく」
+	//    と説明できる)。**移すのであって複製ではない**: 同じ札を2台に置くと2台とも持ち主になる。
+	std::string phoneIdLoad(void)
+	{
+		static std::string s_id;
+		if (!s_id.empty()) { return s_id; }
+		const std::string dir = osfile::dir("asset");
+		if (dir.empty()) { return std::string(); }
+		const std::string path = dir + "/phoneId.json";
+		std::string body;
+		if (osfile::readAll(path, body) && !body.empty())
+		{
+			nlohmann::json j = nlohmann::json::parse(body, nullptr, false);
+			if (!j.is_discarded() && j.is_object()) { s_id = j.value("phoneId", std::string()); }
+			if (!s_id.empty()) { return s_id; }
+		}
+		// 無ければ作る。乱数の素は実行ごとに変わるものを混ぜる(時刻 + アドレス + 乱数装置)。
+		std::random_device rd;
+		uint64_t a = (static_cast<uint64_t>(rd()) << 32) ^ rd();
+		uint64_t b = (static_cast<uint64_t>(rd()) << 32) ^ rd();
+		a ^= static_cast<uint64_t>(std::time(nullptr));
+		b ^= reinterpret_cast<uintptr_t>(&body);
+		char t[48];
+		std::snprintf(t, sizeof(t), "tlp-%016llx%016llx",
+		              static_cast<unsigned long long>(a), static_cast<unsigned long long>(b));
+		s_id = t;
+		nlohmann::json j; j["phoneId"] = s_id;
+		const std::string out = j.dump();
+		osfile::writeAll(path, out.data(), out.size());
+		dataManager::logEvent("INFO", "phone id created");
+		return s_id;
+	}
+}
+
 // ============================================================================
 //  extern "C" インターフェース
 // ============================================================================
@@ -1891,6 +2079,7 @@ int32_t hge_init(void)
 {
 	if (g_inited) { return ERR_HGC_OK; }
 	netThread::init();
+	hge::role::registerBackends();	// この役割が扱うカメラの探索元(共通は何も知らない)
 	hge::role::loadPersisted();	// 無人再起動後の「前回IP直結」用に不揮発の既知カメラを読み込む(エッジ役)
 	// カメラを探し始める前に所持カメラを読んでおく。読み込みでダイジェスト認証の資格情報が
 	//  候補に入る(エッジ役は所持を持たないが、撮影計画の受信/読み込みで同じ入口を通る)。
@@ -2016,6 +2205,57 @@ int32_t hge_presenceJson(char* buf, int32_t* inoutLen)
 {
 	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
 	return copyOut(hge::role::presenceJson(), buf, inoutLen);
+}
+
+// いま見えているカメラ(身元だけ)。エッジが C_CAMERA_SEEN の応答に使う。
+int32_t hge_seenCamerasJson(char* buf, int32_t* inoutLen)
+{
+	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return copyOut(seenCameras().dump(), buf, inoutLen);
+}
+
+// いま見えているカメラの台数。検索応答(edgeInfo)へ載せる件数で、スマホはこれが変わったときだけ
+// 本体を取りに行く。数えるだけなので毎回聞かれても負荷にならない。
+int32_t hge_seenCameraCount(void)
+{
+	return static_cast<int32_t>(seenCameras().size());
+}
+
+int32_t hge_cameraListsJson(const char* serial, char* buf, int32_t* inoutLen)
+{
+	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
+	std::string s = dataManager::cameraListsJson(serial ? serial : "");
+	if (s.empty()) { s = "{}"; }	// 持っていない = 空オブジェクト(呼び手は長さで判る)
+	return copyOut(s, buf, inoutLen);
+}
+
+int32_t hge_applyCameraLists(const char* serial, const char* json)
+{
+	if (serial == nullptr || json == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return dataManager::applyCameraLists(serial, json) ? 1 : 0;
+}
+
+// このスマホの識別子。無ければ作って /asset/phoneId.json へ保存する。
+//  検索要求(C_SEARCH)の data に載せて「自分は誰か」を外部端末へ伝える。
+int32_t hge_phoneIdJson(char* buf, int32_t* inoutLen)
+{
+	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return copyOut(phoneIdLoad(), buf, inoutLen);
+}
+
+// UI から記録へ1行書く。原因調査に要る出来事(端末に断られた等)を、スマホのログにも
+//  残すために使う。tag は "NET" のような短い種別、detail は英語で書く。
+int32_t hge_logEvent(const char* tag, const char* detail, int32_t isError)
+{
+	if (tag == nullptr || detail == nullptr) { return ERR_HGC_INVALID_ARG; }
+	dataManager::logEvent(tag, detail, isError != 0);
+	return ERR_HGC_OK;
+}
+
+int32_t hge_cameraNeedsLists(const char* serial)
+{
+	if (serial == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return dataManager::cameraNeedsLists(serial) ? 1 : 0;
 }
 
 int32_t hge_loadFixedPlan(void)
@@ -2232,7 +2472,6 @@ int32_t hge_getPlanJsonById(const char* id, char* buf, int32_t* inoutLen)
 		cs.camera = fp.camera;
 		cs.lens   = fp.lens;
 	}
-	if (!cs.ccm.complete()) { seedPlanCcmFromDefaults(cs); }
 	const errCode be = astro::buildSchedule(cs);
 	if (be != ERR_HGC_OK) { return be; }
 	applyOwnedCameraSettings(cs.camera);
@@ -2297,6 +2536,8 @@ int32_t hge_listPlansJson(char* buf, int32_t* inoutLen)
 		     ",\"camName\":\"" + jesc(pc.name) + "\"" +
 		     ",\"camAssignedName\":\"" + jesc(pc.assignedName) + "\"" +
 		     ",\"camSerial\":\"" + jesc(pc.serial) + "\"" +
+		     // この端末でしか撮れないカメラ(内蔵)か。予約表が「端末の中のカメラは同時に 1 つ」と扱うのに使う。
+		     ",\"camLocalOnly\":" + std::string(pc.localOnly ? "true" : "false") +
 		     ",\"tzOffMin\":" + std::to_string(planOff(cs)) +
 		     ",\"state\":" + std::to_string(st) + "}";
 		rows.push_back(std::make_pair(startU, o));
@@ -2446,6 +2687,147 @@ int32_t hge_selectTemplate(const char* id)
 
 // 今の計画をひな形として保存する。**編集対象は動かさない**(計画を編集したまま控えを取る)。
 //  name が空なら計画名を使う。同名のひな形があれば連番を付ける(夕焼け → 夕焼け2)。
+int32_t hge_saveTemplateJsonIfAbsent(const char* csJson)
+{
+	if (csJson == nullptr || csJson[0] == 0) { return ERR_HGC_INVALID_ARG; }
+	hgc::cs cs;
+	if (!csjson::fromJson(std::string(csJson), cs)) { return ERR_HGC_JSON_PARSE; }
+	if (cs.name.empty()) { return ERR_HGC_INVALID_ARG; }
+	// 同じ名前が既にある = 作る必要が無い(利用者が消したものを作り直さない)。
+	for (const auto& n : collectTplNames("")) { if (n == cs.name) { return ERR_HGC_OK; } }
+	return dataManager::saveTplFile(makeTplId(), csjson::toJson(cs)) ? ERR_HGC_OK : ERR_HGC_INVALID_STATE;
+}
+
+int32_t hge_setSeedPending(int32_t on)
+{
+	g_seedPending = (on != 0);
+	return ERR_HGC_OK;
+}
+
+int32_t hge_saveStdTemplateJson(const char* csJson)
+{
+	if (csJson == nullptr || csJson[0] == 0) { return ERR_HGC_INVALID_ARG; }
+	hgc::cs cs;
+	if (!csjson::fromJson(std::string(csJson), cs)) { return ERR_HGC_JSON_PARSE; }
+	if (cs.name.empty() || cs.tplKind.empty() || cs.camera.name.empty()) { return ERR_HGC_INVALID_ARG; }
+	// 同じカメラ・同じ種類が既にある = 作る必要が無い(利用者が消したり名前を変えたものを作り直さない)。
+	for (const std::string& id : dataManager::listTplIds())
+	{
+		std::string saved; hgc::cs e;
+		if (!dataManager::loadTplFile(id, saved) || !csjson::fromJson(saved, e)) { continue; }
+		if (e.tplKind == cs.tplKind && e.camera.name == cs.camera.name) { return 0; }
+	}
+	cs.name = uniqueName(cs.name, collectTplNames(""));	// 名前だけ同じものがあれば連番(別カメラの同名など)
+	return dataManager::saveTplFile(makeTplId(), csjson::toJson(cs)) ? 1 : ERR_HGC_INVALID_STATE;
+}
+
+// 【標準ひな形の種まき(2026-09-21 ユーザー指示)】ミラーレス機の既定 = EOS R3 + RF16mm F2.8 STM。
+//  ・EOS R3 を所持カメラへ強制的に入れる(初回起動では所持カメラが内蔵カメラしか無いため)。
+//  ・レンズは RF16mm F2.8 STM(ユーザー指定 2026-09-21)を所持レンズへ入れ、EOS R3 の先頭に組み合わせる。
+//    マスタに無いときだけ、カメラと同じメーカーの RF から魚眼でない最短を選ぶ
+//    (マスタにはフルサイズ/APS-C の区別が無く、他社製を含めると APS-C 用の 9mm が最短になる)。
+//  ・夜間の露出: ISO1600 / F=レンズの開放 / ss=カメラの並びのうち NPF 以下の最大(30 秒まで)。
+//    夜景はその半分以下の最大。明所限界は ISO100 / 1/8000 / F16(並びに無ければ最寄り)。
+//  ・撮影周期: ss + 3 秒(ミラーレス機。ユーザー指示)。
+int32_t hge_seedStandardTemplates(const char* namesJson)
+{
+	static const char* kCam   = "EOS R3";
+	static const char* kLens  = "RF16mm F2.8 STM";
+	static const char* kMount = "RF";
+	const std::string names = (namesJson != nullptr) ? namesJson : "";
+
+	// 所持カメラへ(既にあれば何もしない。addOwnedCameraFromMaster は未識別の同機種があると false を返す)。
+	hgc::camera cam;
+	if (!dataManager::findOwnedCamera(kCam, cam))
+	{
+		dataManager::addOwnedCameraFromMaster(kCam);
+		if (!dataManager::findOwnedCamera(kCam, cam)) { return ERR_HGC_NO_ELEMENT; }
+		dataManager::logEvent("GEAR", "std template: owned camera added EOS R3");
+	}
+	// レンズ: 指定のレンズを所持レンズへ入れ、EOS R3 の組み合わせの先頭にする(既にあれば触らない)。
+	hgc::lens lens;
+	{
+		hgc::lens ml;
+		if (!dataManager::masterLensByName(kLens, ml) &&
+		    !dataManager::masterLensShortest(cam.maker, kMount, ml)) { return ERR_HGC_NO_ELEMENT; }
+		dataManager::addOwnedLensFromMaster(ml.name);
+		if (dataManager::setOwnedCameraLens(kCam, ml.name))
+		{
+			dataManager::logEvent("GEAR", ("std template: owned lens added " + ml.name).c_str());
+		}
+		if (!dataManager::findOwnedLens(ml.name, lens)) { lens = ml; }
+	}
+
+	// 並びから選ぶ(並びはカメラの表記のまま持つ。値は parseValue で実数に)。
+	auto largestBelow = [](const std::vector<std::string>& list, double limit, expo::expoKind k) -> std::string
+	{
+		std::string best; double bv = -1.0;
+		for (const auto& s : list)
+		{
+			const double v = expo::parseValue(s, k);
+			if (v <= 0.0 || v > limit + 1e-9) { continue; }
+			if (v > bv) { bv = v; best = s; }
+		}
+		return best;
+	};
+	auto nearestTo = [](const std::vector<std::string>& list, double want, expo::expoKind k) -> std::string
+	{
+		std::string best; double bd = 1e9;
+		for (const auto& s : list)
+		{
+			const double v = expo::parseValue(s, k);
+			if (v <= 0.0) { continue; }
+			const double d = std::fabs(std::log2(v) - std::log2(want));
+			if (d < bd) { bd = d; best = s; }
+		}
+		return best;
+	};
+	// 並びに無いときの綴り(整数なら "16"、そうでなければ "2.8" のように。出荷時の初期値と同じ流儀)。
+	auto numText = [](double v) -> std::string
+	{
+		char b[24];
+		if (std::fabs(v - std::floor(v + 0.5)) < 0.005) { std::snprintf(b, sizeof(b), "%.0f", v); }
+		else { std::snprintf(b, sizeof(b), "%.1f", v); }
+		return b;
+	};
+	const double npf = expo::npfShutterSec(cam.sensorSize, static_cast<double>(cam.sensorPixel),
+	                                       lens.focalLength, lens.fn);
+	const double ssStarLimit = (npf > 0.0 && npf < 30.0) ? npf : 30.0;
+	std::string ssStar = largestBelow(cam.ssList, ssStarLimit, expo::expoKind::ss);
+	if (ssStar.empty()) { ssStar = numText(ssStarLimit); }
+	const double ssStarSec = expo::parseValue(ssStar, expo::expoKind::ss);
+	std::string ssCity = largestBelow(cam.ssList, ssStarSec * 0.5, expo::expoKind::ss);
+	if (ssCity.empty()) { ssCity = numText(ssStarSec * 0.5); }
+	const double ssCitySec = expo::parseValue(ssCity, expo::expoKind::ss);
+	std::string isoNight = nearestTo(cam.isoList, 1600.0, expo::expoKind::iso);
+	if (isoNight.empty()) { isoNight = "1600"; }
+	std::string isoBright = nearestTo(cam.isoList, 100.0, expo::expoKind::iso);
+	if (isoBright.empty()) { isoBright = "100"; }
+	std::string ssBright = nearestTo(cam.ssList, 1.0 / 8000.0, expo::expoKind::ss);
+	if (ssBright.empty()) { ssBright = "1/8000"; }
+	const double fnBrightV = (lens.fnMax > 0.0 && lens.fnMax < 16.0) ? lens.fnMax : 16.0;
+
+	stdtpl::gear g;
+	g.camera = cam;
+	g.lens   = lens;
+	g.starNight = { isoNight, ssStar, numText(lens.fn) };
+	g.cityNight = { isoNight, ssCity, numText(lens.fn) };
+	g.bright    = { isoBright, ssBright, numText(fnBrightV) };
+	g.starInterval = std::ceil(ssStarSec) + 3.0;
+	g.cityInterval = std::ceil(ssCitySec) + 3.0;
+	g.fnFixed  = (lens.fnMax > 0.0 && lens.fnMax <= lens.fn + 1e-9);
+	g.forPhone = false;
+	const stdtpl::names nm = stdtpl::parseNames(names, "ccm");
+	const int made = stdtpl::seed(g, nm, true);
+	{
+		char b[200];
+		std::snprintf(b, sizeof(b), "std templates for %s + %s: %d made (npf %.1fs -> ss %s / %s)",
+		              kCam, lens.name.c_str(), made, npf, ssStar.c_str(), ssCity.c_str());
+		dataManager::logEvent("GEAR", b);
+	}
+	return ERR_HGC_OK;
+}
+
 int32_t hge_saveTemplateFromPlan(const char* name)
 {
 	if (!g_planReady) { loadFixedPlanImpl(); }
@@ -2465,6 +2847,7 @@ int32_t hge_copyTemplate(const char* id)
 	if (!dataManager::loadTplFile(std::string(id), saved) ||
 	    !csjson::fromJson(saved, cs)) { return ERR_HGC_NO_ELEMENT; }
 	cs.name = uniqueName(cs.name, collectTplNames(""));	// 末尾に連番(前に付けると名前順で離れる)
+	cs.tplKind.clear();	// 複製は利用者のひな形。元を消しても標準のものは作り直される
 	return dataManager::saveTplFile(makeTplId(), csjson::toJson(cs)) ? ERR_HGC_OK : ERR_HGC_INVALID_STATE;
 }
 
@@ -2518,21 +2901,7 @@ int32_t hge_newPlanFromTemplate(const char* id)
 {
 	if (id == nullptr || id[0] == '\0') { return ERR_HGC_INVALID_ARG; }
 	if (!g_planReady) { loadFixedPlanImpl(); }
-	std::string saved; hgc::cs cs;
-	if (!dataManager::loadTplFile(std::string(id), saved) ||
-	    !csjson::fromJson(saved, cs)) { return ERR_HGC_NO_ELEMENT; }
-	cs.name = uniqueName(cs.name, collectPlanNames(""));
-	shiftToToday(cs);
-	refreshCameraFromOwned(cs);
-	g_plan = cs;
-	if (!g_plan.ccm.complete()) { seedPlanCcmFromDefaults(g_plan); }
-	const errCode be = astro::buildSchedule(g_plan);
-	if (be != ERR_HGC_OK) { return be; }
-	buildScheduleJson();
-	g_editId    = makePlanId();
-	g_editIsTpl = false;
-	g_planReady = true;
-	dataManager::savePlanFile(g_editId, wrapCurrentPlan());
+	if (!newPlanFromTemplateImpl(std::string(id))) { return ERR_HGC_NO_ELEMENT; }
 	notify(HGE_EV_SCHEDULE, g_schedJson);
 	return ERR_HGC_OK;
 }
@@ -2554,19 +2923,22 @@ int32_t hge_updatePlanFromTemplate(const char* planId, const char* tplId)
 	const hgc::dateTime keepEn  = cur.end;
 	cur = tpl;
 	cur.name = keepName; cur.start = keepSt; cur.end = keepEn;
+	cur.tplKind.clear();	// 計画は標準ひな形ではない
 	refreshCameraFromOwned(cur);
-	if (!cur.ccm.complete()) { seedPlanCcmFromDefaults(cur); }
+	clampOwnedToGear(cur.ccm, cur.camera, cur.lens);	// ひな形の値を今のカメラ/レンズの目盛りへ
 	if (std::string(planId) == g_editId && !g_editIsTpl)
 	{
 		g_plan = cur;
 		const errCode be = astro::buildSchedule(g_plan);
 		if (be != ERR_HGC_OK) { return be; }
+		{ const int mn = minIntervalSec(g_plan); if (g_plan.interval < static_cast<double>(mn)) { g_plan.interval = mn; } }
 		buildScheduleJson();
 		const errCode se = saveCurrentPlan();
 		notify(HGE_EV_SCHEDULE, g_schedJson);
 		return se;
 	}
 	astro::buildSchedule(cur);
+	{ const int mn = minIntervalSec(cur); if (cur.interval < static_cast<double>(mn)) { cur.interval = mn; } }
 	return dataManager::savePlanFile(std::string(planId), csjson::toJson(cur))
 	           ? ERR_HGC_OK : ERR_HGC_INVALID_STATE;
 }
@@ -2673,6 +3045,20 @@ int32_t hge_setPlanLandscape(int32_t landscape)
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
 	return saveCurrentPlan();	// 編集を即永続化
+}
+
+int32_t hge_setPlanVideo(const char* json)
+{
+	if (json == nullptr || json[0] == '\0') { return ERR_HGC_INVALID_ARG; }
+	if (!g_planReady) { errCode e = loadFixedPlanImpl(); if (e != ERR_HGC_OK) { return e; } }
+	hgc::videoSet v;
+	if (!csjson::videoFromJson(std::string(json), v)) { return ERR_HGC_JSON_PARSE; }
+	g_plan.video = v;
+	buildScheduleJson();	// 次に読まれるときのために更新はする
+	// 【通知は出さない(2026-09-23)】動画の作り方はスケジュールを変えない。通知を出すと画面が
+	//  ページごと作り直され、スライダーを動かしている途中で操作が切れる・タブがいったん先頭へ
+	//  戻る、という見え方になる(実機で確認)。
+	return saveCurrentPlan();	// 編集を即永続化(他の setter と同じ)
 }
 
 int32_t hge_setBandMode(int32_t sunriseMode, int32_t sunsetMode)
@@ -2841,20 +3227,98 @@ int32_t hge_getCcmDefaultsJson(char* buf, int32_t* inoutLen)
 	return ERR_HGC_OK;
 }
 
-int32_t hge_getExpoValuesJson(char* buf, int32_t* inoutLen)
+// 【初期値のエディタはカメラに依らない標準目盛りを使う(2026-09-06)】
+//  以前は初期値の編集でも計画のカメラの目盛り(hge_getExpoValuesJson)を借りていた。
+//  内蔵カメラの実測目盛りに "1600" や "8" は無く、位置を見失った初期値が
+//  ISO 11377 / 48 秒へ化けて保存された。初期値はどのカメラのものでもないので標準 1/3 段で示す。
+//  スマホ向け(forPhone)なら 1/12 段の細かい目盛り、外部カメラ向けなら慣用の 1/3 段(2026-09-06 仕様)。
+int32_t hge_getPresetExpoValuesJson(int32_t forPhone, char* buf, int32_t* inoutLen)
+{
+	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
+	const bool ph = (forPhone != 0);
+	const std::vector<std::string> iso = expo::presetValues(expo::expoKind::iso, ph);
+	const std::vector<std::string> ss  = expo::presetValues(expo::expoKind::ss,  ph);
+	const std::vector<std::string> fn  = expo::presetValues(expo::expoKind::fn,  ph);
+	auto arr = [](const std::vector<std::string>& v) {
+		std::string s = "[";
+		for (size_t i = 0; i < v.size(); ++i) { if (i) { s += ","; } s += "\"" + v[i] + "\""; }
+		s += "]";
+		return s;
+	};
+	const std::string j = "{\"iso\":" + arr(iso) + ",\"ss\":" + arr(ss) + ",\"fn\":" + arr(fn) + "}";
+	return copyOut(j, buf, inoutLen);
+}
+
+// 撮影制御方法エディタの選択肢。
+//
+// 【範囲はカメラ/レンズ、刻みは編集する人の好み(2026-09-19 ユーザー指示)】
+//  以前はカメラが答えた並びをそのまま出していた。内蔵カメラが無段になって並びが
+//  両端だけになったため、ss と ISO が「2 つしか選べない」状態になった(実機で発覚)。
+//  カメラからは**上下限だけ**を取り、そこへ指定の刻みで目盛りを張る。
+//  カメラを変えれば、その機種の上下限で張り直される。
+//
+//  stepPerStop: 1 段を何分割するか。2=1/2段 / 3=1/3段 / 12=1/12段。
+//               0 = おまかせ(端末が答えるカメラ=1/12段、外部カメラ=1/3段)。
+//  F 値は「選べる値だけ」。レンズが 1 点しか持たない(スマホ)ならその 1 つだけを返し、
+//  画面でも動かせなくする。可変絞りのレンズは持っている並びをそのまま返す。
+int32_t hge_getExpoValuesJson(int32_t stepPerStop, char* buf, int32_t* inoutLen)
 {
 	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
 	if (!g_planReady) { loadFixedPlanImpl(); }
 	double fmin = (g_plan.lens.fn > 0.0) ? g_plan.lens.fn : 1.0;
 	double fmax = (g_plan.lens.fnMax > 0.0) ? g_plan.lens.fnMax : 32.0;	// レンズのF最大があれば使う
-	// item3: iso/ss はスライダ選択範囲も計画のカメラの設定可能範囲(isoList/ssList)に限定する。
-	// カメラ未設定時は標準1/3段にフォールバック。ss の "Bulb" はスライダ対象外として除く。
-	std::vector<std::string> iso = !g_plan.camera.isoList.empty()
-	                               ? g_plan.camera.isoList : expo::standardValues(expo::expoKind::iso);
-	std::vector<std::string> ss;
-	if (!g_plan.camera.ssList.empty()) { for (const auto& s : g_plan.camera.ssList) { if (s != "Bulb") { ss.push_back(s); } } }
-	else                               { ss = expo::standardValues(expo::expoKind::ss); }
-	auto fn  = expo::standardFn(fmin, fmax);	// fn はレンズの開放〜最小絞り(従来どおり)
+
+	// 刻み。0 は「おまかせ」= 端末が答えるカメラ(readOnly)なら 1/12 段、それ以外は 1/3 段。
+	int per = stepPerStop;
+	if (per <= 0) { per = g_plan.camera.readOnly ? 12 : 3; }
+	const double step = 1.0 / static_cast<double>(per);
+
+	// 並びの両端 = そのカメラの上下限。値が取れなければ標準の範囲へ。
+	auto span = [](const std::vector<std::string>& v, expo::expoKind k, double& lo, double& hi) -> bool
+	{
+		bool any = false;
+		for (const auto& s : v)
+		{
+			if (s == "Bulb" || s == "auto" || s == "Auto") { continue; }
+			const double r = expo::parseValue(s, k);
+			if (!(r > 0.0)) { continue; }
+			if (!any) { lo = hi = r; any = true; }
+			else { if (r < lo) { lo = r; } if (r > hi) { hi = r; } }
+		}
+		return any;
+	};
+	// 【カメラが自分の並びを持っているならそれを見せる(2026-09-20 ユーザー指示)】
+	//  上下限から目盛りを合成すると、カメラに無い値が画面に出る。EOS R3 の 8 秒は
+	//  下端 1/64000 から 1/3 段で張ると 8.192 秒になり、実機の綴りと食い違っていた
+	//  (送る直前にデバイス側が 8 へ丸めるので写りは合っていたが、表示と保存が嘘になる)。
+	//  並びを持たない機種(端末の内蔵カメラは上下限の 2 点しか答えない)は今までどおり合成する。
+	//  ここでは機種を判断せず、「並びがあるか」だけを見る。
+	auto values = [&](const std::vector<std::string>& list, expo::expoKind k) -> std::vector<std::string>
+	{
+		std::vector<std::string> v = expo::pickFromValues(list, k, step);
+		if (v.size() >= 3) { return v; }	// 3 点以上あれば「並びを持っている」とみなす
+		double lo = 0.0, hi = 0.0;
+		if (span(list, k, lo, hi)) { return expo::rangeValues(k, step, lo, hi); }
+		return {};
+	};
+	std::vector<std::string> iso = values(g_plan.camera.isoList, expo::expoKind::iso);
+	if (iso.empty()) { iso = expo::standardValues(expo::expoKind::iso); }
+	std::vector<std::string> ss = values(g_plan.camera.ssList, expo::expoKind::ss);
+	if (ss.empty()) { ss = expo::standardValues(expo::expoKind::ss); }
+
+	// F 値: レンズが持っている並び(あればそれ)。無ければ開放〜最小絞りの慣用の目盛り。
+	//  【1 点しかないなら 1 点だけ返す(2026-09-19)】以前は standardFn(1.85, 1.85) が
+	//   範囲に1つも入らず「全部」へ落ちていたため、スマホなのに F1.0〜32 が並んでいた。
+	std::vector<std::string> fn;
+	if (!g_plan.lens.fnList.empty()) { fn = g_plan.lens.fnList; }
+	else if (std::fabs(fmax - fmin) < 1e-6)
+	{	// 固定絞り。綴りはレンズが持つ値そのまま(小数2桁。1.85 が 1.9 に化けない)
+		char b[16]; std::snprintf(b, sizeof(b), "%.2f", fmin);
+		std::string t = b;
+		while (t.size() > 3 && t.back() == '0') { t.pop_back(); }
+		fn.push_back(t);
+	}
+	else { fn = expo::standardFn(fmin, fmax); }
 	auto arr = [](const std::vector<std::string>& v) {
 		std::string s = "[";
 		for (size_t i = 0; i < v.size(); ++i) { if (i) { s += ","; } s += "\"" + v[i] + "\""; }
@@ -2995,6 +3459,16 @@ int32_t hge_setPlanCamera(const char* name)
 	hgc::camera c;
 	if (!dataManager::findOwnedCamera(std::string(name), c)) { return ERR_HGC_NO_ELEMENT; }
 	g_plan.camera = c;
+	// 【カメラに割り当てたレンズを一緒に載せる(2026-09-05 依頼)】
+	//  所持カメラは「組み合わせるレンズ(先頭が初期値)」を持っている。カメラを変えたら
+	//  そのカメラの初期値のレンズへ付け替える。載せないと前のレンズの焦点距離のまま
+	//  NPF を計算してしまい、星が流れない上限が大きく外れる
+	//  (スマホ内蔵カメラで 10.1秒 と 48.7秒 ほど違った)。
+	//  レンズを割り当てていないカメラでは何もしない(いまのレンズのまま)。
+	{
+		hgc::lens paired;
+		if (dataManager::findOwnedCameraDefaultLens(c.name, paired)) { g_plan.lens = paired; }
+	}
 	clampPlanCcmToGear();	// item3: 新しいカメラの上下限へccm露出をクランプ
 	// センサーサイズ/画角が変わると太陽の画角侵入時刻が変わるためスケジュールを再生成する。
 	errCode e = astro::buildSchedule(g_plan);
@@ -3249,7 +3723,25 @@ int32_t hge_addOwnedDetected(int32_t index)
 //  用途: ①エッジ→スマホ書き戻し(edgeの進捗JSONの serial/assignedName を受けて allowAdd=1)。
 //        ②裏の発見(プレゼンス)で allowAdd=0 → 返り値 ISNEW のとき UI が「登録しますか？」を出す。
 //  返り値: >=0 は dataManager::camApply(0=updated/1=filled/2=isNew)、<0 はエラー。
-//  maker は model 先頭トークン(空白まで)から導出する(stripMaker 用。Canon運用では "Canon EOS R100"→"Canon")。
+//  model は型番だけ("EOS R100"。探索元が揃えた綴りがそのまま届く)。メーカー名は型番から作らない
+//  (2026-09-06: 以前は先頭語を取っていたが、型番だけになった今は "EOS" になってしまう)。
+//  マスタに載っている機種は登録時にマスタの maker が入り、載っていなければ空のままにする。
+// 【探しに行かない版(2026-09-26)】エッジが見つけたカメラを登録するときに使う。
+//  スマホ⇄エッジが BLE のとき、そのカメラは**エッジのAPの中だけ**に居るので、スマホからは
+//  どうやっても届かない。実機を探しても見つからないまま数秒待つだけなので探索を省く。
+//  ISO/SS は機材マスタの上下限から作られる(マスタに無い機種は空のまま。後でそのカメラへ
+//  繋いだときに埋まる)。
+int32_t hge_recordRemoteCameraIdentity(const char* model, const char* serial, const char* assignedName,
+                                       int32_t allowAdd)
+{
+	device d;
+	d.model        = (model        != nullptr) ? model        : "";
+	d.serialno     = (serial       != nullptr) ? serial       : "";
+	d.assignedName = (assignedName != nullptr) ? assignedName : "";
+	if (d.model.empty() && d.serialno.empty()) { return ERR_HGC_INVALID_ARG; }
+	return dataManager::recordConnectedCameraStatus(d, allowAdd != 0);
+}
+
 int32_t hge_recordCameraIdentity(const char* model, const char* serial, const char* assignedName, int32_t allowAdd)
 {
 	device d;
@@ -3257,8 +3749,6 @@ int32_t hge_recordCameraIdentity(const char* model, const char* serial, const ch
 	d.serialno   = (serial   != nullptr) ? serial   : "";
 	d.assignedName = (assignedName != nullptr) ? assignedName : "";
 	if (d.model.empty() && d.serialno.empty()) { return ERR_HGC_INVALID_ARG; }
-	size_t sp = d.model.find(' ');
-	d.manufacturer = (sp != std::string::npos) ? d.model.substr(0, sp) : std::string();
 
 	// 【新規登録は実機に繋いでから(2026-08-19)】ここへ来る model/serial は在否監視(SSDP)由来で、
 	//  カメラを叩かずに得た情報しか無い。マスタに無い機種は ISO/SS をカメラ本人から取りたいので、
@@ -3413,7 +3903,6 @@ int32_t hge_captureStartPlan(const char* planId_)
 		//  ccmList をそのまま使う(表示用JSONを作るだけ)。窓を持たない計画が届くと、
 		//  この経路では組み立て直さないため撮影ループが**黙って空回り**する
 		//  (状態は「撮影中」なのにカメラへ一切通信しない)。ファイル経由と同じ手当てをする。
-		if (!sess->plan.ccm.complete()) { seedPlanCcmFromDefaults(sess->plan); }
 		if (sess->plan.ccmList.empty())
 		{
 			const errCode be = astro::buildSchedule(sess->plan);
@@ -3429,8 +3918,7 @@ int32_t hge_captureStartPlan(const char* planId_)
 		std::string saved; hgc::cs cs;
 		if (!dataManager::loadPlanFile(planId, saved) || !csjson::fromJson(saved, cs)) { return ERR_HGC_NO_ELEMENT; }
 		sess->plan = cs;
-		// 撮影制御方法は計画が持っている。欠けていたときだけ初期値で補い、窓が無いときだけ組み立てる。
-		if (!sess->plan.ccm.complete()) { seedPlanCcmFromDefaults(sess->plan); }
+		// 撮影制御方法は計画が持っている。窓が無いときだけ組み立てる。
 		if (sess->plan.ccmList.empty())
 		{
 			const errCode be = astro::buildSchedule(sess->plan);

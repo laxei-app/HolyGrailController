@@ -17,7 +17,7 @@
 //  タスクと相手**が分かる。シリアルに何も出なくても残るのが要点。
 //
 // 【読み出し】そのファームの ELF が要る(SHA が一致しないと読めない)。ビルドのたびに
-//  .pio/build/debug/elf/hgc-<版数>.elf へ控えている(archive_elf.py)。
+//  .pio/build/debug/elf/tlp-<版数>.elf へ控えている(archive_elf.py)。
 //    pip install esp-coredump
 //    esptool.py --port COMx read_flash 0x7F0000 0x10000 cd.bin
 //    python -m esp_coredump --chip esp32s3 info_corefile --core cd.bin --core-format raw <elf>

@@ -9,7 +9,7 @@
 で止まった。PlatformIO は firmware.elf を毎回上書きするので、何度か焼き直した後では
 もう戻せない。版数付きで控えておけば、後からダンプを解ける。
 
-置き場所は .pio/build/<env>/elf/hgc-<版数>.elf。ビルド成果物の中なので git には入らない。
+置き場所は .pio/build/<env>/elf/tlp-<版数>.elf。ビルド成果物の中なので git には入らない。
 古い物は kKeep 個まで残して消す(1つ50MB弱あるため)。
 """
 Import("env")
@@ -37,7 +37,7 @@ def elfArchive(source, target, env):
         pass
     outDir = os.path.join(build, "elf")
     os.makedirs(outDir, exist_ok=True)
-    dst = os.path.join(outDir, "hgc-%s.elf" % ver)
+    dst = os.path.join(outDir, "tlp-%s.elf" % ver)
     try:
         shutil.copyfile(src, dst)
     except Exception:

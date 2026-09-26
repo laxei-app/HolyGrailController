@@ -15,10 +15,17 @@ namespace etpEdge
 {
 	// 1フレームを処理して応答フレームを返す(トランスポート非依存)。BLE 経路(etpBle)が使う。
 	// 中身は TCP と完全に同じ処理を通る。
-	std::vector<uint8_t> handleFrame(const etp::packet& pk);
+	//  conn = BLE の接続番号。持ち主かどうかを**接続ごと**に見分けるのに使う
+	//  (2台つないでいるとき、片方の名乗りでもう片方の要求が通ってしまわないように)。
+	std::vector<uint8_t> handleFrame(const etp::packet& pk, uint16_t conn);
 
 	// 検索応答(C_SEARCH)と同じ edgeInfo の JSON。BLE でも同じものを返す。
 	std::string infoJson(void);
+
+	// 持ち主のスマホを登録する(プロビジョニングから呼ぶ)。
+	//  QR の PoP で導いた鍵で復号できた中身に入っていた識別子だけを受け取る。
+	//  = 端末の画面を見られる人しか持ち主になれない。
+	void setOwner(const std::string& phoneId);
 
 	// RTC からシステム時計を復元し、UDP/TCP サーバを開始する。
 	// edgeName: 検索応答で返すエッジ端末の名称。

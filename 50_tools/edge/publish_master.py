@@ -22,7 +22,7 @@
   python publish_master.py --same-rev # 版はそのまま(書き間違いの直し等)
 
 【公開リポジトリは指示があるまで更新しない(2026-08-28 ユーザー指示)】
-この道具は走らせた時点で hgc-master を書き換える。普段は使わないこと。
+この道具は走らせた時点で tlp-master を書き換える。普段は使わないこと。
 機材マスタを直したいだけなら assets/master/*.json を直せばアプリはそれを使う
 (同梱のほうが版が新しければ取り込む)。公開へ出すのはリリースのときだけ。
 """
@@ -36,7 +36,7 @@ import shutil
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 SRC = os.path.join(REPO, "40_src", "90_Target", "20_Android", "app", "src", "main", "assets", "master")
-DST = os.path.abspath(os.path.join(REPO, "..", "hgc-master", "master"))
+DST = os.path.abspath(os.path.join(REPO, "..", "tlp-master", "master"))
 
 SCHEMA = 1
 FILES = ["cameras.json", "lenses.json"]

@@ -1,0 +1,48 @@
+﻿# カメラ固有処理の共通部への漏れ — 洗い出し（2026-09-06）
+
+## 目的
+
+今後、別の制御方式のカメラ（ソニー・ニコン等）や iPhone を実装するときに障害となる
+「キヤノン CCAPI 固有の知識が apiCanonCCAPI / detectCanonCCapi の外に置かれている箇所」を
+洗い出す。対象は 10_common・30_role・20_platform・10_UI（Android / M5）。
+
+## 構造の現状（先に結論）
+… +108 lines
+
+  Ran 1 shell command
+
+整理しました。全文は 10_memo/2026.09.06 カメラ固有処理の共通部への漏れ 洗い出し.md に置いてあります。要点は以下です。
+
+先に結論
+
+骨格は正しいです。露出・測光・センサー諸元・撮影モード・接続維持・在否は apiBase / detectBase の仮想関数を通っていて、内蔵カメラが共通部分を触らずに乗ったのがその証拠です。
+
+漏れているのは 「HTTP で話す・URL がある・応答本文に理由が書いてある」という CCAPI の世界観が共通の型と関数に染み込んでいることです。次が同じ世界観のカメラ（ソニー・ニコンの多くは HTTP+SSDP）なら困りませんが、iPhone（AVFoundation）や USB/BLE のカメラでは邪魔になります。
+
+漏れの一覧（重要度順・全 23 件）
+
+A. 共通部分が CCAPI の言葉を直に使っている（6 件・必ず直す）
+1. presenceMonitor の挨拶 — URL /ver100/deviceinformation を直書き、401/403 の解釈もここ → apiBase::greet() へ
+2. captureRunner fireShutter — 503 と本文 "Can not write to card" でカード起因を判定 → apiBase が意味（mediaBlocked 等）を返す
+3. captureRunner::withHttpDetail / netThread::lastHttpFailure — エラー文言が HTTP 前提 → apiBase::lastFailureDetail()
+4. deviceDiscovery.h が apiCanonCCAPI.h を include（使っていない）→ 消す
+5. device.h の enum apiClass { CANON_CCAPI, SONY_DI } — 共通の型にメーカー名。しかも Sony の SSDP 語を CANON_CCAPI に写像している → 廃止
+6. cameraController.cpp が detectCanonCCapi を include して既定登録 → 登録は役割側へ（内蔵は既にそうなっている）
+
+B. 共通の型が HTTP/SSDP 前提（6 件・次のカメラの方式が決まってから）
+device の UPnP 項目（uuid/location/urn/urlAccess）、captureRunner の IP 取り出しと AP 離脱の突き合わせ、holyGrailEntity の IP/SSDP 前提の表示、presenceMonitor の生死確認（記述 URL への GET）、エッジの :8080 サブネット探索と IP 前提の既知テーブル、ダイジェスト認証の失敗→通知コード変換が holyGrailEntity にあること。→ 「不透明な接続キー」と apiBase/detectBase の問い合わせに置き換える。
+
+C. 語彙・データ形式が CCAPI 由来（7 件・害は小さい）
+露出の文字列表現（これは汎用として通す。tool::ssToStr* 3 本は Canon 表記で未使用→削除）、meterLv「ライブビューで測光」という方式名が型・UI・マスタに露出、via_liveView/via_shotThumb、stopLiveView という関数名、stripMaker 等の "Canon EOS R10"/"Canon.Inc" の綴り差吸収が 3 か所、出荷時計画と手入力カメラの maker 既定 "Canon"。
+
+D. 成果物側（4 件）
+MainActivity.kt の isBuiltinSerial("BUILTIN:") 8 か所（同期撮影を隠す・レンズ固定・読取専用・端末固定）→ UI は「このカメラの性質」を Entity に聞く形にする（iPhone で必ず要る）。所持カメラ詳細の「認証」「ライブビュー測光」行がすべてのカメラに出る。StickS3 のシリアル実験コマンドが CCAPI の URL を直書き。
+
+直す順番の提案
+
+1. A（6 件） — 共通から CCAPI の言葉を消す。エッジのビルドに触るのはこの 1 回。
+2. D1/D2 — UI の内蔵判定を Entity 問い合わせに置き換える。
+3. B — 次のカメラの方式が決まってから（HTTP+SSDP なら当面不要、iPhone は素通りできる）。
+4. C — 折を見て。
+
+A から着手してよければ始めます。今夜の撮影より前に入れるかは、ご判断ください（撮影ループ fireShutter と在否監視に触ります）。

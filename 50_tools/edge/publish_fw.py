@@ -9,7 +9,7 @@
      ※ 2026-09-05 からはビルドの側(stamp_build.py)でも同じものを刻んでいる。
        何度刻んでも結果は同じなのでここは残してある(--no-build で古い成果物を使うときの受け皿)。
   3. ブートローダ・区切り・otadata・本体を1本へ結合する(0番地へ焼く形)
-  4. hgc-master/firmware/ へ置き、目録(manifest.json)を書き直す
+  4. tlp-master/firmware/ へ置き、目録(manifest.json)を書き直す
 
 置いたあとの push は**しない**。中身を確かめてから、手で push すること。
 
@@ -20,7 +20,7 @@
 
 【公開リポジトリは指示があるまで更新しない(2026-08-28 ユーザー指示)】
 公開物はその機能の検証時とリリース時にしか使わない。普段の実機書き込みは --local を使い、
-hgc-master には手を触れないこと。--local はビルド成果物の場所に結合イメージを残すだけ。
+tlp-master には手を触れないこと。--local はビルド成果物の場所に結合イメージを残すだけ。
 """
 import argparse
 import hashlib
@@ -34,7 +34,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
-OUT_REPO = os.path.abspath(os.path.join(REPO, "..", "hgc-master"))
+OUT_REPO = os.path.abspath(os.path.join(REPO, "..", "tlp-master"))
 
 PIO = os.path.expanduser(r"~\.platformio\penv\Scripts\platformio.exe")
 PY = os.path.expanduser(r"~\.platformio\penv\Scripts\python.exe")
@@ -44,13 +44,13 @@ BOOT_APP0 = os.path.expanduser(
     r"~\.platformio\packages\framework-arduinoespressif32@src-702d0f93023d86e22d8ef62aa333f0b7"
     r"\tools\partitions\boot_app0.bin")
 
-APP_NAME = "HolyGrailEdge"
+APP_NAME = "TwyLapseEdge"
 
 MODELS = [
     {"id": "stick-s3", "name": "M5StickS3",      "target": "15_M5StickS3",
-     "flash": "8MB",  "file": "hgc-edge-stick-s3.bin"},
+     "flash": "8MB",  "file": "tlp-edge-stick-s3.bin"},
     {"id": "core-s3",  "name": "M5Stack CoreS3", "target": "10_M5Stack",
-     "flash": "16MB", "file": "hgc-edge-core-s3.bin"},
+     "flash": "16MB", "file": "tlp-edge-core-s3.bin"},
 ]
 
 

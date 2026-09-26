@@ -1,4 +1,4 @@
-﻿package app.laxei.holygrail
+﻿package app.laxei.twylapse
 
 import android.app.PendingIntent
 import android.content.Context
@@ -35,7 +35,7 @@ object EspUsb {
     const val PID_USB_JTAG = 0x1001        // ROM のダウンロードモード / 私たちのファーム
     const val PID_M5_FACTORY = 0x8120      // M5 の工場出荷ファーム
 
-    private const val ACTION_PERMISSION = "app.laxei.holygrail.USB_PERMISSION"
+    private const val ACTION_PERMISSION = "app.laxei.twylapse.USB_PERMISSION"
 
     /** 繋がっている中から、焼ける相手(Espressif の USB)を探す。 */
     fun findDevice(ctx: Context): UsbDevice? {

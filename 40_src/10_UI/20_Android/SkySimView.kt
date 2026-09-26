@@ -1,4 +1,4 @@
-package app.laxei.holygrail
+package app.laxei.twylapse
 
 // 撮影シミュレーション(§7.3 画面360)。撮影計画ページャの最後のページ。
 //  ・撮影方向(方位磁石)/仰角(カメラ図)を貼り付け、期間スライダーで時刻を動かす。

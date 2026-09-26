@@ -256,6 +256,53 @@ int main(void)
 		check(p.nightPostNightEv ==  2.0, "夜間後移行の目標ev");
 	}
 
+	// ---------------------------------------------------------------- ⑦
+	// 標準ひな形(2026-09-21)の骨格: 種類(tplKind)が往復し、-3° の境目(移行→朝日 / 日中→移行)が
+	// 太陽高度で効く。日の出含む=朝日を使い夕日は使わない。
+	std::printf("\n[7] 標準ひな形の骨格(tplKind と -3° の境目)\n");
+	{
+		hgc::cs p = makePlan("EOS R3 star_sunrise");
+		p.tplKind = "star_sunrise";
+		p.ccm.useSunrise = true; p.ccm.useSunset = false;
+		auto addB = [&](hgc::ccmType b, hgc::ccmType a, double alt, bool rising) {
+			hgc::boundaryOverride bo; bo.before = b; bo.after = a; bo.occ = 0; bo.altDeg = alt; bo.rising = rising;
+			p.boundaries.push_back(bo);
+		};
+		addB(hgc::ccmType::postNight, hgc::ccmType::sunrise,  -3.0, true);
+		addB(hgc::ccmType::day,       hgc::ccmType::preNight, -3.0, false);
+		check(astro::buildSchedule(p) == ERR_HGC_OK, "スケジュール");
+		check(countType(p, hgc::ccmType::sunset) == 0, "夕日の窓は無い(使わない)");
+		check(countType(p, hgc::ccmType::sunrise) == 1, "朝日の窓が 1 つ");
+		int found = 0;
+		for (size_t i = 0; i + 1 < p.ccmList.size(); ++i)
+		{
+			const hgc::ccmType bt = p.ccmList[i].type, at = p.ccmList[i + 1].type;
+			const int m = p.ccmList[i].end.hour * 60 + p.ccmList[i].end.min;
+			if (bt == hgc::ccmType::postNight && at == hgc::ccmType::sunrise)
+			{
+				// 既定(0°)なら日の出の時刻(8/12 東京 約 04:58)。-3° なら 15 分ほど早い。
+				std::printf("      移行→朝日 %02d:%02d\n", m / 60, m % 60);
+				check(m >= 4 * 60 + 35 && m <= 4 * 60 + 50, "移行→朝日の境目が -3°(日の出より 10〜25 分前)");
+				++found;
+			}
+			if (bt == hgc::ccmType::day && at == hgc::ccmType::preNight)
+			{
+				// 既定(0°)なら日の入りの時刻(8/11 東京 約 18:35)。-3° なら 15 分ほど遅い。
+				std::printf("      日中→移行 %02d:%02d\n", m / 60, m % 60);
+				check(m >= 18 * 60 + 43 && m <= 18 * 60 + 58, "日中→移行の境目が -3°(日の入りより 10〜25 分後)");
+				++found;
+			}
+		}
+		check(found == 2, "-3° の境目が 2 つとも当たった");
+		const std::string js = csjson::toJson(p);
+		check(js.find("\"tplKind\":\"star_sunrise\"") != std::string::npos, "tplKind を書く");
+		hgc::cs q;
+		check(csjson::fromJson(js, q), "復元できる");
+		checkStr(q.tplKind, "star_sunrise", "tplKind が保たれる");
+		check(q.boundaries.size() == 2, "境目 2 つが保たれる");
+		check(csjson::toJson(makePlan("plain")).find("tplKind") == std::string::npos, "計画は tplKind を書かない");
+	}
+
 	std::printf("\n=== 結果: PASS %d / FAIL %d ===\n", g_pass, g_fail);
 	return g_fail == 0 ? 0 : 1;
 }

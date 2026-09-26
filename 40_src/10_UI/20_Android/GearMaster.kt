@@ -1,4 +1,4 @@
-﻿package app.laxei.holygrail
+﻿package app.laxei.twylapse
 
 import android.content.Context
 import org.json.JSONObject
@@ -27,7 +27,7 @@ import java.security.MessageDigest
 //  一覧を取ってきても**次の起動で古いものに戻る**ので、版を見て決めるようにした。
 object GearMaster {
 
-    const val BASE = "https://raw.githubusercontent.com/laxei-app/hgc-master/main/master/"
+    const val BASE = "https://raw.githubusercontent.com/laxei-app/tlp-master/main/master/"
     const val MANIFEST = "manifest.json"
 
     /** このアプリが読める構造の版。公開側がこれを超えていたら手を出さない。 */

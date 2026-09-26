@@ -23,7 +23,7 @@ public:
 	void watchStop() override;
 
 protected:
-	// このバックエンドが対応するサービス定義(キーワード→apiClass)。
+	// このバックエンドが自分のカメラと見なす SSDP のサービス識別語。
 	virtual const std::vector<deviceDiscovery::definitionIntereface>& interfaces() const = 0;
 
 private:

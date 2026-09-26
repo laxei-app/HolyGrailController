@@ -246,7 +246,7 @@ namespace osfile
 			std::string nm = f.name();
 			size_t slash = nm.find_last_of('/');
 			std::string base = (slash == std::string::npos) ? nm : nm.substr(slash + 1);
-			if (base.rfind("hg_", 0) == 0) { out.push_back(base); }
+			if (base.rfind("tlp_", 0) == 0) { out.push_back(base); }
 			f.close();
 		}
 		d.close();

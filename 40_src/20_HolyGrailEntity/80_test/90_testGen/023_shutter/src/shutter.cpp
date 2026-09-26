@@ -103,7 +103,7 @@ int shutterExecute(int line, void* parm)
 		std::string buff;
 		buff.resize(32);
 		snprintf(buff.data(), buff.size(),
-			"ss:%-6s F%-4.1f iso%u", tool::ssToStr(setting.ss).c_str(),
+			"ss:%-6s F%-4.1f iso%u", std::to_string(setting.ss).c_str(),
 			setting.fNum,
 			static_cast<uint32_t>(setting.iso));
 

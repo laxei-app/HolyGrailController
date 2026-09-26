@@ -93,7 +93,10 @@ public:
 	                      int firstApplyTries = 0;
 	                      convergeInfo converge{};	// 撮影開始前の初期収束の結果(セッション単位)
 	                      // 何で測ったか(レポートの件数用)。apiBase::via_* の値。
-	                      int meterVia = 0; };
+	                      int meterVia = 0;
+	                      // カメラ自身の素性と実績(apiBase::deviceReportJson。セッション単位で
+	                      //  同じ値が来る。レポートの "device" 欄へそのまま入る。空=載せない)。
+	                      std::string deviceJson; };
 
 	using stateCb    = std::function<void(int)>;					// hgeState 値
 	using progressCb = std::function<void(const progressInfo&)>;
@@ -250,7 +253,11 @@ public:
 	// (2026-07-20夕方の実機: 1/60→8秒へ8.91段/27コマ=0.33段/コマ、実写は飽和85〜98%)。
 	// → カメラ実装は露出成分を割り戻した「場面の明るさ」(sceneRef)を返し、こちらは撮影露出で
 	//   撮った場合の値へ投影してから比較する。これでループが閉じ、露出を動かすと比較結果も動く。
-	static constexpr double kExposureStepStops   = 1.0 / 3.0;	// 露出制御の1ステップ(段)
+	// 露出制御の1ステップ(段)の**既定値**。実際の1歩はカメラの設定値テーブルから採る
+	//  (expo::exposureCtl::minStepStops)。スマホ内蔵カメラは 1/3 段より細かい刻みで
+	//  テーブルを合成するため、固定値では扱えない(2026-09-05)。
+	//  この定数は、テーブルが無い/読めない場面のよりどころとしてだけ残す。
+	static constexpr double kExposureStepStops   = 1.0 / 3.0;
 
 	// 【窓の境目で画質を段階的に寄せる(2026-08-29 仕様)】
 	//
@@ -272,7 +279,9 @@ public:
 	// 夜間は固定露出(limitBright==limitDark)なので対象外。既存の preNightConverge に任せる。
 	//
 	// 戻り: 組み替えを行ったら true。
-	bool migrateTowardCcm(expo::exposureCtl& ctl, expo::exposureCtl& want, const hgc::ccmBase* ccm);
+	// stepStops = そのカメラの1目盛り[段]。0 = 無段(1コマの許容を割って刻む)。
+	bool migrateTowardCcm(expo::exposureCtl& ctl, expo::exposureCtl& want, const hgc::ccmBase* ccm,
+	                      double stepStops);
 	// ヒステリシス帯の下限[段]。刻み q・測光の応答 γ のループは、デッドバンドが γ×q 以上で
 	// ないと静止点を持たない(1歩動かすと需要が再び帯を超えて必ず引き返す)。
 	//   動き出すしきい値 = max(帯/2, 1歩 - 帯/2)  ← 帯=1歩 がちょうど最小=最も緩い点
@@ -288,20 +297,59 @@ public:
 	// 追従の代償は小さい: 動き出すしきい値 0.183段 → 0.400段。ただし現状は振動そのもので
 	// ±0.28段ぶれているので、実際の絵の安定性は改善する(テストの最大誤差 0.28→0.34段)。
 	static constexpr double kMinHysteresisStops = 0.8;
-	// 移動平均の遅れを補う外挿量の上限[段]。
-	// 必要な補正量 = 変化速度[段/コマ] × (n-1)/2 で、実測の夜明け(0.46段/コマ・5点平均)では
-	// 0.92段。0.5段では半分しか補正できないので、実測に余裕を持たせて 1.5段 とする。
-	// 傾きは差分の中央値なので、一過性の光(1コマだけの外れ値)や段差では 0 に落ちる。
-	// つまりこの上限は「素性の悪いデータで暴走させない」ための保険であって、
-	// 正常な変化を頭打ちにするためのものではない。
-	static constexpr double kSceneLeadMaxStops = 1.5;
+	// 【帯の下限は1目盛りに比例させる(2026-09-19 ユーザー決定)】
+	//  上の 0.8 段は「1目盛り=1/3段」のカメラでの値である。本質は「帯の半分が1目盛りより広い」こと。
+	//  1目盛り動かすと必要量より最大1目盛りぶん行き過ぎるので、その行き過ぎが帯に収まらないと
+	//  次のコマで戻され、往復になる(模擬で確認: 1/3段のカメラに帯0.3を与えると反転が出る)。
+	//  比 2.4 は従来値から決めた(1/3段 × 2.4 = 0.8段 = 今までと同じ)。
+	//   1/3 段のカメラ → 0.80 段(従来と同じ)
+	//   1/2 段のカメラ → 1.20 段
+	//   内蔵カメラ(細かい) → 目盛りに応じて狭くなる。無段階に近いほど帯を狭くできる
+	//   無段のカメラ(目盛り無し) → kBandFloorStops。丸めの行き過ぎが無いので最低限でよい
+	static constexpr double kBandPerNotch = 2.4;
+	// 目盛りが極端に細かいデバイスでも、測光の揺れを吸う最低限は残す。
+	static constexpr double kBandFloorStops = 0.10;
+	// (移動平均の傾きの先読み kSceneLeadMaxStops は 2026-09-09 に廃止。sceneNowFromBuf の説明を参照)
+	// 露出の変化速度の貯金[段]。addStepBudget で貯め、動いたぶんを spendStepBudget で引く。
+	//  露出そのものと、窓の境目の配分寄せ(明るさは変えない別枠)で別々に持つ。
+	double stepBudget_    = 0.0;
+	double migrateBudget_ = 0.0;
+	// このコマで動かしてよい段数の上限 = max(1目盛り, 上限[段/秒]×撮影周期)。
+	//  addStepBudget が毎コマ更新する。貯金がいくら貯まっていてもこれを超えて動かさない。
+	double frameLimit_    = 1.0 / 3.0;
 	// 反転抑制中でも「本物の急変」は通す差[段]。1歩正しく動かした直後に測光がでっち上げる
 	// 見かけの逆向き需要は最大 γ×1歩 - 帯/2 ≒ 0.47段(実測γ≒1.9)。その約2倍を境にする。
 	static constexpr double kReversalGuardStops = 1.0;
-	// 1コマで詰めてよい上限(段)。撮影中は必ず1ステップ(=1/3段)に留め、撮影計画の境目も含めて
-	// 露出設定を飛ばさず滑らかに動かす(2026-07-24: 境目の多段ジャンプを禁止)。
-	// 大きなズレを速く詰めるのは撮影前の初期収束(initialConverge, シャッター無し)だけの役割とする。
-	static constexpr double kMaxCatchUpStops     = kExposureStepStops;
+	// 【露出を動かす速さの上限[段/秒](2026-09-05 仕様変更)】
+	//
+	// 以前は「1コマあたり最大1ステップ(=1/3段)」だった。撮影周期が変わっても1コマの上限が
+	// 変わらないので、**周期が長いほど露出の追従が遅くなる**。15秒周期でしか試していない
+	// 間は問題にならなかったが、1分周期のような長い周期では場面の変化に追いつけない。
+	//
+	// そこで「1秒あたり何段まで」に改める。1コマの許容 = この値 × 撮影周期[秒]。
+	//  ・15秒周期 → 0.333段/コマ = **従来と完全に同じ**(これまでの検証結果がそのまま生きる)
+	//  ・60秒周期 → 1.33段/コマ (速く追える)
+	//  ・ 9秒周期 → 0.20段/コマ (**従来より遅くなる**。承知のうえで採用。2026-09-05 ユーザー判断)
+	//
+	// 値は天候や太陽の動きという自然現象で決まるので、撮影制御方法ごとには持たせない。
+	// **調整するときはここだけを変える**。
+	static constexpr double kMaxExposureRateStopsPerSec = (1.0 / 3.0) / 15.0;	// 0.0222 段/秒
+
+	// 【貯金と「1コマで動かせる量」は別物(2026-09-05 実機で判明)】
+	//  9秒周期・1/3段刻みのカメラでは1コマの許容 0.20段 < 1目盛り 0.333段 なので、
+	//  貯めて持ち越さないと永久に動けない。一方で、貯まった量をそのまま1コマで使うと
+	//  **静かだった後の1コマだけ大きく飛ぶ**。実機(R50V/Edge01/15秒周期)で、7コマ動かない
+	//  あとに 0.667段(2目盛り)動いた。従来は必ず1目盛りに留めていたので、これは後退である。
+	//
+	//  そこで2つに分ける。
+	//   ・貯金   … 長い目で見た速さを上限どおりに保つためのもの。少し貯める
+	//   ・1コマの上限 … max(1目盛り, 1コマの許容)。**1コマの動きの粗さはこれで決まる**
+	//  15秒周期・1/3段刻みなら上限は 0.333段 = 従来どおり必ず1目盛り。
+	//  60秒周期なら 1.333段 = 4目盛りまで。9秒周期は1目盛りずつだが動くコマが間引かれる。
+	// 無段のカメラで配分を寄せるときの刻み。1コマの許容をこの数で割る(2026-09-19)。
+	//  目盛りのあるカメラは目盛りを使うので、これは無段の端末にだけ効く。
+	static constexpr double kMigrateSlices = 4.0;
+	static constexpr double kStepBudgetCapFrames = 2.0;	// 貯金の頭打ち(1コマの上限の何倍まで)
 
 private:
 	errCode loop(void);								// 撮影ループ本体(別スレッド)
@@ -314,7 +362,7 @@ private:
 	bool    meterFrame(const hgc::exposure& shotExp, apiBase::meterResult& mr, bool haveShot);
 	// カメラ実装が返す「場面の明るさ」(露出非依存)を、その露出で撮ったときのリニア輝度へ投影する。
 	double        linearAtExposure(double sceneRef, const hgc::exposure& e) const;
-	// 目標との差(段)から、このコマで踏む 1/3 段ステップ数を決める(1〜kMaxCatchUpStops相当)。
+	// 目標との差(段)から、このコマで踏む目盛り数を決める(上限は速さの上限×撮影周期の貯金)。
 	// 1歩(1/3段)動かすとヒステリシス帯の反対側へ飛び出すなら true(=このコマは動かさない)。
 	// 帯が歩幅より狭い制御方法(夕日/朝日=0.3段)で必ず起きていた往復振動の防止。
 	// 測光失敗のログ文を作る(待ちのどの通信でつまずいたかを含める。2026-07-30 診断)。
@@ -326,16 +374,45 @@ private:
 	// ヒステリシス帯の実効値(1歩=1/3段を下限とする。設定は書き換えない)。
 	// 移動平均バッファから「いまの場面の明るさ」を推定する(平均の遅れを傾きで補う)。
 	double        sceneNowFromBuf(const std::vector<double>& buf) const;
-	double        effHysteresis(double raw) const;
+	//  notchStops = そのデバイスの1目盛り[段]。帯の下限をこれに比例させる(2026-09-19)。
+	double        effHysteresis(double raw, double notchStops) const;
 	// 反転の抑制(2026-07-30): 露出を1歩変えると測光値が0.30段ずれ、移動平均が異なる露出の
 	// 値を混ぜるため、直後の逆向きは信用できない。抑制中の反転には帯を超える差を要求する。
 	bool          allowStep(int dir, double needStops, double bandStops) const;
 	void          noteStep(int dir);		// 動かした向きを記録し抑制期間を張る
-	void          resetStepLock(void);	// 抑制状態を捨てる
+	void          resetStepLock(void);	// 抑制状態を捨てる(速度も 0 に戻す)
 	int           lastStepDir_ = 0;	// 直前に動かした向き(-1=暗く +1=明るく 0=なし)
 	int           stepLock_    = 0;	// 反転を抑える残りコマ数(0=抑制なし)
-	bool          wouldOvershoot(double needStops, double bandStops) const;
-	int           stepsToClose(double needStops) const;
+
+	// 【速度をならして動かす(2026-09-21 ユーザー決定)】
+	//  動画で目立つのは明るさそのものより「変わり方が変わる瞬間」(動き出し・止まり・歩幅の伸縮)。
+	//  以前は測光を移動平均してから「はみ出た分だけその場で動かす」形で、平均のむだ時間で
+	//  動き出しが 3 コマ遅れ、遅れたぶんを大股で追いつくのが空の境目の往復として見えた
+	//  (2026-09-21 朝・Pixel 6 実測)。キヤノン機ではサムネイル測光の 0.3 段の偽の揺れが
+	//  そのまま歩幅に乗っていた(速度の最大変化 0.17〜0.22 段/コマ)。
+	//  いまは測光は最新 1 コマだけを見て、代わりに**速度**をならす:
+	//    速度の目標 = はみ出た量 ÷ 見込み時間       … 縁に近いほどゆっくり、遠いほど速く
+	//    速度の変化 = 1 コマに a まで                 … a = 速度上限 ÷ なめらかさ[分]
+	//  つまみは「なめらかさ[分]」1 つ(全体設定 / 朝日・夕日は個別)。見込み時間はその 1/4。
+	//  机上比較(2026-09-21 朝の Pixel 6 と R50V の場面系列): 止まりが 3〜25 コマ → 0〜7、
+	//  速度の最大変化が R50V 0.22 → 0.013 段、画の揺れは同等。機種の判断は無い(共通)。
+	double        shapedMove(expo::exposureCtl& ctl, double need,
+	                         const hgc::exposure* home, double homeB,
+	                         double smoothMin, double intervalSec);
+	double        vel_ = 0.0;		// いまの速度[段/コマ](+ 明るく)。窓の切替・測光失敗で 0 に戻す
+	static constexpr double kSmoothMinDefault  = 4.0;	// なめらかさの既定[分]
+	static constexpr double kApproachFraction  = 0.25;	// 見込み時間 = なめらかさ × これ
+	// このコマで動かしてよい量[段]。速さの上限(段/秒)×撮影周期の貯金と、1コマの上限の小さい方。
+	double        moveRoomStops(void) const;
+	// このコマで踏んでよい目盛り数。貯金(stepBudget_)と1目盛りの大きさで決まる。
+
+	// 1コマぶんの許容を貯める(露出判断の直前に1コマ1回だけ呼ぶ)。
+	void          addStepBudget(double intervalSec);
+	// 実際に動いた段数を引く(動けなかったぶんは残る)。
+	void          spendStepBudget(double stops);
+	// 1コマで許される段数(= 上限[段/秒] × 撮影周期[秒])。
+	static double frameAllowanceStops(double intervalSec)
+	{ return kMaxExposureRateStopsPerSec * ((intervalSec > 0.0) ? intervalSec : 15.0); }
 	// 実際にカメラへ適用できている露出を返す。lastXxxApplied_ は「その軸の設定が成功したときだけ」
 	// 更新されるので、一部の軸だけ失敗した場合も含めて実機の状態を正しく表す。
 	hgc::exposure appliedExposure(void) const;
@@ -343,11 +420,11 @@ private:
 	// 1枚目の適用が失敗したときに「撮ったつもりの露出」ではなく実機の状態を使うため。
 	hgc::exposure appliedOrConverge(void) const;
 	hgc::exposure convergeLastApplied_{};	// 初期収束が最後に適用できた露出(=失敗時のカメラの状態)
-	// HTTPを伴うカメラ操作の失敗メッセージに、直近のHTTPステータスと応答本文を添える。
-	//  "actShutter http=503 During shooting or recording" / "actShutter http=応答なし"
+	// カメラ操作の失敗メッセージに、カメラ実装が答える内訳(apiBase::lastFailure().detail)を添える。
+	//  何を添えるか(HTTP の状態など)は実装の都合で、ここは文字列を繋ぐだけ。
 	// 撮影ループ中はライブビューを掴まない(不要な方式のときだけ離す)。
 	void          releaseLiveView(void);
-	std::string   withHttpDetail(const char* what) const;
+	std::string   withFailDetail(const char* what) const;
 	errCode applyExposureChanged(const hgc::exposure& exp);	// 変更のあった ss/iso/fn だけを適用
 	// 露出設定を budgetMs まで kApplyRetryMs 間隔でリトライ。tries=試行回数を返す。
 	errCode applyWithRetry(const hgc::exposure& exp, int& tries, int budgetMs = kApplyMaxMs);
@@ -364,6 +441,9 @@ private:
 	void checkDeviceStatus(bool force);
 	long long   lastStatusCheckSec_ = 0;	// 前回見た時刻(epoch秒)
 	int         lastNotice_         = 0;	// 直近に出したお知らせ(同じものは繰り返さない)
+	// セッションを張れなかった理由として直近に伝えたお知らせ(2026-09-09)。取得は数秒ごとに
+	//  やり直すので、同じ理由を毎回言わないために覚えておく。開けたら 0 へ戻す。
+	int         sessionFailNotice_  = 0;
 
 	// カメラが「カードに書けない」と答えているか(2026-08-19)。
 	//  シャッターは届いているのに記録されないので、通信の問題(未検出/接続断)と取り違えない。
@@ -383,7 +463,7 @@ private:
 	struct subCam
 	{
 		device*          dev = nullptr;
-		expo::expoTables tables;
+		// テーブルは持たない。露出は段でやり取りし、丸めるのは各デバイスの中だけ(2026-09-19)。
 		bool             ready = false;	// startShooting/M固定/テーブル取得まで済んだ
 		std::string      lastFn, lastSs, lastIso;	// 差分送信用(主と同じ考え方)
 		int              failStreak = 0;	// 連続失敗数(ログを毎コマ出さないため)
@@ -405,7 +485,11 @@ private:
 	void* thread_ = nullptr;
 
 	// カメラの設定可能値テーブル(開始時に取得して構築。仕様 4.2)
-	expo::expoTables tables_;
+	// 【テーブルを持たない(2026-09-19 ユーザー決定)】設定できる値の並びと刻みはカメラの
+	//  都合なので、撮影ループは一切持たない。明るさは brightnessOf() でデバイスに聞く。
+	//  露出の一点を段で測る(主カメラ)。読めない軸は 0 として足す。
+	double brightnessOf(const hgc::exposure& e) const;
+	double brightnessOf(const class device& dev, const hgc::exposure& e) const;
 
 	// ② ev0シグモイド設定(コマ毎に太陽高度から中心bmを算出して更新)。露出計算/初期収束で共用。
 	expo::ev0Sigmoid ev0cfg_{};

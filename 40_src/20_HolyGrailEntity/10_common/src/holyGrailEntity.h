@@ -66,8 +66,10 @@ int32_t hge_setKnownCameras(const char* json, int32_t len);
 
 // スマホ役: いま所持しているカメラから台帳 JSON を作る。パスワードは暗号文で入る。
 //  エッジ役では空配列。内容が変わったかどうかの判定にもこの文字列を使ってよい。
-const char* hge_cameraBookJson(void);
-
+const char* hge_cameraBookJson(void);
+
+
+
 // 台帳の**中身の指紋**。暗号化する前の値から作るので、同じ内容なら必ず同じになる。
 //  【なぜ要るか(2026-08-29 実機で判明)】secret::encrypt は毎回ちがう nonce を使うため、
 //   同じパスワードでも暗号文が変わる。台帳 JSON をそのまま比べると毎回「変わった」と
@@ -119,6 +121,10 @@ int32_t hge_renamePlan(const char* id, const char* name);
 
 // 横向き(ランドスケープ)を設定する。画角が変わるためスケジュールを再生成し通知する。
 int32_t hge_setPlanLandscape(int32_t landscape);
+// 動画設定(2026-09-23 UI依頼)。内蔵カメラで撮ったコマから作る動画の作り方。
+//  json: {"make":bool,"size":0|1|2,"aspect":0|1|2,"fps":double,"quality":0|1|2}
+//  size 0=カメラの1/2 1=1920x1440 2=1920x1080 / aspect 0=切り取る 1=全体を入れて余りは黒 2=圧縮する
+int32_t hge_setPlanVideo(const char* json);
 
 // 同期撮影(2026-08-25)。camera で測光した露出を追加カメラへも配り全台で撮る。
 int32_t hge_setPlanSyncShot(int32_t on);
@@ -214,7 +220,11 @@ int32_t hge_getCcmDefaultsJson(char* buf, int32_t* inoutLen);
 // 露出編集用の設定可能値(文字列配列)を取得する(バッファ規約)。
 //  {"iso":["100",...],"ss":["1/8000",...,"30"],"fn":["1.4",...,"32"]}
 //  iso/ss は標準1/3段、fn は計画のレンズf範囲。スライダーの選択肢に使う。
-int32_t hge_getExpoValuesJson(char* buf, int32_t* inoutLen);
+// 撮影制御方法エディタの選択肢。範囲はカメラ/レンズ、刻みは stepPerStop(2/3/12。0=おまかせ)。
+int32_t hge_getExpoValuesJson(int32_t stepPerStop, char* buf, int32_t* inoutLen);
+// 初期値(プリセット)のエディタ用。カメラに依らない目盛り。forPhone=1: 1/12 段(ss 48〜1/50000、
+//  F1.5〜3.5、ISO20〜12800) / 0: 1/3 段(ss 30〜1/16000、F0.5〜24、ISO100〜24000)。
+int32_t hge_getPresetExpoValuesJson(int32_t forPhone, char* buf, int32_t* inoutLen);
 
 // 接続中カメラが実際に受け付ける設定値の一覧(CCAPIのability)を取得する(バッファ規約)。
 //  {"iso":[...],"ss":[...],"fn":[...]}。露出文字列フォーマットの実機検証に使う。
@@ -269,6 +279,30 @@ int32_t hge_deleteTemplate(const char* id);
 int32_t hge_renameTemplate(const char* id, const char* name);
 int32_t hge_newPlanFromTemplate(const char* id);             // 開始日=今日 / 名前は連番回避
 int32_t hge_updatePlanFromTemplate(const char* planId, const char* tplId); // 名前・時刻は据え置き
+
+
+
+// 与えた撮影計画(JSON)をひな形として保存する。**同じ名前のひな形が既にあれば何もしない**。
+//  端末ごとに中身が変わるひな形(スマホ内蔵カメラ用など)を、役割側から作るための口。
+//  一度作った後に利用者が消したものを、起動のたびに作り直さないための「あれば何もしない」。
+int32_t hge_saveTemplateJsonIfAbsent(const char* csJson);
+// 【標準ひな形(2026-09-21)】与えた撮影計画(JSON。tplKind 必須)をひな形として保存する。
+//  **同じカメラ・同じ tplKind のひな形が既にあれば何もしない**(名前は利用者が変えるので鍵にしない)。
+//  戻り: 1=作った / 0=既にある / 負=エラー(errCode)。
+int32_t hge_saveStdTemplateJson(const char* csJson);
+// 【標準ひな形の種まき(初回起動用。2026-09-21 ユーザー指示)】ミラーレス機の既定として EOS R3 を
+//  所持カメラへ強制的に入れ(RF16mm F2.8 STM を所持レンズへ入れて組み合わせる)、
+//  標準ひな形 8 種を作る。内蔵カメラのぶんは builtinCam::registerAll が同じ仕組みで作る。
+//  namesJson: {"tpl":{"star_sunrise":"…",…8 種}, "ccm":{"night":"…","sunrise":"…","sunset":"…","day":"…"}}
+//  (UI の言語。Entity は文言を持たない)。既にあるものは作らない。
+int32_t hge_seedStandardTemplates(const char* namesJson);
+
+// 【初回起動の種まき待ち(2026-09-09 ユーザー決定)】1=待っている / 0=終わった。
+//  待っている間は「計画が1件も無ければ出荷時の固定計画を作る」を止める。
+//  理由: 初回起動では位置情報の許可を聞いてから種をまく(許可=現在地 / 拒否=Tokyo)。
+//  聞いている間に計画へ触れると、内蔵カメラも場所も決まる前に FixedPlan が出来てしまい、
+//  出荷時の EOS R10・Tokyo で固定されてしまう。待っている間は一覧を空のままにする。
+int32_t hge_setSeedPending(int32_t on);
 int32_t hge_removePlace(const char* name);
 int32_t hge_setPlaceAutoInsert(const char* name, int32_t autoInsert);
 // 場所詳細(name/memo/latitude/longitude/altitude/autoInsert)を JSON で更新/新規作成。origName 一致を置換。
@@ -316,6 +350,31 @@ int32_t hge_addOwnedDetected(int32_t index);
 //  allowAdd=1: 未一致(新規)は自動追加(撮影接続/明示登録)。allowAdd=0: 追加せず ISNEW を返す(裏の発見→UIが登録可否を問う)。
 //  返り値: >=0 は区分(0=既存にassignedName反映/1=未定義枠へserial確定/2=新規)、<0 はエラー。
 int32_t hge_recordCameraIdentity(const char* model, const char* serial, const char* assignedName, int32_t allowAdd);
+// 同じだが、新規追加でも**実機を探しに行かない**。エッジ(別ネットワーク)が見つけたカメラ用。
+int32_t hge_recordRemoteCameraIdentity(const char* model, const char* serial, const char* assignedName,
+                                       int32_t allowAdd);
+
+// いま見えているカメラ(身元だけ。IPは載せない)。[{"serial","model","assignedName"}]
+//  エッジが C_CAMERA_SEEN の応答に、検索応答(edgeInfo)の "cams" が件数に使う。
+int32_t hge_seenCamerasJson(char* buf, int32_t* inoutLen);
+int32_t hge_seenCameraCount(void);
+
+// --- ISO/SS の並びを外部端末から貰う(カメラに触らない) ---
+// serial の所持カメラの並びを {"isoList":[...],"ssList":[...]} で返す(持っていなければ "{}")。
+//  外部端末が C_CAMERA_SPEC の応答に使う。
+int32_t hge_cameraListsJson(const char* serial, char* buf, int32_t* inoutLen);
+// 貰った並びを所持カメラへ入れる。**空のときだけ**入る。1=入った / 0=変わらず / <0=エラー。
+int32_t hge_applyCameraLists(const char* serial, const char* json);
+// その serial の所持カメラが並びを持っていない(=貰う価値がある)か。1=要る / 0=不要。
+int32_t hge_cameraNeedsLists(const char* serial);
+
+// このスマホの識別子("tlp-" + 32桁16進)。無ければ作って /asset/phoneId.json へ保存する。
+//  外部端末に「持ち主はこのスマホ」と覚えてもらう札。機種に依存しない乱数なので、
+//  ファイルを移せば機種変更しても同じ札を使い続けられる(**複製すると2台とも持ち主になる**)。
+int32_t hge_phoneIdJson(char* buf, int32_t* inoutLen);
+
+// UI から記録へ1行書く(原因調査用)。tag="NET" など、detail は英語。isError!=0 で ERR 扱い。
+int32_t hge_logEvent(const char* tag, const char* detail, int32_t isError);
 
 // 現在の進捗スナップショットを JSON で取得(バッファ規約)。
 //  {"state","frame","total","remainSec","elapsedSec","ccm","iso","ss","fn"}

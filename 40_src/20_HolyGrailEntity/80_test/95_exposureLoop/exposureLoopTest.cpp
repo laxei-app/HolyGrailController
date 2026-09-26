@@ -16,11 +16,179 @@
 //   実写 IMG_1092.CR3 は 1/100 で撮れており、中央値 0.359(sRGB) = 適正だった。
 
 #include "exposureMath.h"
+#include "apiBase.h"	// 露出制御はデバイスに段で聞く
+#include <deque>
 #include <cstdio>
 #include <algorithm>
 #include <cmath>
 #include <string>
 #include <vector>
+
+// ── 試験用の偽デバイス ──────────────────────────────────────────
+// 【なぜ要るか(2026-09-19)】露出制御は設定できる値の並びを持たなくなり、デバイスに
+//  「段」で聞く形になった(apiBase::expoAxes / expoResolve / expoStops)。
+//  試験もその形に合わせる。並びを持つカメラ(キヤノン)と、無段のカメラ(スマホ内蔵)を
+//  どちらもここで作れるようにしてある。
+class fakeCam : public apiBase
+{
+public:
+	struct ax
+	{
+		expo::expoKind kind = expo::expoKind::iso;
+		std::vector<std::string> value;	// 離散のときの綴り
+		std::vector<double>      b;		// 同じ並びの段(大きいほど明るい)
+		double lo = 0.0, hi = 0.0;		// 連続のときの範囲[段]
+		bool   cont = false;			// 真=無段
+	};
+	ax iso, ss, fn;
+
+	// 並び(expoTables)からそのまま作る。刻みのあるカメラの試験はこれでよい。
+	void setFromTables(const expo::expoTables& t)
+	{
+		fill(iso, t.iso, expo::expoKind::iso);
+		fill(ss,  t.ss,  expo::expoKind::ss);
+		fill(fn,  t.fn,  expo::expoKind::fn);
+	}
+	// 離散の軸にする(実数をそのまま並べる。理想の格子へ丸めないので、
+	//  f/1.5 と f/2.4 のような「格子に乗らない」並びも素直に試せる)。
+	void setDiscrete(expo::expoKind k, const std::vector<double>& reals)
+	{
+		ax& a = ref(k);
+		a = ax{}; a.kind = k; a.cont = false;
+		for (double r : reals)
+		{
+			if (!(r > 0.0)) { continue; }
+			a.value.push_back(textOf(k, r));
+			a.b.push_back(expo::stopsOfReal(r, k));
+		}
+		if (!a.b.empty())
+		{
+			a.lo = a.b[0]; a.hi = a.b[0];
+			for (double v : a.b) { if (v < a.lo) { a.lo = v; } if (v > a.hi) { a.hi = v; } }
+		}
+	}
+	// 無段の軸にする(範囲は実数で指定)。
+	void setContinuous(expo::expoKind k, double loReal, double hiReal)
+	{
+		ax& a = ref(k);
+		a = ax{}; a.kind = k; a.cont = true;
+		double l = expo::stopsOfReal(loReal, k), h = expo::stopsOfReal(hiReal, k);
+		if (h < l) { std::swap(l, h); }
+		a.lo = l; a.hi = h;
+	}
+
+	errCode init(class device&) override { return ERR_HGC_OK; }
+
+	errCode expoAxes(axisInfo& ai, axisInfo& as, axisInfo& af) override
+	{
+		info(iso, ai); info(ss, as); info(fn, af);
+		return ERR_HGC_OK;
+	}
+	errCode expoResolve(const expoPoint& want, hgc::exposure& out, expoPoint& got) override
+	{
+		out = hgc::exposure{}; got = expoPoint{};
+		resolve(iso, want.hasIso, want.iso, out.iso, got.iso, got.hasIso);
+		resolve(ss,  want.hasSs,  want.ss,  out.ss,  got.ss,  got.hasSs);
+		resolve(fn,  want.hasFn,  want.fn,  out.fn,  got.fn,  got.hasFn);
+		return ERR_HGC_OK;
+	}
+	errCode expoStops(const hgc::exposure& e, expoPoint& out) override
+	{
+		out = expoPoint{};
+		stops(iso, e.iso, out.iso, out.hasIso);
+		stops(ss,  e.ss,  out.ss,  out.hasSs);
+		stops(fn,  e.fn,  out.fn,  out.hasFn);
+		return ERR_HGC_OK;
+	}
+
+private:
+	ax& ref(expo::expoKind k)
+	{ return (k == expo::expoKind::iso) ? iso : ((k == expo::expoKind::ss) ? ss : fn); }
+
+	static void fill(ax& a, const std::vector<expo::expoEntry>& t, expo::expoKind k)
+	{
+		a = ax{}; a.kind = k; a.cont = false;
+		for (const auto& e : t)
+		{
+			a.value.push_back(e.value);
+			a.b.push_back((k == expo::expoKind::iso) ? e.apex : -e.apex);
+		}
+		if (!a.b.empty())
+		{
+			a.lo = a.b[0]; a.hi = a.b[0];
+			for (double v : a.b) { if (v < a.lo) { a.lo = v; } if (v > a.hi) { a.hi = v; } }
+		}
+	}
+	// 軸の素性。離散なら「いまの位置」は分からないので、いちばん細かい目盛りを答える
+	//  (試験に使う並びは等間隔なので実機と同じ値になる)。
+	static void info(const ax& a, axisInfo& o)
+	{
+		o = axisInfo{};
+		o.lo = a.lo; o.hi = a.hi;
+		if (a.cont || a.b.size() < 2) { o.notch = 0.0; return; }
+		std::vector<double> s = a.b;
+		std::sort(s.begin(), s.end());
+		double best = 0.0;
+		for (size_t i = 1; i < s.size(); ++i)
+		{
+			const double d = s[i] - s[i - 1];
+			if (d > 1e-6 && (best <= 0.0 || d < best)) { best = d; }
+		}
+		o.notch = best;
+	}
+	static std::string textOf(expo::expoKind k, double real)
+	{
+		char t[32];
+		if (k == expo::expoKind::iso) { std::snprintf(t, sizeof(t), "%d", (int)(real + 0.5)); return t; }
+		if (k == expo::expoKind::fn)  { std::snprintf(t, sizeof(t), "%.2f", real); return t; }
+		if (real < 0.02) { std::snprintf(t, sizeof(t), "1/%d", (int)(1.0 / real + 0.5)); return t; }
+		std::snprintf(t, sizeof(t), "%.4g", real); return t;
+	}
+	static void resolve(const ax& a, bool has, double want, std::string& outv, double& gb, bool& gh)
+	{
+		if (!has) { return; }
+		if (a.cont)
+		{
+			double v = want;
+			if (v < a.lo) { v = a.lo; }
+			if (v > a.hi) { v = a.hi; }
+			outv = textOf(a.kind, expo::realOfStops(v, a.kind));
+			const double back = expo::parseValue(outv, a.kind);
+			gb = expo::stopsOfReal((back > 0.0) ? back : expo::realOfStops(v, a.kind), a.kind);
+			gh = true;
+			return;
+		}
+		if (a.b.empty()) { return; }
+		int best = 0; double bd = 1e300;
+		for (size_t i = 0; i < a.b.size(); ++i)
+		{
+			const double d = std::fabs(a.b[i] - want);
+			if (d < bd) { bd = d; best = (int)i; }
+		}
+		outv = a.value[best]; gb = a.b[best]; gh = true;
+	}
+	static void stops(const ax& a, const std::string& v, double& b, bool& h)
+	{
+		if (v.empty()) { return; }
+		for (size_t i = 0; i < a.value.size(); ++i)
+		{	// 並びにある綴りは、その要素の段そのもの
+			if (a.value[i] == v) { b = a.b[i]; h = true; return; }
+		}
+		const double r = expo::parseValue(v, a.kind);
+		if (!(r > 0.0)) { return; }
+		b = expo::stopsOfReal(r, a.kind); h = true;
+	}
+};
+
+
+// 偽デバイスの置き場。参照が無効にならないよう deque で持つ(試験の間ずっと生かす)。
+static apiBase* fakeOf(const expo::expoTables& t)
+{
+	static std::deque<fakeCam> pool;
+	pool.emplace_back();
+	pool.back().setFromTables(t);
+	return &pool.back();
+}
 
 static int g_fail = 0;
 static void check(bool ok, const char* name, const char* detail = "")
@@ -46,26 +214,15 @@ static double linearAtExposure(double sceneRef, const hgc::exposure& e, const ex
 	if (sceneRef <= 0.0) { return -1.0; }
 	return sceneRef * std::pow(2.0, expo::brightnessStops(e, t));
 }
-// 移動平均の遅れを傾きで補う式(= captureRunner::sceneNowFromBuf)。項目7と項目8で共有する。
-static const double kSceneLeadMaxStops = 1.5;	// = captureRunner::kSceneLeadMaxStops
+// 移動平均(段の平均。先読みなし)(= captureRunner::sceneNowFromBuf)。項目7と項目8で共有する。
+//  2026-09-09 に「傾き × (n-1)/2 の先読み」を外した(デッドゾーン制御では過補正になるため)。
 static double sceneNowFromBufRef(const std::vector<double>& buf)
 {
-	std::vector<double> l;
-	for (double v : buf) { if (v > 0.0) { l.push_back(std::log2(v)); } }
-	if (l.empty()) { return -1.0; }
 	double mean = 0.0;
-	for (double v : l) { mean += v; }
-	mean /= static_cast<double>(l.size());
-	if (l.size() < 3) { return std::pow(2.0, mean); }
-	std::vector<double> d;
-	for (size_t i = 1; i < l.size(); ++i) { d.push_back(l[i] - l[i - 1]); }
-	std::sort(d.begin(), d.end());
-	const size_t m = d.size() / 2;
-	const double slope = (d.size() % 2 != 0) ? d[m] : (d[m - 1] + d[m]) / 2.0;
-	double lead = slope * (static_cast<double>(l.size()) - 1.0) / 2.0;
-	if (lead >  kSceneLeadMaxStops) { lead =  kSceneLeadMaxStops; }
-	if (lead < -kSceneLeadMaxStops) { lead = -kSceneLeadMaxStops; }
-	return std::pow(2.0, mean + lead);
+	int n = 0;
+	for (double v : buf) { if (v > 0.0) { mean += std::log2(v); ++n; } }
+	if (n == 0) { return -1.0; }
+	return std::pow(2.0, mean / static_cast<double>(n));
 }
 static const double kStep = 1.0 / 3.0;
 // 撮影中は必ず1ステップ(=1/3段)に留める(2026-07-24: 境目の多段ジャンプ禁止)。captureRunner と同値。
@@ -115,7 +272,7 @@ int main()
 		hgc::exposure limB; limB.iso = "1600"; limB.ss = "8";      limB.fn = "1.4";
 		hgc::exposure limD; limD.iso = "100";  limD.ss = "1/4000"; limD.fn = "16";
 		hgc::exposureType prio[3] = { hgc::exposureType::iso, hgc::exposureType::ss, hgc::exposureType::fn };
-		ctl.init(t, limB, limD, prio);
+		ctl.init(fakeOf(t), limB, limD, prio);
 		ctl.setCurrent(e);
 		for (int i = 0; i < 40; ++i)
 		{
@@ -136,7 +293,7 @@ int main()
 		hgc::exposure limB; limB.iso = "1600"; limB.ss = "8";      limB.fn = "1.4";
 		hgc::exposure limD; limD.iso = "100";  limD.ss = "1/4000"; limD.fn = "16";
 		hgc::exposureType prio[3] = { hgc::exposureType::iso, hgc::exposureType::ss, hgc::exposureType::fn };
-		ctl.init(t, limB, limD, prio);
+		ctl.init(fakeOf(t), limB, limD, prio);
 		ctl.setCurrent(shotExp);	// 暴走途中の 4秒 から開始
 
 		const double sceneRef = sceneRefFromMetered(metered, meterExp, t);
@@ -269,76 +426,50 @@ int main()
 		check(kFloor >= 2.27 * kStep - 1e-9, "下限は実測γの上側(2.27)×1歩=0.76段以上");
 	}
 
-	// --- 7) 移動平均の遅れを傾きで補う(2026-08-02 案C')。captureRunner::sceneNowFromBuf と同じ式 ---
+	// --- 7) 移動平均は段の平均だけ(先読みなし)。captureRunner::sceneNowFromBuf と同じ式 ---
 	//
-	// 【背景】2026-08-01 の postNight で、写真が目標より最大 1.45段 明るくなった(IMG_4627)。
-	//  内訳は ヒステリシス帯 +0.50段 と 移動平均の遅れ +0.92段 で、主犯は後者。
-	//  n点平均は (n-1)/2 コマ遅れた値になり、遅れ[段] = 変化速度[段/コマ] × (n-1)/2。
-	//  空が 0.09段/コマ の間は 0.18段 だが、夜明けが 0.46段/コマ に加速すると 0.92段 に膨らむ。
-	//  「一部の時間帯だけ明るくずれる」のはこれが理由で、一定量のヒステリシスでは説明できない。
+	// 【経緯】2026-08-02 に「傾き × (n-1)/2 の先読み」を足した(夜明け 0.46 段/コマで平均が 0.92 段
+	//  遅れ、写真が 1.45 段明るくずれた対策。当時は帯を越えたら中央まで戻す方式)。
+	//  2026-09-08 にデッドゾーン制御(縁までの差だけ毎コマ動かす)へ変えたところ、先読みが害になった:
+	//  上がり方が鈍った後も傾きが 2〜3 コマ残り、生の測光が縁の内側に入っても暗くし続ける
+	//  (2026-09-09 朝の実測: 0.4 段・6 コマ周期の往復)。2026-09-09 に先読みを外した。
 	//
 	// 【このテストが固定する仕様】
-	//  ・一定速度の変化では遅れが 0 になること
-	//  ・1コマだけの外れ値(車のライト等)に対し、単純平均と同程度にしか反応しないこと
-	//    (最小二乗の傾きだと3倍に過剰反応し、消えた後に逆振れする。だから差分の中央値を使う)
-	//  ・外挿量は上限で頭打ちになること
+	//  ・平均は「バッファの最小〜最大」の中に収まる(先読みで真値を追い越さない)
+	//  ・上がり方が止まった直後でも、最後の値より明るい側へ出ない(過補正の元を作らない)
+	//  ・1コマだけの外れ値には 1/n しか反応しない(雲・車のライトの吸収)
+	//  ・有効な値が無ければ -1
 	{
-		const double kLeadMax = kSceneLeadMaxStops;
-
-		// 実装と同じ: 段(log2)で平均し、差分の中央値を傾きとして (n-1)/2 コマ分だけ外挿する
 		auto sceneNow = [](const std::vector<double>& buf) { return sceneNowFromBufRef(buf); };
-		auto plainAvg = [](const std::vector<double>& buf)
-		{
-			double a = 0.0;
-			for (double v : buf) { a += v; }
-			return a / static_cast<double>(buf.size());
-		};
 		auto stops = [](double a, double b) { return std::log2(a / b); };
 
-		// ① 一定速度で明るくなる(夜明け 0.30段/コマ。上限0.5段に当たらない範囲で見る)
+		// ① 一定速度で明るくなる: 平均は (n-1)/2 コマ遅れるが、最新値を追い越さない
 		{
-			const double rate = 0.46;	// 実測の夜明けの最速(2026-08-01)
+			const double rate = 0.46;
 			std::vector<double> buf;
 			for (int i = 0; i < 5; ++i) { buf.push_back(std::pow(2.0, rate * i)); }
-			const double truth = std::pow(2.0, rate * 4);	// 最新コマの真値
-			checkNear(stops(sceneNow(buf), truth), 0.0, 0.02, "一定速度の変化で遅れが消える");
-			// 単純平均は (n-1)/2 コマ分だけ遅れる
-			checkNear(stops(truth, plainAvg(buf)), rate * 2.0, 0.20, "単純平均は2コマ分遅れる(比較)");
+			const double truth = std::pow(2.0, rate * 4);
+			checkNear(stops(truth, sceneNow(buf)), rate * 2.0, 1e-9, "一定速度の変化では 2 コマ分遅れる(先読みしない)");
+			check(sceneNow(buf) <= truth, "最新値より明るい側へ出ない");
 		}
 
-		// ② 1コマだけ2段明るい(車のライト)。単純平均と同程度までしか反応しないこと
+		// ② 上がり方が止まった直後(明るくなって平坦に転じた)。先読み有りなら平坦の値を
+		//   +0.4 段ほど追い越していた。平均は平坦の値を越えない。
 		{
-			std::vector<double> buf = { 1.0, 1.0, 4.0, 1.0, 1.0 };	// 中央のコマだけ +2段
-			const double got   = stops(sceneNow(buf),  1.0);
-			const double plain = stops(plainAvg(buf), 1.0);
-			char d[160];
-			std::snprintf(d, sizeof(d), "(推定=%+.2f段 単純平均=%+.2f段)", got, plain);
-			check(got <= plain + 0.05, "一過性の光に過剰反応しない(単純平均以下)", d);
-			check(got > 0.0, "一過性の光を完全に無視はしない", d);
+			std::vector<double> buf = { 1.0, 1.3, 1.7, 2.0, 2.0 };
+			const double got = sceneNow(buf);
+			char d[120]; std::snprintf(d, sizeof(d), "(推定=%+.2f段。平坦の値=+1.00段)", stops(got, 1.0));
+			check(got <= 2.0 + 1e-9, "上がり方が止まった直後に真値を追い越さない", d);
 		}
 
-		// ③ 光が消えた後に逆振れしない(外れ値がバッファから抜ける途中)
+		// ③ 1コマだけ2段明るい(車のライト): 5 点平均なので +0.4 段まで
 		{
-			std::vector<double> buf = { 4.0, 1.0, 1.0, 1.0, 1.0 };	// 古い側に外れ値
+			std::vector<double> buf = { 1.0, 1.0, 4.0, 1.0, 1.0 };
 			const double got = stops(sceneNow(buf), 1.0);
-			char d[120];
-			std::snprintf(d, sizeof(d), "(推定=%+.2f段)", got);
-			check(got > -0.10, "外れ値が抜けるときに暗い側へ逆振れしない", d);
+			checkNear(got, 0.40, 1e-9, "一過性の光には 1/n(0.4 段)だけ反応する");
 		}
 
-		// ④ 外挿量の頭打ち(急変時に行き過ぎない)
-		{
-			const double rate = 2.0;	// 2段/コマ の極端な変化
-			std::vector<double> buf;
-			for (int i = 0; i < 5; ++i) { buf.push_back(std::pow(2.0, rate * i)); }
-			double mean = 0.0;
-			for (double v : buf) { mean += std::log2(v); }
-			mean /= 5.0;
-			checkNear(stops(sceneNow(buf), std::pow(2.0, mean)), kLeadMax, 1e-6,
-			          "外挿量は上限(1.5段)で頭打ちになる");
-		}
-
-		// ⑤ 有効な値が無ければ -1(測光失敗が続いた場合に壊れない)
+		// ④ 有効な値が無ければ -1(測光失敗が続いた場合に壊れない)
 		{
 			std::vector<double> buf = { -1.0, 0.0, -1.0 };
 			check(sceneNow(buf) < 0.0, "有効な測光値が無ければ無効を返す");
@@ -433,8 +564,9 @@ int main()
 			check(!pinned, "露出が動いていないコマでは張り付きと判定しない");
 		}
 
-		// ⑥ 張り付き中は外挿しないこと。captureRunner は検出コマでバッファを捨てるので、
-		//    偽のトレンド(絞っているのに明るくなり続ける)を増幅しない。
+		// ⑥ 張り付き中の列を増幅しないこと。captureRunner は検出コマでバッファを捨てる。
+		//    (2026-09-09 に先読みを外したので、捨てなくても平均が上振れすることは無くなった。
+		//     捨てる処理は「張り付きで測った値を平均に混ぜない」ために残している)
 		{
 			// 暴走中の測光値: 絞っているのに毎コマ +0.07段 ずつ上がっていた
 			std::vector<double> bad;
@@ -442,13 +574,13 @@ int main()
 			double mean = 0.0;
 			for (double v : bad) { mean += std::log2(v); }
 			mean /= 5.0;
-			// 捨てずに外挿すると平均より 0.14段 明るい側へ行き過ぎる(=さらに絞る方向)
+			// 平均は列の平均そのもの。先読みで上振れしない。
 			const double leaked = std::log2(sceneNowFromBufRef(bad)) - mean;
-			check(leaked > 0.10, "張り付き列をそのまま渡すと外挿が上振れする(捨てる根拠)");
-			// 検出コマで捨てた後は1点だけ。傾きは使われない。
+			checkNear(leaked, 0.0, 1e-9, "張り付き列を渡しても平均を追い越さない(先読みなし)");
+			// 検出コマで捨てた後は1点だけ。
 			std::vector<double> one = { bad.back() };
 			checkNear(std::log2(sceneNowFromBufRef(one)), std::log2(bad.back()), 1e-9,
-			          "捨てた直後は1点のみ=外挿されない");
+			          "捨てた直後は1点のみ");
 		}
 	}
 
@@ -943,8 +1075,8 @@ int main()
 		// ① 実測の構成: 1536KB / 当日以外 3+72+394+661KB / 当日と他で約100KB使用
 		{
 			fsSim s{ 1536ULL * 1024, (3 + 72 + 394 + 661 + 100) * 1024ULL,
-			         { {"hg_2026-08-02.log", 3 * 1024ULL}, {"hg_2026-08-05.log", 72 * 1024ULL},
-			           {"hg_2026-08-06.log", 394 * 1024ULL}, {"hg_2026-08-07.log", 661 * 1024ULL} } };
+			         { {"tlp_2026-08-02.log", 3 * 1024ULL}, {"tlp_2026-08-05.log", 72 * 1024ULL},
+			           {"tlp_2026-08-06.log", 394 * 1024ULL}, {"tlp_2026-08-07.log", 661 * 1024ULL} } };
 			const unsigned long long before = s.total - s.used;
 			s.prune(KEEP_FREE, 4, true);
 			const unsigned long long after = s.total - s.used;
@@ -978,17 +1110,17 @@ int main()
 		// ④ 必要な分だけ消す(消しすぎない)。1件消せば足りるなら1件で止まる。
 		{
 			fsSim s{ 1000 * 1024ULL, 900 * 1024ULL,
-			         { {"hg_2026-01-01.log", 300 * 1024ULL}, {"hg_2026-01-02.log", 300 * 1024ULL} } };
+			         { {"tlp_2026-01-01.log", 300 * 1024ULL}, {"tlp_2026-01-02.log", 300 * 1024ULL} } };
 			s.prune(300 * 1024ULL, 4, true);	// 空き100KB → 1件(300KB)消せば400KBで足りる
 			check(s.removed == 1, "1件で足りるなら1件で止まる(消しすぎない)");
 			check(s.total - s.used >= 300 * 1024ULL, "消したあとは条件を満たす");
-			check(s.others[1].first == "hg_2026-01-02.log", "残るのは新しい側");
+			check(s.others[1].first == "tlp_2026-01-02.log", "残るのは新しい側");
 		}
 
 		// ⑤ 足りなければ足りるまで消す(1件では届かない場合)
 		{
 			fsSim s{ 1000 * 1024ULL, 900 * 1024ULL,
-			         { {"hg_2026-01-01.log", 300 * 1024ULL}, {"hg_2026-01-02.log", 300 * 1024ULL} } };
+			         { {"tlp_2026-01-01.log", 300 * 1024ULL}, {"tlp_2026-01-02.log", 300 * 1024ULL} } };
 			s.prune(500 * 1024ULL, 4, true);	// 1件(400KB)では届かないので2件目まで
 			check(s.removed == 2, "1件で足りなければ次の古い方も消す");
 			check(s.total - s.used >= 500 * 1024ULL, "消したあとは条件を満たす");
@@ -1014,13 +1146,13 @@ int main()
 		hgc::exposure carry; carry.iso = "1600"; carry.ss = "1/125"; carry.fn = "1.4";
 
 		expo::exposureCtl ctl;
-		ctl.init(tb, limBright, limDark, prio);
+		ctl.init(fakeOf(tb), limBright, limDark, prio);
 		ctl.setCurrent(carry);
 		const double b0 = expo::brightnessStops(ctl.current(), tb);
 
 		// 一気に飛ぶ従来方式なら、どこへ行き着くか(=寄せ先)
 		expo::exposureCtl want;
-		want.init(tb, limBright, limDark, prio);
+		want.init(fakeOf(tb), limBright, limDark, prio);
 		want.setCurrent(initial);
 		want.applyStops(b0 - expo::brightnessStops(want.current(), tb));
 		const hgc::exposure dest = want.current();
@@ -1033,7 +1165,7 @@ int main()
 		double prevFn = expo::parseValue(ctl.current().fn, expo::expoKind::fn);
 		while (frames < 200)
 		{
-			if (!expo::migrateToward(ctl, want, tb, initial)) { break; }
+			if (!expo::migrateToward(ctl, want, initial, ctl.minStepStops())) { break; }
 			++frames;
 			if (std::fabs(expo::brightnessStops(ctl.current(), tb) - b0) > 1e-6) { brightKept = false; }
 			const double nowFn = expo::parseValue(ctl.current().fn, expo::expoKind::fn);
@@ -1049,7 +1181,7 @@ int main()
 		      "最後は一気に飛んだ場合と同じ配分に落ち着く", dm);
 		// f1.4→f11 は 6段。1コマ1目盛り(1/3段)なので18コマ。15秒周期なら約4分半。
 		check(frames == 18, "6段の組み替えに18コマかかる(1コマ1目盛り)", dm);
-		check(expo::migrateToward(ctl, want, tb, initial) == false,
+		check(expo::migrateToward(ctl, want, initial, ctl.minStepStops()) == false,
 		      "合っていれば何も動かさない(自動露出の邪魔をしない)");
 	}
 
@@ -1102,6 +1234,1120 @@ int main()
 		// 明るい側は変えていない。日中の目標は 18% のまま。
 		cfg.bm = 0.0;
 		checkNear(expo::ev0LinearFromBv(20.0, cfg), 0.18, 0.0005, "明るい側の目標は18%のまま(日中に影響なし)");
+	}
+
+	// --- 露出を動かす速さの上限[段/秒](2026-09-05 仕様変更) ---
+	//  captureRunner は依存が多く単体で組めないので、算数の部分だけを同じ式でなぞる。
+	//  ここが合っていれば「15秒周期なら従来と同じ」「長い周期ほど速く動ける」が担保される。
+	{
+		constexpr double kRate = (1.0 / 3.0) / 15.0;	// captureRunner::kMaxExposureRateStopsPerSec
+		auto frameAllow = [kRate](double sec) { return kRate * ((sec > 0.0) ? sec : 15.0); };
+
+		checkNear(frameAllow(15.0), 1.0 / 3.0, 1e-9, "15秒周期は従来と同じ 1/3段/コマ");
+		checkNear(frameAllow(60.0), 4.0 / 3.0, 1e-9, "60秒周期は 4/3段/コマまで動ける");
+		checkNear(frameAllow( 9.0), 0.2,       1e-9, "9秒周期は 0.2段/コマ(従来より遅い)");
+
+		// 1目盛りの大きさ。キヤノン機の標準テーブルは 1/3 段。
+		expo::exposureCtl c;
+		hgc::exposure noLim{};
+		const hgc::exposureType pri[hgc::exposureTypeNum] =
+			{ hgc::exposureType::iso, hgc::exposureType::ss, hgc::exposureType::fn };
+		c.init(fakeOf(t), noLim, noLim, pri);
+		hgc::exposure e0; e0.iso = "800"; e0.ss = "1/60"; e0.fn = "4.0";
+		c.setCurrent(e0);
+		checkNear(c.minStepStops(), 1.0 / 3.0, 1e-6, "標準テーブルの1目盛りは 1/3段");
+
+		// captureRunner と同じ手順で回す。貯金と「1コマの上限」は別物である。
+		//  1コマの上限 = max(1目盛り, 1コマの許容) … 動きの粗さはこれで決まる
+		//  貯金        = 長い目で見た速さを保つためのもの。上限の2倍で頭打ち
+		auto run = [&](double cycle, double step, int frames, int quiet, int& maxSteps, double& movedTotal)
+		{
+			const double per   = frameAllow(cycle);
+			const double limit = (per > step) ? per : step;
+			const double cap   = limit * 2.0;
+			double budget = 0.0;
+			maxSteps = 0; movedTotal = 0.0;
+			for (int i = 0; i < frames; ++i)
+			{
+				budget += per; if (budget > cap) { budget = cap; }
+				if (i < quiet) { continue; }	// 場面が動かず露出を変えないコマ
+				const double room = (budget < limit) ? budget : limit;
+				const int    n    = static_cast<int>((room + 1e-9) / step);
+				if (n > maxSteps) { maxSteps = n; }
+				movedTotal += n * step; budget -= n * step;
+			}
+		};
+
+		int maxN = 0; double moved = 0.0;
+
+		// 15秒周期・1/3段刻み: 毎コマきっかり1目盛り(従来の挙動)。
+		run(15.0, 1.0 / 3.0, 10, 0, maxN, moved);
+		check(maxN == 1, "15秒周期は1コマ1目盛りを超えない(従来の挙動と一致)");
+
+		// 【実機で出た後退の再現(2026-09-05)】静かなコマが続いた後でも1目盛りを超えない。
+		//  直す前は7コマ静止したあと 0.667段(2目盛り)動いていた。
+		run(15.0, 1.0 / 3.0, 12, 7, maxN, moved);
+		{
+			char d[96]; std::snprintf(d, sizeof(d), "(静止7コマの後の最大 %d目盛り)", maxN);
+			check(maxN == 1, "静かな時間の後でも1コマ1目盛りに留まる", d);
+		}
+
+		// 9秒周期・1/3段刻み: 1コマは1目盛りまで。ただし動くコマが間引かれ、
+		//  長い目で見た速さは上限どおりになる。
+		run(9.0, 1.0 / 3.0, 40, 0, maxN, moved);
+		{
+			const double rate = moved / (40 * 9.0);
+			char d[128];
+			std::snprintf(d, sizeof(d), "(40コマ360秒で %.3f段 = %.4f段/秒。1コマ最大%d目盛り)",
+			              moved, rate, maxN);
+			check(maxN == 1, "9秒周期でも1コマ1目盛りを超えない", d);
+			check(rate > kRate * 0.90 && rate <= kRate * 1.02, "9秒周期でも長い目で見た速さは上限どおり", d);
+		}
+
+		// 60秒周期・1/12段刻み(内蔵カメラ想定): 1コマに16目盛り(=4/3段)まで。
+		run(60.0, 1.0 / 12.0, 5, 0, maxN, moved);
+		{
+			char d[96]; std::snprintf(d, sizeof(d), "(1コマ %d目盛り = %.3f段)", maxN, maxN / 12.0);
+			check(maxN == 16, "60秒周期・1/12段刻みは1コマ16目盛り(=4/3段)", d);
+		}
+	}
+
+	// --- 目盛りの刻みはデバイスが答える(2026-09-07) ---
+	//  【背景】共通部分が APEX を 1/3 段に決め打ちで揃えていたため、内蔵カメラの 1/12 段の目盛りが
+	//   4 つずつ同じ APEX に潰れ、1 目盛り動かしても明るさの計算が 0 段のままだった。さらに 1 秒未満を
+	//   「1/整数」で書いた文字列から実数を読み戻していたので、1/3 秒付近の升目が 0.59 段まで粗くなり、
+	//   夕方の露出がのこぎり波(0.7〜1.0 段)になった。刻みと論理値をデバイスから受け取る形にした。
+	{
+		std::printf("--- 目盛りの刻みをデバイスから貰う(1/12 段) ---\n");
+		const int n = 37;	// 0.25 秒から 3 段ぶん(1/12 段 × 36)
+		cmdt::shotRange r;
+		r.stepStops = 1.0 / 12.0;
+		for (int k = 0; k < n; ++k)
+		{
+			const double sec = 0.25 * std::pow(2.0, k / 12.0);
+			char b[32]; std::snprintf(b, sizeof(b), "%.3g", sec);	// 表示用(有効数字 3 桁)
+			r.ss.push_back(b); r.ssReal.push_back(sec);
+		}
+		r.iso.push_back("100"); r.isoReal.push_back(100.0);
+		r.fNum.push_back("2");  r.fnReal.push_back(2.0);
+		const expo::expoTables t = expo::tablesFromRange(r);
+		check(t.stepStops == 1.0 / 12.0, "テーブルがデバイスの刻みを覚える");
+		check(static_cast<int>(t.ss.size()) == n, "1/12 段の目盛りが 1 つも潰れない");
+		bool realKept = true, stepOk = true, brightOk = true;
+		for (int k = 0; k < n; ++k)
+		{
+			if (t.ss[k].real != r.ssReal[k]) { realKept = false; }	// 論理値は文字列を経由しない
+			if (k > 0)
+			{
+				const double d = std::fabs(t.ss[k].apex - t.ss[k - 1].apex);
+				if (std::fabs(d - 1.0 / 12.0) > 1e-9) { stepOk = false; }
+				hgc::exposure e0; e0.iso = "100"; e0.fn = "2"; e0.ss = t.ss[k - 1].value;
+				hgc::exposure e1 = e0; e1.ss = t.ss[k].value;
+				const double db = expo::brightnessStops(e1, t) - expo::brightnessStops(e0, t);
+				if (std::fabs(db - 1.0 / 12.0) > 1e-9) { brightOk = false; }
+			}
+		}
+		check(realKept, "real はデバイスの論理値そのもの(文字列から読み戻さない)");
+		check(stepOk,   "隣り合う目盛りの APEX 差がきっかり 1/12 段");
+		check(brightOk, "brightnessStops も 1 目盛り = 1/12 段");
+		{
+			expo::exposureCtl ctl;
+			const hgc::exposure noLim{};
+			const hgc::exposureType pri[hgc::exposureTypeNum] =
+				{ hgc::exposureType::ss, hgc::exposureType::iso, hgc::exposureType::fn };
+			ctl.init(fakeOf(t), noLim, noLim, pri);
+			hgc::exposure cur; cur.iso = "100"; cur.fn = "2"; cur.ss = t.ss[12].value;
+			ctl.setCurrent(cur);
+			check(std::fabs(ctl.minStepStops() - 1.0 / 12.0) < 1e-9, "exposureCtl の 1 目盛りが 1/12 段");
+		}
+		// 刻みを言わない(=キヤノンの 1/3 段)と、同じ並びは 1/3 段に潰れる。これが以前の内蔵カメラの姿。
+		{
+			cmdt::shotRange r3 = r; r3.stepStops = 1.0 / 3.0; r3.ssReal.clear();
+			const expo::expoTables t3 = expo::tablesFromRange(r3);
+			int distinct = 1;
+			for (int k = 1; k < static_cast<int>(t3.ss.size()); ++k)
+			{ if (std::fabs(t3.ss[k].apex - t3.ss[k - 1].apex) > 1e-9) { ++distinct; } }
+			check(distinct == 10, "1/3 段のまま作ると 37 目盛りが 10 段階に潰れる(修正前の再現)");
+		}
+		// キヤノンの表示値は従来どおり 1/3 段に揃う(0.3 秒=1/3 秒、1/125=1/128)。
+		{
+			cmdt::shotRange rc;
+			rc.ss = { "1/125", "1/100", "1/80", "0.3", "0.4", "0.5" };
+			rc.iso = { "100" }; rc.fNum = { "2" };
+			const expo::expoTables tc = expo::tablesFromRange(rc);
+			bool third = true;	// どの目盛りも 1/3 段の格子の上(0.3 秒は 1/3 秒として 1.667 に揃う)
+			for (const auto& e : tc.ss)
+			{
+				const double g = e.apex * 3.0;
+				if (std::fabs(g - std::round(g)) > 1e-9) { third = false; }
+			}
+			check(tc.stepStops == 1.0 / 3.0 && third, "刻みを言わないキヤノンは従来どおり 1/3 段");
+		}
+	}
+
+	// --- デッドゾーン制御: 帯からはみ出た分だけ動かす(2026-09-08 ユーザー決定) ---
+	//  【背景】帯(±0.5 段)を越えた瞬間に中央までの差を一度に埋めていたため、夕方の減光で
+	//   0.5〜0.7 段ののこぎり波が出た(内蔵カメラ 09-08 実測・60 秒周期)。縁までの差だけ動かせば、
+	//   場面の変化量ぶんずつ小刻みに追従し、明るさは縁(目標−帯/2)に沿って安定する。
+	{
+		std::printf("--- デッドゾーン制御(はみ出た分だけ) ---\n");
+		// 模擬: 場面の明るさ scene[段]が毎コマ drift だけ変わる。露出 expo[段]。写る明るさ = scene + expo。
+		//  目標 0、帯 band。1 コマの上限 cap[段]。目盛り notch[段]。
+		auto run = [&](double notch, double band, double cap, int frames, double drift,
+		               int cloudAt, int cloudLen, double cloudDepth,
+		               double& maxMove, double& maxErr, double& minErr, int& moves)
+		{
+			double scene = 0.0, expo = 0.0;
+			maxMove = 0.0; maxErr = -1e9; minErr = 1e9; moves = 0;
+			for (int f = 0; f < frames; ++f)
+			{
+				scene += drift;
+				double s = scene;
+				if (f >= cloudAt && f < cloudAt + cloudLen) { s += cloudDepth; }	// 雲(一時的)
+				const double shown = s + expo;	// 写る明るさ[段](0=目標)
+				const double lin   = std::pow(2.0, shown);
+				const double linD  = std::pow(2.0, -band / 2.0), linU = std::pow(2.0, band / 2.0);
+				const double need  = expo::excessStops(lin, linD, linU);
+				int n = static_cast<int>(std::fabs(need) / notch + 0.5);
+				const int maxN = static_cast<int>((cap + 1e-9) / notch);
+				if (n > maxN) { n = maxN; }
+				const double mv = (need < 0 ? -1.0 : 1.0) * n * notch;
+				if (n > 0) { expo += mv; ++moves; if (std::fabs(mv) > maxMove) { maxMove = std::fabs(mv); } }
+				if (f >= 10 && !(f >= cloudAt && f < cloudAt + cloudLen + 3))
+				{	// 立ち上がりと雲の最中は除いて、写る明るさの範囲を測る
+					const double e = s + expo;
+					if (e > maxErr) { maxErr = e; }
+					if (e < minErr) { minErr = e; }
+				}
+			}
+		};
+		double maxMove, maxErr, minErr; int moves;
+		// 1) 内蔵カメラ想定: 1/12 段・帯 1.0・60 秒周期(上限 4/3 段)・夕方 −0.1 段/コマ で 60 コマ
+		run(1.0 / 12.0, 1.0, 4.0 / 3.0, 60, -0.10, 999, 0, 0.0, maxMove, maxErr, minErr, moves);
+		{
+			char d[160]; std::snprintf(d, sizeof(d), "(最大移動 %.3f段 / 写る明るさ %.2f〜%.2f段 / 動いたコマ %d)", maxMove, minErr, maxErr, moves);
+			check(maxMove <= 2.0 / 12.0 + 1e-9, "減光中の 1 コマの移動は 2 目盛り以下(一気に戻さない)", d);
+			check(minErr >= -0.5 - 1.0 / 12.0 && maxErr <= -0.5 + 1.0 / 12.0, "明るさは縁(−0.5 段)に沿って ±1 目盛りに収まる", d);
+		}
+		// 2) 雲: 帯の中に収まる一時的な暗転(−0.3 段 × 3 コマ)には反応しない
+		run(1.0 / 12.0, 1.0, 4.0 / 3.0, 40, 0.0, 15, 3, -0.3, maxMove, maxErr, minErr, moves);
+		{
+			char d[96]; std::snprintf(d, sizeof(d), "(動いたコマ %d)", moves);
+			check(moves == 0, "帯の中の一時的な暗転(−0.3 段)には動かない", d);
+		}
+		// 3) 雲: 帯を越える暗転(−0.8 段 × 5 コマ)は「はみ出た分」だけ動き、晴れたら同じだけ戻る
+		run(1.0 / 12.0, 1.0, 4.0 / 3.0, 40, 0.0, 15, 5, -0.8, maxMove, maxErr, minErr, moves);
+		{
+			char d[128]; std::snprintf(d, sizeof(d), "(最大移動 %.3f段 / 動いたコマ %d)", maxMove, moves);
+			check(maxMove <= 0.3 + 1.0 / 24.0 + 1e-9, "帯を越える暗転でも動くのははみ出た分(0.3 段+半目盛り)だけ", d);
+			check(moves == 1, "動くのは暗転の入りの 1 回だけ(晴れた後は帯の中なので戻さない)", d);
+		}
+		// 4) キヤノン想定: 1/3 段・帯 0.8・15 秒周期(上限 1/3 段)・夕方 −0.05 段/コマ
+		run(1.0 / 3.0, 0.8, 1.0 / 3.0, 120, -0.05, 999, 0, 0.0, maxMove, maxErr, minErr, moves);
+		{
+			char d[160]; std::snprintf(d, sizeof(d), "(最大移動 %.3f段 / 写る明るさ %.2f〜%.2f段 / 動いたコマ %d)", maxMove, minErr, maxErr, moves);
+			check(maxMove <= 1.0 / 3.0 + 1e-9, "キヤノンは 1 コマ 1 目盛り(従来どおり)", d);
+			check(minErr >= -0.4 - 1.0 / 6.0 - 1e-9 && maxErr <= -0.4 + 1.0 / 6.0 + 1e-9, "キヤノンは縁(−0.4 段)に沿って ±半目盛りに収まる", d);
+		}
+		// 5) 純粋関数そのもの
+		check(expo::excessStops(1.0, 0.7, 1.4) == 0.0, "帯の中は 0");
+		check(std::fabs(expo::excessStops(0.5, 0.7, 1.4) - std::log2(0.7 / 0.5)) < 1e-12, "下にはみ出た分は +(明るく)");
+		check(std::fabs(expo::excessStops(2.0, 0.7, 1.4) - std::log2(1.4 / 2.0)) < 1e-12, "上にはみ出た分は −(暗く)");
+	}
+
+	// --- 露出ステップをカメラの答えから見分ける(2026-09-19) ---
+	//  【背景】キヤノンはカメラ本体の設定で ss を 1/3 段と 1/2 段、ISO を 1/3 段と 1 段に切り替えられる。
+	//   1/3 段と決め打っていたため、1/2 段のカメラでは APEX を 1/3 段の格子へ丸めてしまい、
+	//   1 目盛りあたり 0.17 段ずれた明るさで計算していた(実機 EOS R10 の設定で確認)。
+	{
+		std::printf("--- 露出ステップの見分け ---\n");
+		const std::vector<std::string> third = { "1/4000","1/3200","1/2500","1/2000","1/1600","1/1250","1/1000","1/800","1/640","1/500" };
+		const std::vector<std::string> half  = { "1/4000","1/3000","1/2000","1/1500","1/1000","1/750","1/500","1/350","1/250","1/180",
+		                                         "1/125","1/90","1/60","1/45","1/30","1/20","1/15","1/10","1/8","1/6","1/4","1/3","1/2",
+		                                         "0.7","1","1.5","2","3","4","6","8","10","15","20","30" };
+		const std::vector<std::string> iso3 = { "100","125","160","200","250","320","400","500","640","800" };
+		const std::vector<std::string> iso1 = { "100","200","400","800","1600","3200","6400","12800","25600" };
+		checkNear(expo::detectStepStops(third, expo::expoKind::ss),  1.0 / 3.0, 1e-9, "ss 1/3 段を見分ける");
+		checkNear(expo::detectStepStops(half,  expo::expoKind::ss),  0.5,       1e-9, "ss 1/2 段を見分ける");
+		checkNear(expo::detectStepStops(iso3,  expo::expoKind::iso), 1.0 / 3.0, 1e-9, "ISO 1/3 段を見分ける");
+		checkNear(expo::detectStepStops(iso1,  expo::expoKind::iso), 1.0,       1e-9, "ISO 1 段を見分ける");
+		// Bulb のような例外が混ざっても中央値なので引きずられない
+		std::vector<std::string> withBulb = half; withBulb.push_back("Bulb");
+		checkNear(expo::detectStepStops(withBulb, expo::expoKind::ss), 0.5, 1e-9, "Bulb が混ざっても 1/2 段と見分ける");
+		// 値が少なすぎる(内蔵カメラの固定F値など)ときは 0 を返す = 呼び出し側の既定に任せる
+		std::vector<std::string> one = { "2.2" };
+		check(expo::detectStepStops(one, expo::expoKind::fn) == 0.0, "値が1つだけなら見分けない(0)");
+
+		// 1/2 段と 1 段を軸ごとに伝えれば、隣接の APEX 差はきっかりその値になる
+		{
+			cmdt::shotRange r;
+			r.ss   = half; r.ssStep  = expo::detectStepStops(half, expo::expoKind::ss);
+			r.iso  = iso1; r.isoStep = expo::detectStepStops(iso1, expo::expoKind::iso);
+			r.fNum = { "2.8" };
+			const expo::expoTables t = expo::tablesFromRange(r);
+			bool okSs = true, okIso = true;
+			for (size_t i = 1; i < t.ss.size(); ++i)
+			{ if (std::fabs(std::fabs(t.ss[i].apex - t.ss[i - 1].apex) - 0.5) > 1e-9) { okSs = false; } }
+			for (size_t i = 1; i < t.iso.size(); ++i)
+			{ if (std::fabs(std::fabs(t.iso[i].apex - t.iso[i - 1].apex) - 1.0) > 1e-9) { okIso = false; } }
+			check(okSs,  "1/2 段のカメラでは ss の 1 目盛りがきっかり 0.5 段になる");
+			check(okIso, "1 段のカメラでは ISO の 1 目盛りがきっかり 1.0 段になる");
+		}
+		// 決め打ち(1/3 段)のままだと 1/2 段の並びが歪む = 修正前の再現
+		{
+			cmdt::shotRange r3; r3.ss = half; r3.iso = iso1; r3.fNum = { "2.8" };	// 軸ごとの指定なし=既定 1/3 段
+			const expo::expoTables t3 = expo::tablesFromRange(r3);
+			bool mixed = false;
+			for (size_t i = 1; i < t3.ss.size(); ++i)
+			{ if (std::fabs(std::fabs(t3.ss[i].apex - t3.ss[i - 1].apex) - 0.5) > 1e-9) { mixed = true; } }
+			check(mixed, "1/3 段と決め打つと 1/2 段の並びが歪む(修正前の再現)");
+		}
+	}
+
+	// --- 帯の下限はデバイスの1目盛りに比例させる(2026-09-19 ユーザー決定) ---
+	//  1目盛り動かすと必要量より最大1目盛りぶん行き過ぎる。その行き過ぎが帯に収まらないと
+	//  次のコマで戻されて往復になる。条件は「帯の半分 > 1目盛り」。
+	{
+		std::printf("--- 帯の下限は1目盛りに比例 ---\n");
+		const double kPerNotch = 2.4;	// = captureRunner::kBandPerNotch
+		const double kFloorB   = 0.10;	// = captureRunner::kBandFloorStops
+		auto eff = [&](double raw, double notch) {
+			const double n = (notch > 0.0) ? notch : (1.0 / 3.0);
+			double lo = kPerNotch * n;
+			if (lo < kFloorB) { lo = kFloorB; }
+			return (raw > lo) ? raw : lo;
+		};
+		checkNear(eff(0.0, 1.0 / 3.0),   0.80,   1e-9, "1/3 段のカメラは従来どおり 0.8 段");
+		checkNear(eff(0.5, 1.0 / 3.0),   0.80,   1e-9, "朝日夕日の 0.5 も 1/3 段なら 0.8 段(従来と同じ)");
+		checkNear(eff(1.0, 1.0 / 3.0),   1.00,   1e-9, "日中の 1.0 はそのまま(下限より広い)");
+		checkNear(eff(0.0, 0.5),         1.20,   1e-9, "1/2 段のカメラは 1.2 段");
+		checkNear(eff(0.0, 1.0 / 12.0),  0.20,   1e-9, "1/12 段の内蔵カメラは 0.2 段");
+		checkNear(eff(0.0, 1.0 / 100.0), kFloorB, 1e-9, "極端に細かいデバイスでも下限 0.1 段は残す");
+		check(eff(0.0, 1.0 / 3.0) / 2.0 > 1.0 / 3.0, "1/3 段: 帯の半分が1目盛りより広い");
+		check(eff(0.0, 0.5) / 2.0 > 0.5,             "1/2 段: 帯の半分が1目盛りより広い");
+	}
+
+	// --- 無段階(ステップレス)露出制御(2026-09-19 ユーザー決定) ---
+	//  【背景】露出制御がカメラの性能に合わせて動いていた。テーブルの目盛りを 1 つずつ踏むので、
+	//   ・キヤノン本体を 1/2 段設定にすると 1 歩が 0.5 段になる
+	//   ・もともと無段階なスマホ内蔵カメラの ss まで 1/12 段に落ちる(フリッカーの元)
+	//   ・applyStops が 1/3 段に丸めた歩数で動くので、1/12 段のテーブルでは要求の 1/4 しか動かない
+	//  いまは内部を無段階(実数)で持ち、上下限だけを守る。目盛りへ丸めるのは current() を
+	//  作るとき(カメラへ送る直前)だけで、丸めた誤差は内部に残さない。
+	{
+		std::printf("--- 無段階(ステップレス)制御 ---\n");
+		const hgc::exposure noLim{};
+		const hgc::exposureType pri[hgc::exposureTypeNum] =
+			{ hgc::exposureType::iso, hgc::exposureType::ss, hgc::exposureType::fn };
+
+		// ① 内部は無段階・外へ出す姿だけ目盛りに丸める(キヤノンの 1/3 段テーブル)
+		{
+			const expo::expoTables t = expo::standardTables(1.4, 22.0);
+			expo::exposureCtl c; c.init(fakeOf(t), noLim, noLim, pri);
+			hgc::exposure e0; e0.iso = "800"; e0.ss = "1/60"; e0.fn = "4.0";
+			c.setCurrent(e0);
+			const double b0 = c.brightness();
+			const hgc::exposure s0 = c.current();
+
+			c.moveStops(0.10);
+			checkNear(c.brightness(), b0 + 0.10, 1e-9, "内部は要求どおり 0.10 段だけ動く");
+			check(c.current().iso == s0.iso && c.current().ss == s0.ss && c.current().fn == s0.fn,
+			      "半目盛り未満なのでカメラへ送る値はまだ変わらない");
+			c.moveStops(0.10);
+			checkNear(c.brightness(), b0 + 0.20, 1e-9, "小さな動きは内部で積み上がる(丸めで消えない)");
+			checkNear(expo::brightnessStops(c.current(), t) - b0, 1.0 / 3.0, 1e-9,
+			          "半目盛りを越えたところでカメラへ送る値が 1 目盛り動く");
+			c.moveStops(-0.20);
+			checkNear(c.brightness(), b0, 1e-9, "戻せば内部はきっかり元へ(丸めの誤差が溜まらない)");
+			check(c.current().ss == s0.ss && c.current().iso == s0.iso, "送る値も元へ戻る");
+		}
+
+		// ② applyStops が要求どおり動く(1/12 段のテーブル = スマホ内蔵カメラ)
+		//    以前は lround(evStops*3) 歩 = 3 目盛り = 0.25 段しか動かなかった。
+		{
+			cmdt::shotRange r;
+			r.stepStops = 1.0 / 12.0;
+			for (int k = 0; k < 37; ++k)
+			{
+				const double sec = 0.25 * std::pow(2.0, k / 12.0);
+				char b[32]; std::snprintf(b, sizeof(b), "%.3g", sec);
+				r.ss.push_back(b); r.ssReal.push_back(sec);
+			}
+			r.iso.push_back("100"); r.isoReal.push_back(100.0);
+			r.fNum.push_back("2");  r.fnReal.push_back(2.0);
+			const expo::expoTables t = expo::tablesFromRange(r);
+			const hgc::exposureType priSs[hgc::exposureTypeNum] =
+				{ hgc::exposureType::ss, hgc::exposureType::iso, hgc::exposureType::fn };
+			expo::exposureCtl c; c.init(fakeOf(t), noLim, noLim, priSs);
+			hgc::exposure cur; cur.iso = "100"; cur.fn = "2"; cur.ss = t.ss[12].value;
+			c.setCurrent(cur);
+			const double b0 = c.brightness();
+			c.applyStops(1.0);
+			checkNear(c.brightness() - b0, 1.0, 1e-9, "applyStops(1.0) は 1.0 段動く(以前は 0.25 段)");
+			check(std::fabs(expo::brightnessStops(c.current(), t) - (b0 + 1.0)) <= 1.0 / 24.0 + 1e-9,
+			      "送る値も半目盛り以内に収まる");
+			c.applyStops(-0.04);	// 1/12 段(0.083)より細かい要求
+			checkNear(c.brightness() - b0, 0.96, 1e-9, "1 目盛りより細かい要求も内部には残る(無段階)");
+		}
+
+		// ③ 上下限だけを守る(その間は無段階)
+		{
+			cmdt::shotRange r;
+			r.iso  = { "100","125","160","200","250","320","400","500","640","800","1000","1250","1600" };
+			r.ss   = { "1/60" };
+			r.fNum = { "4.0" };
+			const expo::expoTables t = expo::tablesFromRange(r);	// 既定 1/3 段
+			hgc::exposure lb{}, ld{};
+			lb.iso = "800";		// 明側の限界
+			ld.iso = "200";		// 暗側の限界
+			expo::exposureCtl c; c.init(fakeOf(t), lb, ld, pri);
+			hgc::exposure e0; e0.iso = "400"; e0.ss = "1/60"; e0.fn = "4.0";
+			c.setCurrent(e0);
+			const double did = c.moveStops(100.0);
+			check(c.current().iso == "800", "明るい側は限界(ISO800)で止まる");
+			checkNear(did, 1.0, 1e-9, "動けたのは限界までの 1.0 段だけ");
+			c.moveStops(-100.0);
+			check(c.current().iso == "200", "暗い側は限界(ISO200)で止まる");
+			// 限界の間はどんな端数でも置ける
+			c.setCurrent(e0);
+			c.moveStops(0.137);
+			checkNear(c.brightness() - expo::brightnessStops(e0, t), 0.137, 1e-9,
+			          "限界の間は端数のまま持てる(目盛りに吸着させない)");
+		}
+
+		// ④ 丸めの粗さは「動く余地のある軸のいちばん粗い目盛り」で決まる
+		{
+			cmdt::shotRange r;
+			r.ss   = { "1/1000","1/750","1/500","1/350","1/250","1/180","1/125","1/90","1/60","1/45","1/30" };
+			r.iso  = { "100","200","400","800","1600","3200" };
+			r.fNum = { "4.0" };
+			r.ssStep  = expo::detectStepStops(r.ss,  expo::expoKind::ss);	// 1/2 段
+			r.isoStep = expo::detectStepStops(r.iso, expo::expoKind::iso);	// 1 段
+			const expo::expoTables t = expo::tablesFromRange(r);
+			hgc::exposure e0; e0.iso = "400"; e0.ss = "1/125"; e0.fn = "4.0";
+			{
+				expo::exposureCtl c; c.init(fakeOf(t), noLim, noLim, pri); c.setCurrent(e0);
+				checkNear(c.minStepStops(), 0.5, 1e-9, "いちばん細かい目盛りは ss の 1/2 段");
+				checkNear(c.maxStepStops(), 1.0, 1e-9, "いちばん粗い目盛りは ISO の 1 段");
+			}
+			{	// ISO を上下とも 400 に縛ると ISO は動けない → 丸めの粗さは ss の 1/2 段
+				hgc::exposure lb{}, ld{}; lb.iso = "400"; ld.iso = "400";
+				expo::exposureCtl c; c.init(fakeOf(t), lb, ld, pri); c.setCurrent(e0);
+				checkNear(c.maxStepStops(), 0.5, 1e-9, "動けない軸(固定 ISO)は丸めの誤差を生まないので数えない");
+			}
+			{	// 内蔵カメラ: F 値が 1 点しかなくても、上下限で縛られているのと同じで数えない
+				cmdt::shotRange rb; rb.stepStops = 1.0 / 12.0;
+				for (int k = 0; k < 25; ++k)
+				{
+					const double sec = 0.25 * std::pow(2.0, k / 12.0);
+					char b[32]; std::snprintf(b, sizeof(b), "%.3g", sec);
+					rb.ss.push_back(b); rb.ssReal.push_back(sec);
+				}
+				rb.iso = { "100","106","112" }; rb.isoReal = { 100.0, 105.95, 112.25 };
+				rb.fNum = { "1.68" };           rb.fnReal  = { 1.68 };
+				const expo::expoTables tb = expo::tablesFromRange(rb);
+				expo::exposureCtl c; c.init(fakeOf(tb), noLim, noLim, pri);
+				hgc::exposure e; e.iso = "100"; e.ss = tb.ss[12].value; e.fn = "1.68";
+				c.setCurrent(e);
+				checkNear(c.maxStepStops(), 1.0 / 12.0, 1e-9, "内蔵カメラは 1 点の F 値を数えず 1/12 段のまま");
+			}
+		}
+
+		// ⑤ 往復対称(§4.5): 離れたときと逆の順で巻き戻す
+		{
+			cmdt::shotRange r;
+			r.iso  = { "100","125","160","200","250","320","400" };
+			r.ss   = { "1/125","1/100","1/80","1/60","1/50","1/40","1/30","1/25","1/20","1/15" };
+			r.fNum = { "4.0" };
+			const expo::expoTables t = expo::tablesFromRange(r);
+			hgc::exposure lb{}, ld{};
+			lb.iso = "200";		// ISO は 1 段ぶんしか明るくできない
+			ld.iso = "100";
+			expo::exposureCtl c; c.init(fakeOf(t), lb, ld, pri);
+			hgc::exposure home; home.iso = "100"; home.ss = "1/60"; home.fn = "4.0";
+			c.setCurrent(home);
+			c.moveStops(2.0);	// 優先度どおり ISO を限界まで → 残りを ss へ
+			check(c.current().iso == "200", "離れるときは優先度どおり ISO が先");
+			check(c.current().ss  == "1/30", "ISO が限界に当たったら ss が受け持つ");
+			c.moveStops(-1.0, &home);
+			check(c.current().ss  == "1/60", "戻るときは優先度の逆順 = 後から動いた ss が先に戻る");
+			check(c.current().iso == "200",  "ISO はまだ戻らない(往復で同じ組合せを通る)");
+			c.moveStops(-1.0, &home);
+			check(c.current().iso == "100" && c.current().ss == "1/60", "最後に ISO が基準へ戻る");
+			// home を通り越さない
+			c.moveStops(2.0);
+			c.moveStops(-3.0, &home);
+			checkNear(c.brightness() - expo::brightnessStops(home, t), -1.0, 1e-9,
+			          "基準を通り越した分は普通の優先度で配る(基準で止まらない)");
+		}
+
+		// ⑥ 通し: 1/2 段のカメラでも「はみ出た分だけ」動かして往復しない
+		//    帯の下限は 1 目盛り × 2.4(captureRunner::kBandPerNotch)。
+		{
+			cmdt::shotRange r;
+			r.ss = { "1/500","1/350","1/250","1/180","1/125","1/90","1/60","1/45","1/30","1/20","1/15",
+			         "1/10","1/8","1/6","1/4","1/3","1/2","0.7","1","1.5","2","3","4" };
+			r.iso  = { "100","200","400","800","1600","3200" };
+			r.fNum = { "4.0" };
+			r.ssStep  = expo::detectStepStops(r.ss,  expo::expoKind::ss);
+			r.isoStep = expo::detectStepStops(r.iso, expo::expoKind::iso);
+			const expo::expoTables t = expo::tablesFromRange(r);
+			hgc::exposure lb{}, ld{}; lb.iso = "400"; ld.iso = "400";	// ISO は固定 → ss で追う
+			hgc::exposure e0; e0.iso = "400"; e0.ss = "1/125"; e0.fn = "4.0";
+
+			//  wobble = 場面の細かい揺れ(雲・測光のばらつき)。帯はこれを飲み込むためにある。
+			auto run = [&](double band, double cap, int frames, double drift, double wobble,
+			               double& maxMove, double& worst, int& reversals)
+			{
+				expo::exposureCtl c; c.init(fakeOf(t), lb, ld, pri); c.setCurrent(e0);
+				const double base = expo::brightnessStops(e0, t);
+				double scene = -base;	// 1 コマ目の写る明るさが 0(目標)になるように置く
+				double prevB = expo::brightnessStops(c.current(), t);
+				int    lastDir = 0;
+				maxMove = 0.0; worst = 0.0; reversals = 0;
+				for (int f = 0; f < frames; ++f)
+				{
+					scene += drift;
+					const double wob = ((f % 2) == 0) ? wobble : -wobble;
+					const double shown = scene + wob + expo::brightnessStops(c.current(), t);
+					if (f >= 3 && std::fabs(shown) > worst) { worst = std::fabs(shown); }
+					const double linD = std::pow(2.0, -band / 2.0), linU = std::pow(2.0, band / 2.0);
+					double need = expo::excessStops(std::pow(2.0, shown), linD, linU);
+					if (need >  cap) { need =  cap; }
+					if (need < -cap) { need = -cap; }
+					c.moveStops(need);
+					const double nb = expo::brightnessStops(c.current(), t);
+					const double mv = nb - prevB;
+					if (std::fabs(mv) > 1e-9)
+					{
+						if (std::fabs(mv) > maxMove) { maxMove = std::fabs(mv); }
+						const int d = (mv < 0.0) ? -1 : 1;
+						if (lastDir != 0 && d != lastDir) { ++reversals; }
+						lastDir = d;
+					}
+					prevB = nb;
+				}
+			};
+
+			double maxMove, worst; int rev;
+			const double notch = 0.5;
+			const double band  = 2.4 * notch;	// = effHysteresis(0, notch)
+			run(band, 1.0 / 3.0, 200, -0.05, 0.0, maxMove, worst, rev);
+			{
+				char d[160]; std::snprintf(d, sizeof(d), "(帯 %.2f段 / 最大移動 %.3f段 / 目標からの最大ずれ %.2f段 / 反転 %d回)", band, maxMove, worst, rev);
+				check(rev == 0, "1/2 段のカメラでも往復しない(帯の下限が 1 目盛りに比例)", d);
+				check(maxMove <= notch + 1e-9, "1 コマで動くのは 1 目盛りまで", d);
+				check(worst <= band / 2.0 + notch + 1e-9, "目標からのずれは帯の半分+1 目盛りに収まる", d);
+			}
+			// 場面が ±0.2 段揺れても、帯が 1 目盛りに比例していれば飲み込んで往復しない。
+			run(band, 1.0 / 3.0, 200, -0.05, 0.2, maxMove, worst, rev);
+			{
+				char d[160]; std::snprintf(d, sizeof(d), "(帯 %.2f段 / 揺れ ±0.20段 / 反転 %d回)", band, rev);
+				check(rev == 0, "場面の揺れ(±0.2 段)は帯が飲み込む", d);
+			}
+			// 帯を 1 目盛りに比例させないと、同じ揺れで往復が出る = 比例させる理由
+			run(0.3, 1.0 / 3.0, 200, -0.05, 0.2, maxMove, worst, rev);
+			{
+				char d[128]; std::snprintf(d, sizeof(d), "(帯 0.30段 / 揺れ ±0.20段 / 反転 %d回)", rev);
+				check(rev > 0, "帯が狭いと同じ揺れで往復する(比例させない場合の姿)", d);
+			}
+		}
+	}
+
+	// --- 実機 EOS R10 が申告した設定可能値(2026-09-19 採取) ---
+	//  カメラ本体を ss 1/2 段・ISO 1 段に設定した状態で CCAPI から読んだ生の並び
+	//  (S/N 011031000158。shooting/settings/{iso,tv,av} の "ability")。
+	//  文字列は apiCanonCCAPI::toDisp を通した後の形。キヤノンは秒の小数点に " を使う
+	//  ので 1"5 は 1.5 秒、8" は 8 秒になる(1"5 を 15 と読むと並びが壊れる)。
+	//  合成した並びではなく**実機が答えた並び**で見分けられることを固定する。
+	{
+		std::printf("--- 実機 EOS R10 の設定可能値 ---\n");
+		const std::vector<std::string> iso = {
+			"auto","100","200","400","800","1600","3200","6400","12800","25600","32000","51200" };
+		const std::vector<std::string> ss = {
+			"30","20","15","10","8","6","4","3","2","1.5","1","0.7","0.5","0.3",
+			"1/4","1/6","1/8","1/10","1/15","1/20","1/30","1/45","1/60","1/90","1/125","1/180",
+			"1/250","1/350","1/500","1/750","1/1000","1/1500","1/2000","1/3000","1/4000","1/6000",
+			"1/8000","1/16000" };
+		const std::vector<std::string> fn = {
+			"1.4","1.8","2.0","2.5","2.8","3.5","4.0","4.5","5.6","6.7","8.0","9.5","11","13","16" };
+
+		const double isoStep = expo::detectStepStops(iso, expo::expoKind::iso);
+		const double ssStep  = expo::detectStepStops(ss,  expo::expoKind::ss);
+		const double fnStep  = expo::detectStepStops(fn,  expo::expoKind::fn);
+		checkNear(isoStep, 1.0, 1e-9, "実機 R10 の ISO は 1 段と見分ける");
+		checkNear(ssStep,  0.5, 1e-9, "実機 R10 の ss は 1/2 段と見分ける");
+		checkNear(fnStep,  0.5, 1e-9, "実機 R10 の F 値も 1/2 段と見分ける(絞りも本体設定に従う)");
+
+		cmdt::shotRange r;
+		r.iso = iso; r.ss = ss; r.fNum = fn;
+		r.isoStep = isoStep; r.ssStep = ssStep; r.fnStep = fnStep;
+		const expo::expoTables t = expo::tablesFromRange(r);
+		// 隣り合う目盛りの APEX 差は、見分けた刻みのきっかり整数倍になる(格子がずれない)。
+		//  同じ APEX へ潰れた組(差 0)は別に数える。
+		auto grid = [](const std::vector<expo::expoEntry>& e, double step, int& bad, int& dup)
+		{
+			bad = 0; dup = 0;
+			for (size_t i = 1; i < e.size(); ++i)
+			{
+				const double n = std::fabs(e[i].apex - e[i - 1].apex) / step;
+				if (n < 1e-9) { ++dup; continue; }
+				if (std::fabs(n - std::floor(n + 0.5)) > 1e-9) { ++bad; }
+			}
+		};
+		int bad = 0, dup = 0;
+		grid(t.iso, isoStep, bad, dup);
+		check(bad == 0, "ISO テーブルは 1 段格子にきっかり乗る");
+		// 【ISO 25600 と 32000 は同じ目盛りに潰れる】1 段格子では 32000(APEX 8.32)が 8.0 へ丸まり、
+		//  25600 と同じになる。並びは実数の昇順なので最近傍は先に来る 25600 が勝ち、32000 は
+		//  選ばれなくなる。32000 は 25600 の 1/3 段上の拡張値なので実害は無い。
+		//  ここが 2 以上に増えたら、本来使える目盛りを落としているので見直すこと。
+		check(dup == 1, "1 段刻みでは ISO 25600 と 32000 が同じ目盛りに潰れる(1 組だけ)");
+		grid(t.ss, ssStep, bad, dup);
+		check(bad == 0 && dup == 0, "ss テーブルは 1/2 段格子にきっかり乗る(潰れ無し)");
+		grid(t.fn, fnStep, bad, dup);
+		check(bad == 0 && dup == 0, "F 値テーブルは 1/2 段格子にきっかり乗る(潰れ無し)");
+		check(static_cast<int>(t.iso.size()) == 11, "auto は露出計算に使えないので落ちる(12→11)");
+
+		// 1/3 段と決め打っていた頃は、この並びで 1 目盛りあたり 0.17 段ずれていた。
+		{
+			cmdt::shotRange r3; r3.iso = iso; r3.ss = ss; r3.fNum = fn;	// 軸ごとの指定なし=既定 1/3 段
+			const expo::expoTables t3 = expo::tablesFromRange(r3);
+			double worst = 0.0;
+			for (size_t i = 1; i < t3.ss.size(); ++i)
+			{
+				const double d = std::fabs(t3.ss[i].apex - t3.ss[i - 1].apex);
+				const double e = std::fabs(d - 0.5);	// 本当は 0.5 段であるべき
+				if (e > worst) { worst = e; }
+			}
+			char d[96]; std::snprintf(d, sizeof(d), "(最大 %.3f 段)", worst);
+			check(worst > 0.15, "1/3 段と決め打つと実機の ss の目盛りが本来の 0.5 段からずれる(修正前の姿)", d);
+		}
+
+		// --- デバイスが答えた刻みの裏取り(2026-09-19) ---
+		//  キヤノンは CCAPI で本体の設定ステップを答える(実機 R10: av=1/2 tv=1/2 iso=1)。
+		//  ただし答えるのは本体メニューの設定で、送れる値の並びそのものではない。
+		//  食い違ったまま使うと APEX の格子がずれるので、並びで裏を取ってから採る。
+		{
+			// 中央値は拡張感度の外れ値に引きずられない(25600→32000 は 0.32 段しか離れていない)
+			checkNear(expo::medianStepStops(iso, expo::expoKind::iso), 1.0, 1e-9,
+			          "ISO の隣接差の中央値は 1 段(32000 の外れ値に引きずられない)");
+			checkNear(expo::medianStepStops(ss, expo::expoKind::ss), 0.5, 0.03,
+			          "ss の隣接差の中央値は約 1/2 段");
+
+			check(expo::stepMatchesValues(iso, expo::expoKind::iso, 1.0),
+			      "カメラの申告 iso=1 段は並びと合う → そのまま使う");
+			check(expo::stepMatchesValues(ss,  expo::expoKind::ss,  0.5),
+			      "カメラの申告 ss=1/2 段は並びと合う → そのまま使う");
+			check(expo::stepMatchesValues(fn,  expo::expoKind::fn,  0.5),
+			      "カメラの申告 av=1/2 段は並びと合う → そのまま使う");
+
+			// 食い違う申告は弾く。これが通ると 1 目盛りあたり 0.17 段ずれたまま撮ってしまう。
+			check(!expo::stepMatchesValues(ss, expo::expoKind::ss, 1.0 / 3.0),
+			      "1/2 段の並びに 1/3 段と申告されたら弾く");
+			check(!expo::stepMatchesValues(iso, expo::expoKind::iso, 1.0 / 3.0),
+			      "1 段の並びに 1/3 段と申告されたら弾く");
+			check(!expo::stepMatchesValues(ss, expo::expoKind::ss, 0.0),
+			      "答えが無い(0)ときは採らない");
+
+			// 測れないほど値が少ないときは、否定する根拠が無いので申告を信じる
+			//  (内蔵カメラのように F 値が 1 点しかない場合)。
+			const std::vector<std::string> one = { "2.2" };
+			check(expo::medianStepStops(one, expo::expoKind::fn) == 0.0, "値が 1 つでは中央値を測れない(0)");
+			check(expo::stepMatchesValues(one, expo::expoKind::fn, 0.5),
+			      "測れないときは申告を否定しない");
+		}
+	}
+
+	// --- 露出のテーブルをデバイス側へ閉じた(2026-09-19 ユーザー決定) ---
+	//  制御側は並びも刻みも持たない。デバイスに「段」で聞き、「段」で指示する。
+	//  そのおかげで、**無段のカメラ**も**未知の刻みのカメラ**も特別扱い無しで通る。
+	{
+		std::printf("--- デバイスが段で答える(並びは制御側に無い) ---\n");
+		const hgc::exposure noLim{};
+		const hgc::exposureType pri[hgc::exposureTypeNum] =
+			{ hgc::exposureType::iso, hgc::exposureType::ss, hgc::exposureType::fn };
+
+		// ① 無段のカメラ(スマホ内蔵)。目盛りが無いので、細かい要求もそのまま設定へ届く。
+		{
+			static fakeCam cam;
+			cam.setContinuous(expo::expoKind::ss,  1.0 / 8000.0, 48.0);
+			cam.setContinuous(expo::expoKind::iso, 44.0, 11377.0);
+			{	// F は 1 点(この端末は固定絞り)
+				expo::expoTables t1;
+				t1.fn = expo::buildTable({ "1.85" }, expo::expoKind::fn, 1.0 / 12.0);
+				fakeCam tmp; tmp.setFromTables(t1);
+				cam.fn = tmp.fn;
+			}
+			expo::exposureCtl c;
+			check(c.init(&cam, noLim, noLim, pri), "無段のデバイスでも初期化できる");
+			hgc::exposure e0; e0.iso = "100"; e0.ss = "0.05"; e0.fn = "1.85";
+			c.setCurrent(e0);
+
+			checkNear(c.minStepStops(), 0.0, 1e-12, "無段の軸に目盛りは無い(0)");
+			checkNear(c.maxStepStops(), 0.0, 1e-12, "動ける軸がすべて無段なら丸めの誤差も 0");
+
+			const double b0 = c.brightness();
+			const double a0 = c.appliedBrightness();
+			c.moveStops(0.01);
+			checkNear(c.brightness() - b0, 0.01, 1e-12, "0.01 段の要求が内部にそのまま入る");
+			// ここが 1/12 段のときとの違い。以前は目盛りに届かず**送る値が動かなかった**。
+			//  ISO は整数なので、0.01 段の要求は最寄りの整数(0.0144 段)になる。
+			//  大事なのは「動くこと」。1/12 段の並びだったころは目盛りに埋もれて動かなかった。
+			const double moved = c.appliedBrightness() - a0;
+			char md[96]; std::snprintf(md, sizeof(md), "(送る値が %.4f 段動いた)", moved);
+			check(moved > 0.005 && moved < 0.02,
+			      "0.01 段でもカメラへ送る値が動く(以前は目盛りに埋もれた)", md);
+
+			c.setCurrent(e0);
+			const double b1 = c.brightness();
+			c.moveStops(0.137);
+			checkNear(c.brightness() - b1, 0.137, 1e-12, "端数の要求も無段でそのまま");
+			check(std::fabs(c.appliedBrightness() - c.brightness()) < 0.02,
+			      "送る値と内部の差は文字列の丸めぶんだけ(0.02 段未満)");
+		}
+
+		// ② 可変絞りのカメラ(iPhone 13 のような 2 点)。絞りが「動ける軸」になる。
+		//    荒い軸は荒く動く、という方針どおり、帯の下限を決める粗さもそれに従う。
+		{
+			static fakeCam cam;
+			cam.setDiscrete(expo::expoKind::fn,  { 1.5, 2.4 });			// 可変絞り(2 点)
+			cam.setDiscrete(expo::expoKind::iso, { 100.0, 200.0, 400.0 });	// ISO は 1 段刻み
+			cam.setContinuous(expo::expoKind::ss, 1.0 / 8000.0, 48.0);	// ss は無段
+
+			const double gap = std::fabs(expo::stopsOfReal(2.4, expo::expoKind::fn)
+			                           - expo::stopsOfReal(1.5, expo::expoKind::fn));
+			{
+				expo::exposureCtl c;
+				c.init(&cam, noLim, noLim, pri);
+				hgc::exposure e0; e0.iso = "100"; e0.ss = "0.01"; e0.fn = "1.5";
+				c.setCurrent(e0);
+				check(gap > 1.3 && gap < 1.4, "f/1.5 と f/2.4 は約 1.36 段離れている");
+				// 【荒い軸は荒く動く(2026-09-19 ユーザー決定)】絞りが自由なら、いちばん粗いのは
+				//  ISO の 1 段ではなく絞りの 1.36 段。帯の下限はこれに比例して広がる。
+				//  絞りを開けた途端に露出が動きにくくなるのは、この方針どおりの挙動である。
+				checkNear(c.maxStepStops(), gap, 1e-9, "絞りが自由なら、いちばん粗いのは絞りの 1.36 段");
+			}
+			{	// ISO を固定すると、いちばん粗いのは絞りになる
+				hgc::exposure lb{}, ld{}; lb.iso = "100"; ld.iso = "100";
+				expo::exposureCtl c;
+				c.init(&cam, lb, ld, pri);
+				hgc::exposure e0; e0.iso = "100"; e0.ss = "0.01"; e0.fn = "1.5";
+				c.setCurrent(e0);
+				checkNear(c.maxStepStops(), gap, 1e-9, "ISO を固定すると絞りの 1.36 段がいちばん粗い");
+			}
+			{	// 絞りを両端で固定すれば「動けない軸」になり、粗さに数えない
+				hgc::exposure lb{}, ld{}; lb.fn = "1.5"; ld.fn = "1.5";
+				expo::exposureCtl c;
+				c.init(&cam, lb, ld, pri);
+				hgc::exposure e0; e0.iso = "100"; e0.ss = "0.01"; e0.fn = "1.5";
+				c.setCurrent(e0);
+				checkNear(c.maxStepStops(), 1.0, 1e-9, "絞りを固定すれば粗さに数えない(ISO の 1 段が残る)");
+			}
+			{	// 絞りが実際に使われる: ISO と ss を使い切った先で f/2.4 へ回る
+				hgc::exposure lb{}, ld{};
+				lb.iso = "100"; ld.iso = "100";			// ISO 固定
+				lb.ss  = "0.01"; ld.ss = "0.01";		// ss も固定
+				expo::exposureCtl c;
+				c.init(&cam, lb, ld, pri);
+				hgc::exposure e0; e0.iso = "100"; e0.ss = "0.01"; e0.fn = "1.5";
+				c.setCurrent(e0);
+				c.moveStops(-2.0);						// 暗くしたい。残るのは絞りだけ
+				check(expo::parseValue(c.current().fn, expo::expoKind::fn) > 2.0,
+			      "ほかに動く軸が無ければ絞りが受け持つ(可変絞り機)");
+			}
+		}
+
+		// ③ 見覚えのない刻み(0.4 段)のカメラ。特別扱いはどこにも無い。
+		{
+			std::vector<std::string> v;
+			std::vector<double>      r;
+			for (int k = 0; k < 12; ++k)
+			{
+				const double sec = 0.001 * std::pow(2.0, 0.4 * k);
+				char b[32]; std::snprintf(b, sizeof(b), "%.5g", sec);
+				v.push_back(b); r.push_back(sec);
+			}
+			cmdt::shotRange sr;
+			sr.ss = v; sr.ssReal = r; sr.ssStep = 0.4;
+			sr.iso = { "100" }; sr.fNum = { "2.8" };
+			const expo::expoTables t = expo::tablesFromRange(sr);
+			static fakeCam cam;
+			cam.setFromTables(t);
+			expo::exposureCtl c;
+			c.init(&cam, noLim, noLim, pri);
+			hgc::exposure e0; e0.iso = "100"; e0.ss = v[5]; e0.fn = "2.8";
+			c.setCurrent(e0);
+			checkNear(c.minStepStops(), 0.4, 1e-9, "0.4 段という見覚えのない刻みでもそのまま扱える");
+			checkNear(c.maxStepStops(), 0.4, 1e-9, "帯の下限もその刻みに従う");
+			const double b0 = c.brightness();
+			const double a0 = c.appliedBrightness();
+			c.moveStops(0.4);
+			checkNear(c.brightness() - b0, 0.4, 1e-9, "内部は要求どおり動く");
+			checkNear(c.appliedBrightness() - a0, 0.4, 1e-9, "送る値もその刻みで 1 つ動く");
+		}
+	}
+
+	// --- 編集画面の目盛り(2026-09-19 ユーザー報告の3件) ---
+	//  ① ss と ISO が「2 つしか選べない」= 記録用の並び(両端だけ)をそのまま選択肢にしていた
+	//  ② F 値が沢山出る = standardFn(1.85, 1.85) が範囲に1つも入らず「全部」へ落ちていた
+	//  ③ ss を動かしても値が変わらない = 1 秒未満を全部「1/整数」にして綴りが潰れていた
+	//     (1/3 が 6 連続。以前デバイス層で直した件と同じ理由が共通層に残っていた)
+	{
+		std::printf("--- 編集画面の目盛り ---\n");
+
+		// ① 上下限から刻みで張り直す。スマホ内蔵カメラの実測範囲で確かめる。
+		const double ssLo = 26503e-9, ssHi = 48.0;		// Pixel 6 広角 24mm の実測
+		const double isoLo = 44.0,    isoHi = 11377.0;
+		{
+			const std::vector<std::string> ss12 = expo::rangeValues(expo::expoKind::ss, 1.0 / 12.0, ssLo, ssHi);
+			const std::vector<std::string> ss3  = expo::rangeValues(expo::expoKind::ss, 1.0 / 3.0,  ssLo, ssHi);
+			const std::vector<std::string> ss2  = expo::rangeValues(expo::expoKind::ss, 0.5,        ssLo, ssHi);
+			check(ss12.size() > 200, "1/12 段なら 200 個以上の目盛りになる");
+			check(ss3.size()  > 50 && ss3.size()  < ss12.size(), "1/3 段は粗くなる");
+			check(ss2.size()  > 30 && ss2.size()  < ss3.size(),  "1/2 段はもっと粗くなる");
+			const std::vector<std::string> iso = expo::rangeValues(expo::expoKind::iso, 1.0 / 12.0, isoLo, isoHi);
+			check(iso.size() > 90, "ISO も 1/12 段なら 90 個以上");
+		}
+
+		// ③ 綴りが潰れない(同じ文字列が続かない = スライダーを動かせば必ず値が変わる)
+		{
+			const std::vector<std::string> ss = expo::rangeValues(expo::expoKind::ss, 1.0 / 12.0, ssLo, ssHi);
+			int dup = 0;
+			for (size_t i = 1; i < ss.size(); ++i) { if (ss[i] == ss[i - 1]) { ++dup; } }
+			check(dup == 0, "同じ綴りが並ばない");
+			// 段の差でも見る。1/12 段の並びなのに 0 段差の隣り合いがあれば潰れている。
+			double worst = 0.0;
+			int    flat  = 0;
+			for (size_t i = 1; i < ss.size(); ++i)
+			{
+				const double a = expo::parseValue(ss[i - 1], expo::expoKind::ss);
+				const double b = expo::parseValue(ss[i],     expo::expoKind::ss);
+				if (!(a > 0.0) || !(b > 0.0)) { continue; }
+				const double d = std::fabs(std::log2(b / a));
+				if (d < 1e-6) { ++flat; }
+				if (d > worst) { worst = d; }
+			}
+			char det[96]; std::snprintf(det, sizeof(det), "(最大の段差 %.4f 段 / 差0の隣り %d 組)", worst, flat);
+			check(flat == 0, "隣り合う目盛りが必ず離れている(ss を動かせば必ず変わる)", det);
+			check(worst < 0.12, "どこも 1/12 段に近い(0.59 段の飛びが無い)", det);
+		}
+
+		// ③' 1 秒未満を全部 "1/整数" にしていた頃の再現。1/3 秒あたりが潰れる。
+		{
+			int worstRun = 1, run = 1;
+			std::string prev;
+			for (int n = 0; n < 400; ++n)
+			{
+				const double v = ssLo * std::pow(2.0, n / 12.0);
+				if (v > ssHi) { break; }
+				char b[32];
+				const int denom = static_cast<int>(1.0 / v + 0.5);
+				if (denom <= 1) { std::snprintf(b, sizeof(b), "%.1f", v); }
+				else            { std::snprintf(b, sizeof(b), "1/%d", denom); }
+				const std::string t = b;
+				if (t == prev) { ++run; if (run > worstRun) { worstRun = run; } } else { run = 1; }
+				prev = t;
+			}
+			char det[64]; std::snprintf(det, sizeof(det), "(同じ綴りが最大 %d 連続)", worstRun);
+			check(worstRun >= 5, "旧規則(1秒未満は全部 1/整数)では綴りが潰れる(修正前の再現)", det);
+		}
+
+		// ② 起点はデバイスの下端。計画が持つ値がそのまま目盛りに乗る。
+		//    ISO 100 / 1 秒を起点にすると外れて、編集画面を開いただけで値が動いてしまう。
+		{
+			const std::vector<std::string> iso = expo::rangeValues(expo::expoKind::iso, 1.0 / 12.0, isoLo, isoHi);
+			const std::vector<std::string> ss  = expo::rangeValues(expo::expoKind::ss,  1.0 / 12.0, ssLo,  ssHi);
+			bool hasIso = false, hasSs = false;
+			for (const auto& v : iso) { if (v == "1580") { hasIso = true; } }
+			for (const auto& v : ss)  { if (v == "19.65") { hasSs = true; } }
+			check(hasIso, "端末が作った ISO 1580 がそのまま目盛りに乗る");
+			check(hasSs,  "端末が作った ss 19.65 秒がそのまま目盛りに乗る");
+			check(iso.front() == "44", "下端はデバイスの下限そのもの");
+		}
+
+		// ② F 値: 1 点しかないなら 1 点だけ。範囲があるなら慣用の目盛り。
+		{
+			const std::vector<std::string> one = expo::standardFn(1.85, 1.85);
+			char det[96];
+			std::snprintf(det, sizeof(det), "(standardFn(1.85,1.85) は %d 個)", static_cast<int>(one.size()));
+			// 【これが「F値が沢山出る」の正体】範囲に1つも入らないと「全部」へ落ちる作りだった。
+			//  呼ぶ側(hge_getExpoValuesJson)が fn==fnMax を先に見て 1 点だけ返すようにしてある。
+			check(one.size() > 5, "固定絞りを standardFn に渡すと全部返ってくる(呼ぶ側で避ける)", det);
+			const std::vector<std::string> range = expo::standardFn(1.4, 16.0);
+			check(range.size() > 10 && range.front() == "1.4", "範囲があるときは慣用の目盛りが並ぶ");
+		}
+	}
+
+	// --- 最初の補正の飽和ガード(2026-09-20 夕方の白飛びの再発防止) ---
+	//  実機ログ(2026-09-19 16:29 開始・内蔵カメラ)の数字をそのまま固定する。
+	//  19.7 秒始まりで約 10 段オーバー → 投影で 0.304 秒まで落とすが、それでもまだ飽和。
+	//  飽和した画像は中央値が頭打ちで場面の明るさを過小評価するので err がほぼ 0 に見え、
+	//  「収束した」と誤判定して最初の 8 コマを白飛びさせた。
+	{
+		std::printf("--- 最初の補正の飽和ガード ---\n");
+		const double tol = 1.0 / 3.0, satX = 0.95, satStep = 4.0;
+
+		// (1) 事故の再現。step=2 の実測(x=0.9978 err=-1.04)。
+		{
+			const expo::convergeStep r = expo::initialConvergeStep(-1.04, 0.9978, tol, satX, satStep);
+			check(r.saturated, "中央値 0.9978 は飽和とみなす");
+			check(!r.converged, "飽和している間は収束と認めない");
+			checkNear(r.delta, -satStep, 1e-12, "投影量(1.04段)より深く、最低 4 段暗くする");
+		}
+		// (2) 事故を決定づけた step=3 の実測(x=0.9978 err=+0.00)。ここで止まったのが白飛びの入口。
+		{
+			const expo::convergeStep r = expo::initialConvergeStep(0.0, 0.9978, tol, satX, satStep);
+			check(!r.converged, "飽和したまま err≒0 でも収束させない(旧実装はここで止まった)");
+			checkNear(r.delta, -satStep, 1e-12, "誤差 0 に見えても暗くしにいく");
+		}
+		// (3) 飽和が解ければ、いつもどおり投影して収束する(ガードが居座らない)。
+		//     2026-09-20 09:02 の実機 step=3 の数字。
+		{
+			const expo::convergeStep r = expo::initialConvergeStep(0.08, 0.6690, tol, satX, satStep);
+			check(!r.saturated, "中央値 0.669 は飽和ではない");
+			check(r.converged, "誤差 0.08 段なら収束(2026-09-20 09:02 実機の step=3)");
+		}
+		// (4) 通常の投影は素通し。2026-09-20 09:02 の実機 step=1(x=0.6533 err=+9.10)。
+		{
+			const expo::convergeStep r = expo::initialConvergeStep(9.10, 0.6533, tol, satX, satStep);
+			check(!r.converged, "9.10 段ずれていればまだ収束しない");
+			checkNear(r.delta, -9.10, 1e-12, "飽和していなければ投影量そのまま(ガードは効かない)");
+		}
+		// (5) 飽和していても、投影がもっと深い暗さを求めるならそちらを採る(下駄であって蓋ではない)。
+		{
+			const expo::convergeStep r = expo::initialConvergeStep(9.10, 0.99, tol, satX, satStep);
+			checkNear(r.delta, -9.10, 1e-12, "4 段より深い要求は削らない");
+		}
+		// (6) 飽和中に「明るくしたい」と出ても、その向きへは動かさない(頭打ちの誤差は信用しない)。
+		{
+			const expo::convergeStep r = expo::initialConvergeStep(-2.0, 0.99, tol, satX, satStep);
+			check(r.delta < 0.0, "飽和中に明るくする向きへは動かさない");
+			checkNear(r.delta, -satStep, 1e-12, "暗くする側へ 4 段");
+		}
+	}
+
+	// --- 測光ヒストグラムの受け皿(2026-09-20 「昼が明るすぎる」の真因) ---
+	//  以前は uint16 で数えていた。1 ビンの上限は 65,535。内蔵カメラの画像は
+	//  2040x1536 = 313 万画素あるので、同じ明るさの画素が全体の 2.1% を超えると
+	//  ビンが溢れて巻き戻る。平らな白い空はこれを軽く超え、明側が数えられずに
+	//  中央値が暗く出る → 場面を実際より暗いと判断し、露出を明るいまま残していた。
+	//  実測(2026-09-20 朝の窓辺): 真の中央値 173 に対しアプリは 138 相当、0.7 段の差。
+	{
+		std::printf("--- 測光ヒストグラムの受け皿 ---\n");
+		// 実測に近い形: 総画素 2,764,800、上端(白飛び)が 36%、残りは 0〜200 に一様。
+		const uint32_t total = 2764800u;
+		const uint32_t sat   = static_cast<uint32_t>(total * 0.36);
+		uint32_t h32[256] = {0};
+		h32[255] = sat;
+		const uint32_t each = (total - sat) / 201u;
+		for (int i = 0; i <= 200; ++i) { h32[i] = each; }
+
+		const double m32 = expo::histMedian(h32, 256);
+		char det[96];
+		std::snprintf(det, sizeof(det), "(32ビット %.0f / 256)", m32 * 255.0);
+		check(m32 * 255.0 > 150.0, "32ビットなら明側を数え切れて中央値が正しく出る", det);
+		check(h32[255] > 65535u, "白飛びのビンは 16 ビットの上限を超えている");
+
+		// 同じ中身を 16 ビットに入れると巻き戻る(以前の姿)。
+		uint16_t h16[256] = {0};
+		for (int i = 0; i < 256; ++i) { h16[i] = static_cast<uint16_t>(h32[i]); }
+		const double m16 = expo::histMedian(h16, 256);
+		std::snprintf(det, sizeof(det), "(16ビット %.0f / 32ビット %.0f)", m16 * 255.0, m32 * 255.0);
+		check(m16 < m32 - 0.1, "16ビットでは溢れて中央値が暗く出る(以前の不具合の再現)", det);
+		const double gap = std::log2(expo::srgbToLinear(m32) / expo::srgbToLinear(m16));
+		std::snprintf(det, sizeof(det), "(%.2f 段)", gap);
+		check(gap > 0.4, "その差は露出にして 0.4 段以上(実測 0.7 段)", det);
+
+		// 溢れない大きさ(カメラが答えるヒストグラム)では 16 ビットでも一致する。
+		{
+			uint32_t s32[256] = {0}; uint16_t s16[256] = {0};
+			for (int i = 0; i < 256; ++i)
+			{
+				const uint32_t v = (i == 255) ? 20000u : 100u;
+				s32[i] = v; s16[i] = static_cast<uint16_t>(v);
+			}
+			checkNear(expo::histMedian(s16, 256), expo::histMedian(s32, 256), 1e-12,
+			          "溢れない大きさなら 16 ビットと 32 ビットは同じ(カメラ由来は据え置き)");
+		}
+	}
+
+	// --- 編集画面はカメラが持つ並びを見せる(2026-09-20 ユーザー指示) ---
+	//  上下限から目盛りを合成すると、カメラに無い値が画面に出る。EOS R3 のひな型で
+	//  「夜間の 8 秒」が 8.192 秒と表示されていた(下端 1/64000 から 1/3 段で張ると
+	//  19 段上がちょうど 8.192 秒。カメラの並びには 6 / 8 / 10 しか無い)。
+	{
+		std::printf("--- 編集画面はカメラの並びを見せる ---\n");
+		// EOS R3 の長秒側(実機の綴り)。
+		const std::vector<std::string> r3 = {
+			"1/64000", "1/51200", "1/40960", "1/32000", "1/8000", "1/4000", "1/2000", "1/1000",
+			"1/500", "1/250", "1/125", "1/60", "1/30", "1/15", "1/8", "1/4", "1/2",
+			"1", "2", "4", "6", "8", "10", "13", "15", "20", "25", "30", "Bulb" };
+
+		// 合成した目盛りは 8 を作れない(不具合の再現)。
+		{
+			double lo = 1.0 / 64000.0, hi = 30.0;
+			const std::vector<std::string> made = expo::rangeValues(expo::expoKind::ss, 1.0 / 3.0, lo, hi);
+			bool has8 = false, has8192 = false;
+			for (const auto& v : made) { if (v == "8") { has8 = true; } if (v == "8.192") { has8192 = true; } }
+			check(!has8 && has8192, "合成した目盛りには 8 が無く 8.192 が出る(以前の姿)");
+		}
+
+		// カメラの並びから選び直せば、綴りはカメラのものだけになる。
+		{
+			const std::vector<std::string> v = expo::pickFromValues(r3, expo::expoKind::ss, 1.0 / 3.0);
+			bool has8 = false, bogus = false;
+			for (const auto& x : v)
+			{
+				if (x == "8") { has8 = true; }
+				bool found = false;
+				for (const auto& y : r3) { if (x == y) { found = true; break; } }
+				if (!found) { bogus = true; }
+			}
+			check(has8, "カメラが持つ 8 秒がそのまま出る");
+			check(!bogus, "カメラに無い綴りは1つも作らない");
+			// 1/3 段の指定ならカメラの 1/3 段の並びがそのまま残る(13→15 秒は 0.21 段しか離れていない)。
+			bool has15 = false, has25 = false;
+			for (const auto& x : v) { if (x == "15") { has15 = true; } if (x == "25") { has25 = true; } }
+			check(has15 && has25, "刻み 1/3 段でカメラの 15 秒・25 秒が落ちない(丸めた並びを間引かない)");
+			bool bulb = false;
+			for (const auto& x : v) { if (x == "Bulb") { bulb = true; } }
+			check(!bulb, "数値でない綴り(Bulb)は除く");
+		}
+
+		// 刻みを粗くすると間引かれ、細かくしてもカメラより細かくはならない。
+		{
+			const std::vector<std::string> fine = expo::pickFromValues(r3, expo::expoKind::ss, 1.0 / 12.0);
+			const std::vector<std::string> mid  = expo::pickFromValues(r3, expo::expoKind::ss, 1.0 / 3.0);
+			const std::vector<std::string> wide = expo::pickFromValues(r3, expo::expoKind::ss, 1.0);
+			char det[96];
+			std::snprintf(det, sizeof(det), "(1/12段 %d / 1/3段 %d / 1段 %d)",
+			              (int)fine.size(), (int)mid.size(), (int)wide.size());
+			check(fine.size() == 28, "カメラより細かい刻みでは並びがそのまま(Bulb を除く 28 個)", det);
+			check(wide.size() < mid.size() && mid.size() <= fine.size(), "粗い刻みほど間引かれる", det);
+			check(wide.front() == fine.front() && wide.back() == fine.back(), "どの刻みでも両端は残る");
+		}
+
+		// 並びを持たない機種(端末の内蔵カメラは上下限の 2 点だけ)は選びようがない。
+		{
+			const std::vector<std::string> ends = { "1/37732", "48" };
+			const std::vector<std::string> v = expo::pickFromValues(ends, expo::expoKind::ss, 1.0 / 12.0);
+			check(v.size() < 3, "両端しか答えない機種では「並び」とみなさない(合成へ落ちる)");
+		}
+	}
+
+	// --- 帯の下限は1目盛りに比例。無段のカメラは下限まで狭める(2026-09-20) ---
+	//  captureRunner::effHysteresis と同じ式。帯は**全幅**で、縁は目標 ± 帯/2。
+	//  以前は目盛りが無い(notch=0)と既定の 1/3 段へ落としていたため、無段の内蔵カメラにも
+	//  0.80 段(±0.40 段)の帯が当たり、細かい露出補正が1コマも動かずに埋もれていた。
+	{
+		std::printf("--- 帯の下限と無段のカメラ ---\n");
+		const double kPerNotch = 2.4, kFloor = 0.10;
+		auto eff = [&](double raw, double notch)
+		{
+			double lo = (notch > 0.0) ? (kPerNotch * notch) : kFloor;
+			if (lo < kFloor) { lo = kFloor; }
+			return (raw > lo) ? raw : lo;
+		};
+		checkNear(eff(0.0, 1.0 / 3.0),  0.80, 1e-9, "1/3 段のカメラは従来どおり 0.80 段");
+		checkNear(eff(0.0, 0.5),        1.20, 1e-9, "1/2 段のカメラは 1.20 段");
+		checkNear(eff(0.0, 1.0 / 12.0), 0.20, 1e-9, "1/12 段なら 0.20 段まで狭くなる");
+		checkNear(eff(0.0, 0.0),        kFloor, 1e-9,
+		          "無段のカメラは下限 0.10 段(以前は既定の 1/3 段へ落ちて 0.80 段だった)");
+		checkNear(eff(0.5, 0.0),        0.50, 1e-9, "撮影制御方法の設定が下限より広ければそのまま");
+
+		// 露出補正 1/6 段が帯に埋もれないこと。縁は目標 ± 帯/2 なので、帯/2 を超えれば動く。
+		const double step6 = 1.0 / 6.0;
+		char det[96];
+		std::snprintf(det, sizeof(det), "(1/6段 %.3f / 帯の半分 %.3f)", step6, eff(0.0, 0.0) / 2.0);
+		check(step6 > eff(0.0, 0.0) / 2.0, "無段のカメラでは 1/6 段の露出補正が効く", det);
+		std::snprintf(det, sizeof(det), "(1/6段 %.3f / 旧の帯の半分 %.3f)", step6, 0.80 / 2.0);
+		check(step6 < 0.80 / 2.0, "旧(0.80段)では 1/6 段は帯に埋もれていた(不具合の再現)", det);
+	}
+
+	// --- 速度をならす(2026-09-21 ユーザー決定): 動き出し・止まり・歩幅の急変を作らない ---
+	//  2026-09-21 朝(Pixel 6・30 秒周期)の実測から: 朝日の場面は +0.1〜0.2 段/コマで明るくなり、
+	//  移動平均のむだ時間で 3 コマ動かず、そのあと大股で追いついていた。
+	//  なめらかさ 4 分 → 1 コマの速度変化は 0.667 ÷ 8 = 0.083 段、見込み 1 分 = 2 コマ。
+	{
+		std::printf("--- 速度をならす ---\n");
+		const double vmax = (1.0 / 3.0) / 15.0 * 30.0;	// 0.667 段/コマ(30 秒周期)
+		const double a    = vmax / 8.0;					// なめらかさ 4 分
+		const double th   = 2.0;						// 見込み 1 分 = 2 コマ
+		char det[96];
+
+		// ① むだ時間が無い: はみ出た最初のコマから動く(以前は平均のせいで 3 コマ動かなかった)
+		{
+			double v = 0.0;
+			const double mv = expo::shapeVelocity(v, -0.10, vmax, a, th);
+			check(mv < -1e-9, "はみ出たコマから動き出す(むだ時間なし)");
+			checkNear(mv, -0.05, 1e-9, "動き出しの 1 コマ目は need/見込み = 0.05 段(a より小さいのでそのまま)");
+		}
+		// ② 速度の変化は 1 コマに a まで(大股で追いつかない)
+		{
+			double v = 0.0;
+			double prev = 0.0, worst = 0.0;
+			for (int i = 0; i < 20; ++i)
+			{
+				const double mv = expo::shapeVelocity(v, -2.0, vmax, a, th);	// 2 段はみ出しっぱなし(目標 2/2=1.0 は上限 0.667 で切られる)
+				if (std::fabs(mv - prev) > worst) { worst = std::fabs(mv - prev); }
+				prev = mv;
+			}
+			std::snprintf(det, sizeof(det), "(最大 %.4f / 上限 %.4f)", worst, a);
+			check(worst <= a + 1e-9, "速度の変化は 1 コマに a まで", det);
+			checkNear(v, -vmax, 1e-9, "はみ出し続ければ速度上限に達して張り付く");
+		}
+		// ③ 帯の内側に入ると速度は減っていき、止まる(止まり方も急でない)
+		{
+			double v = -0.15;	// 朝日の速さで動いている
+			double prev = v; int n = 0;
+			while (std::fabs(v) > 1e-9 && n < 20)
+			{
+				const double mv = expo::shapeVelocity(v, 0.0, vmax, a, th);
+				check(std::fabs(mv - prev) <= a + 1e-9, "減速も 1 コマに a まで");
+				prev = mv; ++n;
+			}
+			std::snprintf(det, sizeof(det), "(%d コマで停止)", n);
+			check(n == 2, "0.15 段/コマ からは 2 コマで止まる(a=0.083)", det);
+		}
+		// ④ 縁に張り付いて一様に明るくなる場面では、速度が場面の変化に一致する(遅れは一定)
+		{
+			double v = 0.0, E = 0.0;
+			const double rate = 0.12;	// 場面が毎コマ +0.12 段
+			double over = 0.0;		// 縁からのはみ出し
+			double lastMv = 0.0;
+			for (int i = 0; i < 40; ++i)
+			{
+				over += rate;						// 場面が明るくなる
+				lastMv = expo::shapeVelocity(v, -over, vmax, a, th);
+				over += lastMv;						// 露出を下げたぶん戻る
+				E += lastMv;
+			}
+			std::snprintf(det, sizeof(det), "(速度 %.4f / 場面 %.4f / 遅れ %.3f 段)", -lastMv, rate, over);
+			check(std::fabs(-lastMv - rate) < 1e-3, "張り付き中の速度は場面の変化と同じ", det);
+			check(over > 0.0 && over < 0.4, "遅れ(縁からのはみ出し)は一定で 0.4 段未満", det);
+		}
+		// ⑤ キヤノン機の偽の揺れ(±0.3 段がコマごと)は速度に乗らない
+		{
+			double v = 0.0, prev = 0.0, worst = 0.0;
+			const double aC = (1.0 / 3.0) / 15.0 * 12.0 / 20.0;	// 12 秒周期・4 分 → 0.0133
+			const double thC = 60.0 / 12.0;
+			for (int i = 0; i < 60; ++i)
+			{
+				const double noise = ((i & 1) ? +0.3 : -0.3);		// 交互に ±0.3 段
+				const double mv = expo::shapeVelocity(v, -(0.5 + noise), 0.267, aC, thC);
+				if (i > 0 && std::fabs(mv - prev) > worst) { worst = std::fabs(mv - prev); }
+				prev = mv;
+			}
+			std::snprintf(det, sizeof(det), "(速度の最大変化 %.4f / 以前は 0.17〜0.22)", worst);
+			check(worst <= aC + 1e-9, "±0.3 段の揺れがあっても速度の変化は a(0.013)まで", det);
+		}
+		// ⑥ 反転は減速→停止→加速を通る(いきなり逆へ飛ばない)
+		{
+			double v = -0.15;
+			const double mv = expo::shapeVelocity(v, +0.5, vmax, a, th);	// 逆向きに 0.5 段はみ出した
+			checkNear(mv, -0.15 + a, 1e-9, "逆向きの要求でも 1 コマでは a しか変わらない");
+		}
 	}
 
 	std::printf("\n%s (fail=%d)\n", g_fail == 0 ? "ALL PASS" : "FAILED", g_fail);

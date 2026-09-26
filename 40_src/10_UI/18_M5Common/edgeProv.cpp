@@ -6,6 +6,7 @@
 //  BLE は NimBLE(省RAM)。Bluedroid だと WiFi 併用で DRAM 枯渇しクラッシュするため。
 #include "edgeProv.h"
 #include "etpBle.h"		// ETP を BLE でも受ける経路(同じ NimBLE サーバへ相乗り)
+#include "etpEdge.h"	// 持ち主の登録(所有証明が済んだここからだけ呼ぶ)
 #include "holyGrailEntity.h"	// 撮影中かどうかの判定(hge_getState)
 #include <Arduino.h>
 #include <NimBLEDevice.h>
@@ -67,7 +68,7 @@ namespace
 			// 【つながっていても広告を続ける(2026-08-17)】NimBLE は接続すると広告を止める。
 			//  ETP を BLE で運ぶ設定にしているとスマホがつなぎっぱなしにするので、エッジが
 			//  広告しなくなり **設定変更のQRを出す経路が使えなくなる**(スマホのプロビジョニング
-			//  画面は "HGC-<端末名>" の広告を名前一致で探すため「見つかりません」になる)。
+			//  画面は "TLP-<端末名>" の広告を名前一致で探すため「見つかりません」になる)。
 			//  屋外のAPモード運用中に SSID/パスワードを変えられなくなるのは詰みなので、
 			//  接続中も広告を出し続ける。同時接続は CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3 まで。
 			NimBLEDevice::startAdvertising();
@@ -131,12 +132,12 @@ namespace edgeProv
 {
 	void begin(const std::string& devName)
 	{
-		// 【広告名に端末名を入れる(2026-08-08 UI依頼)】従来は全機が "HGC-Edge" を広告しており、
+		// 【広告名に端末名を入れる(2026-08-08 UI依頼)】従来は全機が "TLP-Edge" を広告しており、
 		//  スマホは最初に見つけた1台へ無条件で接続していた。エッジを複数台起動していると
 		//  どれに設定が飛ぶか分からず、登録済み端末の設定を更新できなかった。
-		//  端末名が決まっていれば "HGC-<端末名>" を広告し、スマホ側は名前一致で選ぶ。
-		//  出荷時(名前未設定)は従来どおり "HGC-Edge" を広告して新規登録を妨げない。
-		const std::string advName = devName.empty() ? std::string("HGC-Edge") : ("HGC-" + devName);
+		//  端末名が決まっていれば "TLP-<端末名>" を広告し、スマホ側は名前一致で選ぶ。
+		//  出荷時(名前未設定)は従来どおり "TLP-Edge" を広告して新規登録を妨げない。
+		const std::string advName = devName.empty() ? std::string("TLP-Edge") : ("TLP-" + devName);
 		NimBLEDevice::init(advName);
 		NimBLEServer* srv = NimBLEDevice::createServer();
 		srv->setCallbacks(new SrvCb());
@@ -185,6 +186,10 @@ namespace edgeProv
 				std::string ssid = pick(plain, "ssid");
 				std::string pass = pick(plain, "pass");
 				std::string mode = pick(plain, "mode");	// "sta"(既定) / "ap"。スマホからのモード切替。
+				// 【持ち主の登録(2026-09-26)】ここまで来た=QRのPoPで導いた鍵で復号できた
+				//  =端末の画面を見られる人。所有証明が済んでいるので、識別子を持ち主として覚える。
+				//  近くで別の人が同じアプリを使っていても、画面を見られない限り持ち主になれない。
+				std::string phoneId = pick(plain, "phoneId");
 				Serial.printf("[PROV] creds decrypted: name=%s ssid=%s passLen=%u mode=%s\n",
 				              name.c_str(), ssid.c_str(), (unsigned)pass.size(), mode.c_str());
 				// 撮影中はネットワーク設定を適用しない。AP/STA を切り替えるとカメラとの回線が
@@ -198,6 +203,8 @@ namespace edgeProv
 				else
 				{
 					setStatus("ok");
+					// 持ち主を先に覚える(この後 edgeProvApply が再起動することがあるため)。
+					if (!phoneId.empty()) { etpEdge::setOwner(phoneId); }
 					edgeProvApply(name.c_str(), ssid.c_str(), pass.c_str(), mode.c_str());
 				}
 			}

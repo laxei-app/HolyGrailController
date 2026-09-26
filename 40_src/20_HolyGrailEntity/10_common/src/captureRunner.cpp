@@ -4,9 +4,9 @@
 #include "osSystemCall.h"
 #include "debugOut.h"
 #include "astroSched.h"		// ② 太陽高度(sunHoriz)から ev0 中心bmを算出
-#include "netThread.h"		// 失敗した HTTP のステータス/応答をログへ添えるため
 #include "dataManager.h"		// 初期収束の診断ログ(CONV)を残すため
 #include "linkDown.h"		// APから抜けた相手を待たない(タイムアウト待ちの短縮)
+#include "csJson.h"			// 動画設定をデバイス層へ渡す(2026-09-23)
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -55,6 +55,13 @@ namespace
 	constexpr int    kInitConvergeBudgetMs = 25000;
 	// 目標 ev への許容[段]。これ以内に入ったら収束終了して撮影に入る(=1枚目から1/3段以内)。
 	constexpr double kInitConvergeTolStops = 1.0 / 3.0;
+	// 【飽和ガード(2026-09-20)】測光画像のヒストグラム中央値がこの値以上なら「飽和」とみなす。
+	//  飽和した画像は輝度が頭打ちで真の明るさが測れず、場面の明るさ(sceneRef)を過小評価する。
+	//  そのまま投影すると「もう合っている(err≒0)」と誤判定し、実際は数段オーバーのまま撮り始める。
+	//  実機(内蔵カメラ・夕方 09-19)で 19.7 秒開始→ ss 0.3 秒でも中央値 0.998 のまま収束扱いになり、
+	//  最初の 8 コマが白飛びした。飽和が解けるまで、投影量に関わらず最低 kInitSatStepStops 段は暗くする。
+	constexpr double kInitSatMedian    = 0.95;
+	constexpr double kInitSatStepStops = 4.0;
 	// 「露光終了直後に測光」型(meterTimingHint.afterShutterClose)のとき、露光終了から
 	// この余裕[ms]を置いて準備を始める。露光中は画像取得ができないため。
 	constexpr long   kAfterShutterMarginMs = 300;
@@ -84,13 +91,16 @@ void captureRunner::setCallbacks(stateCb s, progressCb p, capturedCb c, errorCb 
 void captureRunner::fillSensorFromShot(int frame)
 {
 	if (sensorFillDone_ || frame < 2) { return; }
-	if (plan_.camera.sensorSize > 0.0 && plan_.camera.sensorPixel > 0) { sensorFillDone_ = true; return; }
+	//  縦の画素数(sensorPixelV)は 2026-09-05 に増えた欄。横まで埋まっていて縦だけ空の控えは
+	//  それ以前に登録したものなので、縦だけのために一度は読みに行く。
+	if (plan_.camera.sensorSize > 0.0 && plan_.camera.sensorPixel > 0 && plan_.camera.sensorPixelV > 0)
+	{ sensorFillDone_ = true; return; }
 	if (dev_ == nullptr) { return; }
 
 	sensorFillDone_ = true;	// 試すのは1回だけ(失敗しても繰り返さない)
 	double wmm = 0.0, hmm = 0.0;
-	uint32_t px = 0;
-	const errCode e = cameraController::readSensorSpec(*dev_, wmm, hmm, px);
+	uint32_t px = 0, py = 0;
+	const errCode e = cameraController::readSensorSpec(*dev_, wmm, hmm, px, py);
 	if (e != ERR_HGC_OK || wmm <= 0.0 || px == 0)
 	{
 		dataManager::logEvent("GEAR", "sensor spec not found in captured image (register the body in the gear master)", true);
@@ -100,7 +110,8 @@ void captureRunner::fillSensorFromShot(int frame)
 	if (plan_.camera.sensorSize  <= 0.0) { plan_.camera.sensorSize  = wmm; }
 	if (plan_.camera.sensorSizeV <= 0.0) { plan_.camera.sensorSizeV = hmm; }
 	if (plan_.camera.sensorPixel == 0)   { plan_.camera.sensorPixel = px;  }
-	dataManager::fillOwnedCameraSensor(dev_->serialno, wmm, hmm, px);
+	if (plan_.camera.sensorPixelV == 0 && py > 0) { plan_.camera.sensorPixelV = py; }
+	dataManager::fillOwnedCameraSensor(dev_->serialno, wmm, hmm, px, py);
 }
 
 errCode captureRunner::ready(const hgc::cs& plan, device* dev,
@@ -223,7 +234,7 @@ double captureRunner::linearAtExposure(double sceneRef, const hgc::exposure& e) 
 {
 	if (sceneRef <= 0.0) { return -1.0; }
 	if (!validExposure(e)) { return sceneRef; }
-	return sceneRef * std::pow(2.0, expo::brightnessStops(e, tables_));
+	return sceneRef * std::pow(2.0, this->brightnessOf(e));
 }
 
 // HTTP を伴うカメラ操作の失敗メッセージに、直近の HTTP 失敗の詳細を添える。
@@ -243,20 +254,13 @@ void captureRunner::releaseLiveView(void)
 	cameraController::stopLiveView(*dev_);	// 失敗しても撮影は続ける(次コマで測光できる方式なので)
 }
 
-std::string captureRunner::withHttpDetail(const char* what) const
+std::string captureRunner::withFailDetail(const char* what) const
 {
-	int status = 0;
-	std::string body;
-	netThread::lastHttpFailure(status, body);
-	for (auto& c : body) { if (c == '\r' || c == '\n' || c == '\t') { c = ' '; } }	// ログは1行
-	char buf[220];
-	// status==0(応答なし)のときこそ理由が要る。従来はここで body を捨てていたため、
-	// 「TCPが繋がらない(こちら側)」のか「繋がったがカメラが返さない(カメラ側)」のかを
-	// 区別できなかった(2026-08-05)。プラットフォーム層が body に理由を載せる。
-	if (status > 0)        { std::snprintf(buf, sizeof(buf), "%s http=%d %s", what, status, body.c_str()); }
-	else if (!body.empty()){ std::snprintf(buf, sizeof(buf), "%s http=noreply %s", what, body.c_str()); }
-	else                   { std::snprintf(buf, sizeof(buf), "%s http=noreply", what); }
-	return std::string(buf);
+	// 内訳はカメラ実装が作る(HTTP なら状態と本文、内蔵カメラなら無し)。ここは繋ぐだけ。
+	if (dev_ == nullptr) { return std::string(what); }
+	const apiBase::failInfo f = cameraController::lastFailure(*dev_);
+	if (f.detail.empty()) { return std::string(what); }
+	return std::string(what) + " " + f.detail;
 }
 
 // 実際にカメラへ適用できている露出。lastXxxApplied_ は各軸の設定が成功したときだけ更新されるので、
@@ -373,23 +377,17 @@ errCode captureRunner::fireShutter(const hgc::exposure& shotExp, double interval
 
 	void*   t0     = tool::startElapse();
 	errCode err    = ERR_HGC_OK;
-	int     status = 0;
 	int     tries  = 0;
-	std::string body;
+	apiBase::failInfo last;
 	for (;;)
 	{
 		++tries;
 		err = cameraController::actShutter(*dev_);
 		if (err == ERR_HGC_OK) { failStreak = 0; mediaBlocked_ = false; mediaReported_ = false; return err; }
-		netThread::lastHttpFailure(status, body);
-		// 【カード起因かを見分ける(2026-08-19)】カメラは 503 の本文で理由を言う。
-		//  実測(EOS R50 V, カード満杯): {"message":"Can not write to card"}
-		//  仕様上の意味は「撮影中にメディアへ記録できなかった」(CCAPI Reference 3-40)。
-		//  カードが無い/入れ替え待ちのときは "Card not available" が来る。
-		//  どちらも**通信は成立している**ので、未検出や接続断として扱ってはいけない。
-		if (status == 503 && (body.find("Can not write to card") != std::string::npos ||
-		                      body.find("Card not available")   != std::string::npos))
-		{ mediaBlocked_ = true; }
+		// 失敗の意味はカメラ実装に聞く(2026-09-06)。ここは HTTP の状態も本文も見ない。
+		//  メディア起因(カード満杯/未挿入)は通信が成立しているので、未検出や接続断として扱わない。
+		last = cameraController::lastFailure(*dev_);
+		if (last.mediaBlocked) { mediaBlocked_ = true; }
 		if (!running_.load())                                 { break; }
 		if (static_cast<int>(tool::getElapse(t0)) >= budgetMs) { break; }
 		this->interruptibleSleep(kShutterRetryMs);
@@ -398,21 +396,57 @@ errCode captureRunner::fireShutter(const hgc::exposure& shotExp, double interval
 	{
 		char eb[240];
 		std::snprintf(eb, sizeof(eb), "%s (try=%d %dms budget=%dms)",
-		              this->withHttpDetail("actShutter").c_str(), tries,
+		              this->withFailDetail("actShutter").c_str(), tries,
 		              static_cast<int>(tool::getElapse(t0)), budgetMs);
 		onError_(err, eb);
 	}
-	if (status <= 0) { ++failStreak; }	// 応答なし=本当に届いていない。503等は接続断ではない
+	if (last.noReply) { ++failStreak; }	// 届いていない=本当の接続断の疑い。断られただけなら数えない
 	return err;
 }
 
-// 窓の境目の配分を、いまの撮影制御方法の答えへ1目盛りずつ寄せる(説明はヘッダ)。
-bool captureRunner::migrateTowardCcm(expo::exposureCtl& ctl, expo::exposureCtl& want, const hgc::ccmBase* ccm)
+// 窓の境目の配分を、いまの撮影制御方法の答えへ寄せる(説明はヘッダ)。
+//
+// 【速さを露出と揃える(2026-09-05)】明るさは変えないが、iso/ss/fn の配分が変われば
+//  絵の見え方(粒状感・被写界深度・ぶれ)は変わる。露出と同じ「段/秒」で緩やかに寄せる。
+//  短い周期では数コマに1目盛り、長い周期では1コマに複数目盛りになる。
+//  露出そのものとは別枠なので、貯金も別に持つ(migrateBudget_)。
+// 露出の明るさ[段]。**デバイスに聞く**(並びも刻みもカメラの都合なので持たない)。
+double captureRunner::brightnessOf(const hgc::exposure& e) const
+{
+	return (dev_ != nullptr) ? this->brightnessOf(*dev_, e) : 0.0;
+}
+
+double captureRunner::brightnessOf(const class device& dev, const hgc::exposure& e) const
+{
+	if (dev.apiBase == nullptr) { return 0.0; }
+	expo::expoPoint p;
+	if (dev.apiBase->expoStops(e, p) != ERR_HGC_OK) { return 0.0; }
+	return p.sum();
+}
+
+bool captureRunner::migrateTowardCcm(expo::exposureCtl& ctl, expo::exposureCtl& want,
+                                     const hgc::ccmBase* ccm, double stepStops)
 {
 	if (ccm == nullptr || !validExposure(ccm->initial)) { return false; }
 	// 夜間は固定露出。組み替える自由度が無いので触らない(既存の移行に任せる)。
 	if (ccm->type == hgc::ccmType::night) { return false; }
-	return expo::migrateToward(ctl, want, tables_, ccm->initial);
+	double room = (migrateBudget_ < frameLimit_) ? migrateBudget_ : frameLimit_;
+	// 【無段のカメラには目盛りが無い(2026-09-19)】その場合は 1 コマの許容を
+	//  kMigrateSlices に割って刻む。1/3 段と決め打つと、無段の端末で配分が粗く動いてしまう。
+	//  目盛りのあるカメラは従来どおり 1 目盛りずつ。
+	const double step = (stepStops > 0.0) ? stepStops
+	                  : ((room > 0.0) ? (room / kMigrateSlices) : kExposureStepStops);
+	if (!(step > 0.0)) { return false; }
+	bool moved = false;
+	while (room >= step - 1e-9)
+	{
+		if (!expo::migrateToward(ctl, want, ccm->initial, step)) { break; }	// もう合っている
+		room           -= step;
+		migrateBudget_ -= step;
+		moved = true;
+	}
+	if (migrateBudget_ < 0.0) { migrateBudget_ = 0.0; }
+	return moved;
 }
 
 // 測光失敗のログ文を作る。原因を後から特定できるよう、どこでつまずいたかまで残す。
@@ -441,61 +475,43 @@ void captureRunner::meterLostMsg(const apiBase::meterResult& mr, char* buf, size
 	}
 }
 
-// 移動平均バッファから「いまの場面の明るさ」を推定する(2026-08-02)。
+// 移動平均バッファから「いまの場面の明るさ」を求める。
 //
-// 【なぜ単純平均ではいけないか】n点の単純平均は (n-1)/2 コマ分だけ遅れた値になる。
-//  遅れ[段] = 場面の変化速度[段/コマ] × (n-1)/2 なので、変化が速いほど大きく膨らむ。
-//  実測(2026-08-01 postNight): 空が 0.09段/コマ の間は遅れ 0.18段 で目立たないが、
-//  夜明けが加速して 0.46段/コマ になると遅れは 0.92段 になり、写真は目標より 1.45段
-//  明るくなった(IMG_4627)。「一部の時間帯だけ明るくずれる」のはこれが原因で、
-//  ヒステリシス帯(一定の +0.5段)だけでは説明できない。
+// 【傾きの先読みを外した(2026-09-09 ユーザー指示)】以前は n 点平均の遅れ((n-1)/2 コマ)を
+//  「隣接差分の中央値 × (n-1)/2」で外挿して補っていた(2026-08-02。夜明け 0.46 段/コマで平均が
+//  0.92 段遅れ、写真が 1.45 段明るくずれた対策)。「帯を越えたら中央まで戻す」旧方式では、
+//  遅れた値で大きく動くので補正が要った。
+//  デッドゾーン制御(帯の縁までの差だけ毎コマ動かす。2026-09-08)では逆に害になった:
+//  上がり方が鈍った後も傾きが 2〜3 コマ残り、生の測光が縁の内側に入っても暗くし続ける
+//  (2026-09-09 朝の実測: 生 +0.30〜+0.46 段のコマで 5 回動き、0.4 段・6 コマ周期の往復)。
+//  縁に沿う方式では毎コマのはみ出しを見て小さく動くので、遅れそのものは害が小さい。
+//  平均は雲などの一過性の変化を均す役だけに戻す。
 //
-// 【対策】平均に「傾き × (n-1)/2」を足し戻して現在値を推定する。
-//  傾きは最小二乗ではなく **隣り合う差分の中央値** で求める。理由は一過性の光への強さ:
-//    1コマだけ2段明るくなった場合(車のライト等)の推定値
-//      単純平均      +0.40段
-//      最小二乗の傾き +1.20段 … 3倍に過剰反応し、光が消えた後 -0.40段 へ逆振れする
-//      差分の中央値  +0.40段 … 外れ値は4つの差分のうち2つにしか効かないので無視できる
-//  夜明けのような一定速度の変化には、どちらの傾きでも遅れ 0 になる。
-//
-// 計算は段(log2)で行う。場面の明るさは掛け算で変化するので、log空間なら一定速度の
-// 変化が直線になり外挿が正確になる(線形空間で外挿すると加速側で行き過ぎる)。
-//
-// 【残る弱点】変化が折り返す瞬間は直前の傾きを外挿し続けるので少し行き過ぎる
-//  (夜明けが平坦に転じる場面で +0.18段 程度)。外挿量は kSceneLeadMaxStops で頭打ちにする。
-//  return : 推定した場面の明るさ(リニア)。有効な値が無ければ -1
+// 計算は段(log2)で行う(場面の明るさは掛け算で変わるため)。
+//  return : 場面の明るさ(リニア)。有効な値が無ければ -1
 double captureRunner::sceneNowFromBuf(const std::vector<double>& buf) const
 {
-	std::vector<double> l;
-	l.reserve(buf.size());
-	for (double v : buf) { if (v > 0.0) { l.push_back(std::log2(v)); } }
-	if (l.empty()) { return -1.0; }
-
 	double mean = 0.0;
-	for (double v : l) { mean += v; }
-	mean /= static_cast<double>(l.size());
-	// 差分が2つ未満だと中央値が外れ値に耐えられない。傾きは使わず平均のまま返す。
-	if (l.size() < 3) { return std::pow(2.0, mean); }
-
-	std::vector<double> d;
-	d.reserve(l.size() - 1);
-	for (size_t i = 1; i < l.size(); ++i) { d.push_back(l[i] - l[i - 1]); }
-	std::sort(d.begin(), d.end());
-	const size_t m = d.size() / 2;
-	const double slope = (d.size() % 2 != 0) ? d[m] : (d[m - 1] + d[m]) / 2.0;
-
-	double lead = slope * (static_cast<double>(l.size()) - 1.0) / 2.0;
-	if (lead >  kSceneLeadMaxStops) { lead =  kSceneLeadMaxStops; }
-	if (lead < -kSceneLeadMaxStops) { lead = -kSceneLeadMaxStops; }
-	return std::pow(2.0, mean + lead);
+	int n = 0;
+	for (double v : buf) { if (v > 0.0) { mean += std::log2(v); ++n; } }
+	if (n == 0) { return -1.0; }
+	return std::pow(2.0, mean / static_cast<double>(n));
 }
 
-// ヒステリシス帯の実効値。1歩(1/3段)より狭い帯は構造的に成立しない(どう動かしても帯の
-// 内側へ入れないので、補正するたび必ず反対側へ飛び出す)。よって1歩を下限として扱う。
+// ヒステリシス帯の実効値。狭すぎる帯は構造的に成立しない(どう動かしても帯の内側へ
+// 入れないので、補正するたび必ず反対側へ飛び出す)。下限は kMinHysteresisStops で、
+// 実測から選んだ値である(1歩の大きさから導いたものではない。ヘッダの説明を参照)。
 // 設定そのものは書き換えない(ユーザーの値は保存されたまま、使うときだけ下限を当てる)。
-double captureRunner::effHysteresis(double raw) const
+double captureRunner::effHysteresis(double raw, double notchStops) const
 {
-	const double lo = kMinHysteresisStops;
+	// 下限はデバイスの1目盛りに比例させる(ヘッダの kBandPerNotch を参照)。
+	//  1/3 段のカメラでは従来の 0.8 段と同じ値になる。
+	// 【無段のカメラは下限まで狭める(2026-09-20)】目盛りが無い(notch=0)カメラでは
+	//  丸めの行き過ぎが起きないので、帯は測光の揺れを吸う最低限でよい。
+	//  以前はここで既定の 1/3 段へ落としていたため、無段の内蔵カメラにも 0.80 段の帯が
+	//  当たり、細かい露出補正が1コマも動かずに埋もれていた(ヘッダの意図とも食い違っていた)。
+	double lo = (notchStops > 0.0) ? (kBandPerNotch * notchStops) : kBandFloorStops;
+	if (lo < kBandFloorStops) { lo = kBandFloorStops; }
 	return (raw > lo) ? raw : lo;
 }
 
@@ -530,28 +546,76 @@ void captureRunner::resetStepLock(void)
 {
 	lastStepDir_ = 0;
 	stepLock_    = 0;
+	vel_         = 0.0;
 }
 
-// 踏み出すと帯の反対側へ飛び出すなら動かない(デッドバンド。2026-07-29 振動の根治)。
-//  ヒステリシス帯より1歩(1/3段)が大きいと、補正のたびに必ず反対側へ越えて往復し続ける。
-//  夕日/朝日は帯0.3段<歩幅0.333段のため必ず振動していた(日中は帯1.0段なので発動しない)。
-//  need=目標までの差[段], band=ヒステリシス全幅[段]。true=このコマは動かさない。
-bool captureRunner::wouldOvershoot(double needStops, double bandStops) const
+double captureRunner::shapedMove(expo::exposureCtl& ctl, double need,
+                                 const hgc::exposure* home, double homeB,
+                                 double smoothMin, double intervalSec)
 {
-	const double a = std::fabs(needStops);
-	if (a >= kExposureStepStops) { return false; }	// 1歩以上ずれている→動かすべき
-	// 1歩動かすと |a - 1歩| だけ反対側へ出る。それが帯の外なら動かさない。
-	return (kExposureStepStops - a) > (bandStops / 2.0);
+	const double T      = (intervalSec > 0.0) ? intervalSec : 15.0;
+	const double minutes = (smoothMin > 0.0) ? smoothMin : kSmoothMinDefault;
+	const double secs   = minutes * 60.0;
+	// 1 コマの速度変化の上限。速度上限まで secs かけて変わる。
+	const double frames = secs / T;
+	const double a      = frameLimit_ / ((frames > 1.0) ? frames : 1.0);
+	// 見込み時間[コマ]。縁までの距離をこの時間で埋める速度を目標にする(縁に近いほどゆっくり)。
+	const double th     = (secs * kApproachFraction) / T;
+	double mv = expo::shapeVelocity(vel_, need, frameLimit_, a, th);	// 計算は純関数(単体テスト済み)
+	// このコマで動かしてよい量(貯金と 1 コマの上限の小さい方)で切る。
+	const double room = this->moveRoomStops();
+	if (mv >  room) { mv =  room; }
+	if (mv < -room) { mv = -room; }
+	if (std::fabs(mv) < 1e-9) { return 0.0; }
+	// 基準(home)へ戻る向きのときは優先度の逆順で巻き戻す(§4.5 往復対称)。向きは速度で見る。
+	const bool useHome = (home != nullptr) &&
+		((mv < 0.0) ? (ctl.brightness() > homeB) : (ctl.brightness() < homeB));
+	const double did = ctl.moveStops(mv, useHome ? home : nullptr);
+	// 限界に当たって動けなかったぶんは速度から捨てる(溜め込むと限界を離れた瞬間に一気に出る)。
+	if (std::fabs(did - mv) > 1e-6) { vel_ = did; }
+	if (std::fabs(did) > 1e-9) { this->spendStepBudget(did); }
+	return did;
 }
 
-int captureRunner::stepsToClose(double needStops) const
+// 【飛び出しの判定は要らなくなった(2026-09-19 無段階化)】
+//  以前は「1歩=デバイスの1目盛り」しか動かせなかったので、はみ出した量より歩幅が大きいと
+//  必ず反対側へ越えて往復した(wouldOvershoot で見送っていた)。いまは**はみ出した分だけ
+//  無段階で動かす**ので、原理的に反対側へ飛び出さない。残るのは「カメラへ送るときの丸め」
+//  だけで、それは帯の下限を1目盛りに比例させて吸収する(effHysteresis)。
+
+// 【1コマぶんの許容を貯める(2026-09-05)】
+//  露出を動かす速さの上限は「段/秒」なので、1コマの許容は撮影周期で決まる。
+//  周期が短いカメラでは1コマの許容が1目盛りに満たないことがあるため、貯めて持ち越す
+//  (9秒周期・1/3段刻みなら 0.20段ずつ貯まり、2コマ目で1目盛り動ける)。
+//  貯めっぱなしにはしない。測光が長く失敗した後などに何段も一度に飛ぶのを防ぐため、
+//  「1コマぶん + 1目盛り」で頭打ちにする。
+void captureRunner::addStepBudget(double intervalSec)
 {
-	const double a = std::fabs(needStops);
-	int n = static_cast<int>(a / kExposureStepStops + 0.5);
-	const int maxN = static_cast<int>(kMaxCatchUpStops / kExposureStepStops + 0.5);
-	if (n < 1)    { n = 1; }
-	if (n > maxN) { n = maxN; }
-	return n;
+	const double frame = frameAllowanceStops(intervalSec);
+	// 【1目盛りの下駄をやめた(2026-09-19 無段階化)】以前は「1目盛りより細かくは動けない」ので
+	//  1コマの上限を最低1目盛りまで引き上げていた。そのため ISO が 1 段刻みのカメラでは
+	//  1コマで 1.0 段も動けてしまい、変化速度の上限が効かなくなる。無段階になったので
+	//  上限はそのまま「速さの上限×撮影周期」でよい。
+	frameLimit_ = frame;
+	const double cap = frameLimit_ * kStepBudgetCapFrames;
+	stepBudget_    += frame;
+	migrateBudget_ += frame;
+	if (stepBudget_    > cap) { stepBudget_    = cap; }
+	if (migrateBudget_ > cap) { migrateBudget_ = cap; }
+}
+
+void captureRunner::spendStepBudget(double stops)
+{
+	stepBudget_ -= std::fabs(stops);
+	if (stepBudget_ < 0.0) { stepBudget_ = 0.0; }	// 目盛りは段数を跨ぐので少し超えることがある
+}
+
+// このコマで動かしてよい量[段]。
+//  貯金(=速さの上限×撮影周期の積み上げ)と「1コマの上限」の**小さい方**。
+//  貯まっていても1コマの粗さは上限で決まる。
+double captureRunner::moveRoomStops(void) const
+{
+	return (stepBudget_ < frameLimit_) ? stepBudget_ : frameLimit_;
 }
 
 
@@ -720,7 +784,7 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 		const hgc::exposure& mex = validExposure(mr.meterExp) ? mr.meterExp : ctl.current();
 		const double lin0      = expo::ev0LinearForMeasure(mr.linear, mex, ev0cfg_);
 		const double linT      = expo::linearFromEvBase(evT, lin0);		// 目標リニア輝度
-		const double curB      = expo::brightnessStops(ctl.current(), tables_);
+		const double curB      = this->brightnessOf(ctl.current());
 		const double predicted = mr.sceneRef * std::pow(2.0, curB);		// 候補露出で写る明るさ
 		if (predicted <= 0.0 || linT <= 0.0) { break; }
 		const double err = std::log2(predicted / linT);	// +:明るすぎ / -:暗すぎ
@@ -735,19 +799,24 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 			std::snprintf(cb, sizeof(cb),
 			              "step=%d mss=%s mB=%.2f x=%.4f ref=%.6f cur=%.2f err=%+.2f "
 			              "settle=%dms rdy=%dms try=%d stale=%d hs=%08x",
-			              step, mex.ss.c_str(), expo::brightnessStops(mex, tables_), mr.x, mr.sceneRef,
+			              step, mex.ss.c_str(), this->brightnessOf(mex), mr.x, mr.sceneRef,
 			              curB, err, mr.settleMs, mr.rdyMs, mr.tries, mr.staleSkip,
 			              static_cast<unsigned>(mr.histSum));
 			dataManager::logEvent("CONV", cb);
 		}
 
-		if (std::fabs(err) <= kInitConvergeTolStops) { converged = true; break; }	// 収束(1枚目から1/3段以内)
-
-		ctl.applyStops(-err);	// 目標へ直接投影(限界・1/3段テーブルへは applyStops がクランプ)
-		const double newB = expo::brightnessStops(ctl.current(), tables_);
+		// 収束の判断と動かす量。飽和していれば収束と認めず、投影量に関わらず暗くする
+		//  (判断そのものは expo::initialConvergeStep。単体テストで実測値を固定してある)。
+		const expo::convergeStep cs = expo::initialConvergeStep(err, mr.x, kInitConvergeTolStops,
+		                                                        kInitSatMedian, kInitSatStepStops);
+		if (cs.converged) { converged = true; break; }	// 収束(1枚目から1/3段以内)
+		const double did = ctl.moveStops(cs.delta);
 		// 露出限界に当たって動けない=これ以上詰められない。狙いには届かないが「出せる最良」に
 		// 到達しているので、収束できなかった(時間切れ)とは区別して扱う。
-		if (std::fabs(newB - curB) < 1e-6) { converged = true; break; }
+		//  【動いた量そのもので見る(2026-09-19)】カメラへ送る値は目盛りに丸めるので、
+		//  半目盛り未満の動きでは丸めた姿が変わらない。丸めた姿で比べると「動けなかった」と
+		//  取り違える。
+		if (std::fabs(did) < 1e-6) { converged = true; break; }
 		// 次の反復で新しい測光により誤差を再確認する(確認が取れたら上で break)。
 	}
 
@@ -786,7 +855,7 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 			const hgc::exposure& cex = validExposure(cr.meterExp) ? cr.meterExp : ctl.current();
 			const double cLin0 = expo::ev0LinearForMeasure(cr.linear, cex, ev0cfg_);
 			const double cLinT = expo::linearFromEvBase(evT, cLin0);
-			const double cCurB = expo::brightnessStops(ctl.current(), tables_);
+			const double cCurB = this->brightnessOf(ctl.current());
 			const double cPred = cr.sceneRef * std::pow(2.0, cCurB);
 			if (cPred <= 0.0 || cLinT <= 0.0) { break; }
 			const double cErr  = std::log2(cPred / cLinT);
@@ -799,9 +868,8 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 			++step;					// 実写で1歩詰めたので収束の1歩として数える
 			converged = false;
 			if (std::fabs(cErr) <= kInitConvergeTolStops) { converged = true; break; }
-			ctl.applyStops(-cErr);
-			const double cNewB = expo::brightnessStops(ctl.current(), tables_);
-			if (std::fabs(cNewB - cCurB) < 1e-6) { converged = true; break; }	// 露出限界で動けない
+			const double cDid = ctl.moveStops(-cErr);
+			if (std::fabs(cDid) < 1e-6) { converged = true; break; }	// 露出限界で動けない
 			// ここで打ち切らない。補正後の露出でもう一度測り、ev0 を引き直して確かめる
 			//  (1回の補正では 1.0〜1.3段 残る。kCalibMaxShots の説明を参照)。
 		}
@@ -813,7 +881,7 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 		std::snprintf(cb, sizeof(cb), "done step=%d shots=%d ng(apply=%d meter=%d) conv=%d -> iso=%s ss=%s fn=%s (%.2f stops)",
 		              step, calibShots, applyNg, meterNg, converged ? 1 : 0,
 		              ctl.current().iso.c_str(), ctl.current().ss.c_str(), ctl.current().fn.c_str(),
-		              expo::brightnessStops(ctl.current(), tables_));
+		              this->brightnessOf(ctl.current()));
 		dataManager::logEvent("CONV", cb);
 	}
 
@@ -826,8 +894,8 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 
 	// 結果を1行残す。**収束できたなら異常ではないので INFO** にする。onError_ は ERR ログに加えて
 	//  UI へも通知(HGE_EV_ERROR)が飛ぶので、正常な収束で呼んではいけない。
-	//  また、HTTP の状態は「取得そのものが失敗した」(stage=22)ときしか意味を持たない。従来は
-	//  無条件に withHttpDetail を通していたため、通信は正常なのに "http=応答なし" と書かれていた。
+	//  また、失敗の内訳は「取得そのものが失敗した」(stage=22)ときしか意味を持たない。従来は
+	//  無条件に添えていたため、通信は正常なのに "http=応答なし" と書かれていた。
 	{
 		// 数値の内訳はログにだけ残す。画面へはコード1つ(convergeFailed)しか送らない。
 		//  内訳は applyNg/meterNg/stage/HTTP応答など6項目あり、ユーザーが見ても打つ手が無い。
@@ -842,7 +910,7 @@ hgc::exposure captureRunner::initialConverge(expo::exposureCtl& ctl, const hgc::
 			msg += " (applyNg=" + std::to_string(applyNg) + " meterNg=" + std::to_string(meterNg) +
 			       " lastStage=" + std::to_string(lastFailStage) +
 			       " err=" + std::to_string(static_cast<unsigned>(lastErr)) + ")";
-			if (lastFailStage == 22) { msg += " " + this->withHttpDetail("lastHttp"); }
+			if (lastFailStage == 22) { msg += " " + this->withFailDetail("lastFail"); }
 		}
 		dataManager::logEvent(bad ? "ERR" : "CONV", msg.c_str(), bad);
 		if (bad && onNotice_) { onNotice_(static_cast<int>(hgc::notice::convergeFailed), 0); }
@@ -874,10 +942,16 @@ bool captureRunner::establishSession(void)
 
 	// 撮影モードに入る(ライブビュー開始)
 	errCode err = cameraController::startShooting(*dev_);
-	if (err == ERR_HGC_OK) { this->releaseLiveView(); }	// 初期収束が要るときは中で張り直す
+	if (err == ERR_HGC_OK) { this->releaseLiveView(); sessionFailNotice_ = 0; }	// 初期収束が要るときは中で張り直す
 	if (err != ERR_HGC_OK)
 	{
-		if (onError_) { onError_(err, this->withHttpDetail("startShooting")); }
+		// 【理由が分かっているなら名指しで伝える(2026-09-09)】カメラ層が理由を知っていることが
+		//  ある(例: この端末のカメラを使う許可が無い)。「見つかりません」のままだと、
+		//  探し直しても直らないものを利用者が延々と待つことになる。取得は数秒ごとにやり直すので、
+		//  同じ理由は1度だけ流す。
+		const int fn = cameraController::lastFailNotice(*dev_);
+		if (fn != 0 && fn != sessionFailNotice_ && onNotice_) { sessionFailNotice_ = fn; onNotice_(fn, 0); }
+		if (onError_) { onError_(err, this->withFailDetail("startShooting")); }
 		return false;
 	}
 
@@ -886,27 +960,26 @@ bool captureRunner::establishSession(void)
 	// 作れないため、Mにしてから設定可能値を取得する。終了時に restoreShootingMode で元へ戻す。
 	{
 		ramMark("before shootMode");
+		// 成果物に名前を付ける実装(内蔵カメラの動画)へ計画名を渡す。UI に頼ると再起動後の再開で抜ける。
+		if (dev_->apiBase)
+		{
+			dev_->apiBase->setSessionLabel(plan_.name);
+			dev_->apiBase->setVideoOption(csjson::videoToJson(plan_.video));	// 動画の作り方(内蔵カメラだけ使う)
+		}
 		errCode me = cameraController::setupShootingModeManual(*dev_);
 		if (me == ERR_HGC_OK)            { interruptibleSleep(800); }	// モード変更/ability更新の反映待ち(初回rdyShutterの取りこぼし防止)
 		else if (me == ERR_HGC_NOT_SUPPORTED) { /* モード変更非対応機。そのまま続行 */ }
-		else if (onError_)               { onError_(me, this->withHttpDetail("setupShootingModeManual")); }
+		else if (onError_)               { onError_(me, this->withFailDetail("setupShootingModeManual")); }
 	}
 
-	// 設定可能値を取得して設定可能値テーブルを作る(仕様 4.2)
+	// 設定可能値をデバイスに用意させる(仕様 4.2)。**並びはデバイスの中に置いたままにする**。
+	//  ここで取るのは「機材の記録と画面表示」のためで、露出制御は段でやり取りする。
+	//  【標準テーブルへの逃げをやめた(2026-09-19)】以前はカメラが答えないと 1/3 段の
+	//   標準の並びを勝手に使っていた。未知のカメラをそれに載せると歪むので、
+	//   答えられないカメラはここで失敗させる(呼び出し側が撮影を始めない)。
 	ramMark("before getSettings");
 	cmdt::shotRange range;
-	if (cameraController::getSettings(*dev_, range) == ERR_HGC_OK &&
-	    !range.iso.empty() && !range.ss.empty() && !range.fNum.empty())
-	{
-		tables_.iso = expo::buildTable(range.iso,  expo::expoKind::iso);
-		tables_.ss  = expo::buildTable(range.ss,   expo::expoKind::ss);
-		tables_.fn  = expo::buildTable(range.fNum, expo::expoKind::fn);
-	}
-	else
-	{	// 取得失敗時は標準テーブル(レンズのf範囲)でフォールバック
-		double fmin = (plan_.lens.fn > 0.0) ? plan_.lens.fn : 1.0;
-		tables_ = expo::standardTables(fmin, 32.0);
-	}
+	cameraController::getSettings(*dev_, range);
 	// 同期撮影の追加カメラも同じタイミングで張る(失敗しても撮影は続行する)。
 	this->establishSubSessions();
 	ramMark("establish done");
@@ -917,30 +990,8 @@ bool captureRunner::establishSession(void)
 // 主カメラで測光して決めた露出を追加カメラへも配り、同じコマで全台のシャッターを切る。
 // 測光・露出計算は主カメラの経路のままで、ここは決まった露出を乗せるだけ。
 
-namespace
-{
-	// 値文字列を別のカメラの設定可能値へ丸める。
-	//  機種が違うと刻みが違う(例: 1/3段のカメラと1/2段のカメラ)ので、同じ文字列を
-	//  そのまま送るとカメラが断る。実数の比を log2 で見て一番近いものを選ぶ(=段数で最寄り)。
-	//  テーブルが空なら元の文字列をそのまま返す(最善努力)。
-	std::string nearestValue(const std::vector<expo::expoEntry>& tab,
-	                         const std::string& want, expo::expoKind k)
-	{
-		if (tab.empty() || want.empty()) { return want; }
-		for (const auto& e : tab) { if (e.value == want) { return want; } }	// そのまま使える
-		const double target = expo::parseValue(want, k);
-		if (!(target > 0.0)) { return want; }	// Bulb 等は丸めようがない
-		const std::string* best = nullptr;
-		double bestD = 0.0;
-		for (const auto& e : tab)
-		{
-			if (!(e.real > 0.0)) { continue; }
-			const double d = std::fabs(std::log2(e.real / target));
-			if (best == nullptr || d < bestD) { best = &e.value; bestD = d; }
-		}
-		return (best != nullptr) ? *best : want;
-	}
-}
+// 【値の丸めはここに無い(2026-09-19)】機種ごとに刻みが違う件は、各デバイスの
+//  expoResolve が自分の都合で解決する。撮影ループは段を渡すだけでよくなった。
 
 void captureRunner::setSubDevices(const std::vector<device*>& devs)
 {
@@ -980,32 +1031,31 @@ void captureRunner::establishSubSessions(void)
 			errCode me = cameraController::setupShootingModeManual(*sc.dev);
 			if (me == ERR_HGC_OK) { interruptibleSleep(800); }	// ability 更新待ち(主と同じ)
 		}
+		// 設定可能値をこの台に用意させる(並びはその台の中に置いたままにする)。
+		//  主と機種が違えば刻みも違うが、こちらは段で渡すだけなので気にしなくてよい。
 		cmdt::shotRange range;
-		if (cameraController::getSettings(*sc.dev, range) == ERR_HGC_OK &&
-		    !range.iso.empty() && !range.ss.empty() && !range.fNum.empty())
-		{
-			sc.tables.iso = expo::buildTable(range.iso,  expo::expoKind::iso);
-			sc.tables.ss  = expo::buildTable(range.ss,   expo::expoKind::ss);
-			sc.tables.fn  = expo::buildTable(range.fNum, expo::expoKind::fn);
-		}
-		else
-		{	// 取得失敗時は主カメラのテーブルを借りる(丸めなしと同等になる)。
-			sc.tables = tables_;
-		}
+		cameraController::getSettings(*sc.dev, range);
 		sc.ready = true;
 		sc.failStreak = 0;
 	}
 }
 
-// 主の露出を各台の設定値へ丸めて、変わった項目だけ送る。
+// 主の露出を各台へ配る。**段で渡して、丸めるのは各台の中**(2026-09-19)。
+//  以前は主が子のテーブルを持って丸めていた。機種ごとの刻みを撮影ループが抱える形だったので、
+//  それぞれのデバイスに解決させる形に改めた。台数が増えても撮影ループは何も知らなくてよい。
 void captureRunner::applySubExposure(const hgc::exposure& exp)
 {
+	if (dev_ == nullptr || dev_->apiBase == nullptr) { return; }
+	expo::expoPoint want;
+	if (dev_->apiBase->expoStops(exp, want) != ERR_HGC_OK) { return; }
 	for (auto& sc : subs_)
 	{
 		if (!sc.ready || sc.dev == nullptr || sc.dev->apiBase == nullptr) { continue; }
-		const std::string fn  = nearestValue(sc.tables.fn,  exp.fn,  expo::expoKind::fn);
-		const std::string ss  = nearestValue(sc.tables.ss,  exp.ss,  expo::expoKind::ss);
-		const std::string iso = nearestValue(sc.tables.iso, exp.iso, expo::expoKind::iso);
+		hgc::exposure e; expo::expoPoint got;
+		if (sc.dev->apiBase->expoResolve(want, e, got) != ERR_HGC_OK) { continue; }
+		const std::string& fn  = e.fn;
+		const std::string& ss  = e.ss;
+		const std::string& iso = e.iso;
 		if (fn  != sc.lastFn)  { if (cameraController::setFNumber(*sc.dev, fn) == ERR_HGC_OK) { sc.lastFn  = fn;  } }
 		if (ss  != sc.lastSs)  { if (cameraController::setSS(*sc.dev, ss)      == ERR_HGC_OK) { sc.lastSs  = ss;  } }
 		if (iso != sc.lastIso) { if (cameraController::setIso(*sc.dev, iso)    == ERR_HGC_OK) { sc.lastIso = iso; } }
@@ -1357,6 +1407,17 @@ errCode captureRunner::loop(void)
 		// 直前の窓も自動露出だったか(項目8: 自動露出→自動露出のみ目標evを緩やかに移行する)。
 		const bool prevAuto = (prevWin && prevWin->ccm && isAuto(prevWin->ccm->type));
 
+		// 【このコマぶんの許容を貯める(2026-09-05)】露出を動かす速さは段/秒で決めてあるので、
+		//  1コマで動かしてよい段数は撮影周期で決まる。ここで1コマ1回だけ足す。
+		//  1歩の大きさは制御方法ごとの器(preCtl/postCtl/autoCtl)から採るが、貯金は共通なので
+		//  ここではいま使う器のものを渡す(頭打ちの計算にしか使わない)。
+		{
+			const expo::exposureCtl& useCtl =
+				(ccm && ccm->type == hgc::ccmType::preNight)  ? preCtl  :
+				(ccm && ccm->type == hgc::ccmType::postNight) ? postCtl : autoCtl;
+			this->addStepBudget(interval);
+		}
+
 		hgc::exposure target{};
 		double meteredLinear = -1.0;	// 測光したリニア輝度(自動補正時のみ。<0=測光なし)
 		meterMs_  = -1;	// このコマの測光実測msをリセット(測光しないコマは -1 のまま)
@@ -1396,7 +1457,7 @@ errCode captureRunner::loop(void)
 			if (windowChanged)
 			{
 				// 上限=夜間露出(暗所限界)。下限(明所限界)・優先度は直前ccm(日中/夕日)。
-				preCtl.init(tables_, nightExp, prevC ? prevC->limitDark : hgc::exposure{},
+				preCtl.init(dev_->apiBase.get(), nightExp, prevC ? prevC->limitDark : hgc::exposure{},
 				            prevC ? prevC->priority : ccm->priority);
 				preCtl.capLongestSs(maxSsCap);	// ss は夜間ss/周期-2秒を超えない(指示3)
 				avgBuf.clear(); this->resetStepLock();
@@ -1415,17 +1476,28 @@ errCode captureRunner::loop(void)
 			// 終端で夜間露出へきっかり着地させるための残フレーム判定。
 			const long long winEnd  = hgc::toUnixUtc(w->end, off_);
 			const int remainFrames  = (interval > 0.0) ? static_cast<int>((winEnd - now) / interval) : 0;
-			const double curB       = expo::brightnessStops(preCtl.current(), tables_);
-			const double nightB     = validExposure(nightExp) ? expo::brightnessStops(nightExp, tables_) : curB;
-			const int needFrames    = static_cast<int>(std::ceil(std::fabs(nightB - curB) / (1.0 / 3.0)));
+			// 【無段階の現在位置で測る(2026-09-19)】寄せるのは内部の位置(preCtl.brightness())
+			//  なので、残りコマ数もそれで測る。丸めた姿で測ると半目盛りぶん食い違う。
+			const double curB       = preCtl.brightness();
+			const double nightB     = validExposure(nightExp) ? this->brightnessOf(nightExp) : curB;
+			// 【所要フレーム数と寄せ幅は必ず同じ式にする(2026-09-05)】ここがずれると窓の終端で
+			//  夜間露出にきっかり着地しない。1コマで寄せられる段数は速さの上限×撮影周期。
+			const double perFrame   = frameAllowanceStops(interval);
+			const int needFrames    = static_cast<int>(std::ceil(std::fabs(nightB - curB) / perFrame));
 			if (validExposure(nightExp) && remainFrames <= needFrames) { preNightConverge = true; }
 
 			if (preNightConverge && validExposure(nightExp))
 			{
-				// 収束フェーズ: 測光を止め夜間露出へ 1/3 段ずつ寄せる(終端できっかり一致)。
-				const double third = 1.0 / 3.0;
-				if (curB - nightB > third / 2.0)      { preCtl.darken(); }
-				else if (nightB - curB > third / 2.0) { preCtl.brighten(); }
+				// 収束フェーズ: 測光を止め夜間露出へ寄せる(終端できっかり一致)。
+				//  1コマで寄せてよいのは perFrame 段まで。目盛りが細かいカメラでは
+				//  1コマに複数目盛り踏む(合計が perFrame を超えない範囲で)。
+				//  無段階になったので「目盛りを何個踏むか」ではなく、残差をそのまま
+				//  1コマの許容(=速さの上限×撮影周期)で切って動かす。終端できっかり着地する。
+				const double room = this->moveRoomStops();
+				double       d    = nightB - preCtl.brightness();
+				if (d >  room) { d =  room; }
+				if (d < -room) { d = -room; }
+				this->spendStepBudget(preCtl.moveStops(d));
 				target = preCtl.current();
 			}
 			else
@@ -1451,38 +1523,24 @@ errCode captureRunner::loop(void)
 					if (mr.pinned && !pinPrev) { avgBuf.clear(); this->resetStepLock(); }
 					pinPrev = mr.pinned;
 					avgBuf.push_back(mr.sceneRef);
-					int n = (smooth_.movingAverage > 0) ? smooth_.movingAverage : 5;
-					while (static_cast<int>(avgBuf.size()) > n) { avgBuf.erase(avgBuf.begin()); }
-					const double avg = this->sceneNowFromBuf(avgBuf);	// 遅れを補った現在値の推定
+					// 【移動平均は廃止(2026-09-21)】最新 1 コマだけを見る。平均のむだ時間が動き出しを
+					//  遅らせていた。揺れは速度側でならす(shapedMove)。
+					while (static_cast<int>(avgBuf.size()) > 1) { avgBuf.erase(avgBuf.begin()); }
+					const double avg = this->sceneNowFromBuf(avgBuf);
 					double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : preCtl.current(), ev0cfg_);
-					double linU = expo::linearFromEvBase(preEv + this->effHysteresis(smooth_.hysteresis) / 2.0, lin0);
-					double linD = expo::linearFromEvBase(preEv - this->effHysteresis(smooth_.hysteresis) / 2.0, lin0);
+					// 帯の下限は**いちばん粗い目盛り**に比例させる。カメラへ送るときの丸めで
+					//  動いた軸の目盛りぶん行き過ぎうるので、それを帯が飲み込める広さが要る。
+					const double band = this->effHysteresis(smooth_.hysteresis, preCtl.maxStepStops());
+					double linU = expo::linearFromEvBase(preEv + band / 2.0, lin0);
+					double linD = expo::linearFromEvBase(preEv - band / 2.0, lin0);
 					// 撮影露出で撮った場合の明るさへ投影してから比べる(ループを閉じる)。
 					const double predicted = this->linearAtExposure(avg, preCtl.current());
-					if (predicted > linU || predicted < linD)
-					{
-						const double center = expo::linearFromEvBase(preEv, lin0);
-						const double need   = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;
-						// 帯の反対側へ飛び出すだけなら動かない(振動防止)。反転は抑制期間中は強い証拠が要る。
-						const double band = this->effHysteresis(smooth_.hysteresis);
-						const int    dir  = (need < 0.0) ? -1 : 1;
-						if (this->wouldOvershoot(need, band) || !this->allowStep(dir, need, band)) { meterFailStreak = 0; }
-						else
-						{
-						const int    steps  = this->stepsToClose(need);
-						int          moves  = 0;
-						for (int s = 0; s < steps; ++s)
-						{
-							const double cB = expo::brightnessStops(preCtl.current(), tables_);
-							bool moved;
-							if (need < 0.0) { moved = (haveHome && cB > homeB) ? preCtl.stepHome(false, nightExp) : preCtl.darken(); }
-							else            { moved = (haveHome && cB < homeB) ? preCtl.stepHome(true,  nightExp) : preCtl.brighten(); }
-							if (!moved) { break; }
-							++moves;
-						}
-						if (moves > 0) { this->noteStep(dir); }
-						}
-					}
+					// 【はみ出た分から速度を決めて動かす(2026-09-21)】帯の内側なら need=0(速度は減っていく)。
+					//  帯の縁までの差を埋める。中央までは戻さない(2026-09-08 の方針そのまま)。
+					const double need = (predicted > linU || predicted < linD)
+					                  ? expo::excessStops(predicted, linD, linU) : 0.0;
+					this->shapedMove(preCtl, need, haveHome ? &nightExp : nullptr, homeB,
+					                 smooth_.smoothMin, interval);
 					meterFailStreak = 0;
 				}
 				else
@@ -1520,7 +1578,7 @@ errCode captureRunner::loop(void)
 			if (windowChanged)
 			{
 				// 上限(暗所限界=最も露出の多い側)=夜間露出にクランプ。下限(明所限界)・優先度は次ccm。
-				postCtl.init(tables_, nightExp, nextC ? nextC->limitDark : hgc::exposure{},
+				postCtl.init(dev_->apiBase.get(), nightExp, nextC ? nextC->limitDark : hgc::exposure{},
 				             nextC ? nextC->priority : ccm->priority);
 				postCtl.capLongestSs(maxSsCap);	// ss は夜間ss/周期-2秒を超えない(指示3)
 				avgBuf.clear(); this->resetStepLock();
@@ -1535,7 +1593,7 @@ errCode captureRunner::loop(void)
 			}
 			// home(往復対称の基準)=次ccmの基準(=goal)。
 			const bool   haveHome = validExposure(goal);
-			const double homeB    = haveHome ? expo::brightnessStops(goal, tables_) : 0.0;
+			const double homeB    = haveHome ? this->brightnessOf(goal) : 0.0;
 			apiBase::meterResult mr;
 			this->meterFrame(shotExp, mr, warmedUp);	// 測光(実装はカメラ依存層。ウォームアップ中は切替なし=従来動作)
 			meterExp = mr.meterExp;
@@ -1554,38 +1612,18 @@ errCode captureRunner::loop(void)
 				if (mr.pinned && !pinPrev) { avgBuf.clear(); this->resetStepLock(); }
 				pinPrev = mr.pinned;
 				avgBuf.push_back(mr.sceneRef);
-				int n = (smooth_.movingAverage > 0) ? smooth_.movingAverage : 5;
-				while (static_cast<int>(avgBuf.size()) > n) { avgBuf.erase(avgBuf.begin()); }
-				const double avg = this->sceneNowFromBuf(avgBuf);	// 遅れを補った現在値の推定
+				while (static_cast<int>(avgBuf.size()) > 1) { avgBuf.erase(avgBuf.begin()); }	// 移動平均は廃止(2026-09-21)
+				const double avg = this->sceneNowFromBuf(avgBuf);
 				double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : postCtl.current(), ev0cfg_);
-				double linU = expo::linearFromEvBase(postEv + this->effHysteresis(smooth_.hysteresis) / 2.0, lin0);
-				double linD = expo::linearFromEvBase(postEv - this->effHysteresis(smooth_.hysteresis) / 2.0, lin0);
+				const double band = this->effHysteresis(smooth_.hysteresis, postCtl.maxStepStops());
+				double linU = expo::linearFromEvBase(postEv + band / 2.0, lin0);
+				double linD = expo::linearFromEvBase(postEv - band / 2.0, lin0);
 				// 撮影露出で撮った場合の明るさへ投影してから比べる(ループを閉じる)。
 				const double predicted = this->linearAtExposure(avg, postCtl.current());
-				if (predicted > linU || predicted < linD)
-				{
-					const double center = expo::linearFromEvBase(postEv, lin0);
-					const double need   = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;
-					// 帯の反対側へ飛び出すだけなら動かない(振動防止)。反転は抑制期間中は強い証拠が要る。
-					const double band = this->effHysteresis(smooth_.hysteresis);
-					const int    dir  = (need < 0.0) ? -1 : 1;
-					if (this->wouldOvershoot(need, band) || !this->allowStep(dir, need, band)) { meterFailStreak = 0; }
-					else
-					{
-					const int    steps  = this->stepsToClose(need);
-					int          moves  = 0;
-					for (int s = 0; s < steps; ++s)
-					{
-						const double curB = expo::brightnessStops(postCtl.current(), tables_);
-						bool moved;
-						if (need < 0.0) { moved = (haveHome && curB > homeB) ? postCtl.stepHome(false, goal) : postCtl.darken(); }
-						else            { moved = (haveHome && curB < homeB) ? postCtl.stepHome(true,  goal) : postCtl.brighten(); }
-						if (!moved) { break; }
-						++moves;
-					}
-					if (moves > 0) { this->noteStep(dir); }
-					}
-				}
+				const double need = (predicted > linU || predicted < linD)
+				                  ? expo::excessStops(predicted, linD, linU) : 0.0;	// 帯の内側なら 0
+				this->shapedMove(postCtl, need, haveHome ? &goal : nullptr, homeB,
+				                 smooth_.smoothMin, interval);	// preNight と同じ(2026-09-21)
 				meterFailStreak = 0;
 			}
 			else
@@ -1601,19 +1639,18 @@ errCode captureRunner::loop(void)
 			const double evTraw = targetEv(ccm);
 			// §4.5 往復対称の基準(home)=基準の明るさ。home から離れる→優先度順 / 近づく→逆優先。
 			const bool   haveHome = validExposure(ccm->initial);
-			const double homeB    = haveHome ? expo::brightnessStops(ccm->initial, tables_) : 0.0;
+			const double homeB    = haveHome ? this->brightnessOf(ccm->initial) : 0.0;
 			// 項目7: 平滑化(ヒステリシス/移動平均)は ccm 個別値があれば優先、無ければ全体設定。
 			const double effHyst = (ccm->hysteresis > 0.0)  ? ccm->hysteresis  : smooth_.hysteresis;
-			const int    effMA   = (ccm->movingAverage > 0) ? static_cast<int>(ccm->movingAverage)
-			                     : ((smooth_.movingAverage > 0) ? smooth_.movingAverage : 5);
+			const double effSmooth = (ccm->smoothMin > 0.0) ? ccm->smoothMin : smooth_.smoothMin;	// なめらかさ[分]
 			bool didInitConverge = false;
 			if (windowChanged)
 			{
-				autoCtl.init(tables_, ccm->limitBright, ccm->limitDark, ccm->priority);
+				autoCtl.init(dev_->apiBase.get(), ccm->limitBright, ccm->limitDark, ccm->priority);
 				autoCtl.capLongestSs(maxSsCap);	// ss は夜間ss/周期-2秒を超えない(指示3)
 				// 配分寄せの「寄せ先」を計算する器。窓ごとに1回だけ作る(init はテーブルを
 				//  複製するので毎コマ作ると内部RAMを削る)。中身は毎コマ上書きされる。
-				migCtl.init(tables_, ccm->limitBright, ccm->limitDark, ccm->priority);
+				migCtl.init(dev_->apiBase.get(), ccm->limitBright, ccm->limitDark, ccm->priority);
 				migCtl.capLongestSs(maxSsCap);
 				avgBuf.clear(); this->resetStepLock();
 				// 項目8: 自動露出→自動露出の切替で目標evが急変するとオーバーシュートするため、
@@ -1640,11 +1677,13 @@ errCode captureRunner::loop(void)
 				}
 			}
 
-			// 項目8: 実効目標evを新目標へ 1/3 段ずつ寄せる(自動露出→自動露出の緩やか移行)。
+			// 項目8: 実効目標evを新目標へ緩やかに寄せる(自動露出→自動露出の切替)。
+			//  寄せる速さは露出そのものと同じ上限に合わせる(2026-09-05)。目標だけ速く動いても
+			//  露出が追いつかないし、長い撮影周期では逆に遅すぎて窓の中で寄せ切れない。
 			{
-				const double third = 1.0 / 3.0;
-				if      (curEvT < evTraw - 1e-9) { curEvT = std::min(evTraw, curEvT + third); }
-				else if (curEvT > evTraw + 1e-9) { curEvT = std::max(evTraw, curEvT - third); }
+				const double per = frameAllowanceStops(interval);
+				if      (curEvT < evTraw - 1e-9) { curEvT = std::min(evTraw, curEvT + per); }
+				else if (curEvT > evTraw + 1e-9) { curEvT = std::max(evTraw, curEvT - per); }
 			}
 			const double evT = curEvT;
 
@@ -1671,40 +1710,28 @@ errCode captureRunner::loop(void)
 					if (mr.pinned && !pinPrev) { avgBuf.clear(); this->resetStepLock(); }
 					pinPrev = mr.pinned;
 					avgBuf.push_back(mr.sceneRef);
-					int n = effMA;
-					while (static_cast<int>(avgBuf.size()) > n) { avgBuf.erase(avgBuf.begin()); }
-					const double avg = this->sceneNowFromBuf(avgBuf);	// 遅れを補った現在値の推定
+					while (static_cast<int>(avgBuf.size()) > 1) { avgBuf.erase(avgBuf.begin()); }	// 移動平均は廃止(2026-09-21)
+					const double avg = this->sceneNowFromBuf(avgBuf);
 
 					double lin0 = expo::ev0LinearForMeasure(linear, validExposure(lastExp) ? lastExp : autoCtl.current(), ev0cfg_);
-					double linU = expo::linearFromEvBase(evT + this->effHysteresis(effHyst) / 2.0, lin0);
-					double linD = expo::linearFromEvBase(evT - this->effHysteresis(effHyst) / 2.0, lin0);
+					const double band = this->effHysteresis(effHyst, autoCtl.maxStepStops());
+					double linU = expo::linearFromEvBase(evT + band / 2.0, lin0);
+					double linD = expo::linearFromEvBase(evT - band / 2.0, lin0);
 					// 撮影露出で撮った場合の明るさへ投影してから比べる(土俵合わせ)。これでループが
 					// 閉じ、露出を動かすと比較結果も動く(従来は測光値が撮影露出に依存せず暴走した)。
 					const double predicted = this->linearAtExposure(avg, autoCtl.current());
-					if (predicted > linU || predicted < linD)
-					{
-						const double center = expo::linearFromEvBase(evT, lin0);
-						const double need   = (predicted > 0.0) ? std::log2(center / predicted) : 0.0;	// +:明るく -:暗く
-						// 帯の反対側へ飛び出すだけなら動かない(振動防止)。反転は抑制期間中は強い証拠が要る。
-						const double band = this->effHysteresis(effHyst);
-						const int    dir  = (need < 0.0) ? -1 : 1;
-						if (this->wouldOvershoot(need, band) || !this->allowStep(dir, need, band)) { meterFailStreak = 0; }
-						else
-						{
-						const int    steps  = this->stepsToClose(need);
-						int          moves  = 0;
-						for (int s = 0; s < steps; ++s)
-						{
-							const double curB = expo::brightnessStops(autoCtl.current(), tables_);
-							bool moved;
-							if (need < 0.0) { moved = (haveHome && curB > homeB) ? autoCtl.stepHome(false, ccm->initial) : autoCtl.darken(); }
-							else            { moved = (haveHome && curB < homeB) ? autoCtl.stepHome(true,  ccm->initial) : autoCtl.brighten(); }
-							if (!moved) { break; }	// 限界に到達
-							++moves;
-						}
-						if (moves > 0) { this->noteStep(dir); }
-						}
-					}
+					// 【はみ出た分だけ動かす(2026-09-08 ユーザー決定)】
+					//  以前は帯を越えた瞬間に中央までの差を一度に埋めていたため、帯の広さ(±0.5 段)が
+					//  そのまま画の段差になり、夕方の減光で 0.5〜0.7 段ののこぎり波が出た(内蔵カメラ
+					//  09-08 実測)。帯の縁までの差だけ動かせば、ゆっくり変わる場面では縁に沿って
+					//  場面の変化量ぶんずつ追従する。明るさは目標より帯/2 だけずれた所に落ち着く。
+					// 【速度をならす(2026-09-21)】その差から直接動かさず、速度の目標にして 1 コマの速度変化を
+					//  抑える(shapedMove)。帯の内側なら need=0 で速度が減っていく。反転抑制(allowStep)は
+					//  不要になった。反転は必ず減速→停止→加速を通るので、速い往復が構造的に起きない。
+					const double need = (predicted > linU || predicted < linD)
+					                  ? expo::excessStops(predicted, linD, linU) : 0.0;
+					this->shapedMove(autoCtl, need, haveHome ? &ccm->initial : nullptr, homeB,
+					                 effSmooth, interval);
 					meterFailStreak = 0;	// 測光成功
 				}
 				else
@@ -1721,7 +1748,7 @@ errCode captureRunner::loop(void)
 				// 窓の境目で持ち越した配分を、いまの制御方法の答えへ1目盛りだけ寄せる。
 				//  明るい向きと暗い向きを1つずつ動かすので明るさは変わらない(上の自動露出の
 				//  1歩とは別枠)。合っていれば何もしない。
-				this->migrateTowardCcm(autoCtl, migCtl, ccm);
+				this->migrateTowardCcm(autoCtl, migCtl, ccm, autoCtl.minStepStops());
 				target = autoCtl.current();
 			}
 		}
@@ -1758,7 +1785,7 @@ errCode captureRunner::loop(void)
 					{	// 内訳(HTTP応答・試行回数)はログへ。画面へはコードだけ。
 						char eb[240];
 						std::snprintf(eb, sizeof(eb), "%s (try=%d %dms err=%u)",
-						              this->withHttpDetail("first exposure apply failed").c_str(),
+						              this->withFailDetail("first exposure apply failed").c_str(),
 						              t1, kFirstApplyMaxMs, static_cast<unsigned>(ae));
 						dataManager::logEvent("ERR", eb, true);
 					}
@@ -1808,7 +1835,7 @@ errCode captureRunner::loop(void)
 			if (applyErr != ERR_HGC_OK && onError_)
 			{	// リトライしても設定できなかった。放置するとカメラは古い露出のまま撮り続け、
 				// アプリの露出モデルと実機がズレる(白飛び/黒潰れの原因)。必ずログへ出して気付けるようにする。
-				onError_(applyErr, this->withHttpDetail("setExposure failed after retry"));
+				onError_(applyErr, this->withFailDetail("setExposure failed after retry"));
 			}
 		}
 		const int prepMs = (prep != nullptr) ? static_cast<int>(tool::getElapse(prep)) : -1;
@@ -1840,14 +1867,17 @@ errCode captureRunner::loop(void)
 
 		if (onCaptured_)
 		{
-			double lum = expo::brightnessStops(shotExp, tables_);	// 撮ったのは shotExp
+			double lum = this->brightnessOf(shotExp);	// 撮ったのは shotExp
 			onCaptured_(capturedInfo{ frame, shotExp, lum, ccm->name, meteredLinear, meterMs_, applyMs, prepMs,
 			                          static_cast<int>(lateMs), meterOk_, (applyErr == ERR_HGC_OK),
 			                          meterTry_, applyTry, histSum_, lvTimeMs_, staleSkip_, shutterMs, lvP99_, lvPMax_,
 			                          lvMeanLinLog_, lvP75Log_, lvP90Log_, lvSatLog_,
 			                          meterSsUsed_, meterSettleMs_, lvPinnedLog_, meterUsableLog_,
 			                          meterWaitMs_, meterFetchMs_, meterDecodeMs_, meterFetchTries_, busyMs, leadUsed,
-			                          asIsLinear_, firstApplyTries_, converge_, meterVia_ });
+			                          asIsLinear_, firstApplyTries_, converge_, meterVia_,
+			                          // カメラが語る欄(内蔵カメラ以外は空)。中身は見ない。
+			                          (dev_ != nullptr && dev_->apiBase)
+			                              ? dev_->apiBase->deviceReportJson() : std::string() });
 		}
 
 		// 測光の連続失敗は「接続断」ではない(2026-07-28 根治)。
@@ -1961,7 +1991,7 @@ errCode captureRunner::loop(void)
 			{	// establishでキャッシュclear済 → 次シャッター前に露出を再適用しカメラ状態を合わせる。
 				int t2 = 0;
 				const errCode ae = applyWithRetry(pending, t2);
-				if (ae != ERR_HGC_OK && onError_) { onError_(ae, this->withHttpDetail("setExposure failed after retry (reconnect)")); }
+				if (ae != ERR_HGC_OK && onError_) { onError_(ae, this->withFailDetail("setExposure failed after retry (reconnect)")); }
 			}
 			// 届いていない側は再接続で時間を食っているので、次コマは即[A]起点にする。
 			// 撮れていない側は通信できているので周期を崩さない(復帰したらそのまま定刻へ戻る)。

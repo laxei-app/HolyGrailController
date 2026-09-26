@@ -1,4 +1,4 @@
-﻿package app.laxei.holygrail
+﻿package app.laxei.twylapse
 
 import android.Manifest
 import android.app.DatePickerDialog
@@ -28,6 +28,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.CheckBox
@@ -105,6 +106,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  選択が化ける(以前 restoreViewingSelection で起きた不具合と同じ形になる)。
     private var tplMode = false
     private var planIdBeforeTpl = ""      // ひな形画面へ入る前に選んでいた計画(戻すため)
+    private var tplOpenedFrom = 4           // ひな形画面を開いた元の画面(戻るボタンの行き先。2026-09-21 UI依頼)。4=メニュー(kScreenMenu は後ろで宣言されるので数で持つ)
 
     // 編集対象の計画 id。切替(選択/新規/複製/起動時)のたびに「変更の取り消し」用のベースラインを取り直す。
     private var currentPlanId: String = ""
@@ -245,6 +247,76 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private val ccmTextMap = HashMap<Int, Int>()
     // 色の設定画面の状態
     private var colorType = "night"
+
+    // ── タブ(2026-09-07 UI依頼) ──
+    //  撮影計画のページ(撮影計画/薄明/シミュレーション)、撮影制御方法エディタの型、色の設定の型を
+    //  上のタブで見せ、タップで移動できるようにする。スワイプやボタンからの移動はそのまま残し、
+    //  そちらで動いたときはタブの選択だけを追従させる(tabSyncing 中は選択を「操作」と見なさない)。
+    private var tabSyncing = false
+    private val twilightTitles = mutableListOf<String>()   // 薄明ページの名前(ページ順)
+    private val ccmTabKeys = listOf("night", "sunrise", "sunset", "day")
+    private val colorTabKeys = listOf("night", "sunrise", "sunset", "day", "preNight", "postNight")
+    private fun fillTabs(tl: com.google.android.material.tabs.TabLayout, names: List<String>, onPick: (Int) -> Unit) {
+        tabSyncing = true
+        tl.clearOnTabSelectedListeners()
+        tl.removeAllTabs()
+        for (n in names) { tl.addTab(tl.newTab().setText(n)) }
+        tabSyncing = false
+        tl.addOnTabSelectedListener(object : com.google.android.material.tabs.TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: com.google.android.material.tabs.TabLayout.Tab) { if (!tabSyncing) onPick(tab.position) }
+            override fun onTabUnselected(tab: com.google.android.material.tabs.TabLayout.Tab) {}
+            override fun onTabReselected(tab: com.google.android.material.tabs.TabLayout.Tab) {}
+        })
+    }
+    private fun selectTabQuiet(tl: com.google.android.material.tabs.TabLayout, idx: Int) {
+        if (idx < 0 || idx >= tl.tabCount) return
+        if (tl.selectedTabPosition == idx) return
+        tabSyncing = true; tl.getTabAt(idx)?.select(); tabSyncing = false
+    }
+    // 撮影計画のページのタブ。ページ構成(薄明ページの数)が変わるたびに作り直す。
+    private var planTabNames = listOf<String>()
+    private fun rebuildPlanTabs() {
+        val names = mutableListOf(if (tplMode) "ひな形" else "撮影計画")
+        names.addAll(twilightTitles)
+        if (videoPage != null) names.add("出力設定")
+        if (simPage != null) names.add("シミュレーション")
+        val tl = findViewById<com.google.android.material.tabs.TabLayout>(R.id.plan_tabs)
+        // 【同じ並びなら作り直さない(2026-09-23 UI依頼)】作り直すと選択が一瞬先頭へ動いて戻る。
+        if (names == planTabNames && tl.tabCount == names.size) { selectTabQuiet(tl, planPager.current); return }
+        planTabNames = names.toList()
+        fillTabs(tl, names) { i -> planPager.setCurrent(i, true) }
+        selectTabQuiet(tl, planPager.current)
+    }
+    private fun syncPlanTab() {
+        val tl = findViewById<com.google.android.material.tabs.TabLayout>(R.id.plan_tabs) ?: return
+        selectTabQuiet(tl, planPager.current)
+    }
+    // 撮影制御方法エディタの型タブ。切替=今の内容を保存してから次の型を開く(初期値/計画のどちらでも)。
+    private fun ensureCcmTabs() {
+        val tl = findViewById<com.google.android.material.tabs.TabLayout>(R.id.edit_tabs)
+        if (tl.tabCount != ccmTabKeys.size) {
+            fillTabs(tl, listOf("夜間撮影", "朝日撮影", "夕日撮影", "日中撮影")) { i -> switchCcmTab(ccmTabKeys[i]) }
+        }
+        selectTabQuiet(tl, ccmTabKeys.indexOf(editingKey))
+    }
+    private fun switchCcmTab(key: String) {
+        if (key == editingKey) return
+        stopDirtyWatch(); persistCcmEdit()
+        if (editingPlanCcm) openPlanCcmEdit(key) else openPresetScreen(key)
+    }
+    // 色の設定の型タブ。切替=今の色を保存してから次の型を出す。
+    private fun ensureColorTabs() {
+        val tl = findViewById<com.google.android.material.tabs.TabLayout>(R.id.color_tabs)
+        if (tl.tabCount != colorTabKeys.size) {
+            fillTabs(tl, colorTabKeys.map { colorTypeName(it) }) { i -> switchColorTab(colorTabKeys[i]) }
+        }
+        selectTabQuiet(tl, colorTabKeys.indexOf(colorType))
+    }
+    private fun switchColorTab(key: String) {
+        if (key == colorType) return
+        stopDirtyWatch(); saveColorScreen()
+        colorType = key; buildColorScreen()
+    }
     private var gearColorsOpen = false   // メニューの「色の設定」を展開しているか(既定=畳む)
     private var colorTextPicker: com.jaredrummler.android.colorpicker.ColorPickerView? = null
     private var colorBgPicker: com.jaredrummler.android.colorpicker.ColorPickerView? = null
@@ -264,6 +336,24 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private var isoDisp = listOf<String>()
     private var ssDisp = listOf<String>()
     private var fnDisp = listOf<String>()
+    // 今の目盛りの出所: 0=計画のカメラ / 1=初期値(外部カメラ向け 1/3 段) / 2=初期値(スマホ向け 1/12 段)。
+    //  エディタは目盛りを構築時に取り込むので、編集対象が変わったら作り直す(2026-09-06)。
+    private var expoListsMode = -1
+    // 【撮影制御方法エディタの刻み(2026-09-19 ユーザー指示)】画面ごとに選べる。
+    //  1段を何分割するか。2=1/2段 / 3=1/3段 / 12=1/12段 / 0=おまかせ
+    //  (端末が答えるカメラ=1/12段、外部カメラ=1/3段)。
+    //  範囲はカメラ/レンズの実力から決まるので、ここで選ぶのは刻みだけ。
+    //  撮影そのものには影響しない(撮影はデバイスが出せる値へ解決する)ので、
+    //  計画データではなく端末の設定として持つ。
+    private var ccmEditStepPer = 0
+    private fun ccmStepKey(key: String) = "ccmStep_" + key
+    // 選べる刻み。おまかせは、端末が答えるカメラなら 1/12 段・外部カメラなら 1/3 段。
+    private val ccmStepChoices = listOf(0 to "おまかせ", 2 to "1/2 段", 3 to "1/3 段", 12 to "1/12 段")
+    private fun loadCcmStep(key: String) { ccmEditStepPer = hgcPrefs().getInt(ccmStepKey(key), 0) }
+    private fun saveCcmStep(key: String, per: Int) {
+        ccmEditStepPer = per
+        hgcPrefs().edit().putInt(ccmStepKey(key), per).apply()
+    }
     private lateinit var fixEditor: ExposureEditor      // 夜間 固定露出(単一)
     private lateinit var editLimit: LimitEditor         // 自動露出 露出限界(優先度+明暗を一体化)
 
@@ -316,6 +406,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 撮影場所「現在地を取得」の位置情報権限(§7.9)
     private var pendingLocAction: (() -> Unit)? = null
     private val LOC_PERM_REQ = 4712
+    // このスマホのカメラで撮る計画を始めるときのカメラ権限(2026-09-09)。
+    //  【なぜ開始時か】カメラの諸元(画角・ISO範囲)は権限が無くても読めるので、一覧にも出るし
+    //   計画も作れる。実際に断られるのは開こうとした瞬間だけなので、そこで頼むのが自然。
+    //   起動時にまとめて聞くと、外部カメラだけで使う人にも不要な確認が出る。
+    private var pendingCamAction: (() -> Unit)? = null
+    private val CAM_PERM_REQ = 4714
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
@@ -324,9 +420,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
             else Toast.makeText(this, "BLE権限が必要です", Toast.LENGTH_LONG).show()
             pendingBleAction = null
         } else if (requestCode == LOC_PERM_REQ) {
+            // 初回起動の種まきが答えを待っている間は、この答えは種まきのもの(2026-09-09 案A)。
+            //  許可でも拒否でも種はまく。拒否なら場所は Tokyo のままで揃う。
+            if (seedWaitingPerm) { finishSeedAfterPermission(); pendingLocAction = null; return }
             if (grantResults.isNotEmpty() && grantResults.any { it == PackageManager.PERMISSION_GRANTED }) pendingLocAction?.invoke()
             else Toast.makeText(this, "位置情報の権限が必要です", Toast.LENGTH_LONG).show()
             pendingLocAction = null
+        } else if (requestCode == PERMCHECK_REQ) {
+            if (flipper.displayedChild == kScreenPermCheck) buildPermCheckScreen()   // 答えを反映
+        } else if (requestCode == CAM_PERM_REQ) {
+            // 断られたら開始しない(始めても「開けません」を繰り返すだけ)。設定への行き方を添える。
+            if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) pendingCamAction?.invoke()
+            else showCameraPermissionHelp()
+            pendingCamAction = null
         }
     }
 
@@ -349,12 +455,34 @@ class MainActivity : AppCompatActivity(), HgeListener {
         HgeNative.nativeInit()
         // スマホ⇄エッジの通信路(2026-08-14 指示)。選ぶのはスマホだけ。エッジは常に両方で待ち受ける。
         EdgeBleLink.init(this)
+        BuiltinCamera.init(this)   // スマホ内蔵カメラ(Camera2)の入口へ Context を渡す
+        BuiltinStill.init(this)    // 静止画(jpg/DNG)もギャラリーへ出すので Context が要る
+        BuiltinVideo.init(this)    // 動画の書き出し(置き場とギャラリー)に Context が要る
+
+        // 【内蔵カメラ一式は初回起動のときだけ用意する(2026-09-05 依頼)】
+        //  所持カメラ・所持レンズ・撮影計画ひな形を、その端末の実力から作る。端末そのものなので
+        //  「登録しますか」と聞く意味が無い。複数のカメラを持つ端末では1台ずつ並ぶ。
+        //  **一度きり**にするのは、利用者が消したものを起動のたびに作り直さないため
+        //  (撮影場所の種と同じ考え方)。出荷時設定に戻せばまた作られる。
+        //  カメラを列挙できなかったとき(権限がまだ無い等)は印を付けず、次の起動でやり直す。
+        //  マスタ読み込みと同じ単一スレッドで行う(所持機材の書き込み口は1本に保つ)。
+        //  一度作ったデータは差し替えない(2026-09-06 ユーザー決定)。並びや周期の規則は作るときに
+        //  apiBuiltin が答えた値で決まる。新しくしたければ出荷時設定に戻して作り直す。
+        //  【計画より先に済ませる(2026-09-06 ユーザー指示)】出荷時の固定計画(FixedPlan)は最初に計画へ
+        //  触ったときに作られ、そのとき「撮影計画の初期値にする」カメラを採る。内蔵の登録が後回しだと
+        //  FixedPlan が出荷時の EOS R10 で出来てしまう。初回だけなので、終わるまでここで待つ
+        //  (カメラの列挙は権限が無くてもでき、1 秒かからない)。
+        //  撮影場所の種(出荷時の Tokyo を現在地に差し替える)も同じときに済ませてファイルへ保存する
+        //  (2026-09-06 ユーザー指示)。後回しにすると、表示した後で計画の場所が差し替わり「変更あり」になる。
+        startFirstLaunchSeed()
+
         HgeNative.nativeEdgeSetBle(edgeUseBle())
         HgeNative.nativeSetListener(this)
         // 起動時のログ整理(当日以外が5件以上なら古い順に削除、最新4件まで残す)。端末TZで「当日」を判定。
         val tzOffMin = java.util.TimeZone.getDefault().getOffset(System.currentTimeMillis()) / 60000
         Thread { HgeNative.nativePruneOldLogs(tzOffMin) }.start()
-        seedFirstPlaceFromLocation()              // 初回だけ、出荷時の場所を現在地で作り直す
+        //  許可の答えを待っている最中は種まき側が場所も作るので、ここでは何もしない(要求が二重になる)。
+        if (!seedWaitingPerm) { seedFirstPlaceFromLocation() }   // 初回だけ、出荷時の場所を現在地で作り直す
         handler.postDelayed(edgeTimeSync, 3000)   // 選択中エッジへ能動的な時刻同期を開始(RTC無し機/電波悪環境向け)
         handler.postDelayed(edgeSweep, 6000)      // エッジ常時スイープ(生存/IP追従+エッジ側開始・停止の検出。撮影の有無に関わらず30秒毎)
         handler.postDelayed(hgePump, 5000)        // 遅延アームのポンプ(スマホ直接撮影の予約計画の開始スレッドを期日に生成)
@@ -362,6 +490,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         loadExpoValues()
         buildExposureEditors()
         loadRegisteredEdges()   // 設定で登録したエッジ端末(オフラインでも選択可)
+        // BLE が既定になったので、**外部端末を登録している人にだけ**権限を確かめる(2026-09-26)。
+        //  無いまま走ると探索が黙って空を返し、「端末が全部消えた」ように見えてしまう。
+        //  1台も登録していない人には何も聞かない(外部端末を使わないなら要らない権限のため)。
+        if (edgeUseBle() && edges.isNotEmpty()) { ensureBlePermissions {} }
         loadEdgeHeld()          // エッジが持っている計画(=編集ロック)。アプリを終了しても保つ
         applyLogOptsToSelf()    // デバッグログの取捨(既定は採らない)を自分の記録へ効かせる
         refreshEdgeSpinner()
@@ -448,7 +580,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             } catch (_: Exception) {}
             runOnUiThread { pruneOrphanPlanEdges(localPlans.toSet()) }   // 消えた計画のエッジ割当を掃除
             for (ed in found) {
-                runOnUiThread { registerDiscoveredEdge(ed.name, ed.ip, ed.port); refreshEdgeSpinner() }   // 発見したエッジは撮影有無に関わらず登録
+                runOnUiThread { noteDiscoveredEdge(ed.name, ed.ip, ed.port) }   // 見つけた控えだけ(登録はQRの明示操作)
+                if (!edgeIsMine(ed.name)) continue   // 持ち主でない端末には進捗も聞かない(断られる)
                 for (pid in localPlans) {
                     val pj = try { HgeNative.nativeEdgeProgress(ed.addr(), ed.port, pid) } catch (_: Exception) { "" }
                     if (pj.isEmpty()) continue
@@ -528,7 +661,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         planPager = findViewById(R.id.plan_pager)
         planFormScroll = findViewById(R.id.plan_formScroll)
         planListScroll = findViewById(R.id.plan_listScroll)
-        planPager.onPageChanged = { updatePagerTitle() }
+        planPager.onPageChanged = { updatePagerTitle(); syncPlanTab() }
         planListContainer = findViewById(R.id.plan_listContainer)
         captureStatus = findViewById(R.id.plan_captureStatus)
         edgeSpinner = findViewById(R.id.plan_edgeSpinner)
@@ -562,11 +695,23 @@ class MainActivity : AppCompatActivity(), HgeListener {
     override fun onResume() {
         super.onResume()
         if (goHomeOnResume) { goHomeOnResume = false; if (::flipper.isInitialized) gotoScreen(kScreenHome) }
+        // 権限、端末設定の画面を開いたまま設定へ行って戻ってきた → 状態を取り直す
+        if (::flipper.isInitialized && flipper.displayedChild == kScreenPermCheck) buildPermCheckScreen()
     }
 
     private fun wireHeader(homeId: Int, menuId: Int, onLeave: (Int) -> Unit) {
         findViewById<ImageView>(homeId)?.setOnClickListener { onLeave(kScreenHome) }
         findViewById<ImageView>(menuId)?.setOnClickListener { onLeave(kScreenMenu) }
+    }
+
+    // 【戻るボタン(2026-09-21 UI依頼で復活)】端末の戻る機能で戻り先がある画面すべてに、ホームの右へ置く。
+    //  動きは端末の戻るキーと完全に同じ(goBackOneScreen)。撮影計画(ホーム)は戻り先が無いので付けない。
+    private fun wireBackButtons() {
+        val ids = intArrayOf(R.id.cap_back, R.id.edit_back, R.id.cmenu_back, R.id.gmenu_back,
+                             R.id.cameralist_back, R.id.cameraadd_back, R.id.lenslist_back, R.id.lensadd_back,
+                             R.id.color_back, R.id.smooth_back, R.id.places_back, R.id.reserve_back,
+                             R.id.history_back, R.id.report_back, R.id.edge_back, R.id.dlog_back, R.id.pc_back)
+        for (id in ids) { findViewById<ImageView>(id)?.setOnClickListener { goBackOneScreen() } }
     }
 
     private fun gotoScreen(dest: Int) {
@@ -582,7 +727,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun goBackOneScreen(): Boolean {
         if (!::flipper.isInitialized) return false
         when (flipper.displayedChild) {
-            0 -> return false                                            // 撮影計画(先頭)→ アプリ終了に委ねる
+            0 -> { if (!tplMode) return false                               // 撮影計画(先頭)→ アプリ終了に委ねる
+                   leaveTemplates { gotoScreen(tplOpenedFrom) } }           // ひな形 → 開いた元の画面へ
             1 -> { flipper.displayedChild = 0 }                          // 撮影中 → 撮影計画
             2 -> { flipper.displayedChild = 4; buildGearMenu() }         // ccmメニュー(未使用)→ メニュー
             3 -> { stopDirtyWatch(); persistCcmEdit(); flipper.displayedChild = if (editingPlanCcm) 0 else 4 }
@@ -601,6 +747,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             //  分からなくなる)。中断してから戻ってもらう。
             16 -> { if (dlogBusy) Toast.makeText(this, "取得中です。中断してから戻ってください", Toast.LENGTH_SHORT).show()
                     else { flipper.displayedChild = 4; buildGearMenu() } }
+            17 -> { flipper.displayedChild = 4; buildGearMenu() }        // 権限、端末設定 → メニュー
             else -> { flipper.displayedChild = 0 }
         }
         return true
@@ -685,6 +832,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         buildCcmEditButtons()
         // メニュー(plan_menu→600.メニュー)。帯付きの一覧から各画面へ分岐。
         wireHeader(R.id.cap_home, R.id.cap_menu) { gotoScreen(it) }
+        wireBackButtons()
         planMenu.setOnClickListener {
             if (tplMode) { leaveTemplates { openGearMenu() } } else { openGearMenu() }
         }
@@ -692,6 +840,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<ImageView>(R.id.plan_home).setOnClickListener {
             if (tplMode) { leaveTemplates { gotoScreen(kScreenHome) } }
         }
+        // 戻る(ひな形のときだけ見える)。開いた元の画面へ(端末の戻るキーと同じ)。
+        findViewById<ImageView>(R.id.plan_back).setOnClickListener { if (tplMode) goBackOneScreen() }
         // メニュー画面にはホームだけ(メニューの中にメニューは要らない)
         findViewById<ImageView>(R.id.gmenu_home).setOnClickListener { gotoScreen(kScreenHome) }
         // 650 カメラ予約表(項目17)。戻る/メニューどちらもメニューへ戻す。
@@ -702,6 +852,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         wireHeader(R.id.report_home, R.id.report_menu) { gotoScreen(it) }
         // 8.2 エッジ端末設定(2026-08-08 UI依頼で画面化)
         wireHeader(R.id.edge_home, R.id.edge_menu) { stashEdgeForm(); gotoScreen(it) }
+        wireHeader(R.id.pc_home, R.id.pc_menu) { gotoScreen(it) }
         wireHeader(R.id.dlog_home, R.id.dlog_menu) { dest ->
             // 取得中は戻らせない(端末の戻るキーと同じ扱い)。
             if (dlogBusy) Toast.makeText(this, "取得中です。中断してから移動してください", Toast.LENGTH_SHORT).show()
@@ -743,6 +894,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 撮影制御方法の編集は、計画から開いたときも初期値から開いたときも同じ画面。
         //  ホーム/メニューのどちらを押したかで行き先を決める(以前は開いた経路で決めていた)。
         wireHeader(R.id.edit_home, R.id.edit_menu) { stopDirtyWatch(); persistCcmEdit(); gotoScreen(it) }
+        findViewById<Button>(R.id.edit_set_dark_btn).setOnClickListener { applyNightToDarkLimits() }
         findViewById<Button>(R.id.edit_save).visibility = View.GONE   // 取消はエディタ先頭行へ移動
         // 色はメニュー「色の設定」(システム共通)で設定する(per-ccm色は廃止)。
         wireHeader(R.id.color_home, R.id.color_menu) { leaveColorScreen(it) }
@@ -752,8 +904,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         setupValueSlider(R.id.smooth_hyst_seek, 20) {
             findViewById<TextView>(R.id.smooth_hyst_val).text = String.format("%.1fev", seekToHyst(it))
         }
+        // 【なめらかさ(分)(2026-09-21)】移動平均フレーム数の席を引き継ぐ。露出の変化速度が 0 から
+        //  上限まで変わるのにかける時間。全体設定は 1〜10 分(0 は 1 として扱う)。
         setupValueSlider(R.id.smooth_ma_seek, 10) {
-            findViewById<TextView>(R.id.smooth_ma_val).text = "${it}frame"
+            findViewById<TextView>(R.id.smooth_ma_val).text = smoothLabel(it, global = true)
         }
         // 初期値プリセット一覧の分割バー(620と同挙動)
         // スライダーの値ラベル更新(露出スライダーと形を統一するため Material Slider・仕様8)
@@ -762,20 +916,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
             findViewById<TextView>(R.id.edit_alt_val).text = altLabel(deg)
             updateAltTimes(deg.toInt())
         }
-        setupValueSlider(R.id.edit_ev_seek, 30, gradient = true) {
-            findViewById<TextView>(R.id.edit_ev_val).text = String.format("%+.1f ev", seekToEv(it))
+        setupValueSlider(R.id.edit_ev_seek, 60, gradient = true) {
+            findViewById<TextView>(R.id.edit_ev_val).text = evLabel(it)
         }
-        setupValueSlider(R.id.edit_postev_seek, 30, gradient = true) {
-            findViewById<TextView>(R.id.edit_postev_val).text = String.format("%+.1f ev", seekToEv(it))
+        setupValueSlider(R.id.edit_postev_seek, 60, gradient = true) {
+            findViewById<TextView>(R.id.edit_postev_val).text = evLabel(it)
         }
-        setupValueSlider(R.id.edit_preev_seek, 30, gradient = true) {
-            findViewById<TextView>(R.id.edit_preev_val).text = String.format("%+.1f ev", seekToEv(it))
+        setupValueSlider(R.id.edit_preev_seek, 60, gradient = true) {
+            findViewById<TextView>(R.id.edit_preev_val).text = evLabel(it)
         }
         setupValueSlider(R.id.edit_hyst_seek, 20) {
             findViewById<TextView>(R.id.edit_hyst_val).text = hystLabel(it)
         }
         setupValueSlider(R.id.edit_ma_seek, 10) {
-            findViewById<TextView>(R.id.edit_ma_val).text = maLabel(it)
+            findViewById<TextView>(R.id.edit_ma_val).text = smoothLabel(it, global = false)
         }
         // 朝日/夕日の太陽高度=範囲スライダー(2つまみ)。明暗バー下地・つまみ●。
         findViewById<RangeSlider>(R.id.edit_alt_range).apply {
@@ -833,7 +987,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // --- スマホ⇄エッジの通信路(BLE か Wi-Fi か)。スマホだけが決める ---
-    private fun edgeUseBle(): Boolean = hgcPrefs().getBoolean("edgeUseBle", false)
+    // 【既定は BLE(2026-09-26 ユーザー判断)】APモードの外部端末を Wi-Fi で相手にすると、
+    //  スマホがその端末のAPへ入る必要があり、SSIDの切り替えが要るうえ**1台ずつ**しか扱えず、
+    //  その間スマホはインターネットから切り離される。BLE なら端末を何台でも同時に見られ、
+    //  スマホは普段の回線のまま。Wi-Fi の道は残してあるので、このスイッチで戻せる。
+    private fun edgeUseBle(): Boolean = hgcPrefs().getBoolean("edgeUseBle", true)
     private fun setEdgeUseBle(on: Boolean) {
         hgcPrefs().edit().putBoolean("edgeUseBle", on).apply()
         EdgeBleLink.close()                 // 経路を変えるので掴んでいた接続は捨てる
@@ -873,21 +1031,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         gearItem(box, "撮影計画ひな形") { openTemplates() }
         gearItem(box, "カメラ予約表") { openReserveTable() }   // 項目17
         gearBand(box, "撮影制御方法 初期値")
-        // 項目3: 「月の影響への対処」は撮影制御方法初期値から削除。
-        gearItem(box, "夜間撮影") { openPresetScreen("night") }
-        gearItem(box, "朝日撮影") { openPresetScreen("sunrise") }
-        gearItem(box, "夕日撮影") { openPresetScreen("sunset") }
-        gearItem(box, "日中撮影") { openPresetScreen("day") }
-        // 色は撮影制御方法ごとに持つものなので、帯を立てず初期値の下へ畳んで置く(2026-08-23 UI依頼)。
-        gearExpandItem(box, "色の設定", gearColorsOpen) { gearColorsOpen = !gearColorsOpen; buildGearMenu() }
-        if (gearColorsOpen) {
-            gearColorItem(box, "night", "夜間撮影")
-            gearColorItem(box, "sunrise", "朝日撮影")
-            gearColorItem(box, "sunset", "夕日撮影")
-            gearColorItem(box, "day", "日中撮影")
-            gearColorItem(box, "preNight", "夜間前移行")
-            gearColorItem(box, "postNight", "夜間後移行")
-        }
+        // 【2 項目だけ(2026-09-07 UI依頼)】型(夜間/朝日/夕日/日中)は画面の上のタブで移る。最初は夜間を出す。
+        gearItem(box, "初期値") { openPresetScreen("night") }
+        gearItem(box, "色の設定") { openColorSetting("night") }
         gearBand(box, "自動露出")
         gearItem(box, "露出平滑化") { openSmoothingScreen() }
         gearBand(box, "所持機材")
@@ -908,6 +1054,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  ・屋外でエッジが AP のときは BLE にすると SSID を切り替えずに全台と話せる
         //  ・エッジ側にモードを持たせないので、戻せなくなって現地へ行く経路は無い
         gearSwitchItem(box, "外部端末とBLEで通信する", edgeUseBle()) { on -> setEdgeUseBle(on) }
+        // 削除した端末は一覧から伏せている(消したのに戻ってくるのを防ぐため)。戻す道をここに置く。
+        if (hiddenEdges.isNotEmpty()) {
+            gearItem(box, "削除した端末をまた表示する(" + hiddenEdges.size + "台)") {
+                hiddenEdges.clear(); saveHiddenEdges()
+                Toast.makeText(this, "次の探索でまた一覧に出ます", Toast.LENGTH_SHORT).show()
+                buildGearMenu()
+            }
+        }
+        gearBand(box, "権限、端末設定")
+        gearItem(box, "権限、端末設定") { openPermCheck() }
         gearBand(box, "ログ")
         // 撮影中/開始要求中はグレー表示で不可(コピー処理が撮影と競合しないように)。
         // 【撮影中でも開ける(2026-08-29 実機で気づいた)】この画面には性質の違う2つが同居する。
@@ -960,7 +1116,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 "・所持カメラ / 所持レンズ\n" +
                 "・撮影制御方法の初期値と全体設定\n" +
                 "・外部端末の一覧とネットワーク設定\n" +
-                "・撮影ログ / 撮影レポート / 操作履歴\n\n" +
+                "・撮影ログ / 撮影レポート / 操作履歴(初期化した記録だけ残ります)\n\n" +
                 "機材マスタ(カメラ・レンズの一覧)は残します。\n" +
                 "外部端末本体の設定と、そこにある撮影計画は消えません。\n\n" +
                 "元に戻せません。消したあとアプリを開き直します。")
@@ -979,6 +1135,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
             // **commit を使う**。apply は非同期で、書き終わる前にプロセスを落とすと消えない。
             hgcPrefs().edit().clear().commit()
             getSharedPreferences("gearMaster", MODE_PRIVATE).edit().clear().commit()
+            // 【初期化したことは操作履歴に残す(2026-09-06 依頼)】履歴ごと消した直後に、この1件だけを
+            //  書いて新しい履歴の先頭にする。計画・端末・カメラは無いので空。
+            histFile().writeText(JSONArray().put(JSONObject().apply {
+                put("t", System.currentTimeMillis())
+                put("op", "factory reset"); put("plan", ""); put("edge", ""); put("cam", "")
+            }).toString())
         } catch (_: Exception) {
             // 消せなかったものがあっても、残りは消して終了する(中途半端でも次の起動で作り直される)
         }
@@ -1072,6 +1234,183 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (!ed.reachable()) return
         val c = loadEdgeLogOpt(name)
         Thread { try { HgeNative.nativeEdgeSendLogOpt(ed.addr(), ed.port, c.shot, c.batt, c.sys) } catch (_: Exception) {} }.start()
+    }
+
+    // ================= 権限、端末設定(2026-09-21 UI依頼) =================
+    // アプリを正常に動かすのに要る「実行時の権限」と「端末の設定」を一覧にして、揃っているかを見せる。
+    //  ・先頭のチェックは状態の表示だけ(触れない)。▼で開くと「何に要るか」と「設定する」ボタン
+    //  ・「設定する」は権限なら OS の確認ダイアログ(二度と聞けない状態ならアプリの設定画面)、
+    //    端末の設定なら該当する設定画面へ移る。戻ってきたとき(onResume)に取り直す
+    //  ・【設定済みでも押せる(2026-09-21 ユーザー決定)】やめる(取り消す)用事もあるので、ボタンは常に押せる。
+    //    設定済みのときは文言を「設定を開く」にし、行き先を「取り消せる場所」へ切り替える:
+    //      権限 … 許可済みの権限は OS のダイアログが出ないので、アプリの設定画面(権限の項目)へ
+    //      電池 … 既に対象外なら確認が出ないので、電池の最適化の一覧画面へ
+    //      位置情報/Bluetooth/Wi-Fi/日時 … 同じ設定画面(ON も OFF もそこで行う)
+    //    権限を取り消すと Android がアプリを作り直す(撮影が止まる)ので、撮影中は権限の変更だけ止める。
+    //  ・動作中に見るもの(空き容量・熱・同じネットワークに居るか)は載せない。設定しておけば済むものだけ
+    //  ・USB の許可は機器を挿したときに機器ごとに聞くものなので、ここでは扱えない(載せない)
+    private val kScreenPermCheck = 17
+    private val PERMCHECK_REQ = 4715
+    private var permCheckExpanded = HashSet<String>()
+
+    private class CheckItem(val key: String, val title: String, val desc: String,
+                            val isOk: () -> Boolean, val settle: () -> Unit,
+                            val settleWhenOk: () -> Unit = settle,   // 設定済みのときの行き先(取り消せる場所)
+                            val isPermission: Boolean = false)       // 取り消すとアプリが作り直される種類
+
+    private fun permGranted(vararg p: String) =
+        p.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
+
+    // 権限の「設定する」: OS のダイアログを出す。二度と聞けない状態(一度断って「今後表示しない」)では
+    //  ダイアログが出ずに即座に拒否が返るので、そのときはアプリの設定画面へ送る。
+    private fun settlePermission(perms: Array<String>) {
+        val canAsk = perms.any { ActivityCompat.shouldShowRequestPermissionRationale(this, it) } ||
+                     perms.all { !hgcPrefs().getBoolean("permAsked_$it", false) }
+        perms.forEach { hgcPrefs().edit().putBoolean("permAsked_$it", true).apply() }
+        if (canAsk) ActivityCompat.requestPermissions(this, perms, PERMCHECK_REQ)
+        else openAppDetailsSettings()
+    }
+    private fun openAppDetailsSettings() {
+        try {
+            startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                 android.net.Uri.parse("package:$packageName")))
+        } catch (_: Exception) { Toast.makeText(this, "設定画面を開けませんでした", Toast.LENGTH_SHORT).show() }
+    }
+    private fun openSystemSettings(action: String, data: android.net.Uri? = null) {
+        try { startActivity(Intent(action).apply { if (data != null) setData(data) }) }
+        catch (_: Exception) {
+            // その画面が無い機種 → 設定のトップへ
+            try { startActivity(Intent(android.provider.Settings.ACTION_SETTINGS)) } catch (_: Exception) {}
+        }
+    }
+
+    private fun permCheckItems(): List<CheckItem> {
+        val list = ArrayList<CheckItem>()
+        val sdk = Build.VERSION.SDK_INT
+        // --- 権限 ---
+        list.add(CheckItem("perm_camera", "カメラの権限",
+            "このスマホの内蔵カメラで撮影するときと、外部端末の設定用 QR を読むときに使います。" +
+            "外部のカメラ(ミラーレス機)だけで使うなら無くても動きます。",
+            { permGranted(Manifest.permission.CAMERA) },
+            { settlePermission(arrayOf(Manifest.permission.CAMERA)) },
+            { openAppDetailsSettings() }, isPermission = true))
+        list.add(CheckItem("perm_location", "位置情報の権限",
+            "撮影場所を現在地から作るときに使います(初回起動と、撮影場所の「現在地を取得」)。" +
+            (if (sdk < 31) "この Android では外部端末を Bluetooth で探すときにも要ります。" else ""),
+            { permGranted(Manifest.permission.ACCESS_FINE_LOCATION) || permGranted(Manifest.permission.ACCESS_COARSE_LOCATION) },
+            { settlePermission(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) },
+            { openAppDetailsSettings() }, isPermission = true))
+        if (sdk >= 31) {
+            list.add(CheckItem("perm_nearby", "付近のデバイスの権限(Bluetooth)",
+                "外部端末を Bluetooth で探して登録・設定するときと、外部端末と BLE で通信するときに使います。" +
+                "外部端末を使わないなら無くても動きます。",
+                { permGranted(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT) },
+                { settlePermission(arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)) },
+                { openAppDetailsSettings() }, isPermission = true))
+        }
+        if (sdk <= 28) {
+            list.add(CheckItem("perm_storage", "ストレージへの書き込み権限",
+                "撮影ログを Download フォルダへ保存するときに使います(この Android の版だけ必要です)。",
+                { permGranted(Manifest.permission.WRITE_EXTERNAL_STORAGE) },
+                { settlePermission(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE)) },
+                { openAppDetailsSettings() }, isPermission = true))
+        }
+        // --- 端末の設定 ---
+        list.add(CheckItem("set_location", "位置情報サービス(端末の設定)",
+            "権限があっても、端末の位置情報が OFF だと現在地を測れず、撮影場所が Tokyo のままになります。" +
+            (if (sdk < 31) "Bluetooth で外部端末を探すときにも要ります。" else ""),
+            {
+                val lm = getSystemService(LOCATION_SERVICE) as android.location.LocationManager
+                if (sdk >= 28) lm.isLocationEnabled
+                else runCatching { android.provider.Settings.Secure.getInt(contentResolver, android.provider.Settings.Secure.LOCATION_MODE) !=
+                                   android.provider.Settings.Secure.LOCATION_MODE_OFF }.getOrDefault(false)
+            },
+            { openSystemSettings(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS) }))
+        list.add(CheckItem("set_bluetooth", "Bluetooth を ON",
+            "外部端末の登録・設定(プロビジョニング)と、外部端末との BLE 通信に使います。外部端末を使わないなら不要です。",
+            { (getSystemService(BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)?.adapter?.isEnabled == true },
+            { openSystemSettings(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS) }))
+        list.add(CheckItem("set_wifi", "Wi-Fi を ON",
+            "ミラーレス機を見つけて撮影するときと、外部端末との通信に使います。屋外では外部端末のアクセスポイント(TLP-Edge-…)に接続します。撮影中は変えないでください。",
+            { (applicationContext.getSystemService(WIFI_SERVICE) as? WifiManager)?.isWifiEnabled == true },
+            { openSystemSettings(android.provider.Settings.ACTION_WIFI_SETTINGS) }))
+        list.add(CheckItem("set_battery", "電池の最適化の対象外にする",
+            "このスマホで直接撮影するときや予約開始を待つとき、アプリは前面で動き続ける必要があります。" +
+            "電池の最適化(省電力)の対象だと、長時間の撮影の途中で止められることがあります。",
+            { (getSystemService(POWER_SERVICE) as android.os.PowerManager).isIgnoringBatteryOptimizations(packageName) },
+            { openSystemSettings(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                 android.net.Uri.parse("package:$packageName")) },
+            { openSystemSettings(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS) }))
+        list.add(CheckItem("set_autotime", "日時とタイムゾーンを自動設定",
+            "撮影スケジュール(夜間・薄明・日の出の時刻)は端末の時刻とタイムゾーンから計算します。" +
+            "外部端末の時刻もスマホから合わせます。自動設定にしておくと狂いません。",
+            {
+                val cr = contentResolver
+                runCatching { android.provider.Settings.Global.getInt(cr, android.provider.Settings.Global.AUTO_TIME) == 1 &&
+                              android.provider.Settings.Global.getInt(cr, android.provider.Settings.Global.AUTO_TIME_ZONE) == 1 }
+                    .getOrDefault(false)
+            },
+            { openSystemSettings(android.provider.Settings.ACTION_DATE_SETTINGS) }))
+        return list
+    }
+
+    private fun openPermCheck() {
+        buildPermCheckScreen()
+        flipper.displayedChild = kScreenPermCheck
+    }
+
+    private fun buildPermCheckScreen() {
+        val box = findViewById<LinearLayout>(R.id.pc_container)
+        box.removeAllViews()
+        val items = permCheckItems()
+        var okCount = 0
+        for (item in items) {
+            val ok = runCatching { item.isOk() }.getOrDefault(false)
+            if (ok) okCount++
+            val card = LinearLayout(this); card.orientation = LinearLayout.VERTICAL
+            val head = LinearLayout(this); head.orientation = LinearLayout.HORIZONTAL
+            head.gravity = Gravity.CENTER_VERTICAL
+            head.setPadding(dp(12), dp(10), dp(12), dp(10))
+            // 状態のチェック(触れない)。無効にしても色が薄くならないよう、クリックだけ止める。
+            val cb = CheckBox(this); cb.isChecked = ok; cb.isClickable = false; cb.isFocusable = false
+            head.addView(cb, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            val tv = TextView(this); tv.text = item.title; tv.textSize = 16f
+            tv.setTextColor(if (ok) Color.BLACK else Color.parseColor("#C62828"))
+            tv.setPadding(dp(8), 0, 0, 0)
+            head.addView(tv, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            val expanded = permCheckExpanded.contains(item.key)
+            val arrow = TextView(this); arrow.text = if (expanded) "▲" else "▼"; arrow.textSize = 14f
+            arrow.setTextColor(Color.parseColor("#1565C0")); arrow.setPadding(dp(12), dp(4), dp(4), dp(4))
+            head.addView(arrow)
+            card.addView(head)
+            // 開いたときの中身: 説明 + 設定する
+            val body = LinearLayout(this); body.orientation = LinearLayout.VERTICAL
+            body.setPadding(dp(44), 0, dp(12), dp(10))
+            body.visibility = if (expanded) View.VISIBLE else View.GONE
+            val desc = TextView(this); desc.text = item.desc; desc.textSize = 14f; desc.setTextColor(Color.parseColor("#424242"))
+            body.addView(desc)
+            // 常に押せる。設定済みは「設定を開く」で取り消せる場所へ。撮影中の権限変更だけ止める(アプリが作り直される)。
+            val capturing = localCaptureActive()
+            val btn = blueButton(if (ok) "設定を開く" else "設定する") {
+                if (item.isPermission && capturing) {
+                    Toast.makeText(this, "撮影中は権限を変えられません(アプリが再起動され撮影が止まります)", Toast.LENGTH_LONG).show()
+                } else if (ok) item.settleWhenOk() else item.settle()
+            }
+            btn.isEnabled = !(item.isPermission && capturing)
+            (btn.layoutParams as LinearLayout.LayoutParams).let { lp -> lp.width = ViewGroup.LayoutParams.WRAP_CONTENT; lp.gravity = Gravity.END; btn.layoutParams = lp }
+            body.addView(btn)
+            card.addView(body)
+            head.setOnClickListener {
+                if (body.visibility == View.VISIBLE) { body.visibility = View.GONE; arrow.text = "▼"; permCheckExpanded.remove(item.key) }
+                else { body.visibility = View.VISIBLE; arrow.text = "▲"; permCheckExpanded.add(item.key) }
+            }
+            box.addView(card)
+            box.addView(thinDivider())
+        }
+        val sum = TextView(this)
+        sum.text = if (okCount == items.size) "すべて揃っています" else "${items.size - okCount} 件が未設定です(赤い項目)"
+        sum.textSize = 13f; sum.setTextColor(Color.parseColor("#616161")); sum.setPadding(dp(12), dp(12), dp(12), dp(12))
+        box.addView(sum, 0)
     }
 
     private fun openDebugLog() {
@@ -1210,7 +1549,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     val phoneLogs = logDir.listFiles { f -> f.isFile && f.name.endsWith(".log") } ?: emptyArray()
                     for (f in phoneLogs) {
                         if (dlogAbort) break
-                        try { saveToDownloads("hgclog", f.name, f.readBytes()); copied++ }
+                        try { saveToDownloads("tlplog", f.name, f.readBytes()); copied++ }
                         catch (e: Exception) { errors.append("phone/${f.name} ") }
                     }
                     say("スマートフォン: ${phoneLogs.size} 件")
@@ -1229,7 +1568,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         say("$nm: $logName")
                         val bytes = fetchEdgeLog(target, ed.port, logName)
                         if (bytes.isNotEmpty()) {
-                            try { saveToDownloads("hgclog-" + sanitizeFolder(nm), logName, bytes); copied++; n++ }
+                            try { saveToDownloads("tlplog-" + sanitizeFolder(nm), logName, bytes); copied++; n++ }
                             catch (e: Exception) { errors.append("$nm/$logName ") }
                         }
                     }
@@ -1243,7 +1582,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 setDlogEnabled(true)
                 val head = if (stopped) "中断しました。" else "完了しました。"
                 val tail = if (errors.isEmpty()) "" else "\n取れなかったもの: $errors"
-                say(head + "$n 件を Download/hgclog(スマホ)・hgclog-<端末名>(外部端末) へ保存しました。" + tail)
+                say(head + "$n 件を Download/tlplog(スマホ)・tlplog-<端末名>(外部端末) へ保存しました。" + tail)
             }
         }.start()
     }
@@ -1306,6 +1645,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val t = keyType(colorType)
         findViewById<TextView>(R.id.color_title).text = colorTypeName(colorType) + "の色"
         applyHeaderColor(R.id.color_header, R.id.color_title, t)
+        ensureColorTabs()
         val box = findViewById<LinearLayout>(R.id.color_container); box.removeAllViews()
         // 横向きは縦に2分割して 左=文字の色 / 右=背景の色 に並べる(2026-08-30 UI依頼)。
         //  縦向きは従来どおり上下に積む。
@@ -1358,15 +1698,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val h = hystToSeek(o.optDouble("hysteresis", 0.5))
         setSliderProgress(R.id.smooth_hyst_seek, h)
         findViewById<TextView>(R.id.smooth_hyst_val).text = String.format("%.1fev", seekToHyst(h))
-        val m = o.optInt("movingAverage", 5).coerceIn(0, 10)
+        val m = Math.round(o.optDouble("smoothMin", 4.0)).toInt().coerceIn(1, 10)
         setSliderProgress(R.id.smooth_ma_seek, m)
-        findViewById<TextView>(R.id.smooth_ma_val).text = "${m}frame"
+        findViewById<TextView>(R.id.smooth_ma_val).text = smoothLabel(m, global = true)
     }
     private fun leaveSmoothingScreen(dest: Int = kScreenMenu) { stopDirtyWatch(); saveSmoothingScreen(); gotoScreen(dest) }
     private fun saveSmoothingScreen() {
         val js = JSONObject()
             .put("hysteresis", seekToHyst(sliderProgress(R.id.smooth_hyst_seek)))
-            .put("movingAverage", sliderProgress(R.id.smooth_ma_seek))
+            .put("smoothMin", sliderProgress(R.id.smooth_ma_seek).coerceIn(1, 10).toDouble())
             .toString()
         Thread { HgeNative.nativeSetSmoothing(js) }.start()
     }
@@ -1519,11 +1859,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (!editingPlanCcm) {
             val cb = CheckBox(this); cb.text = "優先的な初期値にする"
             cb.isChecked = selPresetName == HgeNative.nativeGetPreferredCcm(presetType)
-            cb.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            cb.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             cb.setOnCheckedChangeListener { _, c ->
                 if (c) { selPresetName?.let { HgeNative.nativeSetPreferredCcm(presetType, it) }; rebuildPresetList() } else cb.isChecked = true
             }
             row.addView(cb); presetPreferCheck = cb
+            // 【スマホ向け(2026-09-06 仕様)】刻みと範囲を切り替える(on: 1/12 段 ss 48〜1/50000・F1.5〜3.5・
+            //  ISO20〜12800 / off: 1/3 段 ss 30〜1/16000・F0.5〜24・ISO100〜24000)。印はその初期値に保存する。
+            val ph = CheckBox(this); ph.text = "スマホ向け"
+            ph.isChecked = ccmJson?.optJSONObject(editingKey)?.optBoolean("forPhone") ?: false
+            ph.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            ph.setOnCheckedChangeListener { _, c -> togglePresetPhone(c) }
+            row.addView(ph)
+            // 残りの幅は空けて、取り消しボタンと重ならないようにする。
+            val sp = View(this); sp.layoutParams = LinearLayout.LayoutParams(0, 1, 1f); row.addView(sp)
         } else {
             val sp = View(this); sp.layoutParams = LinearLayout.LayoutParams(0, 1, 1f); row.addView(sp)
         }
@@ -1600,6 +1949,21 @@ class MainActivity : AppCompatActivity(), HgeListener {
         btn.setOnClickListener { onCancel() }
         if (atTop) box.addView(btn, 0) else box.addView(btn)
         return btn
+    }
+
+    // 「スマホ向け」を切り替える。今の編集内容ごと印を付けて保存し、目盛りを替えて開き直す
+    //  (値は新しい目盛りのいちばん近い位置に乗る)。
+    private fun togglePresetPhone(on: Boolean) {
+        val all = ccmJson ?: return
+        val cur = buildCcmEditJson() ?: return
+        // 触っていなければ保存済みの値をそのまま持つ(スライダーの位置は目盛りに寄せた表示に過ぎず、
+        //  それで保存すると 48 秒が 1/3 段の上限 30 秒に潰れて戻らない)。触っていればその値を採る。
+        val src = all.optJSONObject(editingKey)
+        val o = if (cur.toString() != dirtyBaseline || src == null) cur else JSONObject(src.toString())
+        o.put("forPhone", on)
+        all.put(editingKey, o)
+        savePresetFromEditor(o)
+        openCcmEdit(editingKey)
     }
 
     // エディタ内容をプリセットとして保存する(初期値編集時)。名称は一覧側で編集する。
@@ -1711,7 +2075,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
             box.removeAllViews(); root.removeView(box)
             root.addView(list, bi, LinearLayout.LayoutParams(mp, mdListH[listId] ?: dp(120)))
             root.addView(detail, bi + 2, LinearLayout.LayoutParams(mp, 0, 1f))   // 分割バーの次へ戻す
-            divider.visibility = View.VISIBLE
+            // 一覧が隠れている(計画内の撮影制御方法)ときは分割バーも出さない(2026-09-07 UI指摘。
+            //  初期値→計画内へ切り替えたとき横向きで灰色の棒だけが残っていた)。
+            divider.visibility = if (list.visibility == View.VISIBLE) View.VISIBLE else View.GONE
             mdBoxes.remove(listId)
         }
     }
@@ -1950,8 +2316,27 @@ class MainActivity : AppCompatActivity(), HgeListener {
         selected = { selCamera }, setSelected = { selCamera = it },
         onSelect = { selectCamera(it) },
         // エッジが計画を持っているカメラは名前も変えられない。
-        onRename = { orig, nm -> if (!blockedByEdge(orig, "変更")) commitCameraRename(orig, nm) },
+        onRename = { orig, nm ->
+            // 編集不可のカメラは名前も変えない。ひな形も撮影計画も名前で結び付いている。
+            if (ownedCamera(orig)?.optBoolean("readOnly") == true) { Toast.makeText(this, "このカメラの情報は変更できません", Toast.LENGTH_SHORT).show(); buildCameraList() }
+            else if (!blockedByEdge(orig, "変更")) commitCameraRename(orig, nm) },
         addLabel = "＋ 新規カメラ追加", onAdd = { openCameraAdd() }))
+
+
+    // 編集不可(readOnly)のカメラの詳細は表示だけにする。値は端末が答えたもので、直す余地が無い。
+    //  「撮影計画の初期値にする」だけは計画側の好みなので残す。削除は一覧のメニューからできる
+    //  (使わない人には要らない。出荷時設定に戻せば作り直される)。
+    private fun lockCameraDetail(root: ViewGroup, keep: View?) {
+        for (i in 0 until root.childCount) {
+            val v = root.getChildAt(i)
+            if (v === keep) continue
+            when (v) {
+                is EditText -> { v.isEnabled = false; v.isFocusable = false }
+                is CheckBox -> v.isEnabled = false
+                is ViewGroup -> lockCameraDetail(v, keep)
+            }
+        }
+    }
 
     // マスタに無いカメラを手入力で追加する(レンタル機など)。型番だけ聞き、残りは詳細画面で埋めてもらう。
     private fun promptAddCustomCamera() {
@@ -1991,7 +2376,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val o = JSONObject()
                 .put("name", nm)
                 .put("model", rawName)
-                .put("maker", "Canon")        // 現状の対応はCCAPI(Canon)のみ。違うなら詳細画面で直す
+                .put("maker", "")             // メーカーは詳細画面で入れる(既定を決め打たない 2026-09-06)
                 .put("sensorSize", 0.0)
                 .put("sensorSizeV", 0.0)
                 .put("sensorPixel", 0)
@@ -2032,6 +2417,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         if (cam == null) { val tv = TextView(this); tv.text = "(データなし)"; box.addView(tv); return }
         val camCancel = addCancelButton(box, atTop = true) { buildCameraDetail() }   // 分割バー直下に右寄せ(取消=保存内容から作り直し)
+        // 【外部端末が計画を持っているカメラは最初から編集不可(2026-09-07 ユーザー指示)】
+        //  以前は入力させてから保存時に「変更できません」と断っていた。開いた時点で欄を閉じ、理由を出す。
+        //  撮影が終わって外部端末の計画が解除されれば、開き直したときに編集できる。
+        val heldBy = edgesHoldingCamera(sel)
+        if (heldBy.isNotEmpty()) {
+            val note = TextView(this)
+            note.text = "このカメラを使う撮影計画が外部端末「" + heldBy.joinToString("」「") + "」に送られているため変更できません。" +
+                        "撮影が終わるか、計画一覧からその計画を外部端末から削除すると編集できます。"
+            note.textSize = 13f; note.setTextColor(0xFFB71C1C.toInt()); note.setPadding(dp(4), dp(4), dp(4), dp(8))
+            box.addView(note)
+        }
         box.addView(editRow("メーカー", "maker", cam.optString("maker")))
         box.addView(editRow("モデル", "model", cam.optString("model")))
         // 名称はリストの行でインライン編集する(分割バー画面共通の動作)。詳細からは除外。
@@ -2043,7 +2439,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.addView(editRow("シリアルNo.", "serial", cam.optString("serial")))
         // 未登録(0)は空欄で出す。0.0 と書くと「0という値が入っている」ように見えるため(2026-08-19)。
         // センサー寸法と画素数は機材マスターにある機種しか埋まらない。無い機種はここに手で入れる。
-        fun blankIfZero(v: Double) = if (v > 0.0) v.toString() else ""
+        // センサー寸法[mm]は小数点以下 2 桁固定(2026-09-21 ユーザー指示)。内蔵カメラは端末が float で
+        //  答えるので、そのまま出すと 9.791999816894531 のような桁になる。
+        fun blankIfZero(v: Double) = if (v > 0.0) String.format(java.util.Locale.US, "%.2f", v) else ""
         fun blankIfZeroI(v: Int)   = if (v > 0) v.toString() else ""
         box.addView(editRow2("センサーサイズ", "sensorSize", blankIfZero(cam.optDouble("sensorSize", 0.0)),
             "sensorSizeV", blankIfZero(cam.optDouble("sensorSizeV", 0.0)), "×", "mm", true))
@@ -2057,16 +2455,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
         camAutoInsert = cb; box.addView(cb)
         // 測光方式。既定はサムネイルだけ(最も正確)。撮影済みサムネイルの取得回数に上限がある
         //  機種(EOS R10)だけこれを入れ、普段はライブビューで測って足りないときだけサムネイルへ落ちる。
-        val cbLv = CheckBox(this); cbLv.text = "ライブビューで測光する"; cbLv.isChecked = cam.optBoolean("meterLv", false)
-        camMeterLv = cbLv; box.addView(cbLv)
-        // ダイジェスト認証。カメラ側の設定で有効にすると、CCAPI の全要求が 401 で弾かれる。
-        //  空のままなら認証なしの機体として扱う(要求は 401 を受けてから作るので、事前設定は不要)。
-        box.addView(thinDivider())
-        val ahdr = TextView(this); ahdr.text = "カメラの認証(設定している機体のみ)"; ahdr.textSize = 13f
-        ahdr.setTextColor(Color.GRAY); ahdr.setPadding(0, dp(8), 0, dp(4)); box.addView(ahdr)
-        box.addView(editRow("ユーザーID", "authUser", cam.optString("authUser")))
-        // パスワードは JSON では暗号文なので、平文はネイティブから別途もらう。
-        box.addView(editRowPass("パスワード", "authPass", HgeNative.nativeOwnedCameraAuthPass(sel)))
+        val readOnly = cam.optBoolean("readOnly", false)
+        if (!readOnly) {
+            val cbLv = CheckBox(this); cbLv.text = "ライブビューで測光する"; cbLv.isChecked = cam.optBoolean("meterLv", false)
+            camMeterLv = cbLv; box.addView(cbLv)
+            // ダイジェスト認証。カメラ側の設定で有効にすると、CCAPI の全要求が 401 で弾かれる。
+            //  空のままなら認証なしの機体として扱う(要求は 401 を受けてから作るので、事前設定は不要)。
+            box.addView(thinDivider())
+            val ahdr = TextView(this); ahdr.text = "カメラの認証(設定している機体のみ)"; ahdr.textSize = 13f
+            ahdr.setTextColor(Color.GRAY); ahdr.setPadding(0, dp(8), 0, dp(4)); box.addView(ahdr)
+            box.addView(editRow("ユーザーID", "authUser", cam.optString("authUser")))
+            // パスワードは JSON では暗号文なので、平文はネイティブから別途もらう。
+            box.addView(editRowPass("パスワード", "authPass", HgeNative.nativeOwnedCameraAuthPass(sel)))
+        }
         camAuthBaseline = camAuthSig()      // ここからの変化だけを「変更」とみなす
 
         // 組み合わせるレンズ(先頭=初期値)。並べ替えはハンドルをドラッグ(ss/iso/fnと同じ)。
@@ -2076,13 +2477,29 @@ class MainActivity : AppCompatActivity(), HgeListener {
         ocObj?.optJSONArray("lensList")?.let { ll -> for (i in 0 until ll.length()) ll.optJSONObject(i)?.optString("name")?.let { camLensNames.add(it) } }
         val lensBox = LinearLayout(this); lensBox.orientation = LinearLayout.VERTICAL
         box.addView(lensBox); camLensContainer = lensBox
-        renderCamLensReorder()
+        if (cam.optBoolean("lensFixed", false) || heldBy.isNotEmpty()) {
+            // レンズ固定のカメラ(または外部端末が計画を持っていて変更不可)。並べ替え・追加・削除を出さず、名前だけ見せる。
+            for (nm in camLensNames) {
+                val tv = TextView(this); tv.text = nm; tv.textSize = 14f; tv.setPadding(dp(8), dp(4), 0, dp(4))
+                lensBox.addView(tv)
+            }
+        } else {
+            renderCamLensReorder()
+        }
         // ロック中に「本当に変えたか」を見るための基準。**組み合わせレンズを読み込んだ後**に採る
         //  (2026-09-01 修正)。以前は認証欄の直後で採っていて camLensNames が空のままだったため、
         //  レンズを持つカメラは開いて戻るだけで「変更できません」が出ていた。
         camEditBaseline = camEditSig()
         // 項目2: 「変更の取り消し」を dirty 連動に(未変更=グレー無効、変更で有効、戻すと無効)。
         startDirtyWatch(camCancel) { camDetailSig() }
+        if (readOnly) {
+            lockCameraDetail(box, keep = camAutoInsert)
+            camCancel.visibility = View.GONE
+        } else if (heldBy.isNotEmpty()) {
+            // 保存時の判定(camEditSig)は「撮影計画の初期値にする」も変更に数えるので、欄はすべて閉じる。
+            lockCameraDetail(box, keep = null)
+            camCancel.visibility = View.GONE
+        }
     }
 
     // 所持カメラ詳細の編集内容シグネチャ(dirty 比較用)。編集欄・初期値チェック・レンズ順序を連結。
@@ -2366,8 +2783,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
         },
         selected = { selLens }, setSelected = { selLens = it },
         onSelect = { selectLens(it) },
-        onRename = { orig, nm -> commitLensRename(orig, nm) },
+        onRename = { orig, nm ->
+            // 編集不可のレンズ(内蔵カメラのもの)は名前も変えない。所持カメラの割り当てと名前で結び付いている。
+            if (ownedLens(orig)?.optBoolean("readOnly") == true) { Toast.makeText(this, "このレンズの情報は変更できません", Toast.LENGTH_SHORT).show(); buildLensList() }
+            else commitLensRename(orig, nm) },
         addLabel = "＋ 新規レンズ追加", onAdd = { openLensAdd() }))
+
+    private fun ownedLens(name: String): JSONObject? {
+        val arr = camArray(HgeNative.nativeGetOwnedLenses())
+        for (i in 0 until arr.length()) { val o = arr.optJSONObject(i) ?: continue; if (o.optString("name") == name) return o }
+        return null
+    }
 
     private fun buildLensDetail() {
         val box = findViewById<LinearLayout>(R.id.lenslist_detail)
@@ -2389,6 +2815,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         note.textSize = 12f; note.setTextColor(Color.GRAY); note.setPadding(0, dp(8), 0, dp(8)); box.addView(note)
         // 項目2: 「変更の取り消し」を dirty 連動に。
         startDirtyWatch(lensCancel) { lensDetailSig() }
+        // 編集不可(readOnly)のレンズは表示だけにする(内蔵カメラのレンズ。値は端末が答えたもの。削除は一覧から可)。
+        if (l.optBoolean("readOnly", false)) {
+            lockCameraDetail(box, keep = null)
+            lensCancel.visibility = View.GONE
+        }
     }
 
     private fun lensDetailSig(): String {
@@ -2417,6 +2848,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (origName == null) { commitListNameEdit(R.id.lenslist_container) }   // 名前を宛先にする前に先に確定させる
         val orig = origName ?: selLens ?: return
         if (lensFields.isEmpty()) return
+        if (ownedLens(orig)?.optBoolean("readOnly") == true) return   // 編集不可のレンズは書き戻さない(Entity 側でも拒否する)
         val o = JSONObject()
         for ((k, et) in lensFields) {
             when (k) {
@@ -2609,6 +3041,25 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .show()
     }
 
+    // 【カメラの性質は所持カメラの欄で見る(2026-09-06)】UI は「内蔵かどうか」を判断しない。
+    //  lensFixed / localOnly / noSyncShot / readOnly は登録時にマスタと api 実装が書いたもの。
+    private fun ownedCamera(name: String): JSONObject? {
+        if (name.isEmpty()) return null
+        val arr = camArray(HgeNative.nativeGetOwnedCameras())
+        for (i in 0 until arr.length()) {
+            val c = arr.optJSONObject(i)?.optJSONObject("camera") ?: continue
+            if (c.optString("name") == name) return c
+        }
+        return null
+    }
+
+    // いまの計画のカメラ(所持カメラの記録)。無ければ null。
+    private fun planCamera(): JSONObject? {
+        val want = try { JSONObject(HgeNative.nativeGetPlanJson()).optJSONObject("camera")?.optString("name") ?: "" }
+                   catch (_: Exception) { "" }
+        return ownedCamera(want)
+    }
+
     private fun choosePlanCamera() {
         val arr = camArray(HgeNative.nativeGetOwnedCameras())
         if (arr.length() == 0) { openCameraList(); return }
@@ -2624,6 +3075,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .setTitle("カメラを選択")
             .setItems(labels.toTypedArray()) { _, which ->
                 val name = names[which]
+                // 【この端末でしか撮れないカメラを選んだら端末はスマホ(2026-09-05 ユーザー判断)】
+                //  外部端末へは送れない。選べなくして戸惑わせるより、黙って正しい組み合わせへ寄せる
+                //  (何が起きたかはトーストで知らせる)。性質はカメラの記録(localOnly)で見る。
+                val localOnly = cams[which].optBoolean("localOnly", false)
+                if (localOnly && planEdgeName(currentPlanId).isNotEmpty()) {
+                    setPlanEdgeName(currentPlanId, "")
+                    runOnUiThread {
+                        refreshEdgeSpinner()
+                        Toast.makeText(this, "このカメラはこのスマホでしか使えないので、端末をスマホにしました",
+                                       Toast.LENGTH_LONG).show()
+                    }
+                }
                 planExec.execute {
                     HgeNative.nativeSetPlanCamera(name)
                     val sched = HgeNative.nativeScheduleJson()
@@ -2636,6 +3099,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private fun choosePlanLens() {
+        if (planCamera()?.optBoolean("lensFixed") == true) { return }   // レンズ固定のカメラ
         val arr = camArray(HgeNative.nativeGetOwnedLenses())
         if (arr.length() == 0) { openLensList(); return }
         val names = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("name") }
@@ -2703,14 +3167,25 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun altToSeek(v: Double) = (v + 19.0).toInt().coerceIn(0, 14)
     private fun seekToAlt(p: Int) = -19.0 + p
     // ev: SeekBar 0..30 ⇔ -5.0..+5.0(1/3刻み)
-    private fun evToSeek(v: Double) = ((v + 5.0) * 3.0).toInt().coerceIn(0, 30)
-    private fun seekToEv(p: Int) = -5.0 + p / 3.0
+    // 露出補正: Slider 0..60 ⇔ -5.0..+5.0 ev(1/6 段刻み。2026-09-20 ユーザー指示)。
+    //  【なぜ 1/6 段か】露出制御は内部が無段で、丸めるのは送る直前だけ。狙いを 1/6 段ずらせば
+    //   丸めの境目を越える時期が変わるので、1コマでは 1/3 段しか動かない外部カメラでも、
+    //   並びとしての明るさは 1/6 段ぶん動く。内蔵カメラは無段なのでそのまま出る。
+    //  切り捨てだと端数で1目盛り下へ落ちる(-3.0 が -3.17 になる)ので四捨五入する。
+    private fun evToSeek(v: Double) = Math.round((v + 5.0) * 6.0).toInt().coerceIn(0, 60)
+    private fun seekToEv(p: Int) = -5.0 + p / 6.0
+    // 表示は小数1桁でそろえる(2026-09-20 ユーザー指示)。1/6 段=0.167 は 0.05 より大きいので、
+    //  1目盛り動かせば表示も必ず変わる(0.0 / 0.2 / 0.3 / 0.5 / 0.7 / 0.8 / 1.0 …)。
+    //  保存されるのは丸めていない値(1/6 段そのもの)で、表示だけを丸める。
+    private fun evLabel(p: Int): String = String.format("%+.1f ev", seekToEv(p))
     // ヒステリシス: Slider 0..20 ⇔ 0.0..2.0 ev(0.1刻み)。0=全体設定に従う(ccm個別では未設定扱い)。
     private fun hystToSeek(v: Double) = (v * 10.0).toInt().coerceIn(0, 20)
     private fun seekToHyst(p: Int) = p / 10.0
     private fun hystLabel(p: Int) = if (p == 0) "全体設定" else String.format("%.1fev", seekToHyst(p))
     // 移動平均フレーム数: Slider 0..10(1刻み)。0=全体設定に従う(ccm個別では未設定扱い)。
-    private fun maLabel(p: Int) = if (p == 0) "全体設定" else "${p}frame"
+    // なめらかさ(分)。全体設定は 1〜10、撮影制御方法の個別設定は 0=全体設定に従う。
+    private fun smoothLabel(p: Int, global: Boolean) =
+        if (global) "${p.coerceIn(1, 10)}分" else (if (p == 0) "全体設定" else "${p}分")
 
     private fun altLabel(v: Double) = String.format("%.0f°", v)
 
@@ -2831,12 +3306,28 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun openCcmEdit(key: String) {
         val o = ccmJson?.optJSONObject(key) ?: return
         editingKey = key
+        loadCcmStep(key)                    // この画面の刻み(撮影制御方法ごとに覚える)
+        expoListsMode = -1                  // 刻みが変わっているかもしれないので必ず取り直す
+        buildStepSpinner(key)
+        // 【初期値の編集はカメラに依らない標準目盛りで(2026-09-06)】計画のカメラの目盛りを
+        //  借りると、内蔵カメラの実測目盛りに無い "1600" や "8" が位置を見失って化け、
+        //  そのまま初期値へ保存されていた(ISO 11377 / 48 秒)。計画の編集はそのカメラの目盛り。
+        //  初期値は「スマホ向け」の印で 1/12 段と 1/3 段を切り替える(2026-09-06 仕様)。
+        val wantMode = if (editingPlanCcm) 0 else if (o.optBoolean("forPhone")) 2 else 1
+        if (wantMode != expoListsMode) { loadExpoValues(wantMode); buildExposureEditors() }
         // 計画固有の編集で、その計画がロックされていれば読取専用(初期値の編集は常に可)。
         ccmReadOnly = editingPlanCcm && planReadOnly
         val title = mapOf("night" to "夜間撮影", "sunrise" to "朝日撮影", "sunset" to "夕日撮影", "day" to "日中撮影")[key]
+        // 【どの計画のものかを名前で出す(2026-09-20 ユーザー指示)】計画・ひな形の撮影制御方法は
+        //  「（この計画）」ではなくその名前を出す。名前は選択中の計画/ひな形のスケジュールから採る
+        //  (ひな形を選んでいるときはひな形の名前が入っている)。取れなければ従来の「この計画」。
+        //  初期値の編集はどの計画のものでもないので「（初期値）」のまま。
+        val ccmOwner = (try { JSONObject(latestSchedule).optString("planName") } catch (_: Exception) { "" })
+            .ifEmpty { "この計画" }
         findViewById<TextView>(R.id.edit_title).text = title +
-            (if (!editingPlanCcm) "（初期値）" else if (ccmReadOnly) "（この計画・変更不可）" else "（この計画）")
+            (if (!editingPlanCcm) "（初期値）" else if (ccmReadOnly) "（$ccmOwner・変更不可）" else "（$ccmOwner）")
         applyHeaderColor(R.id.edit_header, R.id.edit_title, keyType(key))   // タイトルバーにシステム共通色
+        ensureCcmTabs()
         val showPreset = !editingPlanCcm   // 初期値編集時のみプリセット一覧を出す
         findViewById<View>(R.id.edit_presetScroll).visibility = if (showPreset) View.VISIBLE else View.GONE
         findViewById<View>(R.id.edit_presetDivider).visibility = if (showPreset) View.VISIBLE else View.GONE
@@ -2854,6 +3345,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val isSun = key == "sunrise" || key == "sunset"
         findViewById<View>(R.id.edit_smooth_section).visibility = if (isSun) View.VISIBLE else View.GONE
         findViewById<View>(R.id.edit_limit_section).visibility = if (isNight) View.GONE else View.VISIBLE
+        // 「暗所限界に設定」は夜間で、計画/ひな形の編集のときだけ(初期値は対象外。2026-09-21 UI依頼)。
+        findViewById<View>(R.id.edit_set_dark_btn).visibility =
+            if (isNight && editingPlanCcm && !ccmReadOnly) View.VISIBLE else View.GONE
 
         if (hasAlt) {
             val isNightAlt = key == "night"
@@ -2890,15 +3384,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (hasEv) {
             val p = evToSeek(o.optDouble("ev", 0.0))
             setSliderProgress(R.id.edit_ev_seek, p)
-            findViewById<TextView>(R.id.edit_ev_val).text = String.format("%+.1f ev", seekToEv(p))
+            findViewById<TextView>(R.id.edit_ev_val).text = evLabel(p)
         }
         if (isNight) {
             val pp = evToSeek(o.optDouble("postNightEv", 0.0))   // 夜間後露出補正
             setSliderProgress(R.id.edit_postev_seek, pp)
-            findViewById<TextView>(R.id.edit_postev_val).text = String.format("%+.1f ev", seekToEv(pp))
+            findViewById<TextView>(R.id.edit_postev_val).text = evLabel(pp)
             val pe = evToSeek(o.optDouble("preNightEv", 0.0))    // 夜間前露出補正(仕様3.7)
             setSliderProgress(R.id.edit_preev_seek, pe)
-            findViewById<TextView>(R.id.edit_preev_val).text = String.format("%+.1f ev", seekToEv(pe))
+            findViewById<TextView>(R.id.edit_preev_val).text = evLabel(pe)
             fixEditor.set(o.optJSONObject("limitBright"))
         } else {
             editLimit.set(o.optJSONObject("limitBright"), o.optJSONObject("limitDark"),
@@ -2908,16 +3402,21 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val hp = hystToSeek(o.optDouble("hysteresis", 0.3))   // ccm個別の平滑化(項目7)
             setSliderProgress(R.id.edit_hyst_seek, hp)
             findViewById<TextView>(R.id.edit_hyst_val).text = hystLabel(hp)
-            val mp = o.optInt("movingAverage", 3).coerceIn(0, 10)
+            val mp = Math.round(o.optDouble("smoothMin", 0.0)).toInt().coerceIn(0, 10)   // 0=全体設定
             setSliderProgress(R.id.edit_ma_seek, mp)
-            findViewById<TextView>(R.id.edit_ma_val).text = maLabel(mp)
+            findViewById<TextView>(R.id.edit_ma_val).text = smoothLabel(mp, global = false)
         }
         // 計画固有編集では「初期値リストから選択」ボタンを出す(§7.4.1)。
         val onPick: (() -> Unit)? = if (editingPlanCcm) ({
             showPresetPicker(editingKey) { preset ->
                 val all = ccmJson ?: return@showPresetPicker
+                val before = dirtyBaseline   // 取り込む前の内容(=保存済み)
                 val merged = JSONObject(preset.toString()); merged.put("type", keyType(editingKey))
                 all.put(editingKey, merged); openCcmEdit(editingKey)   // プリセット値を読み込む(以後変更可)
+                // 【取り込みは「変更」(2026-09-06)】開き直すと基準が取り込んだ内容になり、離脱時の
+                //  「変わっていなければ書かない」に引っかかって保存されなかった。基準は取り込む前のままにする。
+                dirtyBaseline = before
+                dirtyBtn?.let { setCancelEnabled(it, true) }
             }
         }) else null
         if (ccmReadOnly) {
@@ -2942,6 +3441,29 @@ class MainActivity : AppCompatActivity(), HgeListener {
         else v.isEnabled = enabled
     }
 
+    // 【暗所限界に設定(2026-09-21 UI依頼)】夜間撮影の固定露出(いま画面にある iso/ss/F)を、朝日・夕日・日中の
+    //  暗所限界(limitBright)へ写す。対象は計画とひな形(初期値は対象外)。優先順(priority)は変えず値だけ。
+    //  基準(initial)が暗所限界と同じ値だったもの(=基準は暗所限界)は、意味を保つため一緒に動かす。
+    //  すぐ保存する(夜間の編集そのものは従来どおり離脱時に保存)。
+    private fun applyNightToDarkLimits() {
+        if (editingKey != "night" || !editingPlanCcm || ccmReadOnly) return
+        val all = ccmJson ?: return
+        val e = fixEditor.get()
+        val keys = listOf("iso", "ss", "fn")
+        if (keys.any { e.optString(it).isEmpty() }) { Toast.makeText(this, "夜間の固定露出が未設定です", Toast.LENGTH_SHORT).show(); return }
+        for (k in listOf("sunrise", "sunset", "day")) {
+            val o = all.optJSONObject(k) ?: continue
+            val old = o.optJSONObject("limitBright"); val init = o.optJSONObject("initial")
+            val initIsDark = old != null && init != null && keys.all { old.optString(it) == init.optString(it) }
+            val nb = JSONObject(); for (key in keys) nb.put(key, e.optString(key))
+            o.put("limitBright", nb)
+            if (initIsDark) o.put("initial", JSONObject(nb.toString()))
+        }
+        HgeNative.nativeSetPlanCcm(all.toString())
+        Toast.makeText(this, "朝日・夕日・日中の暗所限界を ISO${e.optString("iso")} / ${e.optString("ss")}秒 / F${e.optString("fn")} にしました",
+                       Toast.LENGTH_SHORT).show()
+    }
+
     // 撮影制御方法編集の取り消し(保存済みから再読込して破棄)。
     private fun cancelCcmEdit() {
         if (!editingPlanCcm) { loadPresets(presetType); loadEditorOnly(); rebuildPresetList(); return }
@@ -2951,6 +3473,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // 現在のエディタ内容から ccm の JSON を組み立てる(保存せず・破壊しない)。dirty 比較にも使う。
+    // 露出エディタへ値を入れる。openCcmEdit と、刻みを変えて作り直したときの両方から呼ぶ。
+    //  o=null なら保存済みの内容から入れ直す。
+    private fun restoreCcmEditValues(o: JSONObject?) {
+        val src = o ?: ccmJson?.optJSONObject(editingKey) ?: return
+        if (editingKey == "night") {
+            fixEditor.set(src.optJSONObject("limitBright"))
+        } else {
+            editLimit.set(src.optJSONObject("limitBright"), src.optJSONObject("limitDark"),
+                src.optJSONArray("priority"), src.optJSONObject("initial"),
+                dayMode = (editingKey == "day"))
+        }
+    }
+
     private fun buildCcmEditJson(): JSONObject? {
         val all = ccmJson ?: return null
         val src = all.optJSONObject(editingKey) ?: return null
@@ -2959,7 +3494,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (editingKey != "night") o.put("ev", seekToEv(sliderProgress(R.id.edit_ev_seek)))
         if (editingKey == "sunrise" || editingKey == "sunset") {
             o.put("hysteresis", seekToHyst(sliderProgress(R.id.edit_hyst_seek)))    // ccm個別の平滑化(項目7)
-            o.put("movingAverage", sliderProgress(R.id.edit_ma_seek))
+            o.put("smoothMin", sliderProgress(R.id.edit_ma_seek).toDouble())
         }
         if (editingKey == "night") {
             o.put("postNightEv", seekToEv(sliderProgress(R.id.edit_postev_seek)))   // 夜間後露出補正
@@ -2981,6 +3516,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (ccmReadOnly) return         // 見るだけの表示。画面を離れるときも書き戻さない
         val all = ccmJson ?: return
         val o = buildCcmEditJson() ?: return
+        // 【触っていなければ書かない(2026-09-06)】開いて閉じただけで初期値が書き換わらないように。
+        //  変更の有無は「取り消し」ボタンの赤/灰と同じ比較(開いたときの内容)で見る。
+        if (o.toString() == dirtyBaseline) return
         all.put(editingKey, o)
         if (editingPlanCcm) HgeNative.nativeSetPlanCcm(all.toString()) else savePresetFromEditor(o)
     }
@@ -3019,10 +3557,49 @@ class MainActivity : AppCompatActivity(), HgeListener {
         return l
     }
 
+    // 【刻みの選択(2026-09-19 ユーザー指示)】撮影制御方法の画面ごとに覚える。
+    //  範囲はカメラ/レンズの実力で決まるので、ここで選ぶのは目盛りの細かさだけ。
+    //  撮影そのものには影響しない(撮影時はデバイスが自分の出せる値へ解決する)。
+    //  初期値(カメラに依らない標準目盛り)の編集では意味が無いので隠す。
+    private fun buildStepSpinner(key: String) {
+        val row = findViewById<View>(R.id.edit_step_row) ?: return
+        val sp  = findViewById<Spinner>(R.id.edit_step_spinner) ?: return
+        row.visibility = if (editingPlanCcm) View.VISIBLE else View.GONE
+        if (!editingPlanCcm) return
+        val ad = ArrayAdapter(this, android.R.layout.simple_spinner_item, ccmStepChoices.map { it.second })
+        ad.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        sp.onItemSelectedListener = null
+        sp.adapter = ad
+        val idx = ccmStepChoices.indexOfFirst { it.first == ccmEditStepPer }
+        sp.setSelection(if (idx >= 0) idx else 0, false)
+        sp.isEnabled = !ccmReadOnly
+        sp.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                val per = ccmStepChoices[pos].first
+                if (per == ccmEditStepPer) return
+                // 【刻みを変えただけで表示が消える件(2026-09-20)】目盛りを張り直すとスライダーを
+                //  作り直すので、いま画面にある値を控えてから作り直し、同じ値を入れ直す。
+                //  入れ直さないと、夜間は数値が消えてつまみが左端へ寄り、朝日/夕日/日中は
+                //  カードごと消える(LimitEditor は set() を受けるまで中身を描かない)。
+                //  控えは画面から集める(まだ保存していない編集を捨てないため)。
+                val keep = buildCcmEditJson()
+                saveCcmStep(key, per)
+                reloadExpoEditors()       // 目盛りを張り直してスライダーを作り直す
+                restoreCcmEditValues(keep)
+            }
+            override fun onNothingSelected(p: AdapterView<*>?) {}
+        }
+    }
+
     // 設定可能な露出値(カメラ設定値の文字列)を Entity から取得して保持する。
-    private fun loadExpoValues() {
+    private fun loadExpoValues(mode: Int = 0) {
+        expoListsMode = mode
         try {
-            val o = JSONObject(HgeNative.nativeGetExpoValues())
+            val o = JSONObject(when (mode) {
+                1 -> HgeNative.nativeGetPresetExpoValues(false)
+                2 -> HgeNative.nativeGetPresetExpoValues(true)
+                else -> HgeNative.nativeGetExpoValues(ccmEditStepPer)
+            })
             isoValues = jsonToList(o.optJSONArray("iso"))
             ssValues = jsonToList(o.optJSONArray("ss"))
             fnValues = jsonToList(o.optJSONArray("fn"))
@@ -3105,7 +3682,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // 単一露出を選ぶ1本スライダー行。タイトルは左寄せ(仕様7)、値は右に表示。
     // 夜間固定露出・月の開始時露出に使う。
-    private inner class SingleRow(parent: LinearLayout, title: String, private val vals: List<String>) {
+    // 露出値の文字列を実数にする(iso: そのまま / ss: "1/250" と "8" / fn: そのまま)。失敗は 0。
+    private fun expoNum(kind: Int, s: String): Double {
+        if (kind == 1 && s.contains('/')) {
+            val p = s.split('/'); val a = p[0].trim().toDoubleOrNull() ?: return 0.0
+            val b = p.getOrNull(1)?.trim()?.toDoubleOrNull() ?: return 0.0
+            return if (b > 0.0) a / b else 0.0
+        }
+        return s.trim().trimEnd('"').toDoubleOrNull() ?: 0.0
+    }
+
+    private inner class SingleRow(parent: LinearLayout, title: String, private val vals: List<String>,
+                                  private val kind: Int) {
         private val slider = Slider(this@MainActivity)
         private val valTv: TextView
         init {
@@ -3138,7 +3726,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
             sliderWithIcons(col, slider, showIcons = false)   // 夜間固定露出・月の開始時露出は外側アイコン無し
         }
         fun set(value: String) {
-            val idx = vals.indexOf(value).let { if (it < 0) 0 else it }
+            // 一覧に無い値は位置 0(最大側)にせず、いちばん近い目盛りへ(2026-09-06)。
+            //  位置 0 にすると ISO1600 が 11377 に化ける。段数の差(log)が最小のものを採る。
+            var idx = vals.indexOf(value)
+            if (idx < 0) {
+                val v = expoNum(kind, value)
+                var best = 0; var bestDiff = Double.MAX_VALUE
+                if (v > 0.0) for (i in vals.indices) {
+                    val r = expoNum(kind, vals[i]); if (r <= 0.0) continue
+                    val d = Math.abs(Math.log(r / v)); if (d < bestDiff) { bestDiff = d; best = i }
+                }
+                idx = best
+            }
             slider.value = idx.toFloat().coerceIn(slider.valueFrom, slider.valueTo)
             valTv.text = vals.getOrElse(idx) { "" }
         }
@@ -3147,9 +3746,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // 単一露出(iso/ss/fn)を3スライダーで編集する。夜間固定露出・月の開始時露出に使う。
     private inner class ExposureEditor(container: LinearLayout) {
-        private val isoRow = SingleRow(container, "ISO感度", isoDisp)
-        private val ssRow = SingleRow(container, "シャッター速度", ssDisp)
-        private val fnRow = SingleRow(container, "F値", fnDisp)
+        private val isoRow = SingleRow(container, "ISO感度", isoDisp, 0)
+        private val ssRow = SingleRow(container, "シャッター速度", ssDisp, 1)
+        private val fnRow = SingleRow(container, "F値", fnDisp, 2)
 
         fun set(o: JSONObject?) {
             isoRow.set(o?.optString("iso") ?: "")
@@ -3504,7 +4103,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         return out
     }
 
-    private fun refreshPlanList() {
+    //  then: 一覧を作り終えたあと UI スレッドで呼ぶ(画面を出すのを一覧の完成まで待たせる用。2026-09-21)。
+    private fun refreshPlanList(then: (() -> Unit)? = null) {
         // 一覧の読み出しも計画操作と同じ単一スレッドで実行し、改名・編集の直後に最新状態を読む。
         planExec.execute {
             // 【ひな形モード(2026-09-04 UI依頼)】一覧をひな形に差し替える。選択を native へ
@@ -3516,7 +4116,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     if (currentPlanId.isEmpty() || !tids.contains(currentPlanId)) {
                         currentPlanId = tids.firstOrNull() ?: ""
                     }
-                    buildPlanList(tj); updateReadOnly()
+                    buildPlanList(tj); updateReadOnly(); then?.invoke()
                 }
                 return@execute
             }
@@ -3541,7 +4141,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             runOnUiThread {
                 // 選択が消えた(削除された)ときと、まだ何も選んでいない起動時だけ native に従う。
                 if (currentPlanId.isEmpty() || !ids.contains(currentPlanId)) { currentPlanId = cur }
-                buildPlanList(js); updateReadOnly(); refreshEdgeSpinner()
+                buildPlanList(js); updateReadOnly(); refreshEdgeSpinner(); then?.invoke()
             }
         }
     }
@@ -3559,9 +4159,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     return@runOnUiThread
                 }
                 planIdBeforeTpl = currentPlanId
+                tplOpenedFrom = flipper.displayedChild   // 戻るの行き先(いまはメニューからだけ開く)
                 tplMode = true
-                selectTplRow(ids.first())
-                flipper.displayedChild = 0
+                // 【画面はひな形を載せ終えてから出す(2026-09-21 UI依頼)】先に出すと、選び直しが済むまでの
+                //  一瞬、元の計画(題も「撮影計画」)が見えてしまう。
+                selectTplRow(ids.first()) { flipper.displayedChild = 0 }
             }
         }
     }
@@ -3584,10 +4186,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun tplIdsSorted(): List<String> = planIdsIn(HgeNative.nativeListTemplates()).toList()
 
     // ひな形を1件選ぶ(編集対象にする)。撮影計画の selectPlanRow と同じ役目。
-    private fun selectTplRow(id: String) {
+    private fun selectTplRow(id: String, then: (() -> Unit)? = null) {
         planExec.execute {
             HgeNative.nativeSelectTemplate(id)
-            runOnUiThread { currentPlanId = id; refreshPlanList(); applyTplMode(); reloadExpoEditors() }
+            // 一覧(ひな形)が出来てから then を呼ぶ。先に画面を出すと元の計画の一覧が一瞬見える。
+            runOnUiThread { currentPlanId = id; applyTplMode(); reloadExpoEditors(); refreshPlanList { then?.invoke() } }
         }
     }
 
@@ -3597,7 +4200,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // ホームは「撮影計画ひな形」のときだけ出す。撮影計画そのものがホームなので、
         //  そこでは押す意味がない(場所は空けたままにして題を中央に保つ)。
         findViewById<View>(R.id.plan_home)?.visibility = if (tplMode) View.VISIBLE else View.INVISIBLE
+        findViewById<View>(R.id.plan_back)?.visibility = if (tplMode) View.VISIBLE else View.INVISIBLE
         updatePagerTitle()
+        // 先頭タブの名前(ひな形/撮影計画)も切り替える(2026-09-21 UI依頼)。ひな形からホームで戻るとき、
+        //  計画の選び直し(EV_SCHEDULE)でタブが作られるのが tplMode を落とす前なので「ひな形」のまま残っていた。
+        rebuildPlanTabs()
     }
 
     private fun buildPlanList(js: String) {
@@ -3939,9 +4546,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
             } catch (_: Exception) { "カメラ" }
             AlertDialog.Builder(this)
                 .setTitle("開始できません")
-                .setMessage("$cam は他の計画で使用中なので開始できません。")
+                .setMessage("$cam は他の計画で使用中なので開始できません。\n(このスマホのカメラは同時に 1 つの計画でしか使えません)")
                 .setPositiveButton("OK", null)
                 .show()
+            return
+        }
+        // このスマホのカメラで撮るなら、開く前に許可を貰っておく(2026-09-09)。
+        //  ここを通さないと、開始してから「開けません」を数秒ごとに繰り返すだけになる。
+        if (planCamLocalOnly(id) &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            ensureCameraPermission(id) { startPlan(id) }
             return
         }
         stoppingPlans.remove(id)   // 再開する計画は「中止確定待ち」を解除(NOCAMERA抑止をリセット)
@@ -4042,6 +4656,40 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // NOCAMERAダイアログの抑止フラグ解除＋表示中なら閉じる。状態が「未検出以外」(復帰/待機/撮影/IDLE)へ
     // 移ったとき、および停止確定時に呼ぶ。これで復帰しても閉じない/中止しても再表示される問題を根絶する。
+    // このスマホのカメラを使う計画か(内蔵カメラ = この端末でしか撮れないカメラ)。
+    private fun planCamLocalOnly(id: String): Boolean = try {
+        val arr = JSONArray(HgeNative.nativeListPlans())
+        (0 until arr.length()).asSequence().map { arr.optJSONObject(it) }
+            .firstOrNull { it?.optString("id") == id }?.optBoolean("camLocalOnly", false) ?: false
+    } catch (_: Exception) { false }
+
+    // カメラ権限が要るなら頼んでから action を行う。要らない(外部カメラ)ならそのまま行う。
+    private fun ensureCameraPermission(id: String, action: () -> Unit) {
+        if (!planCamLocalOnly(id) ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            action(); return
+        }
+        pendingCamAction = action
+        ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), CAM_PERM_REQ)
+    }
+
+    // 権限が無いときの案内。「二度と聞かない」を選ばれた後は要求しても何も出ないので、
+    //  設定画面への入口を必ず添える(ここへ来ないと利用者は直しようがない)。
+    private fun showCameraPermissionHelp() {
+        AlertDialog.Builder(this)
+            .setTitle("カメラを使えません")
+            .setMessage(noticeText(66, 0))
+            .setPositiveButton("設定を開く") { d, _ ->
+                d.dismiss()
+                runCatching {
+                    startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                         android.net.Uri.fromParts("package", packageName, null)))
+                }
+            }
+            .setNegativeButton("閉じる", null)
+            .show()
+    }
+
     private fun clearNoCam(id: String) {
         nocamDialogShown.remove(id)
         nocamDialogs.remove(id)?.let { runCatching { if (it.isShowing) it.dismiss() } }
@@ -4125,13 +4773,25 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  だけ、という場合がある。「見つかりません」と言うと電源やWi-Fiを疑って堂々巡りに
         //  なるので、分かっている理由を優先する(63=締め出し / 64=未登録 / 65=誤り)。
         val an = planAuthNotice[id] ?: 0
-        val title = if (an != 0) "カメラに接続できません" else "カメラが見つかりません"
+        // 権限が無いのは「接続できない」でも「見つからない」でもない。探し直しても直らないので
+        //  題も本文も分け、設定画面への入口を添える(2026-09-09)。
+        val noPerm = (an == 66)
+        val title = when { noPerm -> "カメラを使えません"; an != 0 -> "カメラに接続できません"; else -> "カメラが見つかりません" }
         val body  = if (an != 0) "${cam}: " + noticeText(an, 0)
                     else "${cam}が見つかりません。オンラインにしてください。"
-        val dlg = androidx.appcompat.app.AlertDialog.Builder(this)
+        val b = androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle(title)
             .setMessage(body)
             .setCancelable(false)
+        if (noPerm) {
+            b.setNeutralButton("設定を開く") { _, _ ->
+                runCatching {
+                    startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                         android.net.Uri.fromParts("package", packageName, null)))
+                }
+            }
+        }
+        val dlg = b
             .setPositiveButton("継続") { d, _ ->
                 d.dismiss(); nocamDialogs.remove(id)
                 // 即再探索(取得フェーズの60秒待ちを前倒し)。ネットワークI/Oは別スレッド。
@@ -4317,7 +4977,78 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun startBlink() { handler.removeCallbacks(planBlink); blinkOn = true; handler.postDelayed(planBlink, 500) }
     private fun stopBlink() { handler.removeCallbacks(planBlink) }
 
+    // ── 撮影中の画面消灯(案A。2026-09-08 ユーザー指示) ──────────────────────────
+    // 【なぜ「点けたまま真っ黒」か】本当に画面を消す(電源ボタン/自動スリープ)と、前面アプリでなくなり
+    //  内蔵カメラはシステムに止められ、外部カメラへの Wi-Fi も省電力(Doze)で絞られる。それを避けるには
+    //  フォアグラウンドサービス・ウェイクロック・電池最適化の除外が要り、端末ごとの検証も要る。
+    //  代わりに「システムに消させない(keep screen on)」+「全面黒の覆い+明るさ最小」にする。
+    //  有機 EL(Pixel 6)では黒い画素は光らず、実質消灯と同じ。撮影経路には一切影響しない。
+    // 【いつ】スマホ直結の撮影(内蔵カメラ/外部カメラ)が待機中・撮影中・未検出のいずれかにある間だけ。
+    //  エッジで撮っている計画は対象外。撮影が全部終わったら覆いを外し、keep screen on も戻す。
+    // 【操作】開始から 1 分、または最後のタッチから 1 分で黒くなる。どこかをタッチすると戻る
+    //  (そのタッチは下の画面へ渡さない=誤操作にならない)。以後また 1 分放置で黒くなる。
+    // 【注意】電源ボタンで物理的に消すとこれまでどおり撮影が止まり得る(案Aはそこを防がない)。
+    private var dimView: View? = null
+    private var dimArmed = false
+    private val kDimDelayMs = 60_000L
+    private val dimRunnable = Runnable { showDim() }
+
+    private fun localCaptureActive(): Boolean =
+        (capturingPlans + waitingPlans + disconnectedPlans).any { planEdgeName(it).isEmpty() }
+
+    private fun updateDimPolicy() {
+        val active = localCaptureActive()
+        if (active && !dimArmed) {
+            dimArmed = true
+            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            scheduleDim()
+        } else if (!active && dimArmed) {
+            dimArmed = false
+            handler.removeCallbacks(dimRunnable)
+            hideDim()
+            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    private fun scheduleDim() {
+        handler.removeCallbacks(dimRunnable)
+        if (dimArmed) handler.postDelayed(dimRunnable, kDimDelayMs)
+    }
+
+    private fun showDim() {
+        if (!dimArmed || dimView != null) return
+        val root = findViewById<ViewGroup>(android.R.id.content) ?: return
+        val v = View(this).apply {
+            setBackgroundColor(Color.BLACK)
+            isClickable = true; isFocusable = true
+            elevation = 10_000f   // どの画面・ダイアログ枠より手前
+            setOnTouchListener { _, ev ->
+                if (ev.action == MotionEvent.ACTION_DOWN) { hideDim(); scheduleDim() }
+                true   // 覆いを外すためのタッチは下へ渡さない
+            }
+        }
+        root.addView(v, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        dimView = v
+        // 明るさは最小に(0.0 は端末によってバックライトを完全に落とす扱いなので、その一歩手前)。
+        window.attributes = window.attributes.apply { screenBrightness = 0.01f }
+    }
+
+    private fun hideDim() {
+        dimView?.let { (it.parent as? ViewGroup)?.removeView(it) }
+        dimView = null
+        window.attributes = window.attributes.apply {
+            screenBrightness = android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        }
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        // 覆いが出ていない間のタッチは「放置の始まり」を更新する(覆いが出ている間は覆い自身が処理)。
+        if (dimArmed && dimView == null && ev.action == MotionEvent.ACTION_DOWN) scheduleDim()
+        return super.dispatchTouchEvent(ev)
+    }
+
     override fun onDestroy() {
+        handler.removeCallbacks(dimRunnable)
         handler.removeCallbacks(edgePoll)
         handler.removeCallbacks(edgeSweep)
         handler.removeCallbacks(edgeTimeSync)
@@ -4360,18 +5091,25 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // 新規個体ごとに「登録しますか？」ダイアログを出す(どの画面でも表示)。登録=所持へ追加、いいえ=以後自動プロンプト抑止。
-    private fun promptRegisterCameras(list: List<Triple<String, String, String>>) {
+    //  via = 見つけた外部端末の名前(空=スマホ自身が見つけた)。**どこのカメラかを必ず出す**:
+    //   端末を離れた場所に置く使い方では、文面に名前が無いと利用者はどのカメラか判断できない。
+    private fun promptRegisterCameras(list: List<Triple<String, String, String>>, via: String = "") {
         for ((model, serial, assignedName) in list) {
             if (!promptingCamSerials.add(serial)) continue               // 既に表示中のserialは二重に出さない
             val label = if (assignedName.isNotEmpty()) assignedName else if (model.isNotEmpty()) model else serial
+            val where = if (via.isEmpty()) "" else "「$via」が見つけた"
             androidx.appcompat.app.AlertDialog.Builder(this)
                 .setTitle("カメラの登録")
-                .setMessage("未登録のカメラ「$label」が見つかりました。所持カメラに登録しますか？")
+                .setMessage("${where}未登録のカメラ「$label」が見つかりました。所持カメラに登録しますか？")
                 .setCancelable(false)
                 .setPositiveButton("登録") { _, _ ->
                     promptingCamSerials.remove(serial)
                     Thread {
-                        try { HgeNative.nativeRecordCameraIdentity(model, serial, assignedName, true) } catch (_: Exception) {}
+                        // 外部端末が見つけたカメラはスマホから届かないので、実機を探しに行かない版で登録する。
+                        try {
+                            if (via.isEmpty()) { HgeNative.nativeRecordCameraIdentity(model, serial, assignedName, true) }
+                            else               { HgeNative.nativeRecordRemoteCameraIdentity(model, serial, assignedName, true) }
+                        } catch (_: Exception) {}
                         runOnUiThread { if (flipper.displayedChild == 6) buildCameraList() }   // 6=所持カメラ一覧(openCameraList)
                     }.start()
                 }
@@ -4396,7 +5134,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         try {
             if (multicastLock != null) return
             val wifi = applicationContext.getSystemService(android.content.Context.WIFI_SERVICE) as? android.net.wifi.WifiManager ?: return
-            multicastLock = wifi.createMulticastLock("hgc-ssdp").apply { setReferenceCounted(false); acquire() }
+            multicastLock = wifi.createMulticastLock("tlp-ssdp").apply { setReferenceCounted(false); acquire() }
         } catch (e: Exception) { /* 取得失敗時は受動待ち受け無し(60秒能動再探索で復帰) */ }
     }
     private fun releaseMulticastLock() {
@@ -4451,6 +5189,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                             }
                         }
                         refreshPlanList(); updateReadOnly()
+                        updateDimPolicy()   // スマホ直結の撮影中は 1 分で画面を真っ黒にする(案A)
                     }
                     // 表示中の計画の状態をステータス表示(項目6: 選択中の計画に紐付く)。
                     refreshCaptureStatusForCurrent()
@@ -4478,6 +5217,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     val nt = o.optInt("notice", 0)
                     val msg = if (nt != 0) noticeText(nt, o.optLong("n1", 0)) else o.optString("msg")
                     capState.text = "ERROR $msg"
+                    // 【理由を計画に覚えさせる(2026-09-09)】これまでエッジ経由(reconcileEdgePlan)でしか
+                    //  覚えておらず、スマホ直結では「見つかりません」の案内を言い換えられなかった。
+                    //  理由は案内より遅れて届くので、届いた時点で内容が変わるなら出し直す。
+                    val npid = o.optString("planId")
+                    if (npid.isNotEmpty() && nt != 0) {
+                        val prevN = planAuthNotice[npid] ?: 0
+                        planAuthNotice[npid] = nt
+                        if (nt != prevN && nocamDialogShown.contains(npid) && disconnectedPlans.contains(npid)) {
+                            clearNoCam(npid); showNoCameraDialog(npid)
+                        }
+                    }
                     // カメラ未検出・カメラ使用中など、撮影開始の失敗をユーザーへ通知する。
                     if (msg.isNotEmpty()) Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
                 }
@@ -4504,6 +5254,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         54 -> "1枚目の露出をカメラへ設定できませんでした(${n1}回試行)。撮影は続けます"
         55 -> "撮影開始前の露出合わせに失敗しました。ログに内訳が残っています"
         60 -> "このカメラは別の撮影で使用中です"
+        67 -> "この外部端末は別のスマホに登録されています。使うには、端末の画面のQRを読んで登録し直してください"
         // 台数の上限は端末(エッジ/スマホ)が決めて n1 で送ってくる。ここでは埋めるだけで、
         // 数字をアプリに持たない(端末の仕様が変わってもアプリを直さずに済む)。
         61 -> "同期撮影のカメラが多すぎます。この端末で撮れるのは${n1}台までです"
@@ -4511,6 +5262,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         63 -> "カメラが接続を拒否しています。カメラ本体のWi-Fi設定を一度削除して入れ直してください(認証情報の登録漏れが原因のことがあります)"
         64 -> "カメラの認証情報が登録されていません。機材のカメラ設定にユーザーIDとパスワードを入れてください"
         65 -> "カメラの認証情報が正しくありません。機材のカメラ設定のユーザーIDとパスワードを確認してください"
+        66 -> "このスマホのカメラを使う許可がありません。設定 → アプリ → 権限 → カメラ を許可してください"
         else -> "カメラからのお知らせ($code)"
     }
 
@@ -4546,8 +5298,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
             suppressLandscape = true
             landscapeCheck.isChecked = o.optBoolean("landscape")
             suppressLandscape = false
+            // 【カメラの性質で設定できない項目を出さない(2026-09-05 依頼 / 2026-09-06 欄で判断)】
+            //  同期撮影に参加できないカメラでは行を隠す。レンズ固定のカメラではレンズを変えさせない。
+            val pc = planCamera()
+            val noSync    = pc?.optBoolean("noSyncShot", false) == true
+            val lensFixed = pc?.optBoolean("lensFixed", false) == true
+            (syncShotCheck.parent as? View)?.visibility = if (noSync) View.GONE else View.VISIBLE
+            lensText.alpha = if (lensFixed) 0.5f else 1.0f
+            findViewById<TextView>(R.id.plan_lensLabel).alpha = if (lensFixed) 0.5f else 1.0f
             // 同期撮影と追加カメラ(2026-08-25)。
-            val pano = o.optBoolean("syncShot")
+            val pano = o.optBoolean("syncShot") && !noSync
             suppressSyncShot = true
             syncShotCheck.isChecked = pano
             suppressSyncShot = false
@@ -4864,6 +5624,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val planId: String, val planName: String,
         val camKey: String, val camLabel: String,   // camKey=保存/表示用の識別文字列 / camLabel=帯の表示
         val camModel: String, val camSerial: String, // 同一機体の判定はこの2つで行う(下 sameCamera)
+        val camLocal: Boolean,                       // この端末でしか撮れないカメラ(内蔵)。同時に使えるのは 1 つ
         val edge: String,                            // 端末名(空=スマホで撮影)
         val startMs: Long, val endMs: Long,
         var conflict: Boolean = false)
@@ -4873,8 +5634,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  片方でも未確定なら機種一致で同一とみなす。
     //  ※camKey の文字列一致で判定すると、一度も接続していない計画(シリアル空)が
     //    接続済みの計画(シリアル有り)と別カメラ扱いになり、同じカメラの重複を見逃す。
+    //  【端末の中のカメラは全部で 1 台扱い(2026-09-07 ユーザー指示)】広角と超広角は別の記録だが、端末の
+    //   カメラの入口は 1 つしか無く同時には撮れない。性質(localOnly)で見る(共通部分に内蔵の判断は置かない)。
     private fun sameCamera(a: Reservation, b: Reservation): Boolean =
-        if (a.camSerial.isNotEmpty() && b.camSerial.isNotEmpty()) a.camSerial == b.camSerial
+        if (a.camLocal && b.camLocal) true
+        else if (a.camSerial.isNotEmpty() && b.camSerial.isNotEmpty()) a.camSerial == b.camSerial
         else a.camModel.isNotEmpty() && a.camModel == b.camModel
 
     private val reserveFmt = SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.JAPAN)
@@ -4960,7 +5724,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     if (assignedName.isNotEmpty()) append("  $assignedName")
                     if (serial.isNotEmpty()) append("  Sn:$serial")
                 }
-                list.add(Reservation(id, o.optString("planName"), key, label, model, serial, planEdgeName(id), s, e))
+                list.add(Reservation(id, o.optString("planName"), key, label, model, serial,
+                                     o.optBoolean("camLocalOnly", false), planEdgeName(id), s, e))
             }
         } catch (_: Exception) {}
         list.sortWith(compareBy({ it.camLabel }, { it.startMs }))
@@ -5060,6 +5825,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //   auto end       … 終了時刻になり自動的に停止した
     //   lost camera    … カメラがオフラインになった(撮影が止まった)
     //   connect camera … カメラがオンラインになった
+    //   factory reset  … 出荷時設定に戻した(履歴ごと消した直後に、この1件だけ書く)
     private val histFmt = SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.JAPAN)
     private val histLastState = HashMap<String, Int>()   // planId → 直近の状態(遷移の判定用)
     private val histUserStop = HashSet<String>()          // ユーザー中止済み(後続のIDLEを auto end にしない)
@@ -5238,6 +6004,73 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 { selectedReport = name; buildReportList(); buildReportDetail() }, menu))
             box.addView(thinDivider())
         }
+    }
+
+    // 【端末の登録状態(2026-09-26)】検索応答が相手ごとに答えてくれる。
+    //  owned=その端末に持ち主が居るか / mine=持ち主がこのスマホか。
+    //  未登録(owned=false)と「別のスマホのもの」(owned=true かつ mine=false)を出し分ける。
+    private class EdgeOwn(val owned: Boolean, val mine: Boolean)
+    private val edgeOwn = HashMap<String, EdgeOwn>()
+    // その端末へ送ってよいか。**持ち主でなければ一切送らない**(未登録の端末にも送らない。
+    //  登録は QR を読む明示の操作で行い、それまでは見つけるだけにする)。
+    private fun edgeIsMine(name: String): Boolean = edgeOwn[name]?.let { it.owned && it.mine } == true
+
+    // 外部端末ごとの「前回見えていたカメラの台数」。変わったときだけ身元を取りに行く。
+    private val edgeCamsSeen = HashMap<String, Int>()
+    // 外部端末ごとの「最後に見えていたカメラの serial」。ISO/SS を貰う相手を決めるのに使う。
+    private val edgeCamSerials = HashMap<String, List<String>>()
+    // serial ごとの「最後に並びを聞いた時刻」。貰えるようになるのは端末がカメラへ繋いだ後なので、
+    //  貰えなくても諦めずに間をあけて聞き直す(毎スイープ聞くと無駄な往復が増える)。
+    private val camSpecAskedAt = HashMap<String, Long>()
+    private val kCamSpecRetryMs = 10 * 60 * 1000L
+
+    // 外部端末が見つけたカメラを所持カメラへ反映する(edgeSweep のワーカースレッドから呼ぶ)。
+    //
+    // 【なぜ要るか】スマホ⇄外部端末を BLE にすると、スマホはその端末のAPに入らない。カメラは
+    //  APの中だけに居るので、**スマホ自身では一生見つけられない**。端末が見たものを伝えてもらう。
+    //  受け取るのは身元(serial/model/愛称)だけで、IPは受け取らない(どの端末のAPも 192.168.4.x で、
+    //  スマホから見ると意味が無いどころか有害)。
+    //
+    // 【カメラは触らない】そのカメラはスマホから届かないので、実機を探しに行く版は使わない。
+    //  ISO/SS は機材マスタの上下限から作られる(マスタに無い機種は空のまま)。
+    private fun collectEdgeCameras(edge: Edge) {
+        val arr = try { JSONArray(HgeNative.nativeEdgeSeenCameras(edge.addr(), edge.port)) } catch (_: Exception) { return }
+        val toPrompt = ArrayList<Triple<String, String, String>>()   // model, serial, assignedName
+        val serials = ArrayList<String>()
+        for (i in 0 until arr.length()) {
+            val c = arr.optJSONObject(i) ?: continue
+            val serial = c.optString("serial"); if (serial.isEmpty()) continue
+            serials.add(serial)
+            if (declinedCamSerials.contains(serial)) continue        // 「いいえ」済みは自動では聞かない
+            val model = c.optString("model"); val assignedName = c.optString("assignedName")
+            val r = try { HgeNative.nativeRecordRemoteCameraIdentity(model, serial, assignedName, false) } catch (_: Exception) { -1 }
+            if (r == 2) { toPrompt.add(Triple(model, serial, assignedName)) }   // 2=新規個体(未追加)
+        }
+        edgeCamSerials[edge.name] = serials
+        if (toPrompt.isNotEmpty()) runOnUiThread { promptRegisterCameras(toPrompt, edge.name) }
+    }
+
+    // 所持カメラの ISO/SS の並びを外部端末から貰う(edgeSweep のワーカースレッドから呼ぶ)。
+    //
+    // 【なぜ端末から貰うか】そのカメラはスマホから届かないので、スマホは並びを自分で読めない。
+    //  機材マスタに載っている機種なら上下限から作れるが、**載っていない機種は作れない**。
+    //  実際に繋いでいる端末だけが知っているので、そこから貰う。
+    //
+    // 【いつ貰えるか】端末が並びを知るのは認証付きでカメラへ繋いだ後(撮影か挨拶)。つまり
+    //  登録 → 台帳を押す → 端末が繋ぐ、の後になる。それまでは空が返るので、間をあけて聞き直す。
+    private fun fetchEdgeCameraLists(edge: Edge) {
+        val serials = edgeCamSerials[edge.name] ?: return
+        val now = System.currentTimeMillis()
+        var got = 0
+        for (serial in serials) {
+            if (try { HgeNative.nativeCameraNeedsLists(serial) } catch (_: Exception) { 0 } != 1) continue
+            if (now - (camSpecAskedAt[serial] ?: 0L) < kCamSpecRetryMs) continue
+            camSpecAskedAt[serial] = now
+            val spec = try { HgeNative.nativeEdgeCameraSpec(edge.addr(), edge.port, serial) } catch (_: Exception) { "{}" }
+            if (spec.length <= 2) continue                            // "{}" = 端末もまだ知らない
+            if (try { HgeNative.nativeApplyCameraLists(serial, spec) } catch (_: Exception) { 0 } == 1) { got++ }
+        }
+        if (got > 0) runOnUiThread { if (flipper.displayedChild == 6) buildCameraList() }   // 6=所持カメラ一覧
     }
 
     // エッジに溜まった撮影レポートを引き取る(edgeSweep のワーカースレッドから呼ぶ)。
@@ -5420,6 +6253,53 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
         repBand(box, "ライブビュー")
         repRow(box, "古い映像を破棄", "%d コマ (延べ %d 回)".format(lvw.optInt("staleFrames"), lvw.optInt("staleTotal")))
+
+        // 【カメラ自身の素性と画質(2026-09-26 ユーザー依頼)】内蔵カメラだけが出す。
+        //  端末によって「ピントを指定できない」「1コマを長く開けられない」といった
+        //  差があり、それはアプリではなく端末の性質なので、結果として残す。
+        //  CCAPI のカメラは "device" を書かないので、この帯ごと出さない。
+        val dev = o.optJSONObject("device")
+        if (dev != null) {
+            repBand(box, "カメラ特性と画質")
+            val fc = dev.optString("focusControl")
+            repRow(box, "ピント調整", when (fc) {
+                "manual" -> "設定可能"
+                "afOnly" -> "AFのみ"
+                "fixed"  -> "固定"
+                else     -> "不明"
+            }, when (fc) {
+                "manual" -> "毎コマ無限遠を指定している"
+                "afOnly" -> "端末が指定を無視する。ピントはカメラ任せで、遠景が甘くなることがある"
+                "fixed"  -> "この端末にはピントを動かす仕組みがない"
+                else     -> "明るさが足りず確かめられなかった"
+            })
+            val dpt = dev.optDouble("focusDiopter", -1.0)
+            if (dpt >= 0.0) {
+                repRow(box, "ピント位置",
+                       if (dpt < 0.005) "無限遠" else "%.2f dpt (約 %.1f m)".format(dpt, 1.0 / dpt),
+                       "端末が申告している値")
+            }
+            val maxSs = dev.optDouble("maxExposureSec", -1.0)
+            if (maxSs > 0.0) {
+                repRow(box, "1コマの最長露光", "%.2f 秒".format(maxSs),
+                       "これより長いシャッター速度は、この長さのコマを足して作る")
+            }
+            // 撮影中に数コマに1度だけ測った中で、一番悪かった1件。夜と昼では3段以上
+            //  違うので平均には意味がない。値は 0〜255 の目盛り。
+            val wn = dev.optJSONObject("worstNoise")
+            if (wn != null) {
+                repRow(box, "SN比(一番悪いところ)", "%.1f".format(wn.optDouble("snr")),
+                       "大きいほど良い。明るさ %.0f のところで測った (ISO %.0f・%.3f 秒・%d 枚)".format(
+                           wn.optDouble("level"), wn.optDouble("iso"),
+                           wn.optDouble("ssSec"), wn.optInt("stackedFrames")))
+                repRow(box, "時間ノイズ", "%.2f".format(wn.optDouble("temporalSigma")),
+                       "コマごとに暴れる分。0〜255 の目盛りで、小さいほど良い")
+                repRow(box, "固定パターンノイズ", "%.2f".format(wn.optDouble("fixedPatternSigma")),
+                       "いつも同じ場所に出る分。加算しても消えない")
+            } else {
+                repRow(box, "画質の測定", "計測なし", "コマ数が少なく測る回が来なかった")
+            }
+        }
 
         val notes = o.optJSONArray("notes")
         if (notes != null && notes.length() > 0) {
@@ -5741,6 +6621,185 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //   ・標高は標高API→取れなければ測位値。座標さえ取れれば現在地を使う
     //  一度試したら二度としない(prefs)。ユーザーが消した場所を毎回作り直さないため。
     //  出荷時のまま(1件・名前が Tokyo)のときだけ触る。使い始めた後のデータは書き換えない。
+    // 【初回起動の場所の種を計画より先に(2026-09-06 ユーザー指示)】位置情報の権限が既にあるときは、
+    //  内蔵カメラの登録と同じタイミング(計画へ触る前)で出荷時の Tokyo を現在地に差し替えてファイルへ
+    //  保存する。こうすると出荷時の固定計画は最初からその場所で作られ、表示後に差し替わることが無い。
+    //  権限がまだ無いときは何もせず、従来どおり seedFirstPlaceFromLocation が権限を求めて後で行う。
+    //  座標は端末が覚えている最新の測位(getLastKnownLocation)。標高は標高 API(6 秒まで)、駄目なら測位値。
+    //  dataExec(所持機材と同じ単一スレッド)で呼ぶ。画面には触らない。
+    // ── 初回起動の種まき(2026-09-09 ユーザー決定: 案A) ───────────────────────────
+    // 【順番】撮影場所 → 内蔵カメラ(所持カメラ・レンズ・ひな形) → 出荷時のひな形。
+    //  場所が先なのは、ひな形の撮影場所を「撮影計画に自動的に挿入する」場所にするため。
+    //
+    // 【なぜ許可を先に聞くか】場所は現在地で作りたいが、新品の端末では位置情報の許可がまだ無い。
+    //  以前は許可を聞く前に種をまいていたので、ひな形も計画も出荷時の Tokyo で出来上がり、
+    //  その後で撮影場所の一覧だけが current location になって食い違っていた(Pixel 8 Pro で発生)。
+    //  許可されたら現在地・断られたら Tokyo、どちらでも最初から揃った状態で作る。
+    //
+    // 【待っている間に計画を作らせない】答えを待つ数秒の間に計画へ触れると、内蔵カメラも場所も
+    //  決まる前に出荷時の固定計画(FixedPlan)が出来てしまう。待っている間は Entity 側の自動生成を
+    //  止める(nativeSetSeedPending)。撮影計画の一覧はその間だけ空になる。
+    //  答えが返らないまま放置されることもあるので、時間切れ(30秒)で Tokyo として進む。
+    private var seedWaitingPerm = false
+    private val kSeedPermWaitMs = 30_000L
+    private val seedPermTimeout = Runnable { finishSeedAfterPermission() }
+    // 【許可した直後は「最後に分かった位置」が空のことがある(2026-09-09 Pixel 8 Pro 実測)】
+    //  端末が一度も測位していないと getLastKnownLocation は null を返し、そのまま作ると Tokyo になる。
+    //  記録が無いときは測り直しを頼み、返ってくるまで待ってから作る。返らなければ時間切れで Tokyo。
+    private val kSeedLocWaitMs = 15_000L
+    private var seedLocDone = false
+
+    private fun seedNeeded(): Boolean {
+        val p = hgcPrefs()
+        return !p.getBoolean("builtinSeedDone", false) || !p.getBoolean("placeSeedTried", false) ||
+               !p.getBoolean("stdTplDone", false)
+    }
+
+    private fun startFirstLaunchSeed() {
+        if (!seedNeeded()) return
+        if (!locationGranted()) {
+            seedWaitingPerm = true
+            try { HgeNative.nativeSetSeedPending(1) } catch (_: Exception) {}
+            ActivityCompat.requestPermissions(this,
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), LOC_PERM_REQ)
+            handler.postDelayed(seedPermTimeout, kSeedPermWaitMs)
+            return
+        }
+        // 既に許可がある(2回目以降の起動・許可済みの端末)。位置がすぐ分かるならここで待って作る
+        //  (起動を遅らせない)。記録が無いときだけ測り直しを待つ。
+        val loc = lastKnownLocationOrNull()
+        if (loc != null) {
+            val seed = dataExec.submit { runFirstLaunchSeed(loc) }
+            try { seed.get(20, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}
+            return
+        }
+        try { HgeNative.nativeSetSeedPending(1) } catch (_: Exception) {}
+        fetchFreshLocationThenSeed()
+    }
+
+    private fun locationGranted(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    private fun lastKnownLocationOrNull(): android.location.Location? = try {
+        val lm = getSystemService(LOCATION_SERVICE) as android.location.LocationManager
+        lm.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER)
+            ?: lm.getLastKnownLocation(android.location.LocationManager.NETWORK_PROVIDER)
+            ?: lm.getLastKnownLocation(android.location.LocationManager.PASSIVE_PROVIDER)
+    } catch (_: Exception) { null }
+
+    // 許可の答えが出た(または時間切れ)。ここから種をまく。許可が無ければ場所は Tokyo のまま。
+    private fun finishSeedAfterPermission() {
+        if (!seedWaitingPerm) return
+        seedWaitingPerm = false
+        handler.removeCallbacks(seedPermTimeout)
+        if (!locationGranted()) { seedNow(null); return }        // 断られた → Tokyo で確定
+        val loc = lastKnownLocationOrNull()
+        if (loc != null) { seedNow(loc); return }
+        fetchFreshLocationThenSeed()
+    }
+
+    // 測り直しを頼み、返ってきたら(または時間切れで)種をまく。
+    //  「アプリの使用時のみ」の許可では前面にいる間しか測れないので、許可の直後に一度だけ頼む。
+    private fun fetchFreshLocationThenSeed() {
+        seedLocDone = false
+        val finish = { l: android.location.Location? ->
+            if (!seedLocDone) { seedLocDone = true; seedNow(l) }
+        }
+        handler.postDelayed({ finish(null) }, kSeedLocWaitMs)   // 返らない → Tokyo で確定
+        try {
+            val lm = getSystemService(LOCATION_SERVICE) as android.location.LocationManager
+            val prov = when {
+                lm.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER) ->
+                    android.location.LocationManager.NETWORK_PROVIDER
+                lm.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER) ->
+                    android.location.LocationManager.GPS_PROVIDER
+                else -> ""
+            }
+            if (prov.isEmpty()) { finish(null); return }
+            if (Build.VERSION.SDK_INT >= 30) {
+                lm.getCurrentLocation(prov, null, mainExecutor) { l -> runOnUiThread { finish(l) } }
+            } else {
+                @Suppress("DEPRECATION")
+                lm.requestSingleUpdate(prov, object : android.location.LocationListener {
+                    override fun onLocationChanged(l: android.location.Location) { finish(l) }
+                    override fun onProviderEnabled(p: String) {}
+                    override fun onProviderDisabled(p: String) {}
+                    @Deprecated("") override fun onStatusChanged(p: String?, s: Int, e: Bundle?) {}
+                }, mainLooper)
+            }
+        } catch (_: Exception) { finish(null) }
+    }
+
+    // 種まきを実行して、待ちの印を外し、画面を作り直す。
+    private fun seedNow(loc: android.location.Location?) {
+        dataExec.execute {
+            runFirstLaunchSeed(loc)
+            try { HgeNative.nativeSetSeedPending(0) } catch (_: Exception) {}
+            runOnUiThread {
+                restorePlan()            // ここで初めて出荷時の固定計画が作られる(内蔵カメラ・現在地で)
+                refreshPlanList()
+                applyAllMasterDetail()
+            }
+        }
+    }
+
+    // 種まきの中身。**dataExec の上で呼ぶこと**(所持機材の書き込み口は1本に保つ)。
+    private fun runFirstLaunchSeed(loc: android.location.Location?) {
+        seedFirstPlaceBlocking(loc)
+        // 名前は UI の言語で渡す(将来の言語対応は UI だけで済ませる。Entity と通信路に日本語を置かない)。
+        //  最上位 = スマホ用の撮影制御方法初期値の名前(型ごと。内蔵カメラのひな形の撮影制御方法もこの名前)
+        //  ccm    = ミラーレス機のひな形の撮影制御方法の名前
+        //  tpl    = 標準ひな形の名前(種類ごと。題名は「カメラ名 + これ」)
+        val names = JSONObject().put("night", "夜間スマホ").put("sunrise", "朝日スマホ")
+                                .put("sunset", "夕日スマホ").put("day", "日中スマホ")
+            .put("ccm", JSONObject().put("night", "夜間").put("sunrise", "朝日").put("sunset", "夕日").put("day", "日中"))
+            .put("tpl", JSONObject()
+                .put("star_sunrise",          "星景(日の出含む)")
+                .put("night_sunrise",         "夜景(日の出含む)")
+                .put("star_sunrise_sunstar",  "星景(日の出光条)")
+                .put("night_sunrise_sunstar", "夜景(日の出光条)")
+                .put("star_sunset",           "星景(日の入含む)")
+                .put("night_sunset",          "夜景(日の入含む)")
+                .put("star_sunset_sunstar",   "星景(日の入光条)")
+                .put("night_sunset_sunstar",  "夜景(日の入光条)"))
+            .toString()
+        if (!hgcPrefs().getBoolean("builtinSeedDone", false)) {
+            val found = try { HgeNative.nativeRegisterBuiltinCameras(names) } catch (_: Exception) { 0 }
+            if (found > 0) { hgcPrefs().edit().putBoolean("builtinSeedDone", true).commit() }
+        }
+        // ミラーレス機の既定(EOS R3)の標準ひな形もここで(場所の種の後・内蔵カメラの後。
+        //  内蔵カメラを先にしないと「撮影計画の初期値にするカメラ」が EOS R3 になりかねない)。
+        if (!hgcPrefs().getBoolean("stdTplDone", false)) {
+            val r = try { HgeNative.nativeSeedStandardTemplates(names) } catch (_: Exception) { -1 }
+            if (r == 0) { hgcPrefs().edit().putBoolean("stdTplDone", true).commit() }
+        }
+    }
+
+    //  loc = 使う現在地(null なら出荷時の Tokyo のまま)。**位置は呼び出し元が用意する**。
+    //  端末の記録(getLastKnownLocation)は空のことがあるので、ここでは取りに行かない。
+    private fun seedFirstPlaceBlocking(loc: android.location.Location?) {
+        val pf = hgcPrefs()
+        if (pf.getBoolean("placeSeedTried", false)) return
+        val arr = placeArray(HgeNative.nativeGetPlaces())
+        if (arr.length() != 1 || arr.optJSONObject(0)?.optString("name") != "Tokyo") {
+            pf.edit().putBoolean("placeSeedTried", true).commit()   // 既に使われている → 触らない
+            return
+        }
+        pf.edit().putBoolean("placeSeedTried", true).commit()
+        //  出荷時の1件を「撮影計画に自動的に挿入する」に(改名にもついていく)。
+        //  位置が分からず Tokyo のまま残るときも同じ。これが無いと、ひな形も計画も場所が空欄になる。
+        HgeNative.nativeSetPlaceAutoInsert("Tokyo", 1)
+        if (loc == null) { return }   // 位置が分からない(断られた/測れなかった)→ Tokyo のまま
+        val elev = fetchElevationOrNull(loc.latitude, loc.longitude) ?: (if (loc.hasAltitude()) loc.altitude else 0.0)
+        val cur = findPlaceJson("Tokyo") ?: return
+        val o = JSONObject(cur.toString()).apply {
+            put("name", kCurrentPlaceName)
+            put("latitude", loc.latitude); put("longitude", loc.longitude); put("altitude", elev)
+        }.toString()
+        HgeNative.nativeSetPlaceDetail("Tokyo", o)
+    }
+
     private fun seedFirstPlaceFromLocation() {
         val pf = hgcPrefs()
         if (pf.getBoolean("placeSeedTried", false)) { return }
@@ -6246,6 +7305,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         for (p in twilightPages) planPager.removeView(p)
         twilightPages.clear()
         schedulePages.clear()
+        twilightTitles.clear()
         val ed = !planReadOnly
         val planName = o.optString("planName")
         o.optJSONArray("blocks")?.let { arr ->
@@ -6272,6 +7332,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 val axisDown = b.optString("axis") == "down"
                 val block = ScheduleView.Block(if (axisDown) "夕方の薄明" else "朝の薄明", axisDown,
                     b.optString("date"), segs, marks)
+                twilightTitles.add(if (axisDown) "夕方の薄明" else "朝の薄明")
                 val sv = ScheduleView(this)
                 sv.onTapType = { t -> ccmTypeToKey[t]?.let { k -> openPlanCcmEdit(k) } }
                 sv.onMoveBoundary = { before, after, occ, altDeg, rising ->
@@ -6299,6 +7360,49 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 schedulePages.add(sv)
             }
         }
+        // 動画設定ページ(2026-09-23 UI依頼)。内蔵カメラ(videoOut)のときだけ、シミュレーションの手前へ。
+        //  【作り直すのは中身が変わるときだけ】この処理は設定を変えるたびに走る(保存→EV_SCHEDULE)。
+        //   毎回作り直すと、選んだ拍子にページが差し替わってスクロールが先頭へ戻り、次の操作が
+        //   別の項目へ当たる。計画/カメラ/編集可否が同じなら、今のページをそのまま使う。
+        if (o.optBoolean("camVideoOut", false)) {
+            val key = planName + " " + o.optString("camera") + " " + planReadOnly
+            videoJson = JSONObject(o.optJSONObject("video")?.toString() ?: "{}")
+            // 【出来上がる1コマの実寸(2026-09-24 UI依頼)】画面には「変更なし」ではなく実際の
+            //  大きさを出す。端末ごとに違うので、カメラ層へ訊いて本当の値を使う。
+            //  訊けないときだけ、諸元の画素数の半分(2×2 束ねぶん)を目安に置く。
+            videoJson.put("halfW", o.optInt("pixelW", 0) / 2).put("halfH", o.optInt("pixelH", 0) / 2)
+            runCatching {
+                val ser = o.optString("camSerial")
+                if (ser.startsWith("BUILTIN:")) {
+                    val wh = HgeNative.builtinFrameSize(ser.removePrefix("BUILTIN:")).split("x")
+                    if (wh.size == 2) {
+                        val w = wh[0].toInt(); val h = wh[1].toInt()
+                        if (w > 0 && h > 0) { videoJson.put("halfW", w).put("halfH", h) }
+                    }
+                }
+            }
+            // DNG は束ねる前のフルサイズで出す。1 コマの大きさの目安に使う。
+            videoJson.put("fullW", o.optInt("pixelW", 0)).put("fullH", o.optInt("pixelH", 0))
+            // 【中身が変わっていたら作り直す(2026-09-23)】「変更の取り消し」で計画ごと戻したときに、
+            //  画面の選択が古いままにならないように。自分で変えたときは同じ値なので作り直さない。
+            val sig = videoSig(videoJson)
+            var vp = videoPage
+            if (vp == null || videoPageKey != key || videoShown != sig) {
+                vp?.let { planPager.removeView(it) }
+                videoSyncing = true
+                vp = buildVideoPage(planName, o.optString("camera"))
+                videoSyncing = false
+                videoPageKey = key; videoShown = sig
+                videoPage = vp
+            } else {
+                planPager.removeView(vp)   // 並び順(シミュレーションの手前)を保つため付け直す
+            }
+            planPager.addView(vp, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        } else {
+            videoPage?.let { planPager.removeView(it) }
+            videoPage = null; videoPageKey = ""
+        }
         // 最終ページ = 撮影シミュレーション(§7.3 画面360)。永続1インスタンスを毎回末尾へ付け直す。
         ensureSimReady()
         simPage?.let { sp ->
@@ -6323,6 +7427,368 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         planPager.refreshPages()
         updatePagerTitle()
+        rebuildPlanTabs()
+    }
+
+    // ================= 出力設定ページ(2026-09-23 UI依頼) =================
+    // 内蔵カメラ(カメラの性質 videoOut)の計画にだけ、シミュレーションの手前へ差し込む。
+    //  動画: 作る/作らない ・大きさ ・縦横比が合わないときの入れ方 ・コマ送り速度 ・品質
+    //  静止画: DNG(束ねる前のフルサイズ)/ jpg(動画と同じ大きさ)を残すか
+    //  【何も残らない設定は作らない】動画を作らないときは、DNG か jpg のどちらかを必ず残す。
+    //  値は計画(cs.video)に入れて永続化する。撮影が始まるとデバイス層へそのまま渡る。
+    private var videoPage: LinearLayout? = null
+    private var videoPageKey = ""                 // 作り直しの判定(計画名+カメラ+編集可否)
+    private var videoShown = ""                   // いま画面に出ている設定の中身(取り消しで戻ったかの判定)
+    private var videoJson = JSONObject()          // いま画面に出ている設定
+    private var videoSyncing = false              // 表示のための set が native を呼び返さないように
+
+    private fun buildVideoPage(planName: String, cam: String): LinearLayout {
+        val page = LinearLayout(this); page.orientation = LinearLayout.VERTICAL
+        val nameTv = TextView(this)
+        nameTv.text = planName.ifEmpty { "撮影計画" }
+        nameTv.setTypeface(null, Typeface.BOLD); nameTv.textSize = 15f
+        nameTv.maxLines = 1; nameTv.ellipsize = android.text.TextUtils.TruncateAt.END
+        nameTv.setPadding(dp(12), dp(6), dp(12), dp(6))
+        nameTv.setBackgroundColor(0xFFE3F2FD.toInt())
+        page.addView(nameTv, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        val sv = ScrollView(this)
+        val box = LinearLayout(this); box.orientation = LinearLayout.VERTICAL; box.setPadding(dp(12), dp(8), dp(12), dp(12))
+        sv.addView(box, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        page.addView(sv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        val ed = !planReadOnly
+        val hint = TextView(this); hint.textSize = 12f; hint.setTextColor(Color.parseColor("#616161"))
+        hint.setPadding(dp(4), dp(8), dp(4), dp(4))
+        // 【内容の位置を撮影計画の画面と揃える(2026-09-23 UI依頼)】あちらは見出し 96dp のすぐ右から
+        //  値が始まる。こちらも見出しはそのままの位置に置き、内容だけ 96dp の位置から始める。
+        val indent = dp(96)
+
+        // ── 動画 ───────────────────────────────────────────
+        box.addView(videoBand("動画設定"))
+        // 動画自動生成(既定=作る)。見出しは他と同じ体裁、つまみは内容の位置へ。
+        val sw = android.widget.Switch(this)
+        sw.isChecked = videoJson.optBoolean("make", true); sw.isEnabled = ed
+        run {
+            val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL
+            row.gravity = Gravity.CENTER_VERTICAL
+            val lab = videoLabel("動画自動生成")
+            lab.width = indent
+            row.addView(lab); row.addView(sw)
+            box.addView(row)
+        }
+        box.addView(thinDivider())
+
+        // ここから下は「動画自動生成」が off のとき、まとめて灰色にして触れなくする。
+        val body = LinearLayout(this); body.orientation = LinearLayout.VERTICAL
+        box.addView(body)
+
+        // 大きさ(変更なし / 1920x1440 / 1920x1080)
+        body.addView(videoLabel("画像サイズ"))
+        // 先頭は「撮ったまま(拡大縮小しない)」。**端末ごとに違う**ので実寸を出す
+        //  (「変更なし」だと普通のカメラの最大画素と同じに見える、という指摘 2026-09-24)。
+        val nw = videoJson.optInt("halfW", 0); val nh = videoJson.optInt("halfH", 0)
+        val sizeNames = arrayOf(if (nw > 0 && nh > 0) "$nw × $nh" else "変更なし",
+                                "1920 × 1440", "1920 × 1080")
+        body.addView(videoIndent(videoChoice(sizeNames, videoJson.optInt("size", 0), ed) { i ->
+            videoJson.put("size", i); pushVideo(); refreshVideoHint(hint) }, indent))
+
+        // 縦横比が合わないときの入れ方
+        body.addView(videoLabel("縦横比が合わないとき"))
+        val aspNames = arrayOf("切り取る", "全体を入れる", "圧縮する")
+        body.addView(videoIndent(videoChoice(aspNames, videoJson.optInt("aspect", 0), ed) { i ->
+            videoJson.put("aspect", i); pushVideo(); refreshVideoHint(hint) }, indent))
+
+        // コマ送り速度(目盛り付きスライダー。止まる位置は 7.5 / 15 / 30 / 60 だけ)
+        body.addView(videoLabel("フレームレート(fps)"))
+        val fpsVals = doubleArrayOf(7.5, 15.0, 30.0, 60.0)
+        val curFps = videoJson.optDouble("fps", 15.0)
+        var fpsIdx = fpsVals.indexOfFirst { Math.abs(it - curFps) < 0.01 }
+        if (fpsIdx < 0) fpsIdx = 1
+        body.addView(videoIndent(videoSlider(arrayOf("7.5", "15", "30", "60"), null, fpsIdx, ed) { i, commit ->
+            videoJson.put("fps", fpsVals[i]); refreshVideoHint(hint); if (commit) { pushVideo() } }, indent))
+
+        // 品質(同じ形のスライダー。両端に何が変わるかを添える)
+        body.addView(videoLabel("品質"))
+        body.addView(videoIndent(videoSlider(arrayOf("低", "標準", "高"),
+                                arrayOf("ファイルが小さい", "", "夜のノイズに強い"),
+                                videoJson.optInt("quality", 2), ed) { i, commit ->
+            videoJson.put("quality", i); refreshVideoHint(hint); if (commit) { pushVideo() } }, indent))
+
+        box.addView(hint)
+        refreshVideoHint(hint)
+        val note = TextView(this)
+        note.text = "動画は " + cam + " で撮ったコマから作ります。保存先は Movies/TwyLapse。"
+        note.textSize = 12f; note.setTextColor(Color.parseColor("#616161")); note.setPadding(dp(4), dp(10), dp(4), dp(4))
+        box.addView(note)
+        // ── 静止画 ─────────────────────────────────────────
+        // 1コマずつの画像を残すか。**利用者が見える場所**(Pictures/TwyLapse)へ置く。
+        //  動画を作るだけなら中間の jpg は作らない(動画はメモリの上の画像から作っている)ので、
+        //  ここで「残す」と言われたときだけファイルになる。
+        box.addView(videoBand("静止画設定"))
+        val cbDng = videoCheck("DNG出力", videoJson.optBoolean("dng", false), ed)
+        val cbJpg = videoCheck("jpg出力", videoJson.optBoolean("jpg", false), ed)
+        box.addView(videoIndent(cbDng, indent))
+        box.addView(videoIndent(cbJpg, indent))
+        val stillNote = TextView(this)
+        stillNote.textSize = 12f; stillNote.setTextColor(Color.parseColor("#616161"))
+        stillNote.setPadding(dp(4), dp(8), dp(4), dp(4))
+        box.addView(stillNote)
+        refreshStillNote(stillNote)
+
+        // 【何も残らない設定にはしない】動画を作らないときは、どちらか一方は必ず残す。
+        //  最後の1つを外そうとしたら、その場で戻して理由を出す(黙って戻すと壊れて見える)。
+        fun keepSomething(changed: android.widget.CheckBox): Boolean {
+            if (sw.isChecked) { return true }
+            if (cbDng.isChecked || cbJpg.isChecked) { return true }
+            videoSyncing = true; changed.isChecked = true; videoSyncing = false
+            Toast.makeText(this, "動画を作らないときは DNG か jpg のどちらかが要ります",
+                           Toast.LENGTH_SHORT).show()
+            return false
+        }
+        cbDng.setOnCheckedChangeListener { _, v ->
+            if (!videoSyncing) {
+                keepSomething(cbDng)
+                videoJson.put("dng", cbDng.isChecked); pushVideo(); refreshStillNote(stillNote)
+            }
+        }
+        cbJpg.setOnCheckedChangeListener { _, v ->
+            if (!videoSyncing) {
+                keepSomething(cbJpg)
+                videoJson.put("jpg", cbJpg.isChecked); pushVideo(); refreshStillNote(stillNote)
+            }
+        }
+
+        // off にしたら動画の項目はまとめて灰色・操作不可(撮影中の読取専用も同じ扱い)。
+        //  作らないときは、作り方の説明(保存先)も出さない(2026-09-23 UI依頼)。
+        videoSetEnabled(body, ed && sw.isChecked)
+        note.visibility = if (sw.isChecked) View.VISIBLE else View.GONE
+        hint.visibility = if (sw.isChecked) View.VISIBLE else View.GONE
+        sw.setOnCheckedChangeListener { _, v ->
+            videoSetEnabled(body, ed && v)
+            note.visibility = if (v) View.VISIBLE else View.GONE
+            hint.visibility = if (v) View.VISIBLE else View.GONE
+            if (!videoSyncing) {
+                videoJson.put("make", v)
+                // 動画をやめた拍子に何も残らなくなるなら、jpg を入れておく(勝手に消えないように)。
+                if (!v && !cbDng.isChecked && !cbJpg.isChecked) {
+                    videoSyncing = true; cbJpg.isChecked = true; videoSyncing = false
+                    videoJson.put("jpg", true)
+                    Toast.makeText(this, "動画を作らないので jpg 出力を入れました", Toast.LENGTH_SHORT).show()
+                }
+                pushVideo(); refreshVideoHint(hint); refreshStillNote(stillNote)
+            }
+        }
+        return page
+    }
+
+    // 集まりの見出し(帯)。メニューの帯と同じ体裁。
+    private fun videoBand(title: String): TextView {
+        val tv = TextView(this); tv.text = title; tv.textSize = 14f; tv.setTypeface(null, Typeface.BOLD)
+        tv.setTextColor(Color.WHITE); tv.setBackgroundColor(Color.parseColor("#5C6BC0"))
+        tv.setPadding(dp(12), dp(6), dp(12), dp(6))
+        tv.tag = Color.WHITE
+        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                                           ViewGroup.LayoutParams.WRAP_CONTENT)
+        lp.topMargin = dp(10); lp.bottomMargin = dp(4)
+        tv.layoutParams = lp
+        return tv
+    }
+
+    private fun videoCheck(title: String, checked: Boolean, enabled: Boolean): android.widget.CheckBox {
+        val cb = android.widget.CheckBox(this)
+        cb.text = title; cb.textSize = 15f; cb.tag = Color.BLACK
+        cb.isChecked = checked; cb.isEnabled = enabled
+        return cb
+    }
+
+    // 残す画像の大きさの目安。DNG は束ねる前のフルサイズ(16ビット・無圧縮)なので大きい。
+    private fun refreshStillNote(tv: TextView) {
+        val dng = videoJson.optBoolean("dng", false)
+        val jpg = videoJson.optBoolean("jpg", false)
+        if (!dng && !jpg) {
+            tv.text = "1コマずつの画像は残しません(動画を作るための画像はファイルにしません)。"
+            return
+        }
+        val fw = videoJson.optInt("fullW", 0); val fh = videoJson.optInt("fullH", 0)
+        val hw = videoJson.optInt("halfW", 0); val hh = videoJson.optInt("halfH", 0)
+        val sb = StringBuilder()
+        if (dng) {
+            // 1画素2バイト(16ビット)。加算した結果をそのまま入れるので圧縮しない。
+            val mb = fw.toDouble() * fh * 2.0 / 1.0e6
+            sb.append(if (fw > 0)
+                String.format(java.util.Locale.US,
+                    "DNG はフルサイズ %d × %d(束ねる前・16ビット)。1 コマ 約 %.0f MB、1000 コマで約 %.0f GB。",
+                    fw, fh, mb, mb)
+                else "DNG はフルサイズ(束ねる前・16ビット)で出します。1 コマ 20〜30 MB になります。")
+            sb.append("RAW が撮れるカメラのときだけ出ます。")
+        }
+        if (jpg) {
+            if (sb.isNotEmpty()) { sb.append("\n") }
+            val mb = hw.toDouble() * hh * 0.33 / 1.0e6
+            sb.append(if (hw > 0)
+                String.format(java.util.Locale.US, "jpg は %d × %d(現像したもの)。1 コマ 約 %.1f MB。", hw, hh, mb)
+                else "jpg は現像したもの(カメラの 1/2 の大きさ)です。")
+        }
+        sb.append("\n保存先は Pictures/TwyLapse の中の、撮影ごとのフォルダです。")
+        tv.text = sb.toString()
+    }
+
+    private fun videoLabel(s: String): TextView {
+        val tv = TextView(this); tv.text = s; tv.textSize = 14f; tv.setTypeface(null, Typeface.BOLD)
+        tv.setPadding(dp(4), dp(12), dp(4), dp(2))
+        tv.tag = Color.BLACK		// 灰色から戻すときの色(videoSetEnabled)
+        return tv
+    }
+
+    // 内容を撮影計画の画面と同じ位置(見出し 96dp のすぐ右)から始める。
+    private fun videoIndent(v: View, indent: Int): View {
+        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                                           ViewGroup.LayoutParams.WRAP_CONTENT)
+        lp.leftMargin = indent
+        v.layoutParams = lp
+        return v
+    }
+
+    // まとめて有効/無効にする。文字は灰色に落とし、戻すときは作ったときの色へ戻す。
+    private fun videoSetEnabled(v: View, on: Boolean) {
+        if (v is ViewGroup) { for (i in 0 until v.childCount) { videoSetEnabled(v.getChildAt(i), on) } }
+        v.isEnabled = on
+        if (v is TextView) {
+            val normal = (v.tag as? Int) ?: Color.BLACK
+            v.setTextColor(if (on) normal else Color.parseColor("#BBBBBB"))
+        }
+    }
+
+    // 1つ選ぶ並び(ラジオ)。選び直しはその場で計画へ保存する。
+    private fun videoChoice(names: Array<String>, sel: Int, enabled: Boolean, onPick: (Int) -> Unit): View {
+        val g = android.widget.RadioGroup(this)
+        g.orientation = LinearLayout.VERTICAL
+        for ((i, n) in names.withIndex()) {
+            val r = android.widget.RadioButton(this)
+            r.text = n; r.textSize = 15f; r.id = View.generateViewId(); r.tag = Color.BLACK
+            r.isChecked = (i == sel); r.isEnabled = enabled
+            r.setOnCheckedChangeListener { _, c -> if (c && !videoSyncing) onPick(i) }
+            g.addView(r)
+        }
+        return g
+    }
+
+    // 【目盛り付きスライダー(2026-09-23 UI依頼)】上に目盛りの文字を並べ、その位置にだけ止まる。
+    //  文字はスライダーのつまみが止まる位置(トラックの 0 / 1/3 / 2/3 / 1)へ実測で合わせる。
+    //  等分に並べると端の2つがずれるので、幅が決まってから置き直す。
+    //  onPick(値の位置, 確定したか)。動かしている間は false(表示だけ)、離したら true(保存)。
+    private fun videoSlider(labels: Array<String>, subs: Array<String>?, sel: Int,
+                            enabled: Boolean, onPick: (Int, Boolean) -> Unit): View {
+        val col = LinearLayout(this); col.orientation = LinearLayout.VERTICAL
+        val row = FrameLayout(this)
+        val tvs = ArrayList<TextView>()
+        for ((i, s) in labels.withIndex()) {
+            val tv = TextView(this)
+            val sub = subs?.getOrNull(i) ?: ""
+            tv.text = if (sub.isEmpty()) s else s + "\n" + sub
+            tv.textSize = 13f
+            tv.gravity = Gravity.CENTER_HORIZONTAL
+            tv.setTextColor(Color.parseColor("#424242")); tv.tag = Color.parseColor("#424242")
+            tv.setTypeface(null, if (i == sel) Typeface.BOLD else Typeface.NORMAL)
+            row.addView(tv, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            tvs.add(tv)
+        }
+        col.addView(row, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        val sl = com.google.android.material.slider.Slider(this)
+        sl.valueFrom = 0f; sl.valueTo = (labels.size - 1).toFloat(); sl.stepSize = 1f
+        sl.value = sel.coerceIn(0, labels.size - 1).toFloat()
+        sl.isEnabled = enabled
+        sl.labelBehavior = LabelFormatter.LABEL_GONE
+        sl.isTickVisible = true
+        sl.addOnChangeListener { _, v, fromUser ->
+            val i = v.toInt()
+            for ((k, tv) in tvs.withIndex()) { tv.setTypeface(null, if (k == i) Typeface.BOLD else Typeface.NORMAL) }
+            if (fromUser && !videoSyncing) { onPick(i, false) }		// 表示だけ追従させる
+        }
+        // 【横スワイプを取られないようにする(2026-09-23)】Material のスライダーは、縦スクロールの
+        //  入れ物(ScrollView)の中にいるとき、指が滑るまで親へ「横取りしないで」と言わない。
+        //  その滑り幅はページャが横スワイプと判断する幅と同じなので、いつもページャが先に取ってしまい
+        //  つまみが動かない(実機で確認)。触った瞬間に自分で言う。
+        sl.setOnTouchListener { v, e ->
+            when (e.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN ->
+                    v.parent?.requestDisallowInterceptTouchEvent(true)
+                android.view.MotionEvent.ACTION_UP, android.view.MotionEvent.ACTION_CANCEL ->
+                    v.parent?.requestDisallowInterceptTouchEvent(false)
+            }
+            false	// つまみの処理はスライダー自身に任せる
+        }
+        // 保存は指を離したとき(1目盛りごとに書くと、書き込みのたびに操作が引っかかる)。
+        sl.addOnSliderTouchListener(object : com.google.android.material.slider.Slider.OnSliderTouchListener {
+            override fun onStartTrackingTouch(s: com.google.android.material.slider.Slider) {}
+            override fun onStopTrackingTouch(s: com.google.android.material.slider.Slider) {
+                if (!videoSyncing) { onPick(s.value.toInt(), true) }
+            }
+        })
+        col.addView(sl, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        // 幅が決まってから、文字をつまみの止まる位置の真上へ置く。
+        val place = Runnable {
+            val pad = sl.trackSidePadding.toFloat()
+            val track = (sl.width - pad * 2).toFloat()
+            if (track <= 0f) { return@Runnable }
+            for ((i, tv) in tvs.withIndex()) {
+                val frac = if (labels.size > 1) i.toFloat() / (labels.size - 1) else 0f
+                var x = pad + track * frac - tv.width / 2f
+                if (x < 0f) { x = 0f }
+                if (x > row.width - tv.width) { x = (row.width - tv.width).toFloat() }
+                tv.translationX = x
+            }
+        }
+        sl.post(place)
+        sl.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> sl.post(place) }
+        return col
+    }
+
+    // いまの設定で何が出来るか(大きさとビットレート)を1行で出す。
+    private fun refreshVideoHint(tv: TextView) {
+        if (!videoJson.optBoolean("make", true)) { tv.text = "動画は作りません"; return }
+        val size = videoJson.optInt("size", 0)
+        val fps = videoJson.optDouble("fps", 15.0)
+        val q = videoJson.optInt("quality", 2)
+        val bpp = doubleArrayOf(0.20, 0.50, 1.20)[q.coerceIn(0, 2)]
+        val wh = when (size) {
+            1 -> Pair(1920, 1440)
+            2 -> Pair(1920, 1080)
+            else -> Pair(videoJson.optInt("halfW", 0), videoJson.optInt("halfH", 0))
+        }
+        val sizeTxt = if (wh.first > 0) "${wh.first} × ${wh.second}" else "撮ったまま"
+        val px = if (wh.first > 0) wh.first.toDouble() * wh.second else 2000.0 * 1500.0
+        val mbps = Math.min(px * fps * bpp, 150_000_000.0) / 1_000_000.0
+        val gbPer1000 = px * bpp / 8.0 * 1000.0 / 1.0e9
+        tv.text = String.format(java.util.Locale.US, "%s / %.1f fps / 約 %.0f Mbps(1000 コマで約 %.1f GB)",
+                                sizeTxt, fps, mbps, gbPer1000)
+    }
+
+    private fun pushVideo() {
+        val s = videoJson.toString()
+        videoShown = videoSig(videoJson)	// 自分で変えたぶんは作り直しの対象にしない
+        // 【控えの表示用 JSON も直す(2026-09-23)】動画設定は通知を出さない(画面を作り直さないため)ので、
+        //  latestSchedule が古いままになる。画面の向きを変えたときなど、この控えから作り直す経路があり、
+        //  そこで前の値に戻って見える。ここで同じ値にしておく。
+        runCatching {
+            val o = JSONObject(latestSchedule)
+            o.put("video", JSONObject(s))
+            latestSchedule = o.toString()
+        }
+        planExec.execute { runCatching { HgeNative.nativeSetPlanVideo(s) } }
+    }
+
+    // 画面に出ている動画設定の中身(halfW/halfH のような表示の目安は含めない)。
+    private fun videoSig(o: JSONObject?): String {
+        if (o == null) { return "" }
+        return "${o.optBoolean("make", true)}|${o.optInt("size", 0)}|${o.optInt("aspect", 0)}|" +
+               "${o.optDouble("fps", 15.0)}|${o.optInt("quality", 2)}|" +
+               "${o.optBoolean("jpg", false)}|${o.optBoolean("dng", false)}"
     }
 
     // シミュレーションページの下準備: 恒星(fixed_star.json)を一度読み込み、ページを1度だけ生成する。
@@ -6439,7 +7905,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         edges.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
 
     // --- エッジ端末の登録(prefsに永続化。設定で追加・検索で自動登録。オフラインでも選択可) ---
-    private fun hgcPrefs() = getSharedPreferences("hgc", MODE_PRIVATE)
+    private fun hgcPrefs() = getSharedPreferences("tlp", MODE_PRIVATE)
 
     // ── エッジのネットワーク設定を覚えておく(2026-08-29 UI依頼) ──────────────
     //
@@ -6590,16 +8056,25 @@ class MainActivity : AppCompatActivity(), HgeListener {
             // 並びはアルファベット順(大文字小文字を区別しない)。登録した順だと、増えたときに
             //  どこにあるか分からなくなる。**表示の並びだけ**で、保存の順は変えない。
             rows = {
-                edges.sortedBy { it.name.lowercase() }.map { e ->
+                // 【見つけただけの端末も出す(2026-09-26)】自動登録をやめたので、一覧に出さないと
+                //  登録の入口が無くなる。登録済みと合わせて名前順に並べる。
+                val all = (edges + discoveredEdges.values.filter { d -> edges.none { it.name == d.name } })
+                all.sortedBy { it.name.lowercase() }.map { e ->
                     // 副行は**いま届いているか**。IP は普段読んでも何もできないのでやめた
                     //  (2026-08-29 UI依頼)。押す前に「送っても無駄」と分かるのが要点。
-                    val sub = when (edgeOnline[e.name]) {
-                        true  -> "オンライン"
-                        false -> "オフライン"
-                        else  -> "確認中"        // 起動直後、まだ一度もスイープしていない
+                    // 【登録の状態を先に出す(2026-09-26)】持ち主でない端末は操作できないので、
+                    //  「オンラインなのに何もできない」と見えないよう、理由を副行に出す。
+                    val own = edgeOwn[e.name]
+                    val sub = when {
+                        own != null && !own.owned -> "未登録(⋮ から登録)"
+                        own != null && !own.mine  -> "別のスマホに登録されています"
+                        edgeOnline[e.name] == true  -> "オンライン"
+                        edgeOnline[e.name] == false -> "オフライン"
+                        else -> "確認中"        // 起動直後、まだ一度もスイープしていない
                     }
                     ListItem(e.name, e.name, sub, listOf(
-                        "削除" to { confirmRemoveEdge(e) },
+                        "この端末を登録" to { startEdgeClaim(e.name) },
+                        "削除(手放す)" to { confirmRemoveEdge(e) },
                         "すべて削除" to { confirmRemoveAllEdges() }))
                 }
             },
@@ -6654,11 +8129,38 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // 登録から1台外す。**エッジ本体の設定は変えない**(こちらの台帳から消すだけ)。
+    // 【端末を登録する(2026-09-26)】登録＝持ち主になること。所有証明は既存のプロビジョニングと
+    //  同じ道を使う: 端末の画面にQRを出させ、それを読んで得た合言葉(PoP)で暗号化した中身に
+    //  このスマホの識別子を入れて送る。**画面を見られない人は持ち主になれない**。
+    //  設定そのものは変えなくてよい(QRが今の値を運んでくるので、そのまま送り返せばよい)。
+    private fun startEdgeClaim(name: String) {
+        stashEdgeForm()
+        selectedEdgeName = name
+        scannedPop = ""; scannedName = ""
+        edgeApMode = loadEdgeCfg(name).ap
+        buildEdgeList(); buildEdgeForm()
+        AlertDialog.Builder(this)
+            .setTitle("この端末を登録")
+            .setMessage("「" + name + "」の画面にQRを出します。読み取ったあと「設定を送信」を押すと、" +
+                        "このスマホが持ち主になります。設定は変えなくてかまいません。")
+            .setPositiveButton("QRを出す") { _, _ -> requestEdgeQr() }
+            .setNegativeButton("やめる", null)
+            .show()
+    }
+
     private fun confirmRemoveEdge(e: Edge) {
         AlertDialog.Builder(this)
             .setTitle("外部端末の削除")
-            .setMessage("「" + e.name + "」を登録から削除しますか？(端末本体の設定は変わりません)")
+            // 【削除＝手放す(2026-09-26)】一覧から消すだけだと端末側に持ち主が残り、
+            //  「削除したのに他のスマホで登録できない」ことになる。持ち主も一緒に外す。
+            .setMessage("「" + e.name + "」を登録から削除しますか？ 端末側の持ち主の登録も外すので、他のスマホで登録できるようになります。(端末本体のネットワーク設定は変わりません)")
             .setPositiveButton("削除する") { _, _ ->
+                // 届くうちに持ち主を外す。届かないときは一覧から消すだけ(次に使うスマホが
+                //  QRで登録し直せば上書きできるので詰まらない)。
+                if (e.reachable() && edgeIsMine(e.name)) {
+                    Thread { try { HgeNative.nativeEdgeRelease(e.addr(), e.port) } catch (_: Exception) {} }.start()
+                }
+                edgeOwn.remove(e.name); discoveredEdges.remove(e.name); hideEdge(e.name)
                 edges.remove(e); saveRegisteredEdges(); refreshEdgeSpinner()
                 // 【逃げ道】この端末が持っていた計画の縛りも一緒に解く。壊れた/失くした
                 //  端末の分がいつまでも残ると、そのカメラを永久に変更も削除もできなくなる。
@@ -6678,7 +8180,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .setTitle("すべて削除")
             .setMessage("登録している" + edges.size + "台をすべて削除しますか？(端末本体の設定は変わりません)")
             .setPositiveButton("すべて削除") { _, _ ->
-                val names = edges.map { it.name }
+                // 見つかっている端末も含めて伏せる。そうしないと次のスイープで戻ってくる。
+                val names = (edges.map { it.name } + discoveredEdges.keys).distinct()
+                for (e in edges.toList()) {
+                    if (e.reachable() && edgeIsMine(e.name)) {
+                        Thread { try { HgeNative.nativeEdgeRelease(e.addr(), e.port) } catch (_: Exception) {} }.start()
+                    }
+                }
+                for (n in names) { hideEdge(n); edgeOwn.remove(n); discoveredEdges.remove(n) }
                 edges.clear(); saveRegisteredEdges(); refreshEdgeSpinner()
                 val ed = hgcPrefs().edit()
                 for (n in names) { edgeHeldByEdge.remove(n); ed.remove(edgeCfgKey(n)) }
@@ -7016,7 +8525,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // STAのSSIDは「その端末へまだ接続先を送っていないとき」だけ必須。一度送ってあれば
         //  空=端末名だけ変更(エッジは接続先を保つ)。以前は「新規登録のとき」で見ていたが、
         //  登録が先に済むようになったので、保存済みの接続先の有無で見る(2026-09-04)。
-        // APは空ならエッジ側が既定値(HGC-Edge-<MAC下2桁> / 8桁乱数)を用意する。
+        // APは空ならエッジ側が既定値(TLP-Edge-<MAC下2桁> / 8桁乱数)を用意する。
         if (mode == "sta" && ssid.isEmpty() && loadEdgeCfg(selectedEdgeName).staSsid.isEmpty()) {
             Toast.makeText(ctx, "SSIDを入力してください(新規登録は接続先が必要です)", Toast.LENGTH_LONG).show(); return
         }
@@ -7034,7 +8543,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 Toast.makeText(ctx, "APのパスワードは63文字以内にしてください", Toast.LENGTH_LONG).show(); return
             }
         }
-        val json = JSONObject().put("name", name).put("ssid", ssid).put("pass", pass).put("mode", mode).toString()
+        // 【このスマホを持ち主として登録する(2026-09-26)】この中身は QR の合言葉(PoP)で導いた鍵で
+        //  暗号化され、端末はそれを復号できたときだけ受け取る。つまり**端末の画面を見られた人**
+        //  しかここを通れない。近くで別の人が同じアプリを使っていても持ち主にはなれない。
+        val myId = try { HgeNative.nativePhoneId() } catch (_: Exception) { "" }
+        val json = JSONObject().put("name", name).put("ssid", ssid).put("pass", pass).put("mode", mode)
+                               .put("phoneId", myId).toString()
         ensureBlePermissions {
             edgePopView?.text = "BLE送信中..."
             EdgeBle(ctx,
@@ -7044,6 +8558,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     edgePopView?.text = m
                     if (ok) {
                         // 送信できた端末を登録へ反映する。既存なら改名に追従、新規なら追加。
+                        unhideEdge(name)   // 登録し直した=また出す
                         if (selectedEdgeName.isEmpty()) {
                             if (edges.none { it.name == name }) edges.add(Edge(name, "", 50506))
                             saveRegisteredEdges(); refreshEdgeSpinner()
@@ -7118,13 +8633,25 @@ class MainActivity : AppCompatActivity(), HgeListener {
         saveRegisteredEdges()
     }
 
-    // 探索で見つけたエッジを台帳へ入れる(未登録なら追加、既登録ならIP更新)。
-    //  ここが**ネットワーク由来の唯一の登録口**なので、名前と接続先を確かめてから入れる。
-    private fun registerDiscoveredEdge(name: String, ip: String, port: Int) {
+    // 【自動登録はしない(2026-09-26)】以前はここで見つけた端末を黙って自分の一覧へ入れ、
+    //  そのまま台帳やログ設定を送り始めていた。近くで別の人が同じアプリを使っていると、
+    //  登録してもいない他人の端末を壊してしまう。**登録は QR を読む明示の操作だけ**にした。
+    //  見つけた端末は「未登録」として一覧に出すために控えるだけにする。
+    private val discoveredEdges = HashMap<String, Edge>()
+    // 【消した端末は伏せる(2026-09-26)】見つけた端末を一覧に出すようにしたので、削除しても
+    //  次のスイープ(30秒)で「未登録」として戻ってきてしまう。**消したのに復帰する**ように
+    //  しか見えないので、消した名前を覚えて伏せる。登録し直せば戻る。
+    private val hiddenEdges: MutableSet<String> by lazy {
+        (hgcPrefs().getStringSet("hiddenEdges", emptySet()) ?: emptySet()).toMutableSet()
+    }
+    private fun saveHiddenEdges() { hgcPrefs().edit().putStringSet("hiddenEdges", hiddenEdges).apply() }
+    private fun hideEdge(name: String)   { if (hiddenEdges.add(name)) saveHiddenEdges() }
+    private fun unhideEdge(name: String) { if (hiddenEdges.remove(name)) saveHiddenEdges() }
+
+    private fun noteDiscoveredEdge(name: String, ip: String, port: Int) {
         if (name.isEmpty() || !isAsciiEdgeName(name)) return   // エッジのLCDに出せない名前は端末名ではない
-        if (ip.isEmpty()) return                               // 接続先が無いものは端末として登録しない
-        if (edges.none { it.name == name }) { edges.add(Edge(name, ip, port)); saveRegisteredEdges() }
-        else updateEdgeIp(name, ip, port)
+        if (hiddenEdges.contains(name)) return                 // 消した端末は出さない
+        discoveredEdges[name] = Edge(name, ip, port)
     }
 
     // 実在しない計画に紐づくエッジ割当(pe_<計画id>)を落とす。計画を消しても残り続けるため。
@@ -7154,8 +8681,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun refreshEdgeSpinner() {
         val labels = mutableListOf(kPhoneEdgeLabel)
+        // 【この端末でしか撮れないカメラのときは外部端末を出さない(2026-09-05)】外部端末を選べても
+        //  必ず失敗する。選択肢から外して起き得ない組み合わせを消す。性質はカメラの記録(localOnly)で見る。
+        val localOnly = try { planCamera()?.optBoolean("localOnly", false) == true } catch (_: Exception) { false }
         // IPは動的なので名称のみ表示。常時スイープの生存状態を ●=オンライン/○=オフライン で付す(不明=無印)。
-        edgeSpinnerEdges = sortedEdges()
+        edgeSpinnerEdges = if (localOnly) emptyList() else sortedEdges()
         edgeSpinnerEdges.forEach {
             val mark = when (edgeOnline[it.name]) { true -> "● "; false -> "○ "; null -> "" }
             labels.add(mark + it.name)
@@ -7233,10 +8763,35 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // 1つのエッジ計画の進捗JSONを状態集合へ反映する。表示中の計画(currentPlanId)ならステータス行も更新。
     // ST_IDLE/ST_ERROR ならその計画を各集合から除く(=撮影終了)。
+    // 端末が「この計画は走っていない(IDLE)」と答えたのに、スマホはまだ待っている/撮っている
+    //  つもりでいる状態を覚えておく。これが今回の症状(スマホ=撮影待機中 / 端末=カチンコ)そのもの。
+    private val idleMismatchAt = HashMap<String, Long>()
+
     private fun reconcileEdgePlan(pid: String, pj: String) {
         if (pj.isEmpty()) return
         try {
             val o = JSONObject(pj)
+            // 【食い違いを記録する(2026-09-26)】端末は IDLE、こちらは待機/撮影中。
+            //  表示だけでは原因を追えないので、続いているあいだ1分おきに1行残す。
+            //  (1回だけだと、始まらないまま放置された時間の長さが分からない)
+            run {
+                val st0 = o.optInt("state", HgeNative.ST_IDLE)
+                val meWaiting = waitingPlans.contains(pid) || capturingPlans.contains(pid) ||
+                                startingPlans.contains(pid)
+                if (st0 == HgeNative.ST_IDLE && meWaiting) {
+                    val now = System.currentTimeMillis()
+                    if (now - (idleMismatchAt[pid] ?: 0L) > 60000) {
+                        idleMismatchAt[pid] = now
+                        val notice = try { HgeNative.nativeLastEdgeNotice() } catch (_: Exception) { 0 }
+                        try {
+                            HgeNative.nativeLogEvent("NET",
+                                "edge says IDLE but phone is waiting: plan=" + pid +
+                                " edge=" + (planEdge(pid)?.name ?: "?") + " notice=" + notice, true)
+                        } catch (_: Exception) {}
+                    }
+                } else { idleMismatchAt.remove(pid) }
+                Unit   // run{} の値を確定させる(最後が if だと両分岐を要求される)
+            }
             // ① エッジ書き戻し: エッジが接続確定したカメラの serial/assignedName を所持カメラへ反映する
             //  (エッジ撮影ではスマホがカメラに接続しないため、この経路が唯一の識別情報伝播)。serial単位で1回だけ適用。
             // 認証で弾かれているなら、その理由を覚えておく(「見つかりません」を言い換えるため)。
@@ -7346,7 +8901,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // ── APモードのエッジAPへのネットワークバインド(§1.2.1) ──
     // Android は「インターネットゲートウェイの無いWi-Fi(=エッジのSoftAP)」を数十秒で自動的に
     // 見限り、母艦LAN(モバイル/別Wi-Fi)へ切り替える。そのままではスマホがエッジと別網になり、
-    // ETP(TCP/UDP)が届かず制御・監視ができない。そこで、現在スマホが接続中のWi-Fiが "HGC-Edge*"
+    // ETP(TCP/UDP)が届かず制御・監視ができない。そこで、現在スマホが接続中のWi-Fiが "TLP-Edge*"
     // (エッジのSoftAP)のときは、そのNetworkを requestNetwork で確保し bindProcessToNetwork で
     // プロセス全体の通信(ネイティブのソケットも含む)をそのNICへ固定する。これで自動離脱を防ぎ、
     // インターネット判定に依らずエッジと通信できる。別SSID(母艦LAN)に居る間はバインドしない=従来動作。
@@ -7363,11 +8918,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         } catch (_: Exception) { null }
     }
 
-    // SSID が "HGC-Edge" 始まり(=エッジSoftAP)ならバインドを起動、そうでなければ解除する。
+    // SSID が "TLP-Edge" 始まり(=エッジSoftAP)ならバインドを起動、そうでなければ解除する。
     // edgeSweep(30秒毎)から呼ぶ。冪等(多重 requestNetwork を防ぐ)。
     private fun updateEdgeApBinding() {
         val ssid = currentWifiSsid()
-        val onEdgeAp = ssid != null && ssid.startsWith("HGC-Edge")
+        val onEdgeAp = ssid != null && ssid.startsWith("TLP-Edge")
         if (onEdgeAp) {
             if (edgeApCallback != null) return   // 既にバインド機構が稼働中
             val req = NetworkRequest.Builder()
@@ -7380,7 +8935,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     val nc = cm.getNetworkCapabilities(network)
                     val wi = nc?.transportInfo as? WifiInfo
                     val ns = wi?.ssid?.trim('"')
-                    if (ns == null || ns.startsWith("HGC-Edge")) {
+                    if (ns == null || ns.startsWith("TLP-Edge")) {
                         edgeApNetwork = network
                         cm.bindProcessToNetwork(network)
                         android.util.Log.i("EdgeApBind", "bound to $ns")
@@ -7501,7 +9056,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 //  utc/tzOff はエッジ自身の時計(新FWのみ)。0=未設定または旧FW→ずれの判定はしない。
                 data class Found(val edge: Edge, val hasSessions: Boolean, val sessions: Map<String, Int>,
                                  val hasHeld: Boolean, val heldPlans: Set<String>, val reports: Int,
-                                 val utc: Long, val tzOff: Int)
+                                 val utc: Long, val tzOff: Int, val cams: Int,
+                                 val owned: Boolean, val mine: Boolean)
                 val found = HashMap<String, Found>()
                 try {
                     val arr = JSONArray(js)
@@ -7525,8 +9081,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
                             for (k in 0 until ha.length()) { ha.optString(k)?.takeIf { it.isNotEmpty() }?.let { held.add(it) } }
                         }
                         // 溜まっている撮影レポートの件数(新FWのみ)。>0 のときだけ引き取りに行く。
+                        // 登録の状態。古いファームは返さないので、その場合は「自分のもの」として
+                        //  従来どおり扱う(混ぜても動かなくならないように)。
                         found[nm] = Found(Edge(nm, o.optString("ip"), o.optInt("port", 50506)), has, sess, hasHeld, held,
-                                          o.optInt("reports", 0), o.optLong("utc", 0L), o.optInt("tzOff", 0))
+                                          o.optInt("reports", 0), o.optLong("utc", 0L), o.optInt("tzOff", 0),
+                                          o.optInt("cams", 0),
+                                          o.optBoolean("owned", true), o.optBoolean("mine", true))
                     }
                 } catch (_: Exception) {}
                 // UDP無応答の登録エッジ: 連続2回でTCP生存確認(取りこぼし救済)→それも不応答ならオフライン。
@@ -7544,6 +9104,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     var uiDirty = false
                     for ((nm, f) in found) {
                         edgeMiss[nm] = 0
+                        // 【持ち主でなければ何も送らない(2026-09-26)】近くで別の人が同じアプリを
+                        //  使っていても、その端末の設定を壊さないため。見つけたことだけは一覧へ出す。
+                        noteDiscoveredEdge(nm, f.edge.ip, f.edge.port)   // 一覧に「未登録」で出すための控え
+                        if (hiddenEdges.contains(nm)) continue           // 消した端末には触らない
+                        val ownWas = edgeOwn[nm]
+                        if (ownWas == null || ownWas.owned != f.owned || ownWas.mine != f.mine) {
+                            edgeOwn[nm] = EdgeOwn(f.owned, f.mine); uiDirty = true
+                        }
+                        if (!edgeIsMine(nm)) {
+                            // 未登録・他人のもの。一覧の副行を出すために見えたことだけ記録する。
+                            if (edgeOnline[nm] != true) { edgeOnline[nm] = true; uiDirty = true }
+                            continue
+                        }
                         // 居なかったものが見えた瞬間に時刻を送る(電源を入れた直後がこれ)。
                         //  以後は間を空けて送り直すだけ。ずれていなければエッジ側が何もしない。
                         val appeared = edgeOnline[nm] != true
@@ -7568,7 +9141,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         //  設定は**その端末のもの**を送る(端末ごとに違ってよい)。
                         sendEdgeLogOpt(nm)
                         checkEdgeClock(nm, f.utc, f.tzOff)   // 時計のずれを知らせる(止めはしない)
-                        registerDiscoveredEdge(nm, f.edge.ip, f.edge.port)   // 未登録なら登録・既登録はIP追従
+                        updateEdgeIp(nm, f.edge.ip, f.edge.port)   // 持ち主の端末だけIPを追従する(自動登録はしない)
                         if (f.hasSessions) reconcileEdgeSessions(f.edge, f.sessions)
                         if (f.hasHeld) reconcileEdgeRoster(f.edge, f.heldPlans)   // 項目6: エッジ側削除の検知→ロック解除
                     }
@@ -7578,7 +9151,25 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 }
                 // エッジに溜まった撮影レポートを引き取る。件数が入っているときだけ通信するので、
                 // 定常(レポート0件)ではこのスイープの通信量は従来と変わらない。
-                for (f in found.values) { if (f.reports > 0 && f.edge.ip.isNotEmpty()) collectEdgeReports(f.edge) }
+                // 【持ち主の端末だけ】未登録・他人の端末からは何も取らない(取れば消す指示も出すため)。
+                for (f in found.values) {
+                    if (f.reports > 0 && f.edge.ip.isNotEmpty() && edgeIsMine(f.edge.name)) collectEdgeReports(f.edge)
+                }
+                // 外部端末が見つけたカメラを引き取る(2026-09-26)。**BLE のときだけ**行う:
+                //  Wi-Fi で話しているなら、そのカメラはスマホ自身の在否監視にも映っているので要らない。
+                //  台数が前回と変わったときだけ聞く(1往復ぶんの通信を増やさないため)。
+                if (edgeUseBle()) {
+                    for ((nm, f) in found) {
+                        if (!edgeIsMine(nm)) continue   // 未登録・他人の端末には問い合わせない
+                        if (f.cams != (edgeCamsSeen[nm] ?: -1)) {
+                            edgeCamsSeen[nm] = f.cams
+                            if (f.cams > 0) collectEdgeCameras(f.edge)
+                        }
+                        // ISO/SS の並びは、台数が変わらなくても「まだ空の所持カメラ」があるときだけ貰う。
+                        //  貰えるようになるのは端末がカメラへ繋いだ後なので、間をあけて聞き直す。
+                        if (f.cams > 0) fetchEdgeCameraLists(f.edge)
+                    }
+                }
             }.start()
             handler.postDelayed(this, 30000)   // 30秒ごと(常時)
         }
@@ -7594,13 +9185,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         try {
             val o = JSONObject()
             for ((k, v) in edgeHeldByEdge) { o.put(k, JSONArray(v.toList())) }
-            getSharedPreferences("hgc", MODE_PRIVATE).edit().putString("edgeHeld", o.toString()).apply()
+            getSharedPreferences("tlp", MODE_PRIVATE).edit().putString("edgeHeld", o.toString()).apply()
         } catch (_: Exception) {}
     }
 
     private fun loadEdgeHeld() {
         try {
-            val t = getSharedPreferences("hgc", MODE_PRIVATE).getString("edgeHeld", "") ?: ""
+            val t = getSharedPreferences("tlp", MODE_PRIVATE).getString("edgeHeld", "") ?: ""
             if (t.isEmpty()) return
             val o = JSONObject(t)
             for (k in o.keys()) {
@@ -7761,11 +9352,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
             // ネットワークI/Oはこのスレッド上で行う(UIを固めない)。
             val running = if (r == 0) true else {
                 val pj = try { HgeNative.nativeEdgeProgress(e.addr(), e.port, planId) } catch (_: Exception) { "" }
+                // 【結果を必ず記録へ(2026-09-26)】ここは「応答が無い＝走っているかもしれない」と
+                //  みなして待機表示を続ける。実際には端末が要求を断っていて IDLE のままでも、
+                //  スマホは待ち続けるので、後から原因を追えない。何が起きたかを1行残す。
+                val nt0 = try { HgeNative.nativeLastEdgeNotice() } catch (_: Exception) { 0 }
+                val st0 = if (pj.isEmpty()) -1 else
+                    (try { JSONObject(pj).optInt("state", HgeNative.ST_IDLE) } catch (_: Exception) { HgeNative.ST_IDLE })
+                try {
+                    HgeNative.nativeLogEvent("NET",
+                        "edge start failed r=" + r + " notice=" + nt0 + " edgeState=" + st0 +
+                        " (-1=no answer) edge=" + e.name + " plan=" + planId, true)
+                } catch (_: Exception) {}
                 if (pj.isEmpty()) true   // エッジ無応答=判定不能 → 除去せず edgePoll に委ねる(誤って開始前へ戻さない)
-                else {
-                    val st = try { JSONObject(pj).optInt("state", HgeNative.ST_IDLE) } catch (_: Exception) { HgeNative.ST_IDLE }
-                    st != HgeNative.ST_IDLE && st != HgeNative.ST_ERROR   // 明示的IDLE/ERROR以外は走っているとみなし維持
-                }
+                else { st0 != HgeNative.ST_IDLE && st0 != HgeNative.ST_ERROR }   // 明示的IDLE/ERROR以外は走っているとみなし維持
             }
             if (running) addHistory("send plan", planId)   // 項目9: 撮影計画をエッジへ送った
             runOnUiThread {

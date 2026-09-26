@@ -6,6 +6,7 @@
 #include "edgeRtc.h"	// RTC は機種ごとの実装へ委譲する(内蔵/外付け/無し)
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include <Preferences.h>	// 持ち主の識別子(NVS "tlp" の owner)
 #include <json/nlohmann/json.hpp>
 #include <sys/time.h>
 #include <ctime>
@@ -36,6 +37,77 @@ namespace
 {
 	constexpr uint16_t PORT_DISCOVERY = 50505;
 	constexpr uint16_t PORT_CONTROL   = 50506;
+
+	// ── 持ち主(2026-09-26) ────────────────────────────────────────
+	//
+	// 【なぜ要るか】近くで別の人が同じアプリを使っていると、そのスマホが**登録もしていない**
+	//  この端末へ台帳やログ設定を送り込んでくる。台帳は「送った内容がその時点の全量」なので、
+	//  よそのスマホの台帳で上書きされると、こちらが入れたカメラの資格情報が消える。
+	//
+	// 【どう守るか】持ち主のスマホの識別子を1つだけ覚え、**それ以外からの要求は断る**。
+	//  覚えるのはプロビジョニングと同じ道(QRのPoPで導いた鍵で暗号化された中身)だけ。
+	//  PoP は端末の画面にしか出ないので、画面を見られない人は持ち主になれない。
+	//
+	// 【検索だけは誰にでも返す】断ると、よそのスマホには「端末が消えた」としか見えない。
+	//  持ち主かどうかを応答に入れて、「別のスマホに登録されています」と言えるようにする。
+	constexpr uint32_t BIND_TTL_MS = 90000;	// 接続と識別子のひも付けの寿命
+	// 診断ツール用の固定の札。ツールは識別子を持たないので、これだけは常に通す。
+	//  **意図的な裏口**である。公開後に締めるなら、ここを設定で切れるようにする。
+	const char* TOOL_ID = "tlp-tool-0000000000000000000000000000";
+
+	std::string g_owner;		// 持ち主の識別子(空=未登録。誰でも使える)
+	bool        g_ownerLoaded = false;
+
+	struct peerBind { std::string peer; std::string id; uint32_t at; };
+	std::vector<peerBind> g_binds;	// 相手(BLE/TCP/UDP)→識別子。数台ぶんで足りる
+
+	void ownerLoad(void)
+	{
+		if (g_ownerLoaded) { return; }
+		g_ownerLoaded = true;
+		Preferences p;
+		if (p.begin("tlp", true)) { g_owner = p.getString("owner", "").c_str(); p.end(); }
+		if (!g_owner.empty()) { DBGLN(col::GRN, "etpEdge: owner restored"); }
+	}
+
+	// 相手と識別子をひも付ける(C_SEARCH を受けたときだけ)。空の識別子は覚えない。
+	void bindPeer(const std::string& peer, const std::string& id)
+	{
+		if (peer.empty()) { return; }
+		const uint32_t now = millis();
+		for (auto& b : g_binds)
+		{
+			if (b.peer == peer) { b.id = id; b.at = now; return; }
+		}
+		// 古いものを掃除してから足す(表が伸び続けないように)。
+		for (size_t i = 0; i < g_binds.size(); )
+		{
+			if (now - g_binds[i].at > BIND_TTL_MS) { g_binds.erase(g_binds.begin() + static_cast<long>(i)); }
+			else { ++i; }
+		}
+		if (g_binds.size() < 6) { g_binds.push_back({ peer, id, now }); }
+	}
+
+	std::string peerId(const std::string& peer)
+	{
+		const uint32_t now = millis();
+		for (const auto& b : g_binds)
+		{
+			if (b.peer == peer && (now - b.at) <= BIND_TTL_MS) { return b.id; }
+		}
+		return std::string();
+	}
+
+	// この相手の要求を受けてよいか。持ち主が居ないうちは誰でも使える(登録前と移行のため)。
+	bool allowedPeer(const std::string& peer)
+	{
+		ownerLoad();
+		if (g_owner.empty()) { return true; }
+		const std::string id = peerId(peer);
+		return (id == g_owner) || (id == TOOL_ID);
+	}
+
+
 
 	WiFiUDP               g_udp;
 	WiFiServer            g_server(PORT_CONTROL);
@@ -161,9 +233,15 @@ bool applyTime(const std::string& data)
 	}
 
 	// 検索応答 edgeInfo を作る。
-	std::string edgeInfoJson(void)
+	// asker = 聞いてきた相手の識別子(空=名乗らなかった)。持ち主かどうかを相手ごとに答える。
+	std::string edgeInfoJson(const std::string& asker)
 	{
+		ownerLoad();
 		json j;
+		// 登録の状態。スマホはこれで「未登録」「別のスマホに登録されています」を出し分ける。
+		//  owned=持ち主が居るか / mine=聞いてきたあなたが持ち主か
+		j["owned"] = !g_owner.empty();
+		j["mine"]  = g_owner.empty() || (!asker.empty() && asker == g_owner);
 		// 【キーは種別が分かる名前にする(2026-09-02)】以前は "name" で、撮影計画の進捗応答も
 		//  同じ "name" に**計画名**を入れていた。取り違えたとき見分けが付かず、計画名が
 		//  エッジ端末として台帳へ登録される事故になった。名前で種別が分かるようにする。
@@ -204,6 +282,15 @@ bool applyTime(const std::string& data)
 			const int32_t rc = hge_reportCount();
 			if (rc > 0) { j["reports"] = rc; }
 		}
+		// いま見えているカメラの台数(2026-09-26)。スマホ⇄エッジが BLE のとき、スマホはエッジのAPに
+		// 入らないのでカメラを自分では見つけられない。**件数だけ**をここに載せ、スマホは前回と
+		// 変わったときだけ C_CAMERA_SEEN で身元を取りに行く(レポート回収と同じ)。
+		// 一覧そのものをここへ入れてはいけない: 検索応答は UDP 1発で返しており、
+		// sessions(512B)+heldPlans(768B) で既に上限が近い。
+		{
+			const int32_t cc = hge_seenCameraCount();
+			if (cc > 0) { j["cams"] = cc; }
+		}
 		// 項目6: 保有計画ロスター(走行中に限らずエッジが持つ全計画id)。スマホは自分のエッジ担当割り当てと
 		//  突き合わせ、ここに無い=エッジ側で削除された計画のロックを解除する。
 		{
@@ -223,18 +310,47 @@ bool applyTime(const std::string& data)
 	// 【トランスポートに依存しない(2026-08-14)】従来は最後に g_client.write() まで行っていたので
 	//  TCP 専用だった。BLE からも同じ処理を通すため、応答は「返す」だけにして、どこへ送るかは
 	//  呼んだ側(pollTcp / etpBle)に任せる。cmd の処理内容は一切変えていない。
-	std::vector<uint8_t> buildReply(const etp::packet& pk)
+	std::vector<uint8_t> buildReply(const etp::packet& pk, const std::string& peer)
 	{
 		DBGLN(col::YEL, "etpEdge: rx cmd=%u m=%u len=%u", (unsigned)pk.cmd, (unsigned)pk.method, (unsigned)pk.data.size());
 		uint16_t rm = etp::M_ACK;
 		std::string rd;
+		// 【検索だけは誰にでも返す】ここで相手を覚える。以後の要求はこのひも付けで判定する。
+		//  断るときも理由をお知らせコードで返すので、スマホは「別のスマホに登録されています」と
+		//  言える(黙って落とすと、よそのスマホには端末が消えたようにしか見えない)。
+		if (pk.cmd == etp::C_SEARCH)
+		{
+			bindPeer(peer, pk.data);
+			return etp::encode(pk.cmd, etp::M_ACK, edgeInfoJson(pk.data));
+		}
+		if (!allowedPeer(peer))
+		{
+			DBGLN(col::RED, "etpEdge: refused cmd=%u (not the owner)", (unsigned)pk.cmd);
+			// 【必ずログファイルにも残す(2026-09-26)】以前はシリアルにしか出していなかったので、
+			//  後からログを取り寄せても「断った」痕跡がどこにも無く、原因に辿り着けなかった。
+			//  断られた側(スマホ)は開始したつもりで待ち続けるので、ここが唯一の手掛かりになる。
+			//  同じ相手の同じコマンドが続くときは間引く(スイープのたびに何行も出さない)。
+			static uint16_t s_lastCmd = 0xFFFF;
+			static uint32_t s_lastAt  = 0;
+			const uint32_t now = millis();
+			if (pk.cmd != s_lastCmd || (now - s_lastAt) > 10000)
+			{
+				s_lastCmd = pk.cmd; s_lastAt = now;
+				const std::string id = peerId(peer);
+				char b[160];
+				std::snprintf(b, sizeof(b),
+				              "refused cmd=%u method=%u peer=%s named=%s state=%d (not the owner)",
+				              (unsigned)pk.cmd, (unsigned)pk.method, peer.c_str(),
+				              id.empty() ? "no" : "yes", (int)hge_getState());
+				dataManager::logEvent("NET", b, true);
+			}
+			return etp::encode(pk.cmd, etp::M_NAK,
+			                   std::to_string(static_cast<int>(hgc::notice::edgeNotYours)));
+		}
 		switch (pk.cmd)
 		{
 		case etp::C_SEARCH:
-			// 検索応答。TCP では UDP 側(pollUdp)が受けるのでここへは来ないが、BLE には
-			// ブロードキャストが無いので、スマホは接続してから C_SEARCH で edgeInfo を取る。
-			rd = edgeInfoJson();
-			break;
+			break;	// 上で返している(ここへは来ない)
 		case etp::C_TIME:
 			if (!applyTime(pk.data)) { rm = etp::M_NAK; }
 			break;
@@ -378,6 +494,33 @@ bool applyTime(const std::string& data)
 			rd = body;
 			break;
 		}
+		case etp::C_CAMERA_SEEN:	// いま見えているカメラの身元(IPは載せない)
+		{
+			// 1台あたり約100バイト。AP に繋げられる台数(実測10)でも1KBに収まる。
+			char b[1280];
+			int32_t len = sizeof(b);
+			if (hge_seenCamerasJson(b, &len) == ERR_HGC_OK) { rd = b; }
+			else                                            { rd = "[]"; }
+			break;
+		}
+		case etp::C_RELEASE:	// 持ち主の登録を外す(端末を手放す)。ここへ来た時点で持ち主からの要求
+		{
+			Preferences p;
+			if (p.begin("tlp", false)) { p.remove("owner"); p.end(); }
+			g_owner.clear(); g_binds.clear();
+			dataManager::logEvent("INFO", "edge released (no owner)");
+			DBGLN(col::GRN, "etpEdge: released (no owner)");
+			break;
+		}
+		case etp::C_CAMERA_SPEC:	// data=serial。そのカメラの ISO/SS の並びを返す
+		{
+			// 1台ぶんで 600〜800 バイト。名指しなので1回の応答はこれだけ。
+			char b[2048];
+			int32_t len = sizeof(b);
+			if (!pk.data.empty() && hge_cameraListsJson(pk.data.c_str(), b, &len) == ERR_HGC_OK) { rd = b; }
+			else                                                                                 { rd = "{}"; }
+			break;
+		}
 		case etp::C_REPORT_DELETE:	// data=ファイル名。スマホが保存できたものだけを消す
 			if (pk.data.empty() || hge_removeReport(pk.data.c_str()) != ERR_HGC_OK) { rm = etp::M_NAK; }
 			break;
@@ -400,7 +543,11 @@ bool applyTime(const std::string& data)
 		int c = etp::decode(buf, static_cast<size_t>(n), pk);
 		if (c > 0 && pk.cmd == etp::C_SEARCH && pk.method == etp::M_GET)
 		{
-			std::vector<uint8_t> out = etp::encode(etp::C_SEARCH, etp::M_ACK, edgeInfoJson());
+			// 相手は送り主のIPで見分ける。ここで識別子をひも付けておくと、続く TCP の要求
+			// (同じIPから来る)を持ち主かどうかで判定できる。
+			const std::string peer = std::string("w:") + g_udp.remoteIP().toString().c_str();
+			bindPeer(peer, pk.data);
+			std::vector<uint8_t> out = etp::encode(etp::C_SEARCH, etp::M_ACK, edgeInfoJson(pk.data));
 			g_udp.beginPacket(g_udp.remoteIP(), g_udp.remotePort());
 			g_udp.write(out.data(), out.size());
 			g_udp.endPacket();
@@ -451,7 +598,10 @@ bool applyTime(const std::string& data)
 			int c = etp::decode(g_rx.data() + pos, g_rx.size() - pos, pk);
 			if (c > 0)
 			{
-				std::vector<uint8_t> out = buildReply(pk);
+				// TCP は相手IPで見分ける。UDP の検索と同じ鍵("w:<ip>")にして、
+				// 検索でひも付けた識別子をそのまま使う。
+				const std::string peer = std::string("w:") + g_client.remoteIP().toString().c_str();
+				std::vector<uint8_t> out = buildReply(pk, peer);
 				g_client.write(out.data(), out.size());
 				pos += static_cast<size_t>(c);
 			}
@@ -474,15 +624,31 @@ bool applyTime(const std::string& data)
 namespace etpEdge
 {
 	// BLE 経路から呼ぶ。1フレームを処理して応答フレームを返す(トランスポート非依存)。
-	std::vector<uint8_t> handleFrame(const etp::packet& pk)
+	std::vector<uint8_t> handleFrame(const etp::packet& pk, uint16_t conn)
 	{
-		return buildReply(pk);
+		// 【接続ごとに見分ける(2026-09-26)】固定の鍵にしていたら、2台つないでいるとき
+		//  後から名乗ったほうへ鍵が移り、持ち主の要求が断られることがあった(実測で
+		//  検索と送信の間は約1.4秒あり、30秒に1度の他機の検索が5%ほどの確率で割り込む)。
+		char b[16]; std::snprintf(b, sizeof(b), "b:%u", (unsigned)conn);
+		return buildReply(pk, b);
 	}
 
 	// 検索応答と同じ edgeInfo。BLE でも同じものを返すので公開する。
 	std::string infoJson(void)
 	{
-		return edgeInfoJson();
+		return edgeInfoJson(std::string());
+	}
+
+	// プロビジョニング(QRのPoPで守られた道)から持ち主を登録する。
+	//  ここを通れた=端末の画面を見られる人なので、所有証明が済んでいる。
+	void setOwner(const std::string& phoneId)
+	{
+		if (phoneId.empty()) { return; }
+		Preferences p;
+		if (p.begin("tlp", false)) { p.putString("owner", phoneId.c_str()); p.end(); }
+		g_owner = phoneId; g_ownerLoaded = true; g_binds.clear();
+		dataManager::logEvent("INFO", "edge owner registered");
+		DBGLN(col::GRN, "etpEdge: owner registered");
 	}
 
 	void setup(const std::string& edgeName)

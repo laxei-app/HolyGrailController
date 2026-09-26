@@ -28,7 +28,7 @@ import importlib.util
 PROJ = env.subst("$PROJECT_DIR")
 ROOT = os.path.abspath(os.path.join(PROJ, "..", "..", ".."))
 STAMP_PY = os.path.join(ROOT, "50_tools", "edge", "stamp_fw.py")
-APP_NAME = "HolyGrailEdge"
+APP_NAME = "TwyLapseEdge"
 
 
 def _load(path):

@@ -1,4 +1,4 @@
-﻿package app.laxei.holygrail
+﻿package app.laxei.twylapse
 
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest

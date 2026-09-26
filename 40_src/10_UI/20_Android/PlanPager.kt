@@ -1,4 +1,4 @@
-package app.laxei.holygrail
+package app.laxei.twylapse
 
 // 撮影計画画面の横スライドページャ(§7.3 画面分割)。
 //  ・ページ0 = 先頭フォーム(XMLの子。リスト+概要+編集項目。縦スクロール可)
