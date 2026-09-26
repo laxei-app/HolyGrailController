@@ -311,6 +311,37 @@ namespace builtinCam
 		return out;
 	}
 
+	std::string focusControl(void)
+	{
+		attach a;
+		if (!a.ok()) { return ""; }
+		jmethodID mid = a.env->GetStaticMethodID(a.cls, "focusControl", "()Ljava/lang/String;");
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); mid = nullptr; }
+		if (mid == nullptr) { return ""; }
+		jobject r = a.env->CallStaticObjectMethod(a.cls, mid);
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); r = nullptr; }
+		std::string out;
+		if (r != nullptr)
+		{
+			const char* p = a.env->GetStringUTFChars(static_cast<jstring>(r), nullptr);
+			if (p != nullptr) { out = p; a.env->ReleaseStringUTFChars(static_cast<jstring>(r), p); }
+			a.env->DeleteLocalRef(r);
+		}
+		return out;
+	}
+
+	double focusDiopter(void)
+	{
+		attach a;
+		if (!a.ok()) { return -1.0; }
+		jmethodID mid = a.env->GetStaticMethodID(a.cls, "focusDiopter", "()D");
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); mid = nullptr; }
+		if (mid == nullptr) { return -1.0; }
+		const jdouble v = a.env->CallStaticDoubleMethod(a.cls, mid);
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); return -1.0; }
+		return static_cast<double>(v);
+	}
+
 	void setWantDng(bool on)
 	{
 		attach a;

@@ -45,6 +45,28 @@ namespace rawStack
 	//  現像と DNG 書き出しの両方で使う。
 	float shadingAt(const developParams& p, int ch, float fx, float fy);
 
+	// ── 画質の目安(2026-09-26 ユーザー依頼) ─────────────────
+	// 【なぜ2コマ要るか】1コマの中のばらつきには、被写体の模様とノイズが混ざっていて分けられない。
+	//  連続する2コマの**差**を取れば模様は消え、コマごとに変わるノイズだけが残る。
+	//  さらに「1コマの中のばらつき」と比べれば、毎コマ同じ位置に出るノイズ(暗電流のムラ・
+	//  ホットピクセル)も分けられる。加算撮影ではこちらが薄まらないので、別に見る意味がある。
+	//   時間ノイズ   = σ(A − B) ÷ √2        … コマごとに変わる(光ショット+読み出し)
+	//   固定パターン = √(空間σ² − 時間σ²)   … 毎コマ同じ位置に出る
+	struct noiseStat
+	{
+		bool   ok       = false;
+		double level    = 0.0;	// その場所の明るさ(0〜255)
+		double temporal = 0.0;	// 時間ノイズ
+		double fixed    = 0.0;	// 固定パターンノイズ
+		double snr      = 0.0;	// level ÷ temporal(大きいほど良い)
+	};
+	// 現像したコマを渡す(RGBA。jniBridge が現像の直後に呼ぶ)。数コマに1度だけ測る。
+	void noisePush(const uint8_t* rgba, int w, int h);
+	// 測れていれば取り出して空にする(戻り=取り出せたか)。
+	bool noiseTake(noiseStat& out);
+	// 1回の撮影の始めに呼ぶ(持ち越さない)。
+	void noiseReset(void);
+
 	// 足し込み先。1コマ目の前に begin、コマごとに add、最後に develop。
 	class accumulator
 	{

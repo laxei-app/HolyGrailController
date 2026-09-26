@@ -1799,6 +1799,7 @@ namespace
 					R.cvSteps = c.converge.steps; R.cvApplyNg = c.converge.applyNg;
 					R.cvMeterNg = c.converge.meterNg; R.cvOutcome = c.converge.outcome;
 					R.cvShots   = c.converge.shots;
+					if (!c.deviceJson.empty()) { R.deviceJson = c.deviceJson; }
 				}
 			},
 			[S](errCode e, const std::string& m) {

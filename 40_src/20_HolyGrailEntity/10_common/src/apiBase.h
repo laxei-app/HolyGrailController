@@ -16,6 +16,10 @@ public:
 	apiBase(void) {};
 	virtual ~apiBase(void) {};
 	virtual errCode init(class device& device) = 0;
+	// 【カメラ自身の素性と実績(2026-09-26 ユーザー依頼)】撮影レポートの "device" 欄へそのまま入る
+	//  JSON オブジェクト("" =何も載せない)。何を載せるかはカメラ実装が決める(共通部分は中身を見ない)。
+	//  内蔵カメラは「ピントを指定できるか」「1コマの最長露光」「一番荒いところの画質」を載せる。
+	virtual std::string deviceReportJson(void) { return ""; }
 
 	// 身元だけを確かめる(機種名/シリアル/愛称/IP)。**CCAPI は叩かない**。
 	//  在否監視のように「そこに居るか」を知りたいだけの用途で使う。CCAPI の API一覧取得は

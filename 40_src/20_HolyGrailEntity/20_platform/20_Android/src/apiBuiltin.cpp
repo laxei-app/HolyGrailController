@@ -1,5 +1,6 @@
 ﻿#include "apiBuiltin.h"
 #include "builtinBridge.h"
+#include "rawStack.h"		// 画質の目安(現像したコマから測る)
 #include "device.h"
 #include "exposureMath.h"
 #include "jpegLuma.h"
@@ -484,7 +485,9 @@ errCode apiBuiltin::setupShootingModeManual(void)
 	//  出来上がって受け取り口に残る。次の撮影の最初の回収がそれを拾うと、**4時間前の画像が
 	//  1コマ目として動画と jpg に入る**(実機で確認。以降の番号も1つずれる)。
 	builtinCam::sessionBegin();
+	rawStack::noiseReset();
 	focusChecked_ = false;
+	worstOk_ = false;
 	// 【動画をここで開く(2026-09-05)】撮影の区切りと動画の区切りを一致させる。
 	//  出来上がりは Movies/TwyLapse/<計画名>_yyyymmddhhmmss.mp4。10分ごとに「そこまでの完成品」が
 	//  置き換わっていく(BuiltinVideo)。名前と置き場は Kotlin 側が決める。
@@ -663,6 +666,7 @@ void apiBuiltin::collectPending(void)
 				("builtin: wanted physical " + id_ + " but got " + act).c_str(), true);
 		}
 		this->saveShot(jpeg);
+		this->takeNoise();	// 画質の目安(測れている回だけ。数コマに1度)
 		// 受け取ったその場で動画へ1コマ足す。周期が15秒以上あるので符号化は間に合う。
 		builtinCam::videoAddJpeg(jpeg);
 		lastJpeg_.swap(jpeg);
@@ -707,6 +711,50 @@ void apiBuiltin::saveShot(const std::vector<uint8_t>& jpeg)
 	}
 	++shotSeq_;
 	builtinCam::stillNextFrame();
+}
+
+// 【画質の目安を取り込む(2026-09-26 ユーザー依頼)】現像のたびに数コマに1度だけ測られている。
+//  残すのは **SN比がいちばん悪かった1件** だけ。夜と昼では3段以上違う(実測: 夜 SN=2.2 /
+//  昼 SN=26.5)ので、平均には意味がない。「この撮影のいちばん苦しいところ」を代表値にする。
+void apiBuiltin::takeNoise(void)
+{
+	rawStack::noiseStat st;
+	if (!rawStack::noiseTake(st) || !st.ok) { return; }
+	if (worstOk_ && st.snr >= worstSnr_) { return; }
+	worstOk_       = true;
+	worstLevel_    = st.level;
+	worstTemporal_ = st.temporal;
+	worstFixed_    = st.fixed;
+	worstSnr_      = st.snr;
+	worstIso_      = realOf(isoList_, isoReal_, curIso_, expo::expoKind::iso);
+	worstSs_       = this->curSsSec();
+	worstFrames_   = this->stackFrames(worstSs_);
+}
+
+// カメラ自身の素性と実績。レポートの "device" 欄へそのまま入る(英語のみ)。
+//  ・focusControl : ピントを指定できる端末か。manual=指定どおり動く / afOnly=指定を見ない /
+//                   fixed=そもそも動かない。**端末の性質であってアプリの不具合ではない**
+//  ・maxExposureSec: 1コマの最長露光[秒]。短いほど加算コマ数が増え、読み出しノイズで不利になる
+//  ・worstNoise    : その撮影でいちばん荒かったところ(SN比・時間ノイズ・固定パターンノイズ)
+std::string apiBuiltin::deviceReportJson(void)
+{
+	char b[512];
+	const std::string fc = builtinCam::focusControl();
+	int n = std::snprintf(b, sizeof(b),
+	                      "{\"focusControl\":\"%s\",\"focusDiopter\":%.2f,\"maxExposureSec\":%.4f",
+	                      fc.empty() ? "unknown" : fc.c_str(), builtinCam::focusDiopter(),
+	                      this->maxSsSec());
+	if (n <= 0 || n >= static_cast<int>(sizeof(b))) { return ""; }
+	if (worstOk_)
+	{
+		std::snprintf(b + n, sizeof(b) - n,
+		              ",\"worstNoise\":{\"iso\":%.0f,\"ssSec\":%.4f,\"stackedFrames\":%d,"
+		              "\"level\":%.1f,\"snr\":%.2f,\"temporalSigma\":%.2f,\"fixedPatternSigma\":%.2f}}",
+		              worstIso_, worstSs_, worstFrames_,
+		              worstLevel_, worstSnr_, worstTemporal_, worstFixed_);
+	}
+	else { std::snprintf(b + n, sizeof(b) - n, "}"); }
+	return std::string(b);
 }
 
 errCode apiBuiltin::meterScene(const hgc::exposure& shotExp, meterResult& out,

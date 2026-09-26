@@ -1874,7 +1874,10 @@ errCode captureRunner::loop(void)
 			                          lvMeanLinLog_, lvP75Log_, lvP90Log_, lvSatLog_,
 			                          meterSsUsed_, meterSettleMs_, lvPinnedLog_, meterUsableLog_,
 			                          meterWaitMs_, meterFetchMs_, meterDecodeMs_, meterFetchTries_, busyMs, leadUsed,
-			                          asIsLinear_, firstApplyTries_, converge_, meterVia_ });
+			                          asIsLinear_, firstApplyTries_, converge_, meterVia_,
+			                          // カメラが語る欄(内蔵カメラ以外は空)。中身は見ない。
+			                          (dev_ != nullptr && dev_->apiBase)
+			                              ? dev_->apiBase->deviceReportJson() : std::string() });
 		}
 
 		// 測光の連続失敗は「接続断」ではない(2026-07-28 根治)。

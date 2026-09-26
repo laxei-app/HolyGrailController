@@ -1748,6 +1748,12 @@ std::string dataManager::writeCaptureReport(const captureReport& r, const hgc::c
 		else if (margin > 5.0) { notes.push_back(static_cast<int>(NOTE_INTERVAL_ROOM)); }
 	}
 	j["notes"] = notes;
+	// カメラ実装が語る欄。壊れた JSON は黙って捨てる(レポート自体は必ず書く)。
+	if (!r.deviceJson.empty())
+	{
+		json d = json::parse(r.deviceJson, nullptr, false);
+		if (!d.is_discarded()) { j["device"] = d; }
+	}
 
 	const std::string out = j.dump(1, '\t');
 	if (out.empty()) { return ""; }

@@ -1013,6 +1013,12 @@ Java_app_laxei_twylapse_HgeNative_nativeRawStackDevelop(JNIEnv* env, jobject /*t
 			}
 		}
 	}
+	// 画質の目安(2026-09-26)。現像したコマを渡すだけ。数コマに1度しか測らない。
+	if (ok && info.stride == info.width * 4)
+	{
+		rawStack::noisePush(static_cast<const uint8_t*>(px),
+		                    static_cast<int>(info.width), static_cast<int>(info.height));
+	}
 	AndroidBitmap_unlockPixels(env, bitmap);
 	return ok ? JNI_TRUE : JNI_FALSE;
 }

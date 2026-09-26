@@ -172,3 +172,142 @@ namespace rawStack
 		return true;
 	}
 }
+
+// ── 画質の目安(2026-09-26) ──────────────────────────────────
+namespace
+{
+	// 【測る場所は「一番悪いところ」(ユーザー指示)】画面を升目に割って升ごとに測り、
+	//  SN比の悪い順に並べて**下位10%の位置**を代表値にする。最小値そのものを採ると、
+	//  揺れる木の葉のように「動いた升」が必ず1位になってしまう。
+	constexpr int kBlock      = 16;		// 升の大きさ[画素]
+	constexpr int kEveryFrame = 20;		// 何コマに1度測るか
+	constexpr int kWorstPct   = 10;		// 下位何%を代表値にするか
+	constexpr int kLevelMin   = 8;		// 真っ黒な升は除く(SN比が意味を持たない)
+	constexpr int kLevelMax   = 250;	// 飽和した升も除く(ノイズが見えない)
+	constexpr double kFloorSigma = 0.29;	// 量子化の下限(1/√12)。これ未満は測れていない
+
+	// 【ばらつきは中央値から出す(標準偏差では測れない)】コマの間隔は数十秒あるので、
+	//  升の中で雲や葉が動く。標準偏差はその数画素に引きずられて何倍にもなり、
+	//  「カメラのノイズ」ではなく「風の強さ」を測ってしまう。中央絶対偏差なら、
+	//  升の半分未満しか動いていない限り動いた画素を無視できる。1.4826 は正規分布の換算。
+	double madSigma(std::vector<double>& v)
+	{
+		if (v.size() < 8) { return 0.0; }
+		const size_t mid = v.size() / 2;
+		std::nth_element(v.begin(), v.begin() + mid, v.end());
+		const double m = v[mid];
+		for (size_t i = 0; i < v.size(); ++i) { v[i] = std::fabs(v[i] - m); }
+		std::nth_element(v.begin(), v.begin() + mid, v.end());
+		return 1.4826 * v[mid];
+	}
+
+	std::vector<uint8_t>  g_prevGray;	// 直前のコマ(測る回だけ持つ)
+	int                   g_gw = 0, g_gh = 0;
+	int                   g_frameNo = 0;
+	rawStack::noiseStat   g_stat;
+
+	void toGray(const uint8_t* rgba, int w, int h, std::vector<uint8_t>& out)
+	{
+		out.resize(static_cast<size_t>(w) * h);
+		for (size_t i = 0, n = out.size(); i < n; ++i)
+		{
+			const uint8_t* p = rgba + i * 4;
+			const uint32_t y = (299u * p[0] + 587u * p[1] + 114u * p[2] + 500u) / 1000u;
+			out[i] = static_cast<uint8_t>(y > 255u ? 255u : y);
+		}
+	}
+}
+
+namespace rawStack
+{
+	void noiseReset(void)
+	{
+		g_prevGray.clear(); g_prevGray.shrink_to_fit();
+		g_gw = g_gh = 0; g_frameNo = 0; g_stat = noiseStat{};
+	}
+
+	bool noiseTake(noiseStat& out)
+	{
+		if (!g_stat.ok) { return false; }
+		out = g_stat; g_stat = noiseStat{};
+		return true;
+	}
+
+	void noisePush(const uint8_t* rgba, int w, int h)
+	{
+		if (rgba == nullptr || w < kBlock * 4 || h < kBlock * 4) { return; }
+		++g_frameNo;
+		const bool measureNow = (!g_prevGray.empty() && g_gw == w && g_gh == h);
+		if (!measureNow)
+		{
+			// 次のコマで測る回だけ、直前のコマを控える(毎コマ持つと無駄に写す)。
+			// 短い撮影でも1件は残るよう、3コマ目で1度測ってから以降は kEveryFrame ごと。
+			if (g_frameNo == 2 || (g_frameNo % kEveryFrame) == (kEveryFrame - 1))
+			{
+				toGray(rgba, w, h, g_prevGray); g_gw = w; g_gh = h;
+			}
+			return;
+		}
+		std::vector<uint8_t> cur;
+		toGray(rgba, w, h, cur);
+
+		struct cell { double level, temporal, spatial; };
+		std::vector<cell> cells;
+		cells.reserve(static_cast<size_t>((w / kBlock) * (h / kBlock)));
+		std::vector<double> lv, dv, sv;
+		for (int by = 0; by + kBlock <= h; by += kBlock)
+		{
+			for (int bx = 0; bx + kBlock <= w; bx += kBlock)
+			{
+				lv.clear(); dv.clear();
+				for (int j = 0; j < kBlock; ++j)
+				{
+					const size_t row = static_cast<size_t>(by + j) * w + bx;
+					for (int i = 0; i < kBlock; ++i)
+					{
+						lv.push_back(cur[row + i]);
+						dv.push_back(static_cast<double>(cur[row + i]) - g_prevGray[row + i]);
+					}
+				}
+				// 明るさも中央値で見る(動いた画素に引かれないように)。
+				std::nth_element(lv.begin(), lv.begin() + lv.size() / 2, lv.end());
+				const double ma = lv[lv.size() / 2];
+				if (ma < kLevelMin || ma > kLevelMax) { continue; }
+
+				// 【面のざらつきは2階差分で見る】升の中の明暗の傾きや模様をそのまま測ると、
+				//  空と木の境目のような「絵」がノイズに化ける。周りとの差の差(ラプラシアン)
+				//  を採れば、なだらかな傾きは消えてざらつきだけが残る。6 は核の大きさぶん。
+				sv.clear();
+				for (int j = 1; j + 1 < kBlock; ++j)
+				{
+					const size_t row = static_cast<size_t>(by + j) * w + bx;
+					for (int i = 1; i + 1 < kBlock; ++i)
+					{
+						const double lap =
+							1.0 * cur[row - w + i - 1] - 2.0 * cur[row - w + i] + 1.0 * cur[row - w + i + 1]
+						  - 2.0 * cur[row     + i - 1] + 4.0 * cur[row     + i] - 2.0 * cur[row     + i + 1]
+						  + 1.0 * cur[row + w + i - 1] - 2.0 * cur[row + w + i] + 1.0 * cur[row + w + i + 1];
+						sv.push_back(lap);
+					}
+				}
+				cell c;
+				c.level    = ma;
+				c.temporal = madSigma(dv) / std::sqrt(2.0);	// 2コマぶんなので √2 で割る
+				c.spatial  = madSigma(sv) / 6.0;
+				if (c.temporal < kFloorSigma) { c.temporal = kFloorSigma; }
+				cells.push_back(c);
+			}
+		}
+		g_prevGray.clear(); g_prevGray.shrink_to_fit(); g_gw = g_gh = 0;
+		if (cells.size() < 16) { return; }
+		std::sort(cells.begin(), cells.end(), [](const cell& a, const cell& b) {
+			return (a.level / a.temporal) < (b.level / b.temporal);	// SN比の悪い順
+		});
+		const cell& c = cells[cells.size() * kWorstPct / 100];
+		g_stat.ok       = true;
+		g_stat.level    = c.level;
+		g_stat.temporal = c.temporal;
+		g_stat.fixed    = std::sqrt(std::max(0.0, c.spatial * c.spatial - c.temporal * c.temporal));
+		g_stat.snr      = c.level / c.temporal;
+	}
+}

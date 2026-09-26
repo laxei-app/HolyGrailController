@@ -325,6 +325,8 @@ public:
 		// 露出を合わせるために撮影窓の前で余分に撮ったコマ数。frames には入らないので、
 		//  カードの枚数がレポートのコマ数より多くなる。その差の説明として出す。
 		int      cvShots    = 0;
+		// カメラ実装が語る素性と実績(apiBase::deviceReportJson。空=載せない)。
+		std::string deviceJson;
 	};
 	// レポートをファイルへ書く(JSON)。planName/planId/カメラ名と窓・周期は呼び出し側から渡す。
 	// return: 書けたファイルのパス(空=失敗)。

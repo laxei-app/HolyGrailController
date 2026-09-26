@@ -227,6 +227,13 @@ private:
 	double meterSec_ = 0.0, meterIso_ = 0.0;
 	// ピントの確かめ(2026-09-26)。1回の撮影で1度だけ。暗くて測れない窓では走らせない。
 	bool   focusChecked_ = false;
+	// 【一番悪いところを載せる(2026-09-26 ユーザー指示)】撮影中に数コマに1度だけ画質を測り、
+	//  SN比が最も悪かった1件だけを覚えてレポートへ出す。夜と昼では3段以上違うので、
+	//  平均には意味がない。「この撮影のいちばん苦しいところ」を代表値にする。
+	bool   worstOk_ = false;
+	double worstLevel_ = 0.0, worstTemporal_ = 0.0, worstFixed_ = 0.0, worstSnr_ = 0.0;
+	double worstIso_ = 0.0, worstSs_ = 0.0;
+	int    worstFrames_ = 0;
 
 	// カメラを開く(開けたら opened_ を立てる)。開けない理由が権限なら failNotice_ に残す。
 	errCode openCamera(void);
@@ -234,6 +241,14 @@ private:
 
 	// ピントを実測で決める(撮影の始めに1度。暗くて測れないときは何もしない)。
 	void checkFocus(void);
+	// 画質の測定結果を取り込む(悪いほうを残す)。毎コマ呼んでよい(測れていなければ何もしない)。
+	void takeNoise(void);
+
+public:
+	// カメラ自身の素性と実績。撮影レポートの "device" 欄へ入る(apiBase の説明を参照)。
+	std::string deviceReportJson(void) override;
+
+private:
 
 	// 撮った画像を残す(2026-09-05)。キヤノン機はカメラ側のSDに残るが、内蔵カメラには
 	//  「カメラ側」が無いので、自分で書かないと何も残らない。

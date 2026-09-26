@@ -71,6 +71,8 @@ namespace builtinCam
 	void        sessionBegin(void);
 	// ピントを実測で決める(明るくて測れるときだけ)。戻り=ログへ残す1行("" =何もしていない)。
 	std::string focusProbe(double sec, int iso, double fn);
+	std::string focusControl(void);		// "manual" / "afOnly" / "fixed"("" =分からない)
+	double      focusDiopter(void);		// 端末が申告しているピント位置(<0 =不明)
 	void        stillBegin(const std::string& planName);	// 1回の撮影で1つのアルバム
 	bool        stillSaveJpeg(const std::vector<uint8_t>& jpeg);
 	void        stillNextFrame(void);			// jpg と DNG の番号を揃える

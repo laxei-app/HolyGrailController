@@ -74,6 +74,7 @@ object BuiltinCamera {
     //  既定は OFF にしない(Pixel 6 は今のままで無限遠が効いている)。効かない端末でだけ試す。
     private var ctlOff = false
     private var canCtlOff = false
+    private var focusIgnored = false	// 実測で「指定を見ていない」と分かった
     // DNG を出すか(2026-09-23 UI依頼)。出すときだけ、束ねる前のフルサイズの和も持つ(50MB)。
     private var wantDng = false
     @JvmStatic
@@ -390,10 +391,10 @@ object BuiltinCamera {
             if (!ignoresFocus(c2, g2)) {
                 cand = c2; score = s2; got = g2; note = " [control-mode off]"
             } else {
-                ctlOff = false; note = " [manual focus ignored by device]"
+                ctlOff = false; focusIgnored = true; note = " [manual focus ignored by device]"
             }
         } else if (ignoresFocus(cand, got)) {
-            note = " [manual focus ignored by device]"
+            focusIgnored = true; note = " [manual focus ignored by device]"
         }
         wantDng = keepDng
         var best = 0
@@ -433,6 +434,14 @@ object BuiltinCamera {
         }
         return (wMax - wMin) > 0.1f && (gMax - gMin) < 0.02f
     }
+
+    // ピントを指定できる端末かどうか。撮影レポートに載せる(英語のみ)。
+    //  manual = 指定した位置に動く / afOnly = 指定を無視する(AF任せ) / fixed = そもそも動かない
+    @JvmStatic
+    fun focusControl(): String =
+        if (!canSetFocus) { "fixed" } else if (focusIgnored) { "afOnly" } else { "manual" }
+    @JvmStatic
+    fun focusDiopter(): Double = capFocusDpt.toDouble()
 
     private fun focusPrefs() = appCtx?.getSharedPreferences("tlp_focus", Context.MODE_PRIVATE)
     private fun loadFocus(id: String): Float =
@@ -578,7 +587,7 @@ object BuiltinCamera {
         // 一覧を持たない端末もある。**持っていないときは試す**(受け付けなければ黙って無視される)。
         canCtlOff = c.get(CameraCharacteristics.CONTROL_AVAILABLE_MODES)
                      ?.any { it.toInt() == CameraMetadata.CONTROL_MODE_OFF } ?: true
-        ctlOff = false
+        ctlOff = false; focusIgnored = false
         focusDpt = loadFocus(physId)	// 前に実測で決めた位置(無ければ無限遠)
 
         val h = ensureThread()

@@ -272,6 +272,11 @@ object HgeNative {
     // ピントを実測で決める(明るくて測れるときだけ)。戻り=ログ1行
     @JvmStatic
     fun focusProbe(sec: Double, iso: Int, fn: Double): String = BuiltinCamera.focusProbe(sec, iso, fn)
+    // ピントを指定できる端末か("manual" / "afOnly" / "fixed")と、端末が申告している位置
+    @JvmStatic
+    fun focusControl(): String = BuiltinCamera.focusControl()
+    @JvmStatic
+    fun focusDiopter(): Double = BuiltinCamera.focusDiopter()
     // DNG を出すか(撮り始める前に決める。加算器がフルサイズの和を持つかが変わる)
     @JvmStatic
     fun setWantDng(on: Boolean) { BuiltinCamera.setWantDng(on) }

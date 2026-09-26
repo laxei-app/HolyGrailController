@@ -93,7 +93,10 @@ public:
 	                      int firstApplyTries = 0;
 	                      convergeInfo converge{};	// 撮影開始前の初期収束の結果(セッション単位)
 	                      // 何で測ったか(レポートの件数用)。apiBase::via_* の値。
-	                      int meterVia = 0; };
+	                      int meterVia = 0;
+	                      // カメラ自身の素性と実績(apiBase::deviceReportJson。セッション単位で
+	                      //  同じ値が来る。レポートの "device" 欄へそのまま入る。空=載せない)。
+	                      std::string deviceJson; };
 
 	using stateCb    = std::function<void(int)>;					// hgeState 値
 	using progressCb = std::function<void(const progressInfo&)>;
