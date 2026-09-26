@@ -364,6 +364,21 @@ namespace
 		std::string done(void) { return arr + "]"; }
 	};
 
+	// このスマホの識別子。検索要求の data に載せて「自分は誰か」を端末へ伝える。
+	//  端末はこれを持ち主と照合し、違えば以後の要求を断る。1度読めば変わらないので控える。
+	const std::string& myPhoneId(void)
+	{
+		static std::string s_id;
+		static bool s_done = false;
+		if (!s_done)
+		{
+			s_done = true;
+			char b[64]; int32_t n = sizeof(b);
+			if (hge_phoneIdJson(b, &n) == ERR_HGC_OK) { s_id = b; }
+		}
+		return s_id;
+	}
+
 	// 探索の**集め方だけ**が経路で違う。ここと edgeXchg 以外に経路の分岐を作らないこと。
 	//  UDP … ブロードキャスト1発で、相手不明の応答が複数返る
 	//  BLE … ブロードキャストが無いので、広告をスキャンして相手ごとに1往復する
@@ -375,7 +390,7 @@ namespace
 			{
 				if (nm.empty()) { continue; }
 				etp::packet rp;
-				if (bleRequest(nm, etp::C_SEARCH, etp::M_GET, "", rp) == etp::M_ACK) { sink(rp); }
+				if (bleRequest(nm, etp::C_SEARCH, etp::M_GET, myPhoneId(), rp) == etp::M_ACK) { sink(rp); }
 			}
 			return;
 		}
@@ -384,7 +399,7 @@ namespace
 		int yes = 1;
 		setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &yes, sizeof(yes));
 		setRcvTimeout(fd, timeoutMs);
-		std::vector<uint8_t> q = etp::encode(etp::C_SEARCH, etp::M_GET, "");
+		std::vector<uint8_t> q = etp::encode(etp::C_SEARCH, etp::M_GET, myPhoneId());
 		for (uint32_t b : broadcastAddrs())
 		{
 			sockaddr_in dst{};
@@ -777,6 +792,19 @@ Java_app_laxei_twylapse_HgeNative_nativeEdgeLogRead(JNIEnv* env, jobject, jstrin
 // 引き取り→保存できたことを確認→削除、の順で進めるので、途中で切れても失われない。
 
 // レポート一覧(JSON配列)。失敗時 "[]"。
+// その端末の持ち主の登録を外す(手放す)。0=外せた。持ち主でなければ端末が断る。
+JNIEXPORT jint JNICALL
+Java_app_laxei_twylapse_HgeNative_nativeEdgeRelease(JNIEnv* env, jobject, jstring host_, jint port)
+{
+	const char* host = env->GetStringUTFChars(host_, nullptr);
+	std::string hostS = host ? host : "";
+	env->ReleaseStringUTFChars(host_, host);
+
+	std::lock_guard<std::mutex> lk(g_connMtx);
+	std::string rd;
+	return (edgeXchg(hostS, port, etp::C_RELEASE, etp::M_DELETE, "", rd) == etp::M_ACK) ? 0 : -1;
+}
+
 // カメラ1台の ISO/SS の並び {"isoList":[...],"ssList":[...]}。持っていなければ "{}"。
 JNIEXPORT jstring JNICALL
 Java_app_laxei_twylapse_HgeNative_nativeEdgeCameraSpec(JNIEnv* env, jobject, jstring host_, jint port, jstring serial_)

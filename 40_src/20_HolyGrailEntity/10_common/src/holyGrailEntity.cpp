@@ -25,6 +25,7 @@
 #include <cstdio>
 #include <ctime>
 #include <mutex>
+#include <random>	// スマホの識別子(乱数)
 #include <string>
 #include <vector>
 
@@ -2026,6 +2027,46 @@ namespace
 	}
 }
 
+namespace
+{
+	// 【このスマホの識別子(2026-09-26)】外部端末に「持ち主はこのスマホ」と覚えてもらうための札。
+	//  ・**機種に依存しない乱数**にする。ANDROID_ID のような端末由来の値は機種変更で変わるので、
+	//    「バックアップして新しいスマホへ移す」という要件と矛盾する。
+	//  ・端末の情報を一切含まないので、そのまま電波に載せても身元は漏れない。
+	//  ・置き場所は /asset の専用ファイル1つ。他の設定と寿命が違う(移行のとき「これを持っていく」
+	//    と説明できる)。**移すのであって複製ではない**: 同じ札を2台に置くと2台とも持ち主になる。
+	std::string phoneIdLoad(void)
+	{
+		static std::string s_id;
+		if (!s_id.empty()) { return s_id; }
+		const std::string dir = osfile::dir("asset");
+		if (dir.empty()) { return std::string(); }
+		const std::string path = dir + "/phoneId.json";
+		std::string body;
+		if (osfile::readAll(path, body) && !body.empty())
+		{
+			nlohmann::json j = nlohmann::json::parse(body, nullptr, false);
+			if (!j.is_discarded() && j.is_object()) { s_id = j.value("phoneId", std::string()); }
+			if (!s_id.empty()) { return s_id; }
+		}
+		// 無ければ作る。乱数の素は実行ごとに変わるものを混ぜる(時刻 + アドレス + 乱数装置)。
+		std::random_device rd;
+		uint64_t a = (static_cast<uint64_t>(rd()) << 32) ^ rd();
+		uint64_t b = (static_cast<uint64_t>(rd()) << 32) ^ rd();
+		a ^= static_cast<uint64_t>(std::time(nullptr));
+		b ^= reinterpret_cast<uintptr_t>(&body);
+		char t[48];
+		std::snprintf(t, sizeof(t), "tlp-%016llx%016llx",
+		              static_cast<unsigned long long>(a), static_cast<unsigned long long>(b));
+		s_id = t;
+		nlohmann::json j; j["phoneId"] = s_id;
+		const std::string out = j.dump();
+		osfile::writeAll(path, out.data(), out.size());
+		dataManager::logEvent("INFO", "phone id created");
+		return s_id;
+	}
+}
+
 // ============================================================================
 //  extern "C" インターフェース
 // ============================================================================
@@ -2192,6 +2233,14 @@ int32_t hge_applyCameraLists(const char* serial, const char* json)
 {
 	if (serial == nullptr || json == nullptr) { return ERR_HGC_INVALID_ARG; }
 	return dataManager::applyCameraLists(serial, json) ? 1 : 0;
+}
+
+// このスマホの識別子。無ければ作って /asset/phoneId.json へ保存する。
+//  検索要求(C_SEARCH)の data に載せて「自分は誰か」を外部端末へ伝える。
+int32_t hge_phoneIdJson(char* buf, int32_t* inoutLen)
+{
+	if (inoutLen == nullptr) { return ERR_HGC_INVALID_ARG; }
+	return copyOut(phoneIdLoad(), buf, inoutLen);
 }
 
 int32_t hge_cameraNeedsLists(const char* serial)

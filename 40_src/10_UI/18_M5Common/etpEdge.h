@@ -20,6 +20,11 @@ namespace etpEdge
 	// 検索応答(C_SEARCH)と同じ edgeInfo の JSON。BLE でも同じものを返す。
 	std::string infoJson(void);
 
+	// 持ち主のスマホを登録する(プロビジョニングから呼ぶ)。
+	//  QR の PoP で導いた鍵で復号できた中身に入っていた識別子だけを受け取る。
+	//  = 端末の画面を見られる人しか持ち主になれない。
+	void setOwner(const std::string& phoneId);
+
 	// RTC からシステム時計を復元し、UDP/TCP サーバを開始する。
 	// edgeName: 検索応答で返すエッジ端末の名称。
 	void setup(const std::string& edgeName);

@@ -580,7 +580,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             } catch (_: Exception) {}
             runOnUiThread { pruneOrphanPlanEdges(localPlans.toSet()) }   // 消えた計画のエッジ割当を掃除
             for (ed in found) {
-                runOnUiThread { registerDiscoveredEdge(ed.name, ed.ip, ed.port); refreshEdgeSpinner() }   // 発見したエッジは撮影有無に関わらず登録
+                runOnUiThread { noteDiscoveredEdge(ed.name, ed.ip, ed.port) }   // 見つけた控えだけ(登録はQRの明示操作)
+                if (!edgeIsMine(ed.name)) continue   // 持ち主でない端末には進捗も聞かない(断られる)
                 for (pid in localPlans) {
                     val pj = try { HgeNative.nativeEdgeProgress(ed.addr(), ed.port, pid) } catch (_: Exception) { "" }
                     if (pj.isEmpty()) continue
@@ -5245,6 +5246,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         54 -> "1枚目の露出をカメラへ設定できませんでした(${n1}回試行)。撮影は続けます"
         55 -> "撮影開始前の露出合わせに失敗しました。ログに内訳が残っています"
         60 -> "このカメラは別の撮影で使用中です"
+        67 -> "この外部端末は別のスマホに登録されています。使うには、端末の画面のQRを読んで登録し直してください"
         // 台数の上限は端末(エッジ/スマホ)が決めて n1 で送ってくる。ここでは埋めるだけで、
         // 数字をアプリに持たない(端末の仕様が変わってもアプリを直さずに済む)。
         61 -> "同期撮影のカメラが多すぎます。この端末で撮れるのは${n1}台までです"
@@ -5995,6 +5997,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
             box.addView(thinDivider())
         }
     }
+
+    // 【端末の登録状態(2026-09-26)】検索応答が相手ごとに答えてくれる。
+    //  owned=その端末に持ち主が居るか / mine=持ち主がこのスマホか。
+    //  未登録(owned=false)と「別のスマホのもの」(owned=true かつ mine=false)を出し分ける。
+    private class EdgeOwn(val owned: Boolean, val mine: Boolean)
+    private val edgeOwn = HashMap<String, EdgeOwn>()
+    // その端末へ送ってよいか。**持ち主でなければ一切送らない**(未登録の端末にも送らない。
+    //  登録は QR を読む明示の操作で行い、それまでは見つけるだけにする)。
+    private fun edgeIsMine(name: String): Boolean = edgeOwn[name]?.let { it.owned && it.mine } == true
 
     // 外部端末ごとの「前回見えていたカメラの台数」。変わったときだけ身元を取りに行く。
     private val edgeCamsSeen = HashMap<String, Int>()
@@ -8037,16 +8048,25 @@ class MainActivity : AppCompatActivity(), HgeListener {
             // 並びはアルファベット順(大文字小文字を区別しない)。登録した順だと、増えたときに
             //  どこにあるか分からなくなる。**表示の並びだけ**で、保存の順は変えない。
             rows = {
-                edges.sortedBy { it.name.lowercase() }.map { e ->
+                // 【見つけただけの端末も出す(2026-09-26)】自動登録をやめたので、一覧に出さないと
+                //  登録の入口が無くなる。登録済みと合わせて名前順に並べる。
+                val all = (edges + discoveredEdges.values.filter { d -> edges.none { it.name == d.name } })
+                all.sortedBy { it.name.lowercase() }.map { e ->
                     // 副行は**いま届いているか**。IP は普段読んでも何もできないのでやめた
                     //  (2026-08-29 UI依頼)。押す前に「送っても無駄」と分かるのが要点。
-                    val sub = when (edgeOnline[e.name]) {
-                        true  -> "オンライン"
-                        false -> "オフライン"
-                        else  -> "確認中"        // 起動直後、まだ一度もスイープしていない
+                    // 【登録の状態を先に出す(2026-09-26)】持ち主でない端末は操作できないので、
+                    //  「オンラインなのに何もできない」と見えないよう、理由を副行に出す。
+                    val own = edgeOwn[e.name]
+                    val sub = when {
+                        own != null && !own.owned -> "未登録(⋮ から登録)"
+                        own != null && !own.mine  -> "別のスマホに登録されています"
+                        edgeOnline[e.name] == true  -> "オンライン"
+                        edgeOnline[e.name] == false -> "オフライン"
+                        else -> "確認中"        // 起動直後、まだ一度もスイープしていない
                     }
                     ListItem(e.name, e.name, sub, listOf(
-                        "削除" to { confirmRemoveEdge(e) },
+                        "この端末を登録" to { startEdgeClaim(e.name) },
+                        "削除(手放す)" to { confirmRemoveEdge(e) },
                         "すべて削除" to { confirmRemoveAllEdges() }))
                 }
             },
@@ -8101,11 +8121,38 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // 登録から1台外す。**エッジ本体の設定は変えない**(こちらの台帳から消すだけ)。
+    // 【端末を登録する(2026-09-26)】登録＝持ち主になること。所有証明は既存のプロビジョニングと
+    //  同じ道を使う: 端末の画面にQRを出させ、それを読んで得た合言葉(PoP)で暗号化した中身に
+    //  このスマホの識別子を入れて送る。**画面を見られない人は持ち主になれない**。
+    //  設定そのものは変えなくてよい(QRが今の値を運んでくるので、そのまま送り返せばよい)。
+    private fun startEdgeClaim(name: String) {
+        stashEdgeForm()
+        selectedEdgeName = name
+        scannedPop = ""; scannedName = ""
+        edgeApMode = loadEdgeCfg(name).ap
+        buildEdgeList(); buildEdgeForm()
+        AlertDialog.Builder(this)
+            .setTitle("この端末を登録")
+            .setMessage("「" + name + "」の画面にQRを出します。読み取ったあと「設定を送信」を押すと、" +
+                        "このスマホが持ち主になります。設定は変えなくてかまいません。")
+            .setPositiveButton("QRを出す") { _, _ -> requestEdgeQr() }
+            .setNegativeButton("やめる", null)
+            .show()
+    }
+
     private fun confirmRemoveEdge(e: Edge) {
         AlertDialog.Builder(this)
             .setTitle("外部端末の削除")
-            .setMessage("「" + e.name + "」を登録から削除しますか？(端末本体の設定は変わりません)")
+            // 【削除＝手放す(2026-09-26)】一覧から消すだけだと端末側に持ち主が残り、
+            //  「削除したのに他のスマホで登録できない」ことになる。持ち主も一緒に外す。
+            .setMessage("「" + e.name + "」を登録から削除しますか？ 端末側の持ち主の登録も外すので、他のスマホで登録できるようになります。(端末本体のネットワーク設定は変わりません)")
             .setPositiveButton("削除する") { _, _ ->
+                // 届くうちに持ち主を外す。届かないときは一覧から消すだけ(次に使うスマホが
+                //  QRで登録し直せば上書きできるので詰まらない)。
+                if (e.reachable() && edgeIsMine(e.name)) {
+                    Thread { try { HgeNative.nativeEdgeRelease(e.addr(), e.port) } catch (_: Exception) {} }.start()
+                }
+                edgeOwn.remove(e.name); discoveredEdges.remove(e.name)
                 edges.remove(e); saveRegisteredEdges(); refreshEdgeSpinner()
                 // 【逃げ道】この端末が持っていた計画の縛りも一緒に解く。壊れた/失くした
                 //  端末の分がいつまでも残ると、そのカメラを永久に変更も削除もできなくなる。
@@ -8481,7 +8528,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 Toast.makeText(ctx, "APのパスワードは63文字以内にしてください", Toast.LENGTH_LONG).show(); return
             }
         }
-        val json = JSONObject().put("name", name).put("ssid", ssid).put("pass", pass).put("mode", mode).toString()
+        // 【このスマホを持ち主として登録する(2026-09-26)】この中身は QR の合言葉(PoP)で導いた鍵で
+        //  暗号化され、端末はそれを復号できたときだけ受け取る。つまり**端末の画面を見られた人**
+        //  しかここを通れない。近くで別の人が同じアプリを使っていても持ち主にはなれない。
+        val myId = try { HgeNative.nativePhoneId() } catch (_: Exception) { "" }
+        val json = JSONObject().put("name", name).put("ssid", ssid).put("pass", pass).put("mode", mode)
+                               .put("phoneId", myId).toString()
         ensureBlePermissions {
             edgePopView?.text = "BLE送信中..."
             EdgeBle(ctx,
@@ -8565,13 +8617,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
         saveRegisteredEdges()
     }
 
-    // 探索で見つけたエッジを台帳へ入れる(未登録なら追加、既登録ならIP更新)。
-    //  ここが**ネットワーク由来の唯一の登録口**なので、名前と接続先を確かめてから入れる。
-    private fun registerDiscoveredEdge(name: String, ip: String, port: Int) {
+    // 【自動登録はしない(2026-09-26)】以前はここで見つけた端末を黙って自分の一覧へ入れ、
+    //  そのまま台帳やログ設定を送り始めていた。近くで別の人が同じアプリを使っていると、
+    //  登録してもいない他人の端末を壊してしまう。**登録は QR を読む明示の操作だけ**にした。
+    //  見つけた端末は「未登録」として一覧に出すために控えるだけにする。
+    private val discoveredEdges = HashMap<String, Edge>()
+    private fun noteDiscoveredEdge(name: String, ip: String, port: Int) {
         if (name.isEmpty() || !isAsciiEdgeName(name)) return   // エッジのLCDに出せない名前は端末名ではない
-        if (ip.isEmpty()) return                               // 接続先が無いものは端末として登録しない
-        if (edges.none { it.name == name }) { edges.add(Edge(name, ip, port)); saveRegisteredEdges() }
-        else updateEdgeIp(name, ip, port)
+        discoveredEdges[name] = Edge(name, ip, port)
     }
 
     // 実在しない計画に紐づくエッジ割当(pe_<計画id>)を落とす。計画を消しても残り続けるため。
@@ -8951,7 +9004,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 //  utc/tzOff はエッジ自身の時計(新FWのみ)。0=未設定または旧FW→ずれの判定はしない。
                 data class Found(val edge: Edge, val hasSessions: Boolean, val sessions: Map<String, Int>,
                                  val hasHeld: Boolean, val heldPlans: Set<String>, val reports: Int,
-                                 val utc: Long, val tzOff: Int, val cams: Int)
+                                 val utc: Long, val tzOff: Int, val cams: Int,
+                                 val owned: Boolean, val mine: Boolean)
                 val found = HashMap<String, Found>()
                 try {
                     val arr = JSONArray(js)
@@ -8975,9 +9029,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
                             for (k in 0 until ha.length()) { ha.optString(k)?.takeIf { it.isNotEmpty() }?.let { held.add(it) } }
                         }
                         // 溜まっている撮影レポートの件数(新FWのみ)。>0 のときだけ引き取りに行く。
+                        // 登録の状態。古いファームは返さないので、その場合は「自分のもの」として
+                        //  従来どおり扱う(混ぜても動かなくならないように)。
                         found[nm] = Found(Edge(nm, o.optString("ip"), o.optInt("port", 50506)), has, sess, hasHeld, held,
                                           o.optInt("reports", 0), o.optLong("utc", 0L), o.optInt("tzOff", 0),
-                                          o.optInt("cams", 0))
+                                          o.optInt("cams", 0),
+                                          o.optBoolean("owned", true), o.optBoolean("mine", true))
                     }
                 } catch (_: Exception) {}
                 // UDP無応答の登録エッジ: 連続2回でTCP生存確認(取りこぼし救済)→それも不応答ならオフライン。
@@ -8995,6 +9052,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     var uiDirty = false
                     for ((nm, f) in found) {
                         edgeMiss[nm] = 0
+                        // 【持ち主でなければ何も送らない(2026-09-26)】近くで別の人が同じアプリを
+                        //  使っていても、その端末の設定を壊さないため。見つけたことだけは一覧へ出す。
+                        noteDiscoveredEdge(nm, f.edge.ip, f.edge.port)   // 一覧に「未登録」で出すための控え
+                        val ownWas = edgeOwn[nm]
+                        if (ownWas == null || ownWas.owned != f.owned || ownWas.mine != f.mine) {
+                            edgeOwn[nm] = EdgeOwn(f.owned, f.mine); uiDirty = true
+                        }
+                        if (!edgeIsMine(nm)) {
+                            // 未登録・他人のもの。一覧の副行を出すために見えたことだけ記録する。
+                            if (edgeOnline[nm] != true) { edgeOnline[nm] = true; uiDirty = true }
+                            continue
+                        }
                         // 居なかったものが見えた瞬間に時刻を送る(電源を入れた直後がこれ)。
                         //  以後は間を空けて送り直すだけ。ずれていなければエッジ側が何もしない。
                         val appeared = edgeOnline[nm] != true
@@ -9019,7 +9088,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         //  設定は**その端末のもの**を送る(端末ごとに違ってよい)。
                         sendEdgeLogOpt(nm)
                         checkEdgeClock(nm, f.utc, f.tzOff)   // 時計のずれを知らせる(止めはしない)
-                        registerDiscoveredEdge(nm, f.edge.ip, f.edge.port)   // 未登録なら登録・既登録はIP追従
+                        updateEdgeIp(nm, f.edge.ip, f.edge.port)   // 持ち主の端末だけIPを追従する(自動登録はしない)
                         if (f.hasSessions) reconcileEdgeSessions(f.edge, f.sessions)
                         if (f.hasHeld) reconcileEdgeRoster(f.edge, f.heldPlans)   // 項目6: エッジ側削除の検知→ロック解除
                     }
@@ -9029,12 +9098,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 }
                 // エッジに溜まった撮影レポートを引き取る。件数が入っているときだけ通信するので、
                 // 定常(レポート0件)ではこのスイープの通信量は従来と変わらない。
-                for (f in found.values) { if (f.reports > 0 && f.edge.ip.isNotEmpty()) collectEdgeReports(f.edge) }
+                // 【持ち主の端末だけ】未登録・他人の端末からは何も取らない(取れば消す指示も出すため)。
+                for (f in found.values) {
+                    if (f.reports > 0 && f.edge.ip.isNotEmpty() && edgeIsMine(f.edge.name)) collectEdgeReports(f.edge)
+                }
                 // 外部端末が見つけたカメラを引き取る(2026-09-26)。**BLE のときだけ**行う:
                 //  Wi-Fi で話しているなら、そのカメラはスマホ自身の在否監視にも映っているので要らない。
                 //  台数が前回と変わったときだけ聞く(1往復ぶんの通信を増やさないため)。
                 if (edgeUseBle()) {
                     for ((nm, f) in found) {
+                        if (!edgeIsMine(nm)) continue   // 未登録・他人の端末には問い合わせない
                         if (f.cams != (edgeCamsSeen[nm] ?: -1)) {
                             edgeCamsSeen[nm] = f.cams
                             if (f.cams > 0) collectEdgeCameras(f.edge)

@@ -906,6 +906,15 @@ Java_app_laxei_twylapse_HgeNative_nativeCameraNeedsLists(JNIEnv* env, jobject /*
 	return r;
 }
 
+// このスマホの識別子。外部端末に持ち主として覚えてもらう札(プロビジョニングで渡す)。
+JNIEXPORT jstring JNICALL
+Java_app_laxei_twylapse_HgeNative_nativePhoneId(JNIEnv* env, jobject /*thiz*/)
+{
+	char b[64]; int32_t n = sizeof(b);
+	if (hge_phoneIdJson(b, &n) != ERR_HGC_OK) { return env->NewStringUTF(""); }
+	return env->NewStringUTF(b);
+}
+
 // listener(HgeListener) を登録/解除する。
 JNIEXPORT void JNICALL
 Java_app_laxei_twylapse_HgeNative_nativeSetListener(JNIEnv* env, jobject /*thiz*/, jobject listener)

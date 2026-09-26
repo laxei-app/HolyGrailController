@@ -6,6 +6,7 @@
 //  BLE は NimBLE(省RAM)。Bluedroid だと WiFi 併用で DRAM 枯渇しクラッシュするため。
 #include "edgeProv.h"
 #include "etpBle.h"		// ETP を BLE でも受ける経路(同じ NimBLE サーバへ相乗り)
+#include "etpEdge.h"	// 持ち主の登録(所有証明が済んだここからだけ呼ぶ)
 #include "holyGrailEntity.h"	// 撮影中かどうかの判定(hge_getState)
 #include <Arduino.h>
 #include <NimBLEDevice.h>
@@ -185,6 +186,10 @@ namespace edgeProv
 				std::string ssid = pick(plain, "ssid");
 				std::string pass = pick(plain, "pass");
 				std::string mode = pick(plain, "mode");	// "sta"(既定) / "ap"。スマホからのモード切替。
+				// 【持ち主の登録(2026-09-26)】ここまで来た=QRのPoPで導いた鍵で復号できた
+				//  =端末の画面を見られる人。所有証明が済んでいるので、識別子を持ち主として覚える。
+				//  近くで別の人が同じアプリを使っていても、画面を見られない限り持ち主になれない。
+				std::string phoneId = pick(plain, "phoneId");
 				Serial.printf("[PROV] creds decrypted: name=%s ssid=%s passLen=%u mode=%s\n",
 				              name.c_str(), ssid.c_str(), (unsigned)pass.size(), mode.c_str());
 				// 撮影中はネットワーク設定を適用しない。AP/STA を切り替えるとカメラとの回線が
@@ -198,6 +203,8 @@ namespace edgeProv
 				else
 				{
 					setStatus("ok");
+					// 持ち主を先に覚える(この後 edgeProvApply が再起動することがあるため)。
+					if (!phoneId.empty()) { etpEdge::setOwner(phoneId); }
 					edgeProvApply(name.c_str(), ssid.c_str(), pass.c_str(), mode.c_str());
 				}
 			}

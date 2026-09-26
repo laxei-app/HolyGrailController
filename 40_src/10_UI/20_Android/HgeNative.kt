@@ -163,6 +163,8 @@ object HgeNative {
     // 外部端末から貰った ISO/SS の並びを入れる(空のときだけ)。1=入った。要否は needsLists で先に聞く。
     external fun nativeApplyCameraLists(serial: String, json: String): Int
     external fun nativeCameraNeedsLists(serial: String): Int
+    // このスマホの識別子("tlp-"+32桁16進)。/asset/phoneId.json に保存され、機種変更でも移せる。
+    external fun nativePhoneId(): String
     external fun nativeGetColors(): String                 // システム共通の色 {"night":{"text","bg"},...}
     external fun nativeSetColors(json: String): Int
     external fun nativeGetSmoothing(): String              // 露出平滑化 {"hysteresis":double,"movingAverage":int}
@@ -335,6 +337,7 @@ object HgeNative {
     external fun nativeEdgeLogRead(host: String, port: Int, name: String, offset: Int): ByteArray // ログの1チャンク(最大4KB)。空=EOF/失敗
     // 撮影レポートの回収。30秒スイープが edgeInfo.reports>0 のときだけ使う。
     // 取得→保存できたら削除、の順(取得だけで消さない)。
+    external fun nativeEdgeRelease(host: String, port: Int): Int                  // 持ち主の登録を外す。0=外せた
     external fun nativeEdgeSeenCameras(host: String, port: Int): String           // [{"serial","model","assignedName"}]。失敗="[]"
     external fun nativeEdgeCameraSpec(host: String, port: Int, serial: String): String  // {"isoList","ssList"}。無い="{}"
     external fun nativeEdgeReportList(host: String, port: Int): String            // [{"name",...},...]。失敗="[]"

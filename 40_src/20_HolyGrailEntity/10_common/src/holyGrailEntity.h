@@ -368,6 +368,11 @@ int32_t hge_applyCameraLists(const char* serial, const char* json);
 // その serial の所持カメラが並びを持っていない(=貰う価値がある)か。1=要る / 0=不要。
 int32_t hge_cameraNeedsLists(const char* serial);
 
+// このスマホの識別子("tlp-" + 32桁16進)。無ければ作って /asset/phoneId.json へ保存する。
+//  外部端末に「持ち主はこのスマホ」と覚えてもらう札。機種に依存しない乱数なので、
+//  ファイルを移せば機種変更しても同じ札を使い続けられる(**複製すると2台とも持ち主になる**)。
+int32_t hge_phoneIdJson(char* buf, int32_t* inoutLen);
+
 // 現在の進捗スナップショットを JSON で取得(バッファ規約)。
 //  {"state","frame","total","remainSec","elapsedSec","ccm","iso","ss","fn"}
 //  エッジ端末が progress(get) 応答に使う。
