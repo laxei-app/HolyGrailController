@@ -25,6 +25,7 @@
 #include "holyGrailEntity.h"
 #include "dataManager.h"
 #include "commonAndroid.h"	// hgeJavaVm(BLE は Kotlin 側にしかないので呼び返す)
+#include "notice.h"			// 断られた理由(持ち主でない)を見分ける
 
 // 診断ログ(スマホ→エッジ開始の各段の可視化)。adb logcat -s HGEdgeCli で確認。
 #define ELOG(...) __android_log_print(ANDROID_LOG_INFO, "HGEdgeCli", __VA_ARGS__)
@@ -316,6 +317,21 @@ namespace
 		return "{\"utc\":" + std::to_string(utcSec) + ",\"utcOffsetMin\":" + std::to_string(offMin) + "}";
 	}
 
+	// このスマホの識別子。検索要求の data に載せて「自分は誰か」を端末へ伝える。
+	//  端末はこれを持ち主と照合し、違えば以後の要求を断る。1度読めば変わらないので控える。
+	const std::string& myPhoneId(void)
+	{
+		static std::string s_id;
+		static bool s_done = false;
+		if (!s_done)
+		{
+			s_done = true;
+			char b[64]; int32_t n = sizeof(b);
+			if (hge_phoneIdJson(b, &n) == ERR_HGC_OK) { s_id = b; }
+		}
+		return s_id;
+	}
+
 	// ETP を 1 往復する唯一の関門。ここでトランスポートを選ぶ。
 	//  以降のコマンド実装はどちらで話しているかを知らない。
 	//
@@ -328,14 +344,31 @@ namespace
 	             const std::string& data, std::string& out)
 	{
 		etp::packet rp;
-		const int m = g_useBle.load() ? bleRequest(host, cmd, method, data, rp)
-		                              : firstReq(host, port, cmd, method, data, rp);
+		int m = g_useBle.load() ? bleRequest(host, cmd, method, data, rp)
+		                        : firstReq(host, port, cmd, method, data, rp);
 		if (m == 0) { return 0; }
 		if (rp.cmd != cmd)
 		{
 			ELOG("edgeXchg: reply cmd mismatch want=%u got=%u (discard)", (unsigned)cmd, (unsigned)rp.cmd);
 			if (g_useBle.load()) { bleDropLink(host); } else { closeConn(); }
 			return 0;
+		}
+		// 【名乗り直して1度だけやり直す(2026-09-26)】端末は「この相手は誰か」を検索(C_SEARCH)で
+		//  覚え、90秒で忘れる。端末が再起動した直後や間が空いたときは、こちらが名乗る前に
+		//  要求が届いて**持ち主なのに断られる**(実機で確認: 再起動直後の1回)。次のスイープで
+		//  直るとはいえ、撮影開始がこれに当たると「別のスマホに登録されています」と誤って出る。
+		//  断られたのが「持ち主でない」理由のときだけ、名乗ってから1度やり直す。
+		if (m == etp::M_NAK && rp.data == std::to_string(static_cast<int>(hgc::notice::edgeNotYours)))
+		{
+			etp::packet sp;
+			const int sm = g_useBle.load() ? bleRequest(host, etp::C_SEARCH, etp::M_GET, myPhoneId(), sp)
+			                               : firstReq(host, port, etp::C_SEARCH, etp::M_GET, myPhoneId(), sp);
+			if (sm == etp::M_ACK)
+			{
+				m = g_useBle.load() ? bleRequest(host, cmd, method, data, rp)
+				                    : firstReq(host, port, cmd, method, data, rp);
+				if (m == 0 || rp.cmd != cmd) { return 0; }
+			}
 		}
 		out = rp.data;
 		return m;
@@ -363,21 +396,6 @@ namespace
 		}
 		std::string done(void) { return arr + "]"; }
 	};
-
-	// このスマホの識別子。検索要求の data に載せて「自分は誰か」を端末へ伝える。
-	//  端末はこれを持ち主と照合し、違えば以後の要求を断る。1度読めば変わらないので控える。
-	const std::string& myPhoneId(void)
-	{
-		static std::string s_id;
-		static bool s_done = false;
-		if (!s_done)
-		{
-			s_done = true;
-			char b[64]; int32_t n = sizeof(b);
-			if (hge_phoneIdJson(b, &n) == ERR_HGC_OK) { s_id = b; }
-		}
-		return s_id;
-	}
 
 	// 探索の**集め方だけ**が経路で違う。ここと edgeXchg 以外に経路の分岐を作らないこと。
 	//  UDP … ブロードキャスト1発で、相手不明の応答が複数返る

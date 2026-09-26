@@ -1054,6 +1054,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  ・屋外でエッジが AP のときは BLE にすると SSID を切り替えずに全台と話せる
         //  ・エッジ側にモードを持たせないので、戻せなくなって現地へ行く経路は無い
         gearSwitchItem(box, "外部端末とBLEで通信する", edgeUseBle()) { on -> setEdgeUseBle(on) }
+        // 削除した端末は一覧から伏せている(消したのに戻ってくるのを防ぐため)。戻す道をここに置く。
+        if (hiddenEdges.isNotEmpty()) {
+            gearItem(box, "削除した端末をまた表示する(" + hiddenEdges.size + "台)") {
+                hiddenEdges.clear(); saveHiddenEdges()
+                Toast.makeText(this, "次の探索でまた一覧に出ます", Toast.LENGTH_SHORT).show()
+                buildGearMenu()
+            }
+        }
         gearBand(box, "権限、端末設定")
         gearItem(box, "権限、端末設定") { openPermCheck() }
         gearBand(box, "ログ")
@@ -8152,7 +8160,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 if (e.reachable() && edgeIsMine(e.name)) {
                     Thread { try { HgeNative.nativeEdgeRelease(e.addr(), e.port) } catch (_: Exception) {} }.start()
                 }
-                edgeOwn.remove(e.name); discoveredEdges.remove(e.name)
+                edgeOwn.remove(e.name); discoveredEdges.remove(e.name); hideEdge(e.name)
                 edges.remove(e); saveRegisteredEdges(); refreshEdgeSpinner()
                 // 【逃げ道】この端末が持っていた計画の縛りも一緒に解く。壊れた/失くした
                 //  端末の分がいつまでも残ると、そのカメラを永久に変更も削除もできなくなる。
@@ -8172,7 +8180,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .setTitle("すべて削除")
             .setMessage("登録している" + edges.size + "台をすべて削除しますか？(端末本体の設定は変わりません)")
             .setPositiveButton("すべて削除") { _, _ ->
-                val names = edges.map { it.name }
+                // 見つかっている端末も含めて伏せる。そうしないと次のスイープで戻ってくる。
+                val names = (edges.map { it.name } + discoveredEdges.keys).distinct()
+                for (e in edges.toList()) {
+                    if (e.reachable() && edgeIsMine(e.name)) {
+                        Thread { try { HgeNative.nativeEdgeRelease(e.addr(), e.port) } catch (_: Exception) {} }.start()
+                    }
+                }
+                for (n in names) { hideEdge(n); edgeOwn.remove(n); discoveredEdges.remove(n) }
                 edges.clear(); saveRegisteredEdges(); refreshEdgeSpinner()
                 val ed = hgcPrefs().edit()
                 for (n in names) { edgeHeldByEdge.remove(n); ed.remove(edgeCfgKey(n)) }
@@ -8543,6 +8558,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     edgePopView?.text = m
                     if (ok) {
                         // 送信できた端末を登録へ反映する。既存なら改名に追従、新規なら追加。
+                        unhideEdge(name)   // 登録し直した=また出す
                         if (selectedEdgeName.isEmpty()) {
                             if (edges.none { it.name == name }) edges.add(Edge(name, "", 50506))
                             saveRegisteredEdges(); refreshEdgeSpinner()
@@ -8622,8 +8638,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  登録してもいない他人の端末を壊してしまう。**登録は QR を読む明示の操作だけ**にした。
     //  見つけた端末は「未登録」として一覧に出すために控えるだけにする。
     private val discoveredEdges = HashMap<String, Edge>()
+    // 【消した端末は伏せる(2026-09-26)】見つけた端末を一覧に出すようにしたので、削除しても
+    //  次のスイープ(30秒)で「未登録」として戻ってきてしまう。**消したのに復帰する**ように
+    //  しか見えないので、消した名前を覚えて伏せる。登録し直せば戻る。
+    private val hiddenEdges: MutableSet<String> by lazy {
+        (hgcPrefs().getStringSet("hiddenEdges", emptySet()) ?: emptySet()).toMutableSet()
+    }
+    private fun saveHiddenEdges() { hgcPrefs().edit().putStringSet("hiddenEdges", hiddenEdges).apply() }
+    private fun hideEdge(name: String)   { if (hiddenEdges.add(name)) saveHiddenEdges() }
+    private fun unhideEdge(name: String) { if (hiddenEdges.remove(name)) saveHiddenEdges() }
+
     private fun noteDiscoveredEdge(name: String, ip: String, port: Int) {
         if (name.isEmpty() || !isAsciiEdgeName(name)) return   // エッジのLCDに出せない名前は端末名ではない
+        if (hiddenEdges.contains(name)) return                 // 消した端末は出さない
         discoveredEdges[name] = Edge(name, ip, port)
     }
 
@@ -9055,6 +9082,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         // 【持ち主でなければ何も送らない(2026-09-26)】近くで別の人が同じアプリを
                         //  使っていても、その端末の設定を壊さないため。見つけたことだけは一覧へ出す。
                         noteDiscoveredEdge(nm, f.edge.ip, f.edge.port)   // 一覧に「未登録」で出すための控え
+                        if (hiddenEdges.contains(nm)) continue           // 消した端末には触らない
                         val ownWas = edgeOwn[nm]
                         if (ownWas == null || ownWas.owned != f.owned || ownWas.mine != f.mine) {
                             edgeOwn[nm] = EdgeOwn(f.owned, f.mine); uiDirty = true
