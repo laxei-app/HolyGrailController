@@ -709,7 +709,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val ids = intArrayOf(R.id.cap_back, R.id.edit_back, R.id.cmenu_back, R.id.gmenu_back,
                              R.id.cameralist_back, R.id.cameraadd_back, R.id.lenslist_back, R.id.lensadd_back,
                              R.id.color_back, R.id.smooth_back, R.id.places_back, R.id.reserve_back,
-                             R.id.history_back, R.id.report_back, R.id.edge_back, R.id.dlog_back, R.id.pc_back)
+                             R.id.history_back, R.id.report_back, R.id.edge_back, R.id.dlog_back, R.id.pc_back,
+                             R.id.nt_back)
         for (id in ids) { findViewById<ImageView>(id)?.setOnClickListener { goBackOneScreen() } }
     }
 
@@ -747,6 +748,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             16 -> { if (dlogBusy) Toast.makeText(this, "取得中です。中断してから戻ってください", Toast.LENGTH_SHORT).show()
                     else { flipper.displayedChild = 4; buildGearMenu() } }
             17 -> { flipper.displayedChild = 4; buildGearMenu() }        // 権限、端末設定 → メニュー
+            18 -> { flipper.displayedChild = 4; buildGearMenu() }        // 著作権表示 → メニュー
             else -> { flipper.displayedChild = 0 }
         }
         return true
@@ -852,6 +854,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 8.2 エッジ端末設定(2026-08-08 UI依頼で画面化)
         wireHeader(R.id.edge_home, R.id.edge_menu) { stashEdgeForm(); gotoScreen(it) }
         wireHeader(R.id.pc_home, R.id.pc_menu) { gotoScreen(it) }
+        wireHeader(R.id.nt_home, R.id.nt_menu) { gotoScreen(it) }
         wireHeader(R.id.dlog_home, R.id.dlog_menu) { dest ->
             // 取得中は戻らせない(端末の戻るキーと同じ扱い)。
             if (dlogBusy) Toast.makeText(this, "取得中です。中断してから移動してください", Toast.LENGTH_SHORT).show()
@@ -1053,8 +1056,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  ・屋外でエッジが AP のときは BLE にすると SSID を切り替えずに全台と話せる
         //  ・エッジ側にモードを持たせないので、戻せなくなって現地へ行く経路は無い
         gearSwitchItem(box, "外部端末とBLEで通信する", edgeUseBle()) { on -> setEdgeUseBle(on) }
-        gearBand(box, "権限、端末設定")
-        gearItem(box, "権限、端末設定") { openPermCheck() }
+        gearBand(box, "その他")
+        gearItem(box, "スマホ権限、設定") { openPermCheck() }
+        // 使っているソフトウェアの権利表示(2026-09-27 UI依頼)。中身は原文のまま出すので翻訳しない。
+        gearItem(box, "著作権表示") { openNotices() }
         gearBand(box, "ログ")
         // 撮影中/開始要求中はグレー表示で不可(コピー処理が撮影と競合しないように)。
         // 【撮影中でも開ける(2026-08-29 実機で気づいた)】この画面には性質の違う2つが同居する。
@@ -1402,6 +1407,243 @@ class MainActivity : AppCompatActivity(), HgeListener {
         sum.text = if (okCount == items.size) "すべて揃っています" else "${items.size - okCount} 件が未設定です(赤い項目)"
         sum.textSize = 13f; sum.setTextColor(Color.parseColor("#616161")); sum.setPadding(dp(12), dp(12), dp(12), dp(12))
         box.addView(sum, 0)
+    }
+
+    // ================= 著作権表示(2026-09-27 UI依頼) =================
+    // このアプリと外部端末のファームウェアが使っている、他者のソフトウェアの権利表示。
+    //  ・帯は「スマホ」と「外部端末」。同じものを両方で使っていれば両方に出す(配布物が別々なので、
+    //    どちらの配布に付随する表示なのかが分かるようにする)
+    //  ・項目を開くと下に原文を出す。【言語対応の対象外】翻訳せず、原文(英語ほか)のまま見せる
+    //  ・長い条文(newlib 46KB / GPL-3 35KB)があるので、本文は開いたときに初めて読み込む
+    //  ・載せるのは「配布物に実際に入っているもの」だけ。リンカが捨てたものは配布していないので載せない。
+    //    M5GFX の IPA フォントと efont は Font2/Font4 しか使っていないため --gc-sections で
+    //    全て破棄されている(ELF のシンボルで実測 0 バイト)ので載せていない。
+    //    **エッジの画面で日本語フォントを使い始めたら、この2件の追加が要る**
+    private val kScreenNotices = 18
+    private val noticesExpanded = HashSet<String>()
+
+    // 1項目ぶんの表示。head = 原文の前に置く前書き(英語)。rawId/rawId2 = res/raw の条文(0 なら無し)。
+    private class Notice(val key: String, val title: String, val lic: String,
+                         val head: String = "", val rawId: Int = 0, val rawId2: Int = 0)
+
+    private fun noticeRaw(id: Int): String =
+        try { resources.openRawResource(id).use { it.readBytes().toString(Charsets.UTF_8) } }
+        catch (e: Exception) { "(failed to read license text: " + e + ")" }
+
+    // 自前の権利表示。LGPL の条文は「ライブラリを差し替えるための改造とデバッグ」を認めることを
+    //  求めるので、禁止の但し書きにその除外を必ず入れる(ここを書き忘れると条文と衝突する)。
+    private val ownNotice =
+        "Copyright (c) 2026 laxei.app\n" +
+        "All rights reserved.\n" +
+        "\n" +
+        "TwyLapse and the TwyLapse Edge firmware are proprietary software. Except as\n" +
+        "permitted by the licenses of the third-party components listed on this screen,\n" +
+        "no part of this software may be copied, modified, distributed, sold or used to\n" +
+        "create derivative works without prior written permission.\n" +
+        "\n" +
+        "This restriction does not apply to reverse engineering or modification that is\n" +
+        "necessary to exercise the rights granted by the GNU Lesser General Public\n" +
+        "License for the Arduino-ESP32 component of the Edge firmware, including\n" +
+        "debugging modifications of that library."
+
+    private val kArchiveUrl = "https://github.com/laxei-app/tlp-master/tree/main/firmware/archive"
+
+    private fun phoneNotices(): List<Notice> = listOf(
+        Notice("app", "TwyLapse", "Proprietary", ownNotice),
+        Notice("androidx", "AndroidX (Jetpack)", "Apache License 2.0",
+            "androidx.core:core-ktx 1.13.1\n" +
+            "androidx.appcompat:appcompat 1.7.0\n\n" +
+            "Copyright (C) The Android Open Source Project\n\n" +
+            "Licensed under the Apache License, Version 2.0.",
+            R.raw.lic_apache_20),
+        Notice("material", "Material Components for Android", "Apache License 2.0",
+            "com.google.android.material:material 1.12.0\n\n" +
+            "Copyright (C) The Android Open Source Project\n\n" +
+            "Licensed under the Apache License, Version 2.0.",
+            R.raw.lic_apache_20),
+        Notice("colorpicker", "ColorPicker", "Apache License 2.0",
+            "com.jaredrummler:colorpicker 1.1.0\n" +
+            "https://github.com/jaredrummler/ColorPicker\n\n" +
+            "Copyright (C) 2017 Jared Rummler\n\n" +
+            "Licensed under the Apache License, Version 2.0.",
+            R.raw.lic_apache_20),
+        Notice("gms", "Google Play services (Code Scanner)", "Google terms",
+            "com.google.android.gms:play-services-code-scanner 16.1.0\n\n" +
+            "Copyright (C) Google LLC\n\n" +
+            "Used under the Google APIs Terms of Service and the Android Software\n" +
+            "Development Kit License Agreement.\n\n" +
+            "Google publishes the open source notices for the Google Play services\n" +
+            "libraries through the Google Play services component of this device. They\n" +
+            "can be read there:\n" +
+            "Settings > Apps > Google Play services > Details > Open source licenses\n" +
+            "(the exact path depends on the device)."),
+        Notice("osmdroid", "osmdroid", "Apache License 2.0",
+            "org.osmdroid:osmdroid-android 6.1.20\n" +
+            "https://github.com/osmdroid/osmdroid\n\n" +
+            "Copyright (c) osmdroid contributors\n\n" +
+            "Licensed under the Apache License, Version 2.0.",
+            R.raw.lic_apache_20),
+        Notice("osm", "OpenStreetMap map data", "ODbL 1.0",
+            "The map tiles shown when picking a shooting location are rendered from\n" +
+            "OpenStreetMap data.\n\n" +
+            "(c) OpenStreetMap contributors\n\n" +
+            "The map data is available under the Open Database License (ODbL) 1.0 and\n" +
+            "the map tiles under CC BY-SA 2.0. See:\n" +
+            "https://www.openstreetmap.org/copyright\n" +
+            "https://opendatacommons.org/licenses/odbl/1-0/"),
+        Notice("astronomy", "Astronomy Engine", "MIT License",
+            "https://github.com/cosinekitty/astronomy", R.raw.lic_astronomy),
+        Notice("nlohmann", "JSON for Modern C++", "MIT License", "", R.raw.lic_mit_nlohmann),
+        Notice("tjpgd", "TJpgDec - Tiny JPEG Decompressor", "Original (BSD-like)",
+            "", R.raw.lic_tjpgd)
+    )
+
+    private fun edgeNotices(): List<Notice> = listOf(
+        Notice("fw", "TwyLapse Edge firmware", "Proprietary", ownNotice),
+        Notice("arduino", "Arduino-ESP32", "LGPL-2.1-or-later",
+            "Arduino core for the ESP32, version 3.1.3\n" +
+            "https://github.com/espressif/arduino-esp32\n\n" +
+            "Copyright (c) Arduino SA, Espressif Systems and contributors\n\n" +
+            "This component is licensed under the GNU Lesser General Public License,\n" +
+            "version 2.1 or (at your option) any later version. It is statically linked\n" +
+            "into the Edge firmware.\n\n" +
+            "As required by section 6 of that license, you may replace this library with\n" +
+            "your own modified version. For every published firmware image we provide a\n" +
+            "relink archive containing the object code of the rest of the firmware, the\n" +
+            "linker scripts, the exact link command and build instructions, so that the\n" +
+            "firmware can be relinked against a modified Arduino-ESP32 and flashed to\n" +
+            "the device. The archives are published here:\n\n" +
+            kArchiveUrl + "\n\n" +
+            "You are permitted to reverse engineer and debug such modifications.\n" +
+            "The full text of the license follows.",
+            R.raw.lic_lgpl_21),
+        Notice("espidf", "ESP-IDF", "Apache License 2.0",
+            "Espressif IoT Development Framework 5.x\n" +
+            "https://github.com/espressif/esp-idf\n\n" +
+            "Copyright (C) Espressif Systems (Shanghai) CO LTD\n\n" +
+            "Licensed under the Apache License, Version 2.0. Includes the Wi-Fi,\n" +
+            "network, flash, NVS, LittleFS, SD and USB components used by this\n" +
+            "firmware.",
+            R.raw.lic_apache_20),
+        Notice("m5", "M5Unified / M5GFX", "MIT License",
+            "m5stack/M5Unified 0.2.x and m5stack/M5GFX\n" +
+            "https://github.com/m5stack/M5Unified\n" +
+            "https://github.com/m5stack/M5GFX",
+            R.raw.lic_m5stack),
+        Notice("lovyangfx", "LovyanGFX", "FreeBSD (BSD 2-Clause)", "", R.raw.lic_bsd2_lovyangfx),
+        Notice("fonts24", "Font 2 / Font 4 (TFT_eSPI)", "FreeBSD (BSD 2-Clause)",
+            "", R.raw.lic_bsd2_tft_espi),
+        Notice("glcdfont", "GLCD font (Adafruit GFX)", "BSD 2-Clause",
+            "", R.raw.lic_bsd2_adafruit_gfx),
+        Notice("nimble", "NimBLE-Arduino", "Apache License 2.0",
+            "h2zero/NimBLE-Arduino 2.2.x\n" +
+            "https://github.com/h2zero/NimBLE-Arduino\n\n" +
+            "Copyright (c) Ryan Powell and contributors.\n" +
+            "Based on Apache NimBLE - Copyright (c) The Apache Software Foundation.\n\n" +
+            "Licensed under the Apache License, Version 2.0.",
+            R.raw.lic_apache_20),
+        Notice("mbedtls", "Mbed TLS", "Apache License 2.0",
+            "https://github.com/Mbed-TLS/mbedtls\n\n" +
+            "Copyright The Mbed TLS Contributors\n\n" +
+            "Mbed TLS is dual licensed under Apache-2.0 OR GPL-2.0-or-later.\n" +
+            "This product uses it under the Apache License, Version 2.0.",
+            R.raw.lic_apache_20),
+        Notice("freertos", "FreeRTOS kernel", "MIT License",
+            "https://www.freertos.org/\n\n" +
+            "Copyright (C) Amazon.com, Inc. or its affiliates.",
+            R.raw.lic_freertos),
+        Notice("lwip", "lwIP", "BSD 3-Clause", "https://savannah.nongnu.org/projects/lwip/",
+            R.raw.lic_lwip),
+        Notice("newlib", "newlib (C library and math library)", "Multiple permissive licenses",
+            "https://sourceware.org/newlib/\n\n" +
+            "newlib is a collection of software from several sources. The complete list\n" +
+            "of copyright notices and licenses follows.",
+            R.raw.lic_newlib),
+        Notice("gccrt", "GCC runtime library (libgcc, libstdc++)",
+            "GPL-3.0 with GCC Runtime Library Exception",
+            "Copyright (C) Free Software Foundation, Inc.\n\n" +
+            "The runtime libraries of the GNU Compiler Collection are licensed under\n" +
+            "the GNU General Public License version 3, with the GCC Runtime Library\n" +
+            "Exception version 3.1. Because this firmware is compiled with an\n" +
+            "unmodified GCC, that exception permits the compiled result to be\n" +
+            "distributed under terms of our choice. The exception and the license\n" +
+            "follow.",
+            R.raw.lic_gcc_runtime, R.raw.lic_gpl_3),
+        Notice("astronomy_e", "Astronomy Engine", "MIT License",
+            "https://github.com/cosinekitty/astronomy", R.raw.lic_astronomy),
+        Notice("nlohmann_e", "JSON for Modern C++", "MIT License", "", R.raw.lic_mit_nlohmann),
+        Notice("tjpgd_e", "TJpgDec - Tiny JPEG Decompressor", "Original (BSD-like)",
+            "", R.raw.lic_tjpgd)
+    )
+
+    private fun openNotices() {
+        buildNoticesScreen()
+        flipper.displayedChild = kScreenNotices
+    }
+
+    private fun buildNoticesScreen() {
+        val box = findViewById<LinearLayout>(R.id.nt_container)
+        box.removeAllViews()
+        box.addView(TextView(this).apply {
+            text = "この製品が使っているソフトウェアの権利表示です。項目を開くと原文を表示します" +
+                   "(原文のまま載せるため、日本語には直していません)。"
+            textSize = 13f; setTextColor(Color.parseColor("#616161"))
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+        })
+        gearBand(box, "スマホ")
+        for (n in phoneNotices()) addNoticeRow(box, n)
+        gearBand(box, "外部端末")
+        for (n in edgeNotices()) addNoticeRow(box, n)
+    }
+
+    private fun addNoticeRow(box: LinearLayout, n: Notice) {
+        val card = LinearLayout(this); card.orientation = LinearLayout.VERTICAL
+        val head = LinearLayout(this); head.orientation = LinearLayout.HORIZONTAL
+        head.gravity = Gravity.CENTER_VERTICAL
+        head.setPadding(dp(12), dp(10), dp(12), dp(10))
+        val names = LinearLayout(this); names.orientation = LinearLayout.VERTICAL
+        names.addView(TextView(this).apply {
+            text = n.title; textSize = 16f; setTextColor(Color.BLACK)
+        })
+        names.addView(TextView(this).apply {
+            text = n.lic; textSize = 12f; setTextColor(Color.parseColor("#616161"))
+        })
+        head.addView(names, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val expanded = noticesExpanded.contains(n.key)
+        val arrow = TextView(this).apply {
+            text = if (expanded) "▲" else "▼"; textSize = 14f
+            setTextColor(Color.parseColor("#1565C0")); setPadding(dp(12), dp(4), dp(4), dp(4))
+        }
+        head.addView(arrow)
+        card.addView(head)
+
+        // 本文。条文は最大 46KB あるので、開いたときに初めて読む(画面を作るたびに全部読むと重い)。
+        val body = TextView(this).apply {
+            textSize = 11f; setTextColor(Color.parseColor("#212121"))
+            typeface = Typeface.MONOSPACE
+            setPadding(dp(16), 0, dp(12), dp(12))
+            visibility = if (expanded) View.VISIBLE else View.GONE
+        }
+        if (expanded) body.text = noticeBody(n)
+        card.addView(body)
+        head.setOnClickListener {
+            if (body.visibility == View.VISIBLE) {
+                body.visibility = View.GONE; arrow.text = "▼"; noticesExpanded.remove(n.key)
+            } else {
+                if (body.text.isNullOrEmpty()) body.text = noticeBody(n)
+                body.visibility = View.VISIBLE; arrow.text = "▲"; noticesExpanded.add(n.key)
+            }
+        }
+        box.addView(card)
+        box.addView(thinDivider())
+    }
+
+    private fun noticeBody(n: Notice): String {
+        val sb = StringBuilder()
+        if (n.head.isNotEmpty()) sb.append(n.head)
+        if (n.rawId != 0) { if (sb.isNotEmpty()) sb.append("\n\n"); sb.append(noticeRaw(n.rawId)) }
+        if (n.rawId2 != 0) { sb.append("\n\n"); sb.append(noticeRaw(n.rawId2)) }
+        return sb.toString()
     }
 
     private fun openDebugLog() {

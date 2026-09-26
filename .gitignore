@@ -9,3 +9,6 @@
 
 # PlatformIO のビルド生成物/依存ライブラリ（巨大。ビルドで再生成される）
 .pio/
+
+# PlatformIO がビルド時に作るコンパイル方法の一覧(再リンク材料の生成に使う中間物)
+compile_commands.json
