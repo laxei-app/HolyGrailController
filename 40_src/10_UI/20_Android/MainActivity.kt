@@ -6168,12 +6168,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  CCAPI のカメラは "device" を書かないので、この帯ごと出さない。
         val dev = o.optJSONObject("device")
         if (dev != null) {
-            repBand(box, "カメラの素性と画質")
+            repBand(box, "カメラ特性と画質")
             val fc = dev.optString("focusControl")
             repRow(box, "ピント調整", when (fc) {
-                "manual" -> "指定どおり動く"
-                "afOnly" -> "指定を見ない"
-                "fixed"  -> "動かない"
+                "manual" -> "設定可能"
+                "afOnly" -> "AFのみ"
+                "fixed"  -> "固定"
                 else     -> "不明"
             }, when (fc) {
                 "manual" -> "毎コマ無限遠を指定している"
