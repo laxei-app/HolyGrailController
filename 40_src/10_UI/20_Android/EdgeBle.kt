@@ -241,20 +241,24 @@ class EdgeBle(
             override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) { log("MTU=$mtu。サービス探索..."); g.discoverServices() }
             override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
                 val svc = g.getService(SVC) ?: run { finish(false, "サービスが見つかりません"); return }
-                if (startOnly) { writeCtrlStart(g); return }   // QR表示要求は STAT 通知不要で CTRL に write
-                // "deny" = 別のスマホに登録されている。QRも設定も通らないので、そのまま終わる。
+                // 【QR要求でも状態通知を購読する(2026-09-26)】以前は「QR表示要求は応答が要らない」
+                //  として購読せずに書いていた。端末が**断った理由("deny")を返すようになった**ので、
+                //  購読していないと理由が受け取れず、利用者には何も起きないように見える(実機で発生)。
                 val stat = svc.getCharacteristic(STAT)
                 if (stat != null) {
                     g.setCharacteristicNotification(stat, true)
                     val d = stat.getDescriptor(CCCD)
                     if (d != null) writeDescriptor(g, d, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
-                    else writeCred(g)
-                } else writeCred(g)
+                    else nextAfterSubscribe(g)
+                } else nextAfterSubscribe(g)
             }
-            override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) { writeCred(g) }
+            override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) { nextAfterSubscribe(g) }
             override fun onCharacteristicWrite(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
                 if (c.uuid == CTRL) {
-                    if (status == BluetoothGatt.GATT_SUCCESS) finish(true, "端末にQR表示を要求しました")
+                    // 【書けた＝成功、にしない(2026-09-26)】端末は持ち主でなければQRを出さず
+                    //  "deny" を返す。ここで終わらせると理由が届く前に画面が閉じてしまう。
+                    //  答えを少し待ち、来なければ従来どおり「要求した」で終わる(古い端末向け)。
+                    if (status == BluetoothGatt.GATT_SUCCESS) { log("QR表示を要求。端末の応答待ち...") }
                     else finish(false, "start書込失敗 status=$status")
                 } else if (c.uuid == CRED) {
                     if (status == BluetoothGatt.GATT_SUCCESS) log("認証情報を送信。応答待ち...")
@@ -274,6 +278,8 @@ class EdgeBle(
     private fun handleStat(s: String) {
         log("端末の応答: $s")
         when {
+            // QR要求の答え。出たなら成功として閉じ、読み取りへ進んでもらう。
+            s.startsWith("qr")   -> if (startOnly) finish(true, "端末にQRを表示しました。読み取ってください")
             s.startsWith("ok")   -> finish(true, "設定を保存しました(端末がWiFi再接続)")
             // 別のスマホに登録されている。QRも設定も通らないので、理由を出して終わる。
             s.startsWith("deny") -> finish(false, "この外部端末は別のスマホに登録されています。" +
@@ -281,6 +287,11 @@ class EdgeBle(
             s.startsWith("busy") -> finish(false, "外部端末が撮影中のため設定できません")
             s.startsWith("fail") -> finish(false, "端末側で復号失敗(PoP不一致、または合言葉の期限切れ)。QRを出し直してください")
         }
+    }
+
+    // 状態通知を購読し終えたら、用事に応じて送る。QR要求も認証情報も同じ入口を通す。
+    private fun nextAfterSubscribe(g: BluetoothGatt) {
+        if (startOnly) { writeCtrlStart(g) } else { writeCred(g) }
     }
 
     private fun writeCtrlStart(g: BluetoothGatt) {
@@ -296,8 +307,9 @@ class EdgeBle(
             @Suppress("DEPRECATION") ctrl.value = bytes
             @Suppress("DEPRECATION") g.writeCharacteristic(ctrl)
         }
-        // 応答特性は無いので、書込コールバックが来ない実装でも完了扱いにする保険。
-        handler.postDelayed({ if (!done) finish(true, "QR表示を要求(応答待ちタイムアウト)") }, 5000)
+        // 端末の答え("qr" / "deny")を待つ。古い端末は何も返さないので、来なければ
+        //  従来どおり「要求した」で閉じる(書込コールバックが来ない実装への保険でもある)。
+        handler.postDelayed({ if (!done) finish(true, "QR表示を要求しました(端末からの応答なし)") }, 5000)
     }
 
     private fun writeCred(g: BluetoothGatt) {
