@@ -33,6 +33,16 @@ namespace
 	volatile bool g_startReq = false;
 	volatile bool g_credReq  = false;
 	std::string    g_credBlob;   // BLEタスクが書き込み、loop が読む
+	std::string    g_startId;    // QR要求に載ってきたスマホの札(空=名乗らなかった)
+	uint32_t       g_popAt = 0;  // QRを出した時刻[ms]。0=有効なPoPが無い
+	// 【合言葉に寿命をつける(2026-09-26)】以前は次にQRを出すまで失効せず、**一度撮られた
+	//  QRの写真がその後ずっと使えた**。5分で切り、一度通ったら捨てる。
+	constexpr uint32_t POP_LIFE_MS = 5 * 60 * 1000;
+	// 【QRは持ち主にしか出さない(2026-09-26)】QRを出させる要求は元から無認証で、
+	//  近くの他人が端末の画面を勝手にQRへ切り替えられた。札を見て、持ち主以外には出さない。
+	//  合言葉(PoP)そのものは画面にしか出ないので、これは**嫌がらせの防止**であって
+	//  攻撃対策ではない(札は検索要求に平文で流れるので、電波を拾える人は詐称できる)。
+	//  守りたい境界は「端末の画面を見られるか」で、そこは変わらない。
 
 	void setStatus(const char* s)
 	{
@@ -46,7 +56,11 @@ namespace
 		void onWrite(NimBLECharacteristic* c, NimBLEConnInfo& /*info*/) override
 		{
 			std::string v = c->getValue();
-			if (v.rfind("start", 0) == 0) { g_startReq = true; }
+			if (v.rfind("start", 0) != 0) { return; }
+			// "start" だけ(古いスマホ)と "start <札>" の両方を受ける。
+			const size_t sp = v.find(' ');
+			g_startId  = (sp == std::string::npos) ? std::string() : v.substr(sp + 1);
+			g_startReq = true;
 		}
 	};
 	class CredCb : public NimBLECharacteristicCallbacks
@@ -171,16 +185,32 @@ namespace edgeProv
 		if (g_startReq)
 		{
 			g_startReq = false;
-			edgeProvShowQr();
-			setStatus("qr");
-			Serial.println("[PROV] start -> PoP generated + QR shown");
+			if (!etpEdge::ownerAllows(g_startId))
+			{
+				// 別のスマホに登録されている。**画面を切り替えない**(撮影中の表示も守れる)。
+				setStatus("deny");
+				Serial.println("[PROV] start REFUSED (registered to another phone)");
+			}
+			else
+			{
+				edgeProvShowQr();
+				g_popAt = millis();
+				setStatus("qr");
+				Serial.println("[PROV] start -> PoP generated + QR shown");
+			}
 		}
 		if (g_credReq)
 		{
 			g_credReq = false;
 			std::string blob = g_credBlob;
 			std::string plain;
-			if (decryptCreds(edgePop(), blob, plain))
+			// 寿命切れの合言葉では受けない(古いQRの写真を使わせない)。
+			if (g_popAt == 0 || (millis() - g_popAt) > POP_LIFE_MS)
+			{
+				Serial.println("[PROV] rejected: PoP expired (show the QR again)");
+				setStatus("fail");
+			}
+			else if (decryptCreds(edgePop(), blob, plain))
 			{
 				std::string name = pick(plain, "name");
 				std::string ssid = pick(plain, "ssid");
@@ -200,9 +230,17 @@ namespace edgeProv
 					Serial.println("[PROV] rejected: capturing");
 					setStatus("busy");
 				}
+				// 【QRを出さないだけでは足りない(2026-09-26)】持ち主がQRを出している隙に
+				//  横から撮られることがある。適用のときにも札を見る。
+				else if (!etpEdge::ownerAllows(phoneId))
+				{
+					Serial.println("[PROV] rejected: registered to another phone");
+					setStatus("deny");
+				}
 				else
 				{
 					setStatus("ok");
+					g_popAt = 0;	// 使った合言葉は捨てる(同じ写真を二度使わせない)
 					// 持ち主を先に覚える(この後 edgeProvApply が再起動することがあるため)。
 					if (!phoneId.empty()) { etpEdge::setOwner(phoneId); }
 					edgeProvApply(name.c_str(), ssid.c_str(), pass.c_str(), mode.c_str());

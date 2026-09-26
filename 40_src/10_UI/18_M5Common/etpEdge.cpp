@@ -639,6 +639,25 @@ namespace etpEdge
 		return edgeInfoJson(std::string());
 	}
 
+	// この札で登録・設定してよいか。
+	//  ・持ち主が居ない → 誰でも可(出荷直後・手放した後)
+	//  ・持ち主本人 → 可(設定の変更も再登録も自由)
+	//  ・それ以外 → 不可。ただし**起動から60秒以内は通す**。持ち主のスマホを失くすと
+	//    二度と登録できなくなるのを防ぐ逃げ道で、電源を入れ直せる人=画面を見られる人
+	//    なので、守りたい境界(画面を見られるか)は崩れない。
+	bool ownerAllows(const std::string& phoneId)
+	{
+		ownerLoad();
+		if (g_owner.empty()) { return true; }
+		if (!phoneId.empty() && phoneId == g_owner) { return true; }
+		if (millis() < CLAIM_GRACE_MS)
+		{
+			DBGLN(col::YEL, "etpEdge: claim allowed by boot grace");
+			return true;
+		}
+		return false;
+	}
+
 	// プロビジョニング(QRのPoPで守られた道)から持ち主を登録する。
 	//  ここを通れた=端末の画面を見られる人なので、所有証明が済んでいる。
 	void setOwner(const std::string& phoneId)

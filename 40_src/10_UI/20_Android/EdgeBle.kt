@@ -242,6 +242,7 @@ class EdgeBle(
             override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
                 val svc = g.getService(SVC) ?: run { finish(false, "サービスが見つかりません"); return }
                 if (startOnly) { writeCtrlStart(g); return }   // QR表示要求は STAT 通知不要で CTRL に write
+                // "deny" = 別のスマホに登録されている。QRも設定も通らないので、そのまま終わる。
                 val stat = svc.getCharacteristic(STAT)
                 if (stat != null) {
                     g.setCharacteristicNotification(stat, true)
@@ -274,13 +275,20 @@ class EdgeBle(
         log("端末の応答: $s")
         when {
             s.startsWith("ok")   -> finish(true, "設定を保存しました(端末がWiFi再接続)")
-            s.startsWith("fail") -> finish(false, "端末側で復号失敗(PoP不一致)")
+            // 別のスマホに登録されている。QRも設定も通らないので、理由を出して終わる。
+            s.startsWith("deny") -> finish(false, "この外部端末は別のスマホに登録されています。" +
+                                                 "使うには、今の持ち主のスマホで削除するか、端末の電源を入れ直して1分以内に登録してください")
+            s.startsWith("busy") -> finish(false, "外部端末が撮影中のため設定できません")
+            s.startsWith("fail") -> finish(false, "端末側で復号失敗(PoP不一致、または合言葉の期限切れ)。QRを出し直してください")
         }
     }
 
     private fun writeCtrlStart(g: BluetoothGatt) {
         val ctrl = g.getService(SVC)?.getCharacteristic(CTRL) ?: run { finish(false, "CTRL特性無し"); return }
-        val bytes = "start".toByteArray(Charsets.UTF_8)
+        // 【誰が頼んでいるかを名乗る(2026-09-26)】端末は持ち主以外にはQRを出さない。
+        //  名乗らないと、別のスマホに登録済みの端末では断られる(古い端末は中身を見ない)。
+        val myId = try { HgeNative.nativePhoneId() } catch (_: Exception) { "" }
+        val bytes = (if (myId.isEmpty()) "start" else "start " + myId).toByteArray(Charsets.UTF_8)
         if (Build.VERSION.SDK_INT >= 33) {
             g.writeCharacteristic(ctrl, bytes, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
         } else {
