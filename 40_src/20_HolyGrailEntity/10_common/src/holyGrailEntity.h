@@ -427,6 +427,10 @@ bool hge_isCameraInUse(const char* serial);
 // 充電して電源を入れ直せば hge_resumeCapture で再開される。
 void hge_markAllNoCameraForShutdown(void);
 
+// 電池切れで電源を切る直前に呼ぶ。撮れた分の撮影レポートを書き出す(終了理由 "power")。
+// これが無いと電池で落ちた撮影はレポートごと消える。カメラへは触らない(ファイル書き込みのみ)。
+void hge_finalizeReportsForShutdown(void);
+
 #ifdef __cplusplus
 }
 #endif

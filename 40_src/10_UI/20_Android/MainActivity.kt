@@ -6442,6 +6442,39 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 取得 → レポートとして読めることを確認 → スマホへ保存 → そこで初めてエッジへ削除を指示する。
     // 取得しただけで消すと、保存に失敗したぶんが永久に失われる。削除まで届かなかったものは
     // 次のスイープでまた拾う(同名で上書きするだけなので重複しない)。
+
+    // エッジから引き取ったレポート1件を統計へ流す(2026-09-27)。
+    //  エッジはスマホが居なくても撮るので、生の状態監視では取りこぼす。レポートは
+    //  **撮影が終わった時点で端末内に書かれ、次に繋がったときに引き取られる**ので、
+    //  繋がっていなかった間の撮影もここで1件ずつ数えられる。
+    // 【時刻のずれ】Firebase はイベントの時刻を後から指定できない。3日前の撮影を今日
+    //  引き取れば GA4 上は「今日」になる。そこで
+    //   ・end_local  … レポートの shotAt から取るので**何時に終わったかは正しい**
+    //   ・delayed_days … 何日遅れで届いたか。今日の出来事でないことが分かる
+    //  日付そのものは送らない(季節ごとの薄明の時刻から緯度が割れるため)。
+    private fun telemetryFromReport(o: JSONObject, edgeName: String) {
+        val shotAt = o.optString("shotAt")          // "YYYY-MM-DD HH:MM:SS"
+        val startedAt = o.optString("startedAt")    // "YYYY-MM-DD HH:MM"(古いファームには無い)
+        val fmtD = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US)
+        val endMs = try { fmtD.parse(shotAt.take(16))?.time ?: 0L } catch (_: Exception) { 0L }
+        val begMs = try { fmtD.parse(startedAt.take(16))?.time ?: 0L } catch (_: Exception) { 0L }
+        val b = android.os.Bundle()
+        // レポートの camera は "メーカー 型番"。利用者が付けた名前は入らない。
+        b.putString("camera_model", o.optString("camera").ifEmpty { "unknown" })
+        b.putString("device_kind", edgeModel[edgeName]?.takeIf { it.isNotEmpty() && it != "Edge" } ?: "edge")
+        b.putString("source", "report")
+        // 古いファームには endReason が無い。その場合は「不明」として数える(completed と混ぜない)。
+        b.putString("end_reason", o.optString("endReason").ifEmpty { "unknown" })
+        if (shotAt.length >= 16) b.putString("end_local", shotAt.substring(11, 16))
+        if (begMs > 0L && endMs > begMs) b.putLong("duration_min", (endMs - begMs) / 60000L)
+        b.putLong("frames", (o.optJSONObject("capture")?.optInt("frames") ?: 0).toLong())
+        if (endMs > 0L) {
+            val d = ((System.currentTimeMillis() - endMs) / 86400000L).coerceAtLeast(0L)
+            if (d > 0L) b.putLong("delayed_days", d)
+        }
+        tlmLog("capture_end", b)
+    }
+
     private fun collectEdgeReports(edge: Edge) {
         val arr = try { JSONArray(HgeNative.nativeEdgeReportList(edge.addr(), edge.port)) } catch (_: Exception) { JSONArray() }
         val dir = java.io.File(getExternalFilesDir(null), "log")
@@ -6457,6 +6490,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             if (!o.has("capture")) continue
             o.put("edge", edge.name)   // どの端末で撮ったかを一覧と内容に出せるようにする
             try { java.io.File(dir, name).writeText(o.toString()) } catch (_: Exception) { continue }
+            telemetryFromReport(o, edge.name)   // 保存できたものだけ数える(端末から消す前に)
             try { HgeNative.nativeEdgeReportDelete(edge.addr(), edge.port, name) } catch (_: Exception) {}
             got++
         }
@@ -8335,7 +8369,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 状態の集合と突き合わせて開始/終了を出す。撮影の状態が変わるたび(refreshPlanList)と、
     //  30秒毎のスイープから呼ぶ。集合の比較だけなので何度呼んでも安い。
     private fun telemetryReconcile() {
-        val active = capturingPlans + waitingPlans + disconnectedPlans + startingPlans
+        // 【エッジ撮影はここでは出さない(2026-09-27)】エッジはスマホが居なくても走るので、
+        //  この監視では取りこぼす。エッジ分は端末に溜まったレポートを引き取ったときに出す
+        //  (collectEdgeReports)。両方から出すと同じ撮影が2回数えられる。
+        val active = (capturingPlans + waitingPlans + disconnectedPlans + startingPlans)
+            .filter { planEdgeName(it).isEmpty() }
         for (id in active) {
             val s = tlmActive[id]
             if (s == null) {
@@ -8344,6 +8382,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 tlmLog("capture_start", android.os.Bundle().apply {
                     putString("camera_model", ns.camera)
                     putString("device_kind", ns.device)
+                    putString("source", "live")
                 })
             } else {
                 if (disconnectedPlans.contains(id)) s.everLost = true
@@ -8358,6 +8397,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             tlmLog("capture_end", android.os.Bundle().apply {
                 putString("camera_model", s.camera)
                 putString("device_kind", s.device)
+                putString("source", "live")
                 putString("end_reason", reason)
                 putString("end_local", java.text.SimpleDateFormat("HH:mm", java.util.Locale.US)
                                         .format(java.util.Date()))

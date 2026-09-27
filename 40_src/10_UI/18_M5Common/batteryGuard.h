@@ -1,4 +1,4 @@
-#ifndef _BATTERY_GUARD_H_
+﻿#ifndef _BATTERY_GUARD_H_
 #define _BATTERY_GUARD_H_
 // バッテリ残量の監視と、限界での自動シャットダウン(エッジ端末のUI共通部)。
 // **このファイルに機種名は出てこない。** 機種ごとに違う値は batteryParams.h(各機種フォルダ)。
@@ -70,6 +70,7 @@ namespace batt
 		              "battery low: volt=%dmV pct=%d -> stopping capture and powering off (resumes after recharge)",
 		              volt, pct);
 		dataManager::logEvent("PWROFF", d, true);	// ERR扱いで目立たせる
+		hge_finalizeReportsForShutdown();			// 撮れた分のレポートを残す(終了理由 power)
 		hge_markAllNoCameraForShutdown();			// スマホのポーリングが✖を拾えるようにする
 	}
 }

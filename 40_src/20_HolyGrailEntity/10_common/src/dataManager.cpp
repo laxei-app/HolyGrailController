@@ -1711,7 +1711,8 @@ void dataManager::logEvent(const char* event, const char* detail, bool error)
 //  ・撮れなかった/露出を当てられなかったコマがどれだけあったか
 //  ・撮影周期をどこまでシャッター速度へ近づけられるか(busy と準備の実測)
 // の2点である。
-std::string dataManager::writeCaptureReport(const captureReport& r, const hgc::cs& plan, const char* planId)
+std::string dataManager::writeCaptureReport(const captureReport& r, const hgc::cs& plan, const char* planId,
+                                            const char* endReason, long long startedAtUtc)
 {
 	std::string dir = osfile::logDir();
 	if (dir.empty()) { return ""; }
@@ -1757,6 +1758,25 @@ std::string dataManager::writeCaptureReport(const captureReport& r, const hgc::c
 		j["window"] = { { "start", ws }, { "end", we } };
 	}
 	j["shotAt"] = timeBuf;	// レポートを書いた(=撮影を終えた)日時
+	// どう終わったか。スマホはこれをそのまま統計の end_reason にする。
+	if (endReason && endReason[0]) { j["endReason"] = endReason; }
+	// 実際に撮り始めた時刻(予定の窓ではなく実績)。所要時間はここから shotAt までになる。
+	//  ローカル化は nowLocal と同じやり方(UTC秒+オフセットを gmtime)。標準の localtime は
+	//  端末のタイムゾーン設定に引きずられるので使わない。
+	if (startedAtUtc > 0)
+	{
+		std::time_t lt = static_cast<std::time_t>(startedAtUtc) + static_cast<std::time_t>(g_logOff) * 60;
+		std::tm g{};
+#if defined(_WIN32)
+		gmtime_s(&g, &lt);
+#else
+		gmtime_r(&lt, &g);
+#endif
+		char sb[20];
+		std::snprintf(sb, sizeof(sb), "%04d-%02d-%02d %02d:%02d",
+		              g.tm_year + 1900, g.tm_mon + 1, g.tm_mday, g.tm_hour, g.tm_min);
+		j["startedAt"] = sb;
+	}
 
 	j["capture"] = { { "frames", r.frames }, { "shootFail", r.shootFail },
 	                 { "shootFailPct", pct(r.shootFail, r.frames) } };

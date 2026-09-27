@@ -342,7 +342,13 @@ public:
 	};
 	// レポートをファイルへ書く(JSON)。planName/planId/カメラ名と窓・周期は呼び出し側から渡す。
 	// return: 書けたファイルのパス(空=失敗)。
-	static std::string writeCaptureReport(const captureReport& r, const hgc::cs& plan, const char* planId);
+	// endReason: どう終わったか。スマホの統計と、後から原因を追うときに要る。
+	//  "completed"(窓を撮りきった) / "stopped"(止められた) / "camera_error"(カメラ側の理由で終了)
+	//  / "camera_lost"(見失って終了) / "power"(電池切れで電源断)
+	// startedAtUtc: 実際に撮り始めた時刻(UTC epoch)。0 なら出さない。
+	//  予定の窓(window)ではなく実績を残すため。遅れて始まった撮影の所要時間が出せるようになる。
+	static std::string writeCaptureReport(const captureReport& r, const hgc::cs& plan, const char* planId,
+	                                      const char* endReason = "", long long startedAtUtc = 0);
 
 	// --- 撮影レポートの取り出し(UI表示用 / エッジからの回収用) ---
 	// レポートのファイル名一覧(中身は読まない)。件数だけ知りたいエッジの30秒応答でも使う。

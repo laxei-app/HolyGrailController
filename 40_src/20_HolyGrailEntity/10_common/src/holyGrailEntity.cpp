@@ -98,6 +98,8 @@ namespace
 		std::vector<std::unique_ptr<class device>> subDevs;
 		std::atomic<int>              state{ HGE_ST_IDLE };
 		bool                          logCapturing = false;	// START/STOP検出
+		long long                     startedAtUtc = 0;	// 実際に撮り始めた時刻(レポートに実績を残す)
+		bool                          endByPower   = false;	// 電池切れで終わる(電源断の直前に立てる)
 		bool                          authTold     = false;	// 認証まわりの理由を1回だけ知らせたか
 		int                           authNotice   = 0;		// その理由(進捗に載せてスマホへ運ぶ)
 		dataManager::captureReport    report;				// 撮影結果レポートの積算(STOP時にファイルへ出す)
@@ -1644,6 +1646,7 @@ namespace
 				if (s == HGE_ST_CAPTURING && !S->logCapturing)
 				{
 					S->logCapturing = true; S->lastCcm.clear();
+					S->startedAtUtc = static_cast<long long>(std::time(nullptr));
 					std::string d = "plan=" + S->plan.name + " " + dtToStr(S->plan.start) + "~" + dtToStr(S->plan.end);
 					dataManager::logEvent("START", d.c_str());
 					char pb[56]; std::snprintf(pb, sizeof(pb), "int=%.0fs az=%.0f el=%.0f", S->plan.interval, S->plan.azimuth, S->plan.elevation);
@@ -1668,7 +1671,15 @@ namespace
 					// 撮影結果レポートをファイルへ出す(UIには出さない)。1コマも撮っていなければ出さない。
 					if (S->report.frames > 0)
 					{
-						std::string rp = dataManager::writeCaptureReport(S->report, S->plan, S->planId.c_str());
+						// どう終わったかを残す。ここでしか分からない(後から状態だけ見ても
+						//  「窓を撮りきった」のか「途中で止められた」のか区別が付かない)。
+						const char* why = "completed";
+						if      (S->endByPower)      { why = "power"; }
+						else if (s == HGE_ST_ERROR)  { why = (S->authNotice != 0) ? "camera_error" : "camera_lost"; }
+						else if (static_cast<long long>(std::time(nullptr)) <
+						         hgc::toUnixUtc(S->plan.end, planOff(S->plan))) { why = "stopped"; }
+						std::string rp = dataManager::writeCaptureReport(S->report, S->plan, S->planId.c_str(),
+						                                                 why, S->startedAtUtc);
 						if (!rp.empty()) { dataManager::logEvent("INFO", ("report: " + rp).c_str()); }
 						S->report = dataManager::captureReport{};	// 次の撮影に持ち越さない
 					}
@@ -4121,6 +4132,23 @@ bool hge_anyActiveCameraSession(void)
 //  ・状態を ERROR ではなく NOCAMERA にするのは、スマホ側の reconcileEdgePlan が
 //    NOCAMERA を disconnectedPlans に入れて ✖ を点灯させるため。ERROR/IDLE では
 //    「終了」と解釈されて集合から除去され、✖ が出ない。
+// 電池切れで電源を切る直前に、撮れた分のレポートを書き出す(2026-09-27)。
+//  これが無いと、電池で落ちた撮影は**レポートごと消える**。終了理由 "power" を残せるのも
+//  ここだけ(スマホからは「見失った」としか見えない)。
+//  カメラへは一切触らない。ファイル書き込みだけなので、電源断までの猶予(12秒)で足りる。
+void hge_finalizeReportsForShutdown(void)
+{
+	for (auto& up : g_sessions)
+	{
+		if (up->report.frames <= 0) { continue; }
+		up->endByPower = true;
+		std::string rp = dataManager::writeCaptureReport(up->report, up->plan, up->planId.c_str(),
+		                                                 "power", up->startedAtUtc);
+		if (!rp.empty()) { dataManager::logEvent("INFO", ("report(power): " + rp).c_str()); }
+		up->report = dataManager::captureReport{};	// 二重に書かない
+	}
+}
+
 void hge_markAllNoCameraForShutdown(void)
 {
 	for (auto& up : g_sessions)
