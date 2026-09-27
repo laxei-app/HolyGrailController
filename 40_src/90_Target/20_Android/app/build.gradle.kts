@@ -3,6 +3,8 @@ import java.util.Properties
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("com.google.gms.google-services")
+    id("com.google.firebase.crashlytics")
 }
 
 // アプリのバージョン(2026-08-08 UI依頼)。
@@ -82,7 +84,24 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            // 【ネイティブのクラッシュを読める形にする(2026-09-27)】このアプリは中身の
+            //  大半が C++(libHolyGrailEntity.so)。シンボルを上げておかないと、落ちた場所が
+            //  アドレスのままで読めない。release を作るときだけ上げる。
+            configure<com.google.firebase.crashlytics.buildtools.gradle.CrashlyticsExtension> {
+                nativeSymbolUploadEnabled = true
+            }
         }
+        debug {
+            // 開発中のビルドからシンボルを上げる意味はない(毎回変わる)。
+            configure<com.google.firebase.crashlytics.buildtools.gradle.CrashlyticsExtension> {
+                nativeSymbolUploadEnabled = false
+            }
+        }
+    }
+    buildFeatures {
+        // BuildConfig.DEBUG を使う(AGP 8 では既定で生成されない)。
+        //  デバッグビルドから統計を送らないための判定に要る。
+        buildConfig = true
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -94,6 +113,15 @@ android {
 }
 
 dependencies {
+    // Firebase(2026-09-27)。版は BoM が揃える。
+    //  analytics      : 使われ方の統計(送る項目は自分で決める)
+    //  crashlytics    : 落ちたときの記録
+    //  crashlytics-ndk: C++ 側(libHolyGrailEntity.so)で落ちたときの記録
+    implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
+    implementation("com.google.firebase:firebase-analytics")
+    implementation("com.google.firebase:firebase-crashlytics")
+    implementation("com.google.firebase:firebase-crashlytics-ndk")
+
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")

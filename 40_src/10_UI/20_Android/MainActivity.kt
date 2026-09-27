@@ -453,6 +453,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         startGearMasterCheck(baseDir)                     // 1日1回、公開リポジトリを見に行く
         HgeNative.nativeSetLogDir(baseDir.absolutePath)
         HgeNative.nativeInit()
+        applyTelemetryConsent()   // 統計とクラッシュ記録の可否(既定: リリース版だけ送る)
         // スマホ⇄エッジの通信路(2026-08-14 指示)。選ぶのはスマホだけ。エッジは常に両方で待ち受ける。
         EdgeBleLink.init(this)
         BuiltinCamera.init(this)   // スマホ内蔵カメラ(Camera2)の入口へ Context を渡す
@@ -8153,6 +8154,31 @@ class MainActivity : AppCompatActivity(), HgeListener {
         edges.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
 
     // --- エッジ端末の登録(prefsに永続化。設定で追加・検索で自動登録。オフラインでも選択可) ---
+    // ================= Firebase(統計とクラッシュ記録)(2026-09-27) =================
+    // ここでやるのは「送る入れ物を開ける/閉じる」だけ。**何を送るかはまだ決めていない**。
+    //
+    // 【送るのはリリース版だけ】開発の実機試験(毎晩の通し撮影)まで数えると、知りたかった
+    //  「どのカメラがどれだけ使われているか」が自分の記録で埋まる。利用者が少ないうちほど
+    //  効くので、デバッグビルドからは送らない。
+    // 【利用者が止められる】telemetryEnabled=false で止まる(既定は送る)。画面からの
+    //  切り替えはログの隠し設定と合わせて後で足す。
+    // 【開発中に確かめたいとき】telemetryForceOn=true にすると、デバッグビルドでも送る。
+    // 【広告IDは集めない】マニフェストで収集を切り、AD_ID 権限も外してある。
+    private fun applyTelemetryConsent() {
+        val userOn = hgcPrefs().getBoolean("telemetryEnabled", true)
+        val force = hgcPrefs().getBoolean("telemetryForceOn", false)
+        val on = userOn && (!BuildConfig.DEBUG || force)
+        val r = runCatching {
+            com.google.firebase.analytics.FirebaseAnalytics.getInstance(this)
+                .setAnalyticsCollectionEnabled(on)
+            com.google.firebase.crashlytics.FirebaseCrashlytics.getInstance()
+                .isCrashlyticsCollectionEnabled = on
+        }
+        // 失敗しても撮影には関係しないので、記録だけ残して先へ進む。
+        if (r.isFailure) HgeNative.nativeLogEvent("TLM", "init failed: " + r.exceptionOrNull(), true)
+        else HgeNative.nativeLogEvent("TLM", "collection=" + (if (on) "on" else "off"), false)
+    }
+
     private fun hgcPrefs() = getSharedPreferences("tlp", MODE_PRIVATE)
 
     // ── エッジのネットワーク設定を覚えておく(2026-08-29 UI依頼) ──────────────
