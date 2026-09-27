@@ -33,6 +33,18 @@ extern void edgeSetNameBitmap(const std::string& id, const uint8_t* data, int le
 extern void edgeAddReceivedPlan(const std::string& id);
 extern void edgeRemoveReceivedPlan(const std::string& id);	// 項目6: C_DELETE_PLAN で計画をエッジから削除(撮影中は停止してから)
 
+#include "edgeBoot.h"
+#include "edgeVersion.h"	// 端末の版数(自動生成)
+#include <esp_random.h>
+
+// 起動ごとの目印。不揮発に持たず、起動のたびに変わればよい(スマホが起動の変化を見分ける用)。
+static uint32_t bootId(void)
+{
+	static uint32_t id = 0;
+	if (id == 0) { id = esp_random(); if (id == 0) { id = 1; } }
+	return id;
+}
+
 namespace
 {
 	constexpr uint16_t PORT_DISCOVERY = 50505;
@@ -262,7 +274,17 @@ bool applyTime(const std::string& data)
 #else
 		j["model"] = "Edge";
 #endif
-		j["fw"]    = std::string(hge_version());
+		// 【端末の版数を名乗る(2026-09-27)】以前は hge_version()(Entity の版=
+		//  "HolyGrailEntity 0.1 (MVP step2.1)" 固定)を返していて、どの版のファームかが
+		//  分からなかった。画面に出ている版数(0.3.x)と同じものを返す。
+		j["fw"]    = std::string(HGC_EDGE_VERSION);
+		// 【前回どう終わったかを名乗る(2026-09-27)】ログには BOOT 行で残しているが、
+		//  ログは普段オフだし取りに行くのも重い。異常な落ち方(PANIC/WDT/BROWNOUT)は
+		//  スマホがすぐ気づいて記録へ上げたいので、探索の応答に載せる。
+		//  boot は起動ごとの乱数。スマホが「同じ起動を何度も数えない」ために使う
+		//  (不揮発に持たなくても、起動が変われば必ず変わる)。
+		j["rst"]   = edgeBoot::resetReasonName();
+		j["boot"]  = bootId();
 		j["state"] = hge_getState();
 		// 【自分の時刻を知らせる(2026-09-03)】撮影待機中・撮影中は時計を受け付けないので、
 		//  ずれたまま走り続けることがある。スマホが気づけるよう、現在のUTCと表示用オフセットを出す。

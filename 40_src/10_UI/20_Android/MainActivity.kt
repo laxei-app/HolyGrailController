@@ -456,6 +456,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         HgeNative.nativeSetLogDir(baseDir.absolutePath)
         HgeNative.nativeInit()
         applyTelemetryConsent()   // 統計とクラッシュ記録の可否(既定: リリース版だけ送る)
+        crashKeys(); crashLog("app start")
         // スマホ⇄エッジの通信路(2026-08-14 指示)。選ぶのはスマホだけ。エッジは常に両方で待ち受ける。
         EdgeBleLink.init(this)
         BuiltinCamera.init(this)   // スマホ内蔵カメラ(Camera2)の入口へ Context を渡す
@@ -726,6 +727,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun gotoScreen(dest: Int) {
         flipper.displayedChild = dest
+        crashKeys()
         if (dest == kScreenMenu) { buildGearMenu() } else { capturePlanBaseline() }
     }
 
@@ -5572,6 +5574,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     //  Entity と通信路に日本語を置かないため(2026-08-19 方針)。
                     val nt = o.optInt("notice", 0)
                     val msg = if (nt != 0) noticeText(nt, o.optLong("n1", 0)) else o.optString("msg")
+                    // 落ちたときに「直前にカメラが何を言っていたか」が分かるようにする。
+                    //  文言は入れない(番号だけ。文言には計画名などが混じりうる)。
+                    if (nt != 0) crashLog("notice " + nt)
                     capState.text = "ERROR $msg"
                     // 【理由を計画に覚えさせる(2026-09-09)】これまでエッジ経由(reconcileEdgePlan)でしか
                     //  覚えておらず、スマホ直結では「見つかりません」の案内を言い換えられなかった。
@@ -8390,6 +8395,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     putString("device_kind", ns.device)
                     putString("source", "live")
                 })
+                crashLog("capture start " + ns.camera + " on " + ns.device)
+                crashKeys()
             } else {
                 if (disconnectedPlans.contains(id)) s.everLost = true
                 planProgress[id]?.let { if (it.frame > s.frames) s.frames = it.frame }
@@ -8400,6 +8407,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val s = tlmActive.remove(id) ?: continue
             val (reason, notice) = tlmEndReason(id, s)
             val mins = ((System.currentTimeMillis() - s.startMs) / 60000L).toInt()
+            crashLog("capture end " + reason + " frames=" + s.frames + " min=" + mins)
+            crashKeys()
             tlmLog("capture_end", android.os.Bundle().apply {
                 putString("camera_model", s.camera)
                 putString("device_kind", s.device)
@@ -8412,6 +8421,37 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 if (notice != 0) putLong("notice_code", notice.toLong())
             })
         }
+    }
+
+    // ================= Crashlytics(落ちたときの記録)(2026-09-27 依頼) =================
+    // 依存を入れただけでは「どこで落ちたか」しか残らない。このアプリの不具合は
+    //  **どのカメラ・どの端末・どの局面で**起きたかが分からないと再現できないので、
+    //  落ちたときに一緒に残る手掛かりを自分で足す。
+    //
+    // 【custom key】落ちた瞬間の状況。1件のクラッシュに付いて回る
+    // 【log】そこへ至るまでの足跡。直前に何をしていたかが時系列で残る
+    //  どちらも**個人が特定できるものは入れない**(計画名・場所・SSID・端末名は入れない)。
+    //  Analytics と同じ線引きにしてある。
+    private fun crashLog(msg: String) {
+        try { com.google.firebase.crashlytics.FirebaseCrashlytics.getInstance().log(msg) }
+        catch (_: Exception) {}
+    }
+
+    // 落ちた瞬間の状況を更新する。画面が変わったとき・撮影の状態が変わったときに呼ぶ。
+    private fun crashKeys() {
+        try {
+            val c = com.google.firebase.crashlytics.FirebaseCrashlytics.getInstance()
+            c.setCustomKey("screen", if (::flipper.isInitialized) flipper.displayedChild else -1)
+            c.setCustomKey("capturing", capturingPlans.size)
+            c.setCustomKey("waiting", waitingPlans.size)
+            c.setCustomKey("disconnected", disconnectedPlans.size)
+            c.setCustomKey("edges", edges.size)
+            c.setCustomKey("edges_online", edgeOnline.count { it.value })
+            c.setCustomKey("link", if (edgeUseBle()) "ble" else "wifi")
+            // カメラは型番だけ(利用者が付けた名前は入れない)。
+            c.setCustomKey("camera_model", tlmCameraModel(currentPlanId))
+            c.setCustomKey("device_kind", tlmDeviceKind(currentPlanId))
+        } catch (_: Exception) {}
     }
 
     private fun applyTelemetryConsent() {
@@ -9575,6 +9615,36 @@ class MainActivity : AppCompatActivity(), HgeListener {
         for (ed in edges) { if (ed.ip.isNotEmpty()) sendEdgeCameraBook(ed) }
     }
 
+    // 外部端末の「前回の落ち方」を1起動につき1回だけ記録へ上げるための控え(端末名→boot値)。
+    private val edgeBootSeen = mutableMapOf<String, Long>()
+
+    // 外部端末が異常な落ち方をしていたら記録(Crashlytics)へ上げる(2026-09-27 依頼)。
+    //  エッジは Firebase を動かせないので、**スマホが代理で報告する**。端末は探索の応答に
+    //  「前回のリセット要因(rst)」と「起動ごとの目印(boot)」を載せてくる。目印が変わった
+    //  ときだけ見るので、30秒ごとの探索で同じ起動を何度も数えることはない。
+    //  【細かい追跡は別】panic のときは全タスクのスタックが端末のフラッシュに残る。
+    //   そちらは coredump.py でシリアルから読む(読むには ELF が要るので送っても意味がない)。
+    private fun reportEdgeReset(name: String, rst: String, boot: Long, fw: String, model: String) {
+        if (rst.isEmpty() || boot == 0L) return                  // 古いファームは載せてこない
+        if (edgeBootSeen[name] == boot) return                   // 同じ起動は1回だけ
+        edgeBootSeen[name] = boot
+        val kind = model.ifEmpty { "edge" }
+        crashLog("edge boot $kind rst=$rst")
+        // 正常な起動(電源投入・書き込み後の再起動・リセットボタン)は報告しない。
+        val bad = rst == "PANIC" || rst == "INT_WDT" || rst == "TASK_WDT" ||
+                  rst == "WDT" || rst == "BROWNOUT"
+        if (!bad) return
+        try {
+            val c = com.google.firebase.crashlytics.FirebaseCrashlytics.getInstance()
+            c.setCustomKey("edge_reset", rst)
+            c.setCustomKey("edge_model", kind)
+            c.setCustomKey("edge_fw", fw)
+            // 端末名は利用者が付けるので入れない(機種と版数だけで足りる)。
+            c.recordException(RuntimeException("edge reset $rst ($kind $fw)"))
+        } catch (_: Exception) {}
+        HgeNative.nativeLogEvent("EDGE", "abnormal reset: $rst fw=$fw", true)
+    }
+
     private val edgeSweep = object : Runnable {
         override fun run() {
             updateEdgeApBinding()   // エッジSoftAP接続中はそのNICへバインド維持(Androidの自動離脱を防ぐ)
@@ -9615,6 +9685,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
                                           o.optInt("reports", 0), o.optLong("utc", 0L), o.optInt("tzOff", 0),
                                           o.optInt("cams", 0),
                                           o.optBoolean("owned", true), o.optBoolean("mine", true))
+                        // 機種(core-s3 / stick-s3)。古いファームは "Edge" としか名乗らない。
+                        o.optString("model").let { if (it.isNotEmpty()) edgeModel[nm] = it }
+                        // 前回の落ち方(新しいファームだけが載せてくる)。異常なら記録へ上げる。
+                        val rst = o.optString("rst"); val boot = o.optLong("boot", 0L)
+                        val fw = o.optString("fw"); val mdl = o.optString("model")
+                        runOnUiThread { reportEdgeReset(nm, rst, boot, fw, mdl) }
                     }
                 } catch (_: Exception) {}
                 // UDP無応答の登録エッジ: 連続2回でTCP生存確認(取りこぼし救済)→それも不応答ならオフライン。
