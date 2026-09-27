@@ -697,6 +697,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (goHomeOnResume) { goHomeOnResume = false; if (::flipper.isInitialized) gotoScreen(kScreenHome) }
         // 権限、端末設定の画面を開いたまま設定へ行って戻ってきた → 状態を取り直す
         if (::flipper.isInitialized && flipper.displayedChild == kScreenPermCheck) buildPermCheckScreen()
+        // 裏に回っているあいだに期限が切れていることがある。デバッグログの画面を
+        //  開いたままなら、閉じてメニューへ戻す。
+        enforceLogUnlockExpiry()
+        if (::flipper.isInitialized && flipper.displayedChild == 16 && !isLogUnlocked() && !dlogBusy) {
+            flipper.displayedChild = 4; buildGearMenu()
+        }
     }
 
     private fun wireHeader(homeId: Int, menuId: Int, onLeave: (Int) -> Unit) {
@@ -1026,6 +1032,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private fun buildGearMenu() {
+        enforceLogUnlockExpiry()        // 期限切れならここで閉じる(項目を出す前に)
         val box = findViewById<LinearLayout>(R.id.gmenu_container)
         box.removeAllViews()
         gearBand(box, "撮影計画")
@@ -1228,11 +1235,32 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  見えないところで記録され続ける。スマホの撮影ログと、**各外部端末の3種**を
     //  まとめて切って送り直す(エッジは不揮発に残さないので、届かなかった端末にも
     //  次のスイープで false が送られる)。
-    private fun isLogUnlocked(): Boolean =
-        hgcPrefs().getBoolean("logUnlocked", BuildConfig.DEBUG)
+    // 【時間が来たら勝手に閉じる(2026-09-27 依頼)】開けたまま忘れられるのを防ぐ。
+    //  閉じ忘れると、見えないところで量の多い記録が走り続けて保存領域を食う。
+    //  **リリース版だけ**。開発中に24時間で閉じられると、毎回7回叩くことになって邪魔。
+    private val LOG_UNLOCK_MS = 24L * 60 * 60 * 1000
+
+    private fun isLogUnlocked(): Boolean {
+        if (!hgcPrefs().getBoolean("logUnlocked", BuildConfig.DEBUG)) return false
+        if (BuildConfig.DEBUG) return true                 // 開発中は期限なし
+        val at = hgcPrefs().getLong("logUnlockedAt", 0L)
+        return at != 0L && System.currentTimeMillis() - at < LOG_UNLOCK_MS
+    }
+
+    // 期限が切れていたら、「隠す」を押したときと同じ後始末をする(記録の設定も切る)。
+    //  判定だけでは設定が残るので、**必ずここを通して閉じること**。
+    //  画面を作るとき・前面へ戻ったとき・30秒毎のスイープから呼ぶ。
+    private fun enforceLogUnlockExpiry() {
+        if (BuildConfig.DEBUG) return
+        if (!hgcPrefs().getBoolean("logUnlocked", false)) return   // もともと閉じている
+        if (isLogUnlocked()) return                                // まだ期限内
+        setLogUnlocked(false)
+        HgeNative.nativeLogEvent("LOGUI", "auto-hidden after 24h", false)
+    }
 
     private fun setLogUnlocked(on: Boolean) {
-        hgcPrefs().edit().putBoolean("logUnlocked", on).apply()
+        hgcPrefs().edit().putBoolean("logUnlocked", on)
+            .putLong("logUnlockedAt", if (on) System.currentTimeMillis() else 0L).apply()
         if (!on) {
             setLogOptShot(false)                       // スマホ自身の撮影ログ
             for (e in edges) {                         // 外部端末は3種ともまとめて
@@ -9533,6 +9561,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     }
                 }
             }.start()
+            // 開いたまま画面を触らずに一晩置かれることがある(撮影中がまさにそう)。
+            //  メニューを作るときだけの確認では期限切れに気づけないので、ここでも見る。
+            enforceLogUnlockExpiry()
             handler.postDelayed(this, 30000)   // 30秒ごと(常時)
         }
     }
