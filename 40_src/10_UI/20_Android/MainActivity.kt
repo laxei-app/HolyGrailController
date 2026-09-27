@@ -699,6 +699,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     override fun onResume() {
         super.onResume()
         if (goHomeOnResume) { goHomeOnResume = false; if (::flipper.isInitialized) gotoScreen(kScreenHome) }
+        // 統計とクラッシュ記録を送ってよいか(まだ答えを貰っていなければ尋ねる)。
+        //  初回起動で位置情報の確認が出ている間は見送り、片付いてから出す。
+        maybeAskTelemetryConsent()
         // 権限、端末設定の画面を開いたまま設定へ行って戻ってきた → 状態を取り直す
         if (::flipper.isInitialized && flipper.displayedChild == kScreenPermCheck) buildPermCheckScreen()
         // 裏に回っているあいだに期限が切れていることがある。デバッグログの画面を
@@ -1347,7 +1350,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private class CheckItem(val key: String, val title: String, val desc: String,
                             val isOk: () -> Boolean, val settle: () -> Unit,
                             val settleWhenOk: () -> Unit = settle,   // 設定済みのときの行き先(取り消せる場所)
-                            val isPermission: Boolean = false)       // 取り消すとアプリが作り直される種類
+                            val isPermission: Boolean = false,       // 取り消すとアプリが作り直される種類
+                            val optional: Boolean = false)           // 任意(off でも「未設定」に数えず赤くしない)
 
     private fun permGranted(vararg p: String) =
         p.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }
@@ -1442,6 +1446,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     .getOrDefault(false)
             },
             { openSystemSettings(android.provider.Settings.ACTION_DATE_SETTINGS) }))
+        // --- 任意(このアプリの設定) ---
+        // 【赤くしない・数えない(2026-09-27 依頼)】これは OS の権限ではなくアプリの設定で、
+        //  「送らない」も正しい選択。未設定として赤く出すと、断った人を急かすことになる。
+        //  中身の説明は起動時に出すものと同じ文にする(2か所で言うことが違うと不審)。
+        list.add(CheckItem("telemetry", "品質向上のための情報を送る(任意)",
+            "不具合の記録と使われ方の統計を開発者へ送ります。" +
+            "送るのはカメラの型番・機種・版数・撮影の周期やコマ数・終わり方などで、" +
+            "写真・撮影した日付・緯度経度・あなたが入力した文字は送りません。" +
+            "送らなくてもアプリの動きは変わりません。",
+            { telemetryUserOn() },
+            { showTelemetryConsentDialog(false) { buildPermCheckScreen() } },
+            optional = true))
         return list
     }
 
@@ -1454,10 +1470,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val box = findViewById<LinearLayout>(R.id.pc_container)
         box.removeAllViews()
         val items = permCheckItems()
+        val needCount = items.count { !it.optional }   // 揃っているかを数えるのは「要る」ものだけ
         var okCount = 0
         for (item in items) {
             val ok = runCatching { item.isOk() }.getOrDefault(false)
-            if (ok) okCount++
+            if (ok && !item.optional) okCount++
             val card = LinearLayout(this); card.orientation = LinearLayout.VERTICAL
             val head = LinearLayout(this); head.orientation = LinearLayout.HORIZONTAL
             head.gravity = Gravity.CENTER_VERTICAL
@@ -1466,7 +1483,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val cb = CheckBox(this); cb.isChecked = ok; cb.isClickable = false; cb.isFocusable = false
             head.addView(cb, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             val tv = TextView(this); tv.text = item.title; tv.textSize = 16f
-            tv.setTextColor(if (ok) Color.BLACK else Color.parseColor("#C62828"))
+            tv.setTextColor(if (ok || item.optional) Color.BLACK else Color.parseColor("#C62828"))
             tv.setPadding(dp(8), 0, 0, 0)
             head.addView(tv, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             val expanded = permCheckExpanded.contains(item.key)
@@ -1482,7 +1499,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             body.addView(desc)
             // 常に押せる。設定済みは「設定を開く」で取り消せる場所へ。撮影中の権限変更だけ止める(アプリが作り直される)。
             val capturing = localCaptureActive()
-            val btn = blueButton(if (ok) "設定を開く" else "設定する") {
+            val btn = blueButton(if (item.optional) "変更する" else if (ok) "設定を開く" else "設定する") {
                 if (item.isPermission && capturing) {
                     Toast.makeText(this, "撮影中は権限を変えられません(アプリが再起動され撮影が止まります)", Toast.LENGTH_LONG).show()
                 } else if (ok) item.settleWhenOk() else item.settle()
@@ -1499,7 +1516,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             box.addView(thinDivider())
         }
         val sum = TextView(this)
-        sum.text = if (okCount == items.size) "すべて揃っています" else "${items.size - okCount} 件が未設定です(赤い項目)"
+        sum.text = if (okCount == needCount) "すべて揃っています" else "${needCount - okCount} 件が未設定です(赤い項目)"
         sum.textSize = 13f; sum.setTextColor(Color.parseColor("#616161")); sum.setPadding(dp(12), dp(12), dp(12), dp(12))
         box.addView(sum, 0)
     }
@@ -7153,6 +7170,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 restorePlan()            // ここで初めて出荷時の固定計画が作られる(内蔵カメラ・現在地で)
                 refreshPlanList()
                 applyAllMasterDetail()
+                maybeAskTelemetryConsent()   // 位置情報の確認が片付いた。次にこちらを尋ねる
             }
         }
     }
@@ -8324,8 +8342,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 【送るのはリリース版だけ】開発の実機試験(毎晩の通し撮影)まで数えると、知りたかった
     //  「どのカメラがどれだけ使われているか」が自分の記録で埋まる。利用者が少ないうちほど
     //  効くので、デバッグビルドからは送らない。
-    // 【利用者が止められる】telemetryEnabled=false で止まる(既定は送る)。画面からの
-    //  切り替えはログの隠し設定と合わせて後で足す。
+    // 【尋ねてから送る(2026-09-27 依頼)】答えを貰うまで送らない。起動時に尋ね、
+    //  「スマホ権限、設定」から変えられる(showTelemetryConsentDialog / telemetryUserOn)。
     // 【開発中に確かめたいとき】telemetryForceOn=true にすると、デバッグビルドでも送る。
     // 【広告IDは集めない】マニフェストで収集を切り、AD_ID 権限も外してある。
     // ================= Analytics: 撮影1回を1件にまとめる(2026-09-27 依頼) =================
@@ -8458,9 +8476,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private fun applyTelemetryConsent() {
-        val userOn = hgcPrefs().getBoolean("telemetryEnabled", true)
         val force = hgcPrefs().getBoolean("telemetryForceOn", false)
-        val on = userOn && (!BuildConfig.DEBUG || force)
+        val on = telemetryUserOn() && (!BuildConfig.DEBUG || force)
         val r = runCatching {
             com.google.firebase.analytics.FirebaseAnalytics.getInstance(this)
                 .setAnalyticsCollectionEnabled(on)
@@ -8470,6 +8487,67 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 失敗しても撮影には関係しないので、記録だけ残して先へ進む。
         if (r.isFailure) HgeNative.nativeLogEvent("TLM", "init failed: " + r.exceptionOrNull(), true)
         else HgeNative.nativeLogEvent("TLM", "collection=" + (if (on) "on" else "off"), false)
+    }
+
+    // ================= 送ってよいかを尋ねる(2026-09-27 依頼) =================
+    // 【答えを貰うまで送らない】以前は「既定は送る・止めたい人が止める」だった。断りなく集めない
+    //  形にする(EU へ配信するなら必須で、そうでなくても Play の申告と筋が揃う)。
+    //  **マニフェスト側でも既定を off にしてあることが要点** — Firebase は ContentProvider で
+    //  onCreate より先に動き出すので、実行時の applyTelemetryConsent() だけでは
+    //  最初の1回(first_open など)が答えを聞く前に出てしまう。
+    // 【聞くのは1回だけ】答えは prefs に残る(telemetryAsked)。あとから
+    //  「スマホ権限、設定」で変えられる。出荷時設定に戻すと prefs ごと消えるので聞き直す。
+    // 【出すのは起動時】ただし初回起動は位置情報の確認が先に出ているので、
+    //  それが片付くまで待つ(重ねると下に隠れて何に答えたのか分からなくなる)。
+    private var telemetryDialog: androidx.appcompat.app.AlertDialog? = null
+
+    private fun telemetryAsked() = hgcPrefs().getBoolean("telemetryAsked", false)
+    // 送ってよい状態か。**答えを貰っていなければ false**(既定では送らない)。
+    private fun telemetryUserOn() = telemetryAsked() && hgcPrefs().getBoolean("telemetryEnabled", false)
+
+    // 何を送って何を送らないかを、そのまま読める言葉で並べる。送る項目を増やしたらここも直す。
+    private fun telemetryMessage() =
+        "アプリの不具合の記録と、使われ方の統計を開発者へ送ります。" +
+        "あなたが誰かを特定できるものは送りません。\n\n" +
+        "送るもの\n" +
+        "・カメラの型番、スマホと外部端末の機種、アプリの版数\n" +
+        "・撮影の周期・コマ数・所要時間と、終わり方(完了・中止・エラーの別)\n" +
+        "・撮影が終わった時刻(時分だけ。日付は送りません)\n" +
+        "・アプリが落ちたときの記録(落ちた場所と、その直前の操作)\n" +
+        "・通信元から自動的に分かる、おおよその国と地域\n\n" +
+        "送らないもの\n" +
+        "・撮影した写真\n" +
+        "・撮影した日付と、緯度経度・撮影場所\n" +
+        "・計画名・端末名・Wi-Fi の SSID など、あなたが入力した文字\n\n" +
+        "送らなくても、アプリの動きは何も変わりません。\n" +
+        "あとから メニュー → スマホ権限、設定 で変えられます。"
+
+    // firstTime=true(起動時に尋ねる) では閉じられないようにする。答えを貰えないと
+    //  「聞いていないのに集めない」ままになり、押し忘れたのか断ったのかが分からない。
+    private fun showTelemetryConsentDialog(firstTime: Boolean, after: (() -> Unit)? = null) {
+        val d = androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("品質向上のための情報を送ってもよいですか")
+            .setMessage(telemetryMessage())
+            .setPositiveButton("送る") { _, _ -> setTelemetryChoice(true); after?.invoke() }
+            .setNegativeButton("送らない") { _, _ -> setTelemetryChoice(false); after?.invoke() }
+            .setCancelable(!firstTime)
+            .create()
+        telemetryDialog = d
+        d.show()
+    }
+
+    private fun setTelemetryChoice(on: Boolean) {
+        hgcPrefs().edit().putBoolean("telemetryAsked", true).putBoolean("telemetryEnabled", on).apply()
+        applyTelemetryConsent()
+    }
+
+    // 起動時・前面へ戻ったときに呼ぶ。答えを貰っていなければ尋ねる。
+    private fun maybeAskTelemetryConsent() {
+        if (telemetryAsked()) return
+        if (isFinishing || isDestroyed) return
+        if (seedWaitingPerm) return                        // 位置情報の確認中。種まきが済んだら seedNow から呼ばれる
+        if (telemetryDialog?.isShowing == true) return
+        showTelemetryConsentDialog(true)
     }
 
     private fun hgcPrefs() = getSharedPreferences("tlp", MODE_PRIVATE)

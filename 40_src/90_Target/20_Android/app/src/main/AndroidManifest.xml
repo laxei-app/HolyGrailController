@@ -49,6 +49,14 @@
 
         <meta-data android:name="google_analytics_adid_collection_enabled" android:value="false" />
 
+        <!-- 【同意を貰うまで集めない(2026-09-27 依頼)】Firebase は ContentProvider で
+             MainActivity.onCreate より先に動き出すので、実行時の applyTelemetryConsent() だけでは
+             最初の1回(first_open など)が答えを聞く前に出てしまう。既定を off にしておき、
+             「送る」と答えたときだけ実行時に on にする。
+             _deactivated ではなく _enabled を使うこと(前者は実行時に戻せない)。 -->
+        <meta-data android:name="firebase_analytics_collection_enabled" android:value="false" />
+        <meta-data android:name="firebase_crashlytics_collection_enabled" android:value="false" />
+
         <!-- GMSコードスキャナ(QR)モジュールをインストール時に取得 §8.2.2 -->
         <meta-data
             android:name="com.google.mlkit.vision.DEPENDENCIES"
