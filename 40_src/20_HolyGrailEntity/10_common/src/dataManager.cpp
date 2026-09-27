@@ -1854,6 +1854,102 @@ std::vector<std::string> dataManager::reportNames(void)
 // 撮影レポートの一覧。並びは撮影日時(shotAt)の降順=本当に新しい順。
 // ファイル名は report_<planId>_<日付>_<時刻>.json なので、名前で並べると planId が先に効いてしまい
 // 計画をまたぐと日時順にならない。中身の shotAt で並べる。
+// ===== 途中で終わった撮影の印(2026-09-27 依頼) =====
+// 撮り始めに1つ置き、正常に終わったら消す。次の起動で残っていたら「途中で終わった」
+//  レポートを作る。**書くのは開始時の1回だけ**なので、撮影中の負担は増えない。
+namespace
+{
+	std::string inflightName(const char* planId)
+	{
+		return std::string("inflight_") + ((planId && planId[0]) ? planId : "plan") + ".json";
+	}
+}
+
+void dataManager::markCaptureInflight(const char* planId, const hgc::cs& plan, long long startedAtUtc)
+{
+	std::string dir = osfile::logDir();
+	if (dir.empty()) { return; }
+	char timeStr[20], dateStr[11];
+	nowLocal(timeStr, dateStr);
+	json j;
+	j["planId"]       = (planId ? planId : "");
+	j["plan"]         = plan.name;
+	j["camera"]       = plan.camera.maker + " " + plan.camera.model;
+	j["lens"]         = plan.lens.name;
+	j["startedAt"]    = std::string(timeStr).substr(0, 16);	// "YYYY-MM-DD HH:MM"
+	j["startedAtUtc"] = startedAtUtc;
+	const std::string body = j.dump();
+	osfile::writeAll(dir + "/" + inflightName(planId), body.c_str(), body.size());
+}
+
+void dataManager::clearCaptureInflight(const char* planId)
+{
+	osfile::removeFile("log", inflightName(planId));
+}
+
+int dataManager::recoverInflightReports(void)
+{
+	std::string dir = osfile::logDir();
+	if (dir.empty()) { return 0; }
+	std::vector<std::string> names = osfile::listFiles("log", "inflight_", ".json");
+	int made = 0;
+	for (const auto& nm : names)
+	{
+		std::string body;
+		if (!osfile::readAll(dir + "/" + nm, body)) { osfile::removeFile("log", nm); continue; }
+		json m = json::parse(body, nullptr, false);
+		if (m.is_discarded() || !m.is_object()) { osfile::removeFile("log", nm); continue; }
+
+		const std::string planId    = m.value("planId", std::string());
+		const std::string startedAt = m.value("startedAt", std::string());	// "YYYY-MM-DD HH:MM"
+		// 【いまの時刻は使えない】ここは起動直後で、機種によっては時計がまだ復元されていない
+		//  (実機で 09:00:51 という嘘の時刻になった)。印に入っている**撮り始めた時刻**は
+		//  正しいので、そちらでファイル名を作る。並び順も素直になる。
+		char dateStr[11] = {0}, hhmmss[7] = {0};
+		if (startedAt.size() >= 16)
+		{
+			std::snprintf(dateStr, sizeof(dateStr), "%s", startedAt.substr(0, 10).c_str());
+			std::snprintf(hhmmss, sizeof(hhmmss), "%c%c%c%c00",
+			              startedAt[11], startedAt[12], startedAt[14], startedAt[15]);
+		}
+		else
+		{
+			char timeStr[20];
+			nowLocal(timeStr, dateStr);
+			std::snprintf(hhmmss, sizeof(hhmmss), "%c%c%c%c%c%c",
+			              timeStr[11], timeStr[12], timeStr[14], timeStr[15], timeStr[17], timeStr[18]);
+		}
+
+		json j;
+		j["version"]   = 1;
+		j["plan"]      = m.value("plan", std::string());
+		j["planId"]    = planId;
+		j["camera"]    = m.value("camera", std::string());
+		j["lens"]      = m.value("lens", std::string());
+		j["startedAt"] = startedAt;
+		// 【shotAt には終わった時刻を入れられない】いつ落ちたかは端末にも分からない。
+		//  一覧に並べるための時刻が要るので**撮り始めた時刻**を入れる。終わった時刻として
+		//  読まれないよう endReason="interrupted" を必ず添える(スマホ側も、この場合は
+		//  shotAt を「終わった時刻」として使わない)。
+		j["shotAt"]    = startedAt.empty() ? std::string(dateStr) : startedAt;
+		j["endReason"] = "interrupted";
+		// コマ数は数え切れずに落ちたので分からない。0 を入れる(欄を欠かすと読む側が困る)。
+		j["capture"]   = { { "frames", 0 } };
+		j["note"]      = "capture did not finish (device restarted or lost power)";
+
+		const std::string path = dir + "/report_" + (planId.empty() ? "plan" : planId) +
+		                         "_" + dateStr + "_" + hhmmss + ".json";
+		const std::string out = j.dump();
+		if (osfile::writeAll(path, out.c_str(), out.size()))
+		{
+			++made;
+			logEvent("INFO", ("recovered interrupted capture: " + path).c_str());
+		}
+		osfile::removeFile("log", nm);	// 作れても作れなくても印は消す(次の起動で繰り返さない)
+	}
+	return made;
+}
+
 std::string dataManager::reportListJson(void)
 {
 	std::vector<std::string> names = reportNames();

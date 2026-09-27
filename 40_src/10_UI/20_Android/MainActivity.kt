@@ -6476,10 +6476,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         b.putString("source", "report")
         // 古いファームには endReason が無い。その場合は「不明」として数える(completed と混ぜない)。
         b.putString("end_reason", o.optString("endReason").ifEmpty { "unknown" })
-        if (shotAt.length >= 16) b.putString("end_local", shotAt.substring(11, 16))
-        if (begMs > 0L && endMs > begMs) b.putLong("duration_min", (endMs - begMs) / 60000L)
+        // 【途中で終わった撮影の shotAt は「見つけた時刻」】いつ落ちたかは端末にも分からない。
+        //  終わった時刻として扱うと「何時に終わるか」の統計が狂うので、その場合は入れない。
+        val interrupted = o.optString("endReason") == "interrupted"
+        if (!interrupted && shotAt.length >= 16) b.putString("end_local", shotAt.substring(11, 16))
+        if (!interrupted && begMs > 0L && endMs > begMs) b.putLong("duration_min", (endMs - begMs) / 60000L)
         b.putLong("frames", (o.optJSONObject("capture")?.optInt("frames") ?: 0).toLong())
-        if (endMs > 0L) {
+        if (!interrupted && endMs > 0L) {
             val d = ((System.currentTimeMillis() - endMs) / 86400000L).coerceAtLeast(0L)
             if (d > 0L) b.putLong("delayed_days", d)
         }

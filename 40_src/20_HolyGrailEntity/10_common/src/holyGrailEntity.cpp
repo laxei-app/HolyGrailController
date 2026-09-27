@@ -1647,6 +1647,8 @@ namespace
 				{
 					S->logCapturing = true; S->lastCcm.clear();
 					S->startedAtUtc = static_cast<long long>(std::time(nullptr));
+					// 落ちても「撮っていた」ことが残るよう印を置く(次の起動で拾う)。
+					dataManager::markCaptureInflight(S->planId.c_str(), S->plan, S->startedAtUtc);
 					std::string d = "plan=" + S->plan.name + " " + dtToStr(S->plan.start) + "~" + dtToStr(S->plan.end);
 					dataManager::logEvent("START", d.c_str());
 					char pb[56]; std::snprintf(pb, sizeof(pb), "int=%.0fs az=%.0f el=%.0f", S->plan.interval, S->plan.azimuth, S->plan.elevation);
@@ -1668,6 +1670,7 @@ namespace
 				else if ((s == HGE_ST_IDLE || s == HGE_ST_ERROR) && S->logCapturing)
 				{
 					S->logCapturing = false; dataManager::logEvent("STOP", "");
+					dataManager::clearCaptureInflight(S->planId.c_str());	// 正常に終わった
 					// 撮影結果レポートをファイルへ出す(UIには出さない)。1コマも撮っていなければ出さない。
 					if (S->report.frames > 0)
 					{
@@ -2094,6 +2097,18 @@ int32_t hge_init(void)
 	hge::role::loadPersisted();	// 無人再起動後の「前回IP直結」用に不揮発の既知カメラを読み込む(エッジ役)
 	// カメラを探し始める前に所持カメラを読んでおく。読み込みでダイジェスト認証の資格情報が
 	//  候補に入る(エッジ役は所持を持たないが、撮影計画の受信/読み込みで同じ入口を通る)。
+	// 前回、撮影の途中で落ちていたら「途中で終わった」レポートを作る(2026-09-27 依頼)。
+	//  レポートは撮影の終わりに書くので、電源ごと落ちるとその撮影は記録が残らない。
+	//  一番知りたい「黙って死んだ」場合がこれで見えるようになる。
+	{
+		const int rec = dataManager::recoverInflightReports();
+		if (rec > 0)
+		{
+			char b2[64];
+			std::snprintf(b2, sizeof(b2), "recovered %d interrupted capture(s)", rec);
+			dataManager::logEvent("BOOT", b2);
+		}
+	}
 	dataManager::preloadOwned();
 	loadCameraBook();			// エッジ役の資格情報はここが唯一の入口(上の説明を参照)
 	g_inited = true;
@@ -4159,6 +4174,7 @@ void hge_finalizeReportsForShutdown(void)
 		                                                 "power", up->startedAtUtc);
 		if (!rp.empty()) { dataManager::logEvent("INFO", ("report(power): " + rp).c_str()); }
 		up->report = dataManager::captureReport{};	// 二重に書かない
+		dataManager::clearCaptureInflight(up->planId.c_str());	// 印も消す(次の起動で作り直さない)
 	}
 }
 

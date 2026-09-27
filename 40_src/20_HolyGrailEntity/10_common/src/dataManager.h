@@ -350,6 +350,23 @@ public:
 	static std::string writeCaptureReport(const captureReport& r, const hgc::cs& plan, const char* planId,
 	                                      const char* endReason = "", long long startedAtUtc = 0);
 
+	// --- 途中で終わった撮影を取りこぼさない(2026-09-27 依頼) ---
+	//
+	// 【なぜ要るか】レポートは**撮影が終わったときに書く**ので、電源ごと落ちたり
+	//  ウォッチドッグで再起動したりすると、その撮影は**記録が1件も残らない**まま消える。
+	//  電池切れだけは電源断の直前に書き出しているが(hge_finalizeReportsForShutdown)、
+	//  それ以外の落ち方は手当てが無かった。一番知りたい「黙って死んだ」場合が抜けている。
+	//
+	// 【やり方】撮り始めたら印を1つ置き、正常に終わったら消す。次の起動で印が残っていたら
+	//  「途中で終わった」レポートを作って印を消す。印は開始時の1回だけ書くので、撮影中の
+	//  書き込みは増えない(フラッシュの消耗も周期への影響も無い)。
+	//  **コマ数は分からない**(最後まで数えられずに落ちたため)。レポートには 0 を入れ、
+	//  endReason="interrupted" で区別できるようにする。
+	static void markCaptureInflight(const char* planId, const hgc::cs& plan, long long startedAtUtc);
+	static void clearCaptureInflight(const char* planId);
+	// 起動時に1回だけ呼ぶ。残っている印からレポートを作る。return: 作った件数。
+	static int  recoverInflightReports(void);
+
 	// --- 撮影レポートの取り出し(UI表示用 / エッジからの回収用) ---
 	// レポートのファイル名一覧(中身は読まない)。件数だけ知りたいエッジの30秒応答でも使う。
 	static std::vector<std::string> reportNames(void);
