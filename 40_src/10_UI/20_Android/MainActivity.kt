@@ -380,6 +380,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun Edge.reachable(): Boolean = if (edgeUseBle()) name.isNotEmpty() else ip.isNotEmpty()
     private val edges = mutableListOf<Edge>()   // 登録済みエッジ端末(設定で追加、prefsに永続化、オフラインでも選択可)
     // 常時スイープ(edgeSweep)によるエッジ生存状態。true=オンライン/false=オフライン/未登録=不明(起動直後)。
+    // 検索応答の model(core-s3 / stick-s3)。古いファームは "Edge" としか名乗らない。
+    private val edgeModel = mutableMapOf<String, String>()
     private val edgeOnline = mutableMapOf<String, Boolean>()
     private val edgeMiss = mutableMapOf<String, Int>()   // スイープUDPの連続無応答回数(閾値超えでTCP生存確認→オフライン判定)
     // エッジ選択スピナーの保存制御。Spinner の onItemSelected は setAdapter/setSelection の中では呼ばれず
@@ -569,6 +571,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 for (i in 0 until arr.length()) {
                     val o = arr.getJSONObject(i)
                     found.add(Edge(o.optString("edgeName"), o.optString("ip"), o.optInt("port", 50506)))
+                    o.optString("model").let { if (it.isNotEmpty()) edgeModel[o.optString("edgeName")] = it }
                 }
             } catch (_: Exception) {}
             // ローカル計画一覧(id)。各エッジに planId 別に問い合わせ、そのエッジで走行中の“全”計画を復元する。
@@ -4451,6 +4454,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     //  then: 一覧を作り終えたあと UI スレッドで呼ぶ(画面を出すのを一覧の完成まで待たせる用。2026-09-21)。
     private fun refreshPlanList(then: (() -> Unit)? = null) {
+        telemetryReconcile()    // 撮影の開始/終了を1件ずつ統計へ(集合の比較だけ)
         // 一覧の読み出しも計画操作と同じ単一スレッドで実行し、改名・編集の直後に最新状態を読む。
         planExec.execute {
             // 【ひな形モード(2026-09-04 UI依頼)】一覧をひな形に差し替える。選択を native へ
@@ -8276,6 +8280,94 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  切り替えはログの隠し設定と合わせて後で足す。
     // 【開発中に確かめたいとき】telemetryForceOn=true にすると、デバッグビルドでも送る。
     // 【広告IDは集めない】マニフェストで収集を切り、AD_ID 権限も外してある。
+    // ================= Analytics: 撮影1回を1件にまとめる(2026-09-27 依頼) =================
+    // 【粒度】1コマごとには送らない。撮影が始まったとき1件、終わったとき1件だけ。
+    //  一晩1〜2件にしかならないので量は問題にならず、レポートも壊れない。
+    // 【時刻】GA4 は全イベントに時刻を自動で付けるので日付は送らない。送るのは
+    //  「その日の何時何分に終わったか」だけ(end_local)。日付まで送ると、季節ごとの
+    //  薄明の時刻から撮影地の緯度が逆算できてしまう。
+    // 【機種名は型番だけ】カメラの assignedName は利用者が付けた名前なので送らない。
+    //  camera.model(機材マスタの型番)だけを送る。計画名・場所名・SSID・MAC も送らない。
+    // 【開始も送る理由】アプリが落ちて終わった撮影は、終了イベントが出ないまま消える。
+    //  開始と終了の件数の差が「途中で消えた撮影」になる。Crashlytics にも出ない
+    //  静かな失敗を見つけるための唯一の手がかり。
+    private class TlmSession(val startMs: Long, val camera: String, val device: String) {
+        var frames = 0
+        var everLost = false     // 一度でもカメラを見失ったか(終了理由の判定に使う)
+    }
+    private val tlmActive = mutableMapOf<String, TlmSession>()
+
+    // 型番だけを取る。利用者が付けた名前(assignedName)や計画名は**絶対に入れない**。
+    private fun tlmCameraModel(id: String): String {
+        return try {
+            val js = if (id == currentPlanId) HgeNative.nativeGetPlanJson()
+                     else HgeNative.nativeGetPlanJsonById(id)
+            val m = JSONObject(js).optJSONObject("camera")?.optString("model") ?: ""
+            if (m.isNotEmpty()) m else "unknown"
+        } catch (_: Exception) { "unknown" }
+    }
+
+    // 撮った端末。エッジは検索応答の model(core-s3 / stick-s3)。
+    //  古いファームは "Edge" としか名乗らないので、その場合は edge とだけ記録する。
+    private fun tlmDeviceKind(id: String): String {
+        val en = planEdgeName(id)
+        if (en.isEmpty()) return "phone"
+        val m = edgeModel[en] ?: ""
+        return if (m.isNotEmpty() && m != "Edge") m else "edge"
+    }
+
+    private fun tlmLog(name: String, b: android.os.Bundle) {
+        try { com.google.firebase.analytics.FirebaseAnalytics.getInstance(this).logEvent(name, b) }
+        catch (_: Exception) {}   // 統計が取れなくても撮影には関係しない
+    }
+
+    // 終了理由。**電池切れは今のところ判定できない** — エッジの自動電源断はスマホからは
+    //  「見失った」としか見えないため、camera_lost になる。見分けるにはエッジ側からの
+    //  通知が要る(未実装)。
+    private fun tlmEndReason(id: String, s: TlmSession): Pair<String, Int> {
+        val notice = planAuthNotice[id] ?: 0
+        if (stoppingPlans.contains(id)) return "user_stopped" to notice
+        if (notice != 0) return "camera_error" to notice
+        if (s.everLost) return "camera_lost" to 0
+        return "completed" to 0
+    }
+
+    // 状態の集合と突き合わせて開始/終了を出す。撮影の状態が変わるたび(refreshPlanList)と、
+    //  30秒毎のスイープから呼ぶ。集合の比較だけなので何度呼んでも安い。
+    private fun telemetryReconcile() {
+        val active = capturingPlans + waitingPlans + disconnectedPlans + startingPlans
+        for (id in active) {
+            val s = tlmActive[id]
+            if (s == null) {
+                val ns = TlmSession(System.currentTimeMillis(), tlmCameraModel(id), tlmDeviceKind(id))
+                tlmActive[id] = ns
+                tlmLog("capture_start", android.os.Bundle().apply {
+                    putString("camera_model", ns.camera)
+                    putString("device_kind", ns.device)
+                })
+            } else {
+                if (disconnectedPlans.contains(id)) s.everLost = true
+                planProgress[id]?.let { if (it.frame > s.frames) s.frames = it.frame }
+            }
+        }
+        for (id in tlmActive.keys.toList()) {
+            if (active.contains(id)) continue
+            val s = tlmActive.remove(id) ?: continue
+            val (reason, notice) = tlmEndReason(id, s)
+            val mins = ((System.currentTimeMillis() - s.startMs) / 60000L).toInt()
+            tlmLog("capture_end", android.os.Bundle().apply {
+                putString("camera_model", s.camera)
+                putString("device_kind", s.device)
+                putString("end_reason", reason)
+                putString("end_local", java.text.SimpleDateFormat("HH:mm", java.util.Locale.US)
+                                        .format(java.util.Date()))
+                putLong("duration_min", mins.toLong())
+                putLong("frames", s.frames.toLong())
+                if (notice != 0) putLong("notice_code", notice.toLong())
+            })
+        }
+    }
+
     private fun applyTelemetryConsent() {
         val userOn = hgcPrefs().getBoolean("telemetryEnabled", true)
         val force = hgcPrefs().getBoolean("telemetryForceOn", false)
@@ -9564,6 +9656,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             // 開いたまま画面を触らずに一晩置かれることがある(撮影中がまさにそう)。
             //  メニューを作るときだけの確認では期限切れに気づけないので、ここでも見る。
             enforceLogUnlockExpiry()
+            telemetryReconcile()
             handler.postDelayed(this, 30000)   // 30秒ごと(常時)
         }
     }

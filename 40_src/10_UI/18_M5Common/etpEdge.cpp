@@ -254,7 +254,14 @@ bool applyTime(const std::string& data)
 			j["ip"] = ips.empty() ? std::string() : ips.front();
 		}
 		j["port"]  = PORT_CONTROL;
+		// 【機種を名乗る(2026-09-27)】以前は "Edge" 固定で、スマホからは CoreS3 と StickS3 の
+		//  区別が付かなかった。統計で「どの端末で撮ったか」を見たいので実機種を載せる。
+		//  古いファームは "Edge" のままなので、スマホ側はそれも受けられるようにしてある。
+#ifdef HGC_EDGE_MODEL
+		j["model"] = HGC_EDGE_MODEL;
+#else
 		j["model"] = "Edge";
+#endif
 		j["fw"]    = std::string(hge_version());
 		j["state"] = hge_getState();
 		// 【自分の時刻を知らせる(2026-09-03)】撮影待機中・撮影中は時計を受け付けないので、
