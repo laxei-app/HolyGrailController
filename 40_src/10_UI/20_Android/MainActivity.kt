@@ -3361,7 +3361,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val primary = latestSchedule.let {
             if (it.isEmpty()) "" else try { org.json.JSONObject(it).optString("camera") } catch (_: Exception) { "" }
         }
-        val pick = cams.filter { it.optString("name").isNotEmpty() && it.optString("name") != primary }
+        // 同期撮影に参加できないカメラ(スマホ内蔵など)は選ばせない(2026-09-27 依頼)。
+        //  【内蔵かどうかは見ない】カメラが自分で名乗った noSyncShot だけで判断する。
+        //  一覧に出して黙って落とすと「選んだのに入らない」に見えるので、最初から出さない。
+        val pick = cams.filter {
+            it.optString("name").isNotEmpty() && it.optString("name") != primary &&
+            !it.optBoolean("noSyncShot", false)
+        }
         if (pick.isEmpty()) {
             Toast.makeText(this, "追加できるカメラがありません(所持カメラを登録してください)", Toast.LENGTH_LONG).show()
             return

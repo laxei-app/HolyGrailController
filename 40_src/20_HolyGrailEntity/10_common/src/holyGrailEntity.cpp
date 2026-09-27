@@ -3470,6 +3470,15 @@ int32_t hge_setPlanCamera(const char* name)
 	hgc::camera c;
 	if (!dataManager::findOwnedCamera(std::string(name), c)) { return ERR_HGC_NO_ELEMENT; }
 	g_plan.camera = c;
+	// 【同期撮影できないカメラへ変えたら同期撮影を落とす(2026-09-27 依頼)】
+	//  スマホ内蔵カメラのように noSyncShot が立つカメラがある。画面から見えなくなるだけでは
+	//  計画に syncShot と追加カメラが残り、**別のカメラへ戻した瞬間に復活する**。
+	//  「内蔵かどうか」はここでは判断しない。カメラが自分で名乗った性質(noSyncShot)だけを見る。
+	if (c.noSyncShot)
+	{
+		g_plan.syncShot = false;
+		g_plan.subCameras.clear();
+	}
 	// 【カメラに割り当てたレンズを一緒に載せる(2026-09-05 依頼)】
 	//  所持カメラは「組み合わせるレンズ(先頭が初期値)」を持っている。カメラを変えたら
 	//  そのカメラの初期値のレンズへ付け替える。載せないと前のレンズの焦点距離のまま
@@ -3494,6 +3503,9 @@ int32_t hge_setPlanCamera(const char* name)
 int32_t hge_setPlanSyncShot(int32_t on)
 {
 	if (!g_planReady) { errCode e = loadFixedPlanImpl(); if (e != ERR_HGC_OK) { return e; } }
+	// 同期撮影できないカメラでは ON にできない(2026-09-27 依頼)。画面では行ごと隠すが、
+	//  入口はここなので、どの経路から来ても落とせるようにここでも見る。
+	if (on != 0 && g_plan.camera.noSyncShot) { return ERR_HGC_INVALID_ARG; }
 	g_plan.syncShot = (on != 0);
 	buildScheduleJson();
 	notify(HGE_EV_SCHEDULE, g_schedJson);
@@ -3522,6 +3534,7 @@ int32_t hge_setPlanSubCameras(const char* namesJson)
 			if (dup) { continue; }
 			hgc::camera c;
 			if (!dataManager::findOwnedCamera(nm, c)) { continue; }	// 所持カメラから消えたものは落とす
+			if (c.noSyncShot) { continue; }	// 同期撮影に参加できないカメラは入れない(2026-09-27 依頼)
 			next.push_back(c);
 		}
 	}
