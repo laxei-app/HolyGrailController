@@ -87,6 +87,10 @@ android {
             // 【ネイティブのクラッシュを読める形にする(2026-09-27)】このアプリは中身の
             //  大半が C++(libHolyGrailEntity.so)。シンボルを上げておかないと、落ちた場所が
             //  アドレスのままで読めない。release を作るときだけ上げる。
+            // 【送信は assembleRelease に含まれない(2026-09-27 実測)】この旗はタスクを
+            //  作るだけで、リリースを組んでも自動では上がらない。リリースのときは
+            //    ./gradlew assembleRelease uploadCrashlyticsSymbolFileRelease
+            //  を走らせること。忘れるとネイティブのクラッシュがアドレスのままになる。
             configure<com.google.firebase.crashlytics.buildtools.gradle.CrashlyticsExtension> {
                 nativeSymbolUploadEnabled = true
             }

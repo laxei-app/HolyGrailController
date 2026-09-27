@@ -1067,7 +1067,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  記録する内容 = 次の撮影に効く設定。**撮影の様子がおかしいときこそ入れたい**
         //  ログ取得     = 重いコピー。撮影中は走らせたくない
         //  画面ごと塞ぐと前者ができなくなるので、塞ぐのは取得ボタンだけにする。
-        gearItem(box, "デバッグログ") { openDebugLog() }
+        if (isLogUnlocked()) gearItem(box, "デバッグログ") { openDebugLog() }
         // この2つは「撮影計画」ではなく「記録を見る」側なのでログの下へ置く(2026-08-23 UI依頼)。
         gearItem(box, "操作履歴") { openHistory() }            // 項目9
         gearItem(box, "撮影レポート") { openReportList() }     // 670: 撮影1回ぶんの結果と所見
@@ -1082,6 +1082,29 @@ class MainActivity : AppCompatActivity(), HgeListener {
             textSize = 12f
             setTextColor(0xFF9E9E9E.toInt())
             setPadding(dp(16), dp(16), dp(16), dp(8))
+            // 7回叩くとデバッグログが現れる(隠し機能)。残り回数はこの行に出す。
+            //  すぐ消える通知は使わない(画面に残るものだけで伝える)。
+            setOnClickListener {
+                val now = System.currentTimeMillis()
+                // 間が空いたら数え直す。**そのとき表示も戻すこと** — 戻さないと
+                //  「あと2回」と出たまま数えは0に戻っており、押しても何も起きない
+                //  ように見える(実機で踏んだ)。
+                if (now - verTapAt > 2000) {
+                    verTapCount = 0
+                    text = "バージョン " + appVersionName()
+                }
+                verTapAt = now
+                verTapCount++
+                if (isLogUnlocked()) {
+                    text = "バージョン " + appVersionName() + "  (デバッグログは表示中です)"
+                } else if (verTapCount >= 7) {
+                    verTapCount = 0
+                    setLogUnlocked(true)
+                    buildGearMenu()                              // 項目を出すために組み直す
+                } else if (verTapCount >= 4) {
+                    text = "バージョン " + appVersionName() + "  あと " + (7 - verTapCount) + " 回"
+                }
+            }
         })
     }
 
@@ -1189,6 +1212,44 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  ところが困るのはたいてい1台だけで、全部の端末で記録を増やす理由がない。
     //  スマホは自分で撮ることもあるので**撮影ログだけ**持つ。電池と STACK/HEAP は
     //  エッジの話なので、エッジ端末設定の画面で端末ごとに入れてもらう。
+    // ================= デバッグログは隠し機能(2026-09-27 依頼) =================
+    // 【なぜ隠すか】ログは利用者のための機能ではない。困ったときにこちらが原因を追うための
+    //  ものなので、普段は見えない方がよい。出したままだと、量の多い記録を入れっぱなしにされて
+    //  保存領域と性能を食う(StickS3 は 1.5MB しかなく、撮影ログだけで一晩で満杯になる)。
+    //
+    // 【隠すのはリリース版だけ】デバッグビルドは最初から開いている。開発中に毎回7回叩くのは
+    //  無駄なので、既定値をビルドの種類で変える。**「隠す」を押せばデバッグ版でも閉じる**ので、
+    //  隠れている側の見え方もそのまま試せる。
+    //
+    // 【開け方】メニュー最下部の版数を7回叩く(Android の慣習に合わせた)。電話越しに
+    //  「バージョンのところを7回叩いてください」で伝わるのが利点。
+    //
+    // 【閉じるときは量の多い記録も必ず切る】これが要点。閉じただけだと設定が残り、
+    //  見えないところで記録され続ける。スマホの撮影ログと、**各外部端末の3種**を
+    //  まとめて切って送り直す(エッジは不揮発に残さないので、届かなかった端末にも
+    //  次のスイープで false が送られる)。
+    private fun isLogUnlocked(): Boolean =
+        hgcPrefs().getBoolean("logUnlocked", BuildConfig.DEBUG)
+
+    private fun setLogUnlocked(on: Boolean) {
+        hgcPrefs().edit().putBoolean("logUnlocked", on).apply()
+        if (!on) {
+            setLogOptShot(false)                       // スマホ自身の撮影ログ
+            for (e in edges) {                         // 外部端末は3種ともまとめて
+                val c = loadEdgeLogOpt(e.name)
+                if (c.shot || c.batt || c.sys) {
+                    c.shot = false; c.batt = false; c.sys = false
+                    saveEdgeLogOpt(e.name, c)          // 保存 + 届く端末へは即送信
+                }
+            }
+        }
+        HgeNative.nativeLogEvent("LOGUI", if (on) "unlocked" else "hidden (options cleared)", false)
+    }
+
+    // 版数を叩いた回数。画面を離れたら忘れる(連打とみなせる範囲だけ数える)。
+    private var verTapCount = 0
+    private var verTapAt = 0L
+
     private fun logOptShot() = hgcPrefs().getBoolean("logShot", false)
     private fun setLogOptShot(on: Boolean) {
         hgcPrefs().edit().putBoolean("logShot", on).apply()
@@ -1734,6 +1795,29 @@ class MainActivity : AppCompatActivity(), HgeListener {
         heading("状況", st)
         val pg = TextView(this).apply { textSize = 13f; setTextColor(Color.DKGRAY) }
         st.addView(pg); dlogProgress = pg
+
+        // 【隠す(2026-09-27 依頼)】この画面は隠し機能なので、閉じる口をここに置く。
+        //  閉じると量の多い記録(スマホの撮影ログ/外部端末の3種)もまとめて切れる。
+        //  切らずに閉じると、見えないところで記録され続けて保存領域を食う。
+        heading("この機能を隠す")
+        ops.addView(TextView(this).apply {
+            text = "メニューから「デバッグログ」を消します。記録する内容もすべて切ります。" +
+                   "もう一度出すには、メニュー最下部のバージョン表示を7回続けて押してください。"
+            textSize = 12f; setTextColor(Color.GRAY); setPadding(0, 0, 0, dp(4))
+        })
+        val hideBtn = blueButton("隠す") {
+            if (dlogBusy) {
+                Toast.makeText(this, "取得中です。中断してから隠してください", Toast.LENGTH_SHORT).show()
+            } else {
+                setLogUnlocked(false)
+                flipper.displayedChild = 4; buildGearMenu()
+            }
+        }
+        (hideBtn.layoutParams as LinearLayout.LayoutParams).let {
+            it.width = ViewGroup.LayoutParams.WRAP_CONTENT; it.gravity = Gravity.END; hideBtn.layoutParams = it
+        }
+        ops.addView(hideBtn)
+
         setDlogEnabled(!dlogBusy && !isCaptureBusy())
     }
 
@@ -8680,7 +8764,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  記録を増やす理由がない。しかも StickS3 の保存領域は 1.5MB しかなく、
         //  撮影ログを入れると一晩(16時間・15秒周期)で約1.5MB、STACK/HEAP だけでも約320KB になる。
         //  必要な端末にだけ入れられるようにする。
-        if (selectedEdgeName.isNotEmpty()) {
+        if (selectedEdgeName.isNotEmpty() && isLogUnlocked()) {
             box.addView(TextView(ctx).apply {
                 text = "ログ取得"
                 setTypeface(null, Typeface.BOLD); textSize = 15f
