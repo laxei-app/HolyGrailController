@@ -487,8 +487,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         Thread { HgeNative.nativePruneOldLogs(tzOffMin) }.start()
         //  許可の答えを待っている最中は種まき側が場所も作るので、ここでは何もしない(要求が二重になる)。
         if (!seedWaitingPerm) { seedFirstPlaceFromLocation() }   // 初回だけ、出荷時の場所を現在地で作り直す
-        handler.postDelayed(edgeTimeSync, 3000)   // 選択中エッジへ能動的な時刻同期を開始(RTC無し機/電波悪環境向け)
-        handler.postDelayed(edgeSweep, 6000)      // エッジ常時スイープ(生存/IP追従+エッジ側開始・停止の検出。撮影の有無に関わらず30秒毎)
+        // 外部端末の常駐処理(時刻同期・30秒スイープ)は applyPaidGating() が有料のときだけ始める。
         handler.postDelayed(hgePump, 5000)        // 遅延アームのポンプ(スマホ直接撮影の予約計画の開始スレッドを期日に生成)
         loadColors()
         loadExpoValues()
@@ -497,12 +496,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // BLE が既定になったので、**外部端末を登録している人にだけ**権限を確かめる(2026-09-26)。
         //  無いまま走ると探索が黙って空を返し、「端末が全部消えた」ように見えてしまう。
         //  1台も登録していない人には何も聞かない(外部端末を使わないなら要らない権限のため)。
-        if (edgeUseBle() && edges.isNotEmpty()) { ensureBlePermissions {} }
+        //  free 版は外部端末を使わないので、権限も聞かない(2026-09-29)。
+        if (isPaid() && edgeUseBle() && edges.isNotEmpty()) { ensureBlePermissions {} }
         loadEdgeHeld()          // エッジが持っている計画(=編集ロック)。アプリを終了しても保つ
         applyLogOptsToSelf()    // デバッグログの取捨(既定は採らない)を自分の記録へ効かせる
         refreshEdgeSpinner()
 
         wireListeners()
+        applyPaidGating()   // free/有料に応じて外部端末の常駐処理と広告の帯を揃える(2026-09-29)
 
         // 項目I: Android標準の「戻る」(Pixelの右エッジスワイプや戻るボタン)で、いきなりアプリを
         //  閉じずに、その画面の戻るボタンと同じ動作(前の画面へ)をする。先頭ページ(撮影計画)でだけ
@@ -702,6 +703,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 統計とクラッシュ記録を送ってよいか(まだ答えを貰っていなければ尋ねる)。
         //  初回起動で位置情報の確認が出ている間は見送り、片付いてから出す。
         maybeAskTelemetryConsent()
+        applyAdBand()
         // 権限、端末設定の画面を開いたまま設定へ行って戻ってきた → 状態を取り直す
         if (::flipper.isInitialized && flipper.displayedChild == kScreenPermCheck) buildPermCheckScreen()
         // 裏に回っているあいだに期限が切れていることがある。デバッグログの画面を
@@ -731,6 +733,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun gotoScreen(dest: Int) {
         flipper.displayedChild = dest
         crashKeys()
+        applyAdBand()          // 撮影中は出さないので、画面が変わるたびに見直す
         if (dest == kScreenMenu) { buildGearMenu() } else { capturePlanBaseline() }
     }
 
@@ -1057,6 +1060,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         gearBand(box, "所持機材")
         gearItem(box, "所持カメラ") { openCameraList() }
         gearItem(box, "所持レンズ") { openLensList() }
+        // 【free 版では丸ごと出さない(2026-09-29 依頼)】使えないものが見えていても
+        //  「これ何？」になるだけなので、案内も置かずに消す。
+        if (isPaid()) {
         gearBand(box, "外部端末")
         // 2026-08-08 UI依頼: 「登録」と「設定」を1画面へ統合した(登録は画面内の
         // 「＋ 新規エッジ端末」から行う)。
@@ -1072,6 +1078,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  ・屋外でエッジが AP のときは BLE にすると SSID を切り替えずに全台と話せる
         //  ・エッジ側にモードを持たせないので、戻せなくなって現地へ行く経路は無い
         gearSwitchItem(box, "外部端末とBLEで通信する", edgeUseBle()) { on -> setEdgeUseBle(on) }
+        }   // if (isPaid())
         gearBand(box, "その他")
         gearItem(box, "スマホ権限、設定") { openPermCheck() }
         // 使っているソフトウェアの権利表示(2026-09-27 UI依頼)。中身は原文のまま出すので翻訳しない。
@@ -1083,6 +1090,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  ログ取得     = 重いコピー。撮影中は走らせたくない
         //  画面ごと塞ぐと前者ができなくなるので、塞ぐのは取得ボタンだけにする。
         if (isLogUnlocked()) gearItem(box, "デバッグログ") { openDebugLog() }
+        // 【開発用: 有料/free の行き来(2026-09-29)】購入の仕組みがまだ無い段階で、両方の
+        //  見え方を実機で確かめるためのもの。**リリース版には存在しない** — 残すと
+        //  それ自体が有料機能の抜け道になる。
+        if (BuildConfig.DEBUG) {
+            gearSwitchItem(box, "【開発】有料版として動かす", isPaid()) { on ->
+                hgcPrefs().edit().putBoolean("paidOwned", on).apply()
+                applyPaidGating()
+                buildGearMenu()      // 外部端末の区画が出る/消えるので組み直す
+                refreshPlanList()
+            }
+        }
         // この2つは「撮影計画」ではなく「記録を見る」側なのでログの下へ置く(2026-08-23 UI依頼)。
         gearItem(box, "操作履歴") { openHistory() }            // 項目9
         gearItem(box, "撮影レポート") { openReportList() }     // 670: 撮影1回ぶんの結果と所見
@@ -1168,7 +1186,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 java.io.File(base, d).listFiles()?.forEach { it.delete() }
             }
             // **commit を使う**。apply は非同期で、書き終わる前にプロセスを落とすと消えない。
+            // 【paidOwned だけは残す(2026-09-29 依頼)】購入の記録は利用者が作ったデータでは
+            //  なく**領収書**なので、初期化の対象として筋が違う。消すと、**圏外で初期化した人が
+            //  野外で有料機能を失う**(オンラインに戻るまで Play へ問い合わせられない)。
+            val keepPaid = isPaid()
             hgcPrefs().edit().clear().commit()
+            if (keepPaid) hgcPrefs().edit().putBoolean("paidOwned", true).commit()
             getSharedPreferences("gearMaster", MODE_PRIVATE).edit().clear().commit()
             // 【初期化したことは操作履歴に残す(2026-09-06 依頼)】履歴ごと消した直後に、この1件だけを
             //  書いて新しい履歴の先頭にする。計画・端末・カメラは無いので空。
@@ -1395,7 +1418,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
             { permGranted(Manifest.permission.ACCESS_FINE_LOCATION) || permGranted(Manifest.permission.ACCESS_COARSE_LOCATION) },
             { settlePermission(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) },
             { openAppDetailsSettings() }, isPermission = true))
-        if (sdk >= 31) {
+        // 【free 版では外部端末向けの項目を出さない(2026-09-29 依頼)】使えない機能のために
+        //  権限を求めるのは筋が通らないし、「赤い未設定」が消せないまま残ることになる。
+        if (sdk >= 31 && isPaid()) {
             list.add(CheckItem("perm_nearby", "付近のデバイスの権限(Bluetooth)",
                 "外部端末を Bluetooth で探して登録・設定するときと、外部端末と BLE で通信するときに使います。" +
                 "外部端末を使わないなら無くても動きます。",
@@ -1421,10 +1446,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
                                    android.provider.Settings.Secure.LOCATION_MODE_OFF }.getOrDefault(false)
             },
             { openSystemSettings(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS) }))
-        list.add(CheckItem("set_bluetooth", "Bluetooth を ON",
-            "外部端末の登録・設定(プロビジョニング)と、外部端末との BLE 通信に使います。外部端末を使わないなら不要です。",
-            { (getSystemService(BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)?.adapter?.isEnabled == true },
-            { openSystemSettings(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS) }))
+        if (isPaid()) {
+            list.add(CheckItem("set_bluetooth", "Bluetooth を ON",
+                "外部端末の登録・設定(プロビジョニング)と、外部端末との BLE 通信に使います。外部端末を使わないなら不要です。",
+                { (getSystemService(BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)?.adapter?.isEnabled == true },
+                { openSystemSettings(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS) }))
+        }
         list.add(CheckItem("set_wifi", "Wi-Fi を ON",
             "ミラーレス機を見つけて撮影するときと、外部端末との通信に使います。屋外では外部端末のアクセスポイント(TLP-Edge-…)に接続します。撮影中は変えないでください。",
             { (applicationContext.getSystemService(WIFI_SERVICE) as? WifiManager)?.isWifiEnabled == true },
@@ -4480,6 +4507,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  then: 一覧を作り終えたあと UI スレッドで呼ぶ(画面を出すのを一覧の完成まで待たせる用。2026-09-21)。
     private fun refreshPlanList(then: (() -> Unit)? = null) {
         telemetryReconcile()    // 撮影の開始/終了を1件ずつ統計へ(集合の比較だけ)
+        applyAdBand()           // 撮影の開始/終了で帯の出し入れが変わる
         // 一覧の読み出しも計画操作と同じ単一スレッドで実行し、改名・編集の直後に最新状態を読む。
         planExec.execute {
             // 【ひな形モード(2026-09-04 UI依頼)】一覧をひな形に差し替える。選択を native へ
@@ -4571,7 +4599,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // ひな形モードでできないことを画面から消す。題も差し替える。
     private fun applyTplMode() {
-        findViewById<View>(R.id.plan_edgeRow)?.visibility = if (tplMode) View.GONE else View.VISIBLE
+        // ひな形は端末を持たない。free 版は外部端末に関する機能を一切出さない(2026-09-29)。
+        findViewById<View>(R.id.plan_edgeRow)?.visibility =
+            if (tplMode || !isPaid()) View.GONE else View.VISIBLE
         // ホームは「撮影計画ひな形」のときだけ出す。撮影計画そのものがホームなので、
         //  そこでは押す意味がない(場所は空けたままにして題を中央に保つ)。
         findViewById<View>(R.id.plan_home)?.visibility = if (tplMode) View.VISIBLE else View.INVISIBLE
@@ -5423,6 +5453,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     override fun onDestroy() {
+        try { adView?.destroy() } catch (_: Exception) {}
+        adView = null
         handler.removeCallbacks(dimRunnable)
         handler.removeCallbacks(edgePoll)
         handler.removeCallbacks(edgeSweep)
@@ -8554,6 +8586,107 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (seedWaitingPerm) return                        // 位置情報の確認中。種まきが済んだら seedNow から呼ばれる
         if (telemetryDialog?.isShowing == true) return
         showTelemetryConsentDialog(true)
+    }
+
+    // ================= free版 / 有料版(2026-09-29 依頼) =================
+    // アプリは1本で、アプリ内購入(買い切り1品)で切り替える。free は外部端末に関する機能を
+    //  一切出さず、画面の最下段に広告の帯が出る。有料は広告が出ず、外部端末が使える。
+    //
+    // 【読む側はここだけ】出し分けは **isPaid() しか見ない**。Play Billing は「paidOwned を
+    //  書く側」として後から足す。こうしておくと課金が影も形も無いうちから切り替えを
+    //  作り込んで実機で通せる(デバッグ専用のトグルで両方の状態を行き来できる)。
+    // 【置き場】tlp の prefs。**getExternalFilesDir の下には絶対に置かない** — あそこは
+    //  ファイルマネージャで取り出せるので、置いた瞬間に「配れば誰でも有料版」になる。
+    //  同じ理由で**引き継ぎ用のファイルは作らない**。機種変更は、同じ Google アカウントで
+    //  Play へ問い合わせ直せば戻る(新端末で一度だけオンラインになれば足りる)。
+    // 【圏外】一度「持っている」と分かったら**期限を付けずに保存**し、確認できないときは
+    //  保存した値をそのまま使う。**自分からは閉じない**。queryPurchases は「空」と
+    //  「持っていない」を見分けられないうえ、返金された人が使い続ける損害より
+    //  **払った人を野外で締め出す損害のほうがはるかに大きい**。
+    // 【出荷時設定に戻す】paidOwned は消さない。利用者のデータではなく**領収書**なので、
+    //  初期化の対象として筋が違う(doFactoryReset で明示的に取り置いている)。
+    private fun isPaid(): Boolean = hgcPrefs().getBoolean("paidOwned", false)
+
+    // 有料/free が変わったときに、画面と常駐処理をその状態へ揃える。
+    //  起動時と、デバッグ用トグルを倒したときに呼ぶ。購入で true になったときもここを通す。
+    private fun applyPaidGating() {
+        // 【USB を挿したときに勝手に開くのを止める】外部端末へファームを書き込む画面は
+        //  別 Activity で、USB_DEVICE_ATTACHED の intent-filter を持っている。メニューから
+        //  導線を消しても、**free の利用者が M5Stack を挿すとこの画面が立ち上がってしまう**。
+        //  マニフェストの宣言は1本のアプリでは消せないので、実行時に部品ごと無効化する。
+        try {
+            val cn = android.content.ComponentName(this, EdgeFlashActivity::class.java)
+            packageManager.setComponentEnabledSetting(cn,
+                if (isPaid()) PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+                else PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                PackageManager.DONT_KILL_APP)
+        } catch (_: Exception) {}
+        // 外部端末の常駐処理(30秒スイープと時刻同期)は free では走らせない。
+        //  電池と通信を使ううえ、BLE 探索は権限も要る。
+        handler.removeCallbacks(edgeSweep); handler.removeCallbacks(edgeTimeSync)
+        if (isPaid()) {
+            handler.postDelayed(edgeTimeSync, 3000)
+            handler.postDelayed(edgeSweep, 6000)
+        }
+        if (::flipper.isInitialized) {
+            findViewById<View>(R.id.plan_edgeRow)?.visibility =
+                if (isPaid() && !tplMode) View.VISIBLE else View.GONE
+            applyAdBand()
+        }
+    }
+
+    // ================= 広告の帯(free版のみ。2026-09-29 依頼) =================
+    // 【置き場】画面は ViewFlipper 1枚で19画面を切り替えているので、**その下に枠を1つ置けば
+    //  全画面に効く**(activity_main.xml)。画面ごとに貼らない。
+    // 【撮影中は出さない】撮影中の画面は**一晩中、無人で表示されたまま**になる。誰も見ていない
+    //  表示を積み上げても収益にならず、通信と電池を使い、不自然な表示として問題にもなりうる。
+    // 【取れないときは帯ごと消す】圏外では必ず起きる。空白の帯を残さない。
+    // 【全画面広告・動画広告は使わない】操作を止めないこと(ユーザー決定)。撮影を止めたいときに
+    //  止められなくなる。
+    // 【テスト用のID】**本番のIDに差し替えるのは本番公開のときだけ**。テスターに本物の広告を
+    //  出すとタップされ、無効なトラフィックで AdMob のアカウントが止まるおそれがある。
+    private val kAdUnitBanner = "ca-app-pub-3940256099942544/6300978111"   // Google 公開のテスト用バナー
+    private var adView: com.google.android.gms.ads.AdView? = null
+    private var adsInited = false
+
+    private fun adsWanted(): Boolean = !isPaid() && !isCaptureBusy()
+
+    // 有料/free・撮影の状態が変わるたびに呼ぶ。起動時・画面遷移・撮影状態の更新から。
+    private fun applyAdBand() {
+        val slot = findViewById<android.widget.FrameLayout>(R.id.ad_slot) ?: return
+        if (!adsWanted()) {
+            slot.visibility = View.GONE
+            try { adView?.pause() } catch (_: Exception) {}
+            return
+        }
+        if (!adsInited) {
+            adsInited = true
+            try { com.google.android.gms.ads.MobileAds.initialize(this) } catch (_: Exception) {}
+        }
+        val have = adView
+        if (have == null) {
+            try {
+                val v = com.google.android.gms.ads.AdView(this)
+                v.setAdSize(com.google.android.gms.ads.AdSize.BANNER)
+                v.adUnitId = kAdUnitBanner
+                v.adListener = object : com.google.android.gms.ads.AdListener() {
+                    // 読み込めてから初めて出す。取れなければ枠ごと畳む。
+                    override fun onAdLoaded() { slot.visibility = View.VISIBLE }
+                    override fun onAdFailedToLoad(e: com.google.android.gms.ads.LoadAdError) {
+                        slot.visibility = View.GONE
+                    }
+                }
+                slot.addView(v)
+                adView = v
+                v.loadAd(com.google.android.gms.ads.AdRequest.Builder().build())
+            } catch (_: Exception) {
+                // 広告が出せなくても撮影には関係しない。黙って畳む。
+                slot.visibility = View.GONE
+            }
+        } else {
+            try { have.resume() } catch (_: Exception) {}
+            if (slot.childCount > 0) slot.visibility = View.VISIBLE
+        }
     }
 
     private fun hgcPrefs() = getSharedPreferences("tlp", MODE_PRIVATE)

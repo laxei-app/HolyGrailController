@@ -49,6 +49,24 @@
 
         <meta-data android:name="google_analytics_adid_collection_enabled" android:value="false" />
 
+        <!-- 【広告(2026-09-29)】これが無いと**起動した瞬間に落ちます**(Mobile Ads SDK の決まり)。
+             値は Google が公開している**テスト用のアプリID**。本番のIDに差し替えるのは
+             本番公開のときだけ。テスターに本物の広告を出すとタップされ、無効なトラフィックで
+             AdMob のアカウントが止まるおそれがあるため。
+             【AD_ID を消したままにしてある】上の指定で広告IDの収集を止めている間は、
+             パーソナライズされない広告になる。**本番で広告を出す段になったら、
+             この下の AD_ID の tools:node="remove" を外すこと。** -->
+        <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="ca-app-pub-3940256099942544~3347511713" />
+
+        <!-- 広告のライブラリと Analytics のライブラリが、同じ名前の property を別々の値で
+             宣言してくるのでマージが止まる。**広告側(gma_)を採る**のが Google の案内。
+             これが無いと "Manifest merger failed ... AD_SERVICES_CONFIG" でビルドできない。 -->
+        <property
+            android:name="android.adservices.AD_SERVICES_CONFIG"
+            android:resource="@xml/gma_ad_services_config"
+            tools:replace="android:resource" />
+
         <!-- 【同意を貰うまで集めない(2026-09-27 依頼)】Firebase は ContentProvider で
              MainActivity.onCreate より先に動き出すので、実行時の applyTelemetryConsent() だけでは
              最初の1回(first_open など)が答えを聞く前に出てしまう。既定を off にしておき、

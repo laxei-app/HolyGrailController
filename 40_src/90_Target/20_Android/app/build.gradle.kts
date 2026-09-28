@@ -126,6 +126,11 @@ dependencies {
     implementation("com.google.firebase:firebase-crashlytics")
     implementation("com.google.firebase:firebase-crashlytics-ndk")
 
+    // 広告(2026-09-29)。free 版だけ画面最下段に帯を出す。
+    //  **いまはテスト用の広告IDを使っている**。本番のIDに差し替えるのは本番公開のときだけ
+    //  (テスターに本物の広告を出すとタップされ、無効なトラフィックで AdMob が止まる)。
+    implementation("com.google.android.gms:play-services-ads:23.6.0")
+
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")

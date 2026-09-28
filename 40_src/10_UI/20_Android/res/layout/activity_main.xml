@@ -1,9 +1,18 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <!-- 330撮影計画設定 / 430撮影中 / 撮影制御方法初期値 を ViewFlipper で切り替える。 -->
-<ViewFlipper xmlns:android="http://schemas.android.com/apk/res/android"
+<!-- 【広告の帯は全画面の最下段(2026-09-29 依頼)】19画面は ViewFlipper 1枚の切り替えなので、
+     縦並びで包んで下に枠を1つ置けば、全部の画面に一度で効く。
+     free 版でだけ中身が入る。撮影中と、広告が取れないときは枠ごと消える(空白を残さない)。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+<ViewFlipper
     android:id="@+id/flipper"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="0dp"
+    android:layout_weight="1">
 
     <include layout="@layout/screen_plan" />
     <include layout="@layout/screen_capturing" />
@@ -25,3 +34,10 @@
     <include layout="@layout/screen_permcheck" />
     <include layout="@layout/screen_notices" />
 </ViewFlipper>
+
+    <FrameLayout android:id="@+id/ad_slot"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:visibility="gone" />
+
+</LinearLayout>
