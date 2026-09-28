@@ -8339,12 +8339,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // ================= Firebase(統計とクラッシュ記録)(2026-09-27) =================
     // ここでやるのは「送る入れ物を開ける/閉じる」だけ。**何を送るかはまだ決めていない**。
     //
-    // 【送るのはリリース版だけ】開発の実機試験(毎晩の通し撮影)まで数えると、知りたかった
-    //  「どのカメラがどれだけ使われているか」が自分の記録で埋まる。利用者が少ないうちほど
-    //  効くので、デバッグビルドからは送らない。
+    // 【送り先をビルドで分ける(2026-09-28 依頼)】開発の実機試験(毎晩の通し撮影)まで同じ所へ
+    //  送ると、知りたかった「どのカメラがどれだけ使われているか」が自分の記録で埋まり、
+    //  クラッシュの一覧も自分の試験と利用者のものが見分けられなくなる。**リリース中も次の版の
+    //  開発は続く**ので、止めるのではなく分ける。debug は app/src/debug/google-services.json
+    //  の開発用プロジェクト(twylapse-debug)へ、release は app/google-services.json の本番
+    //  (twylapse)へ行く。google-services プラグインがビルドタイプ側を優先するので、
+    //  **Gradle に書くことは何も無い**。json を置くだけで切り替わる。
+    //  分かれた以上デバッグビルドを止める理由が無くなったので、BuildConfig.DEBUG の抑止と
+    //  その逃げ道だった telemetryForceOn は廃止した。
     // 【尋ねてから送る(2026-09-27 依頼)】答えを貰うまで送らない。起動時に尋ね、
     //  「スマホ権限、設定」から変えられる(showTelemetryConsentDialog / telemetryUserOn)。
-    // 【開発中に確かめたいとき】telemetryForceOn=true にすると、デバッグビルドでも送る。
     // 【広告IDは集めない】マニフェストで収集を切り、AD_ID 権限も外してある。
     // ================= Analytics: 撮影1回を1件にまとめる(2026-09-27 依頼) =================
     // 【粒度】1コマごとには送らない。撮影が始まったとき1件、終わったとき1件だけ。
@@ -8476,8 +8481,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private fun applyTelemetryConsent() {
-        val force = hgcPrefs().getBoolean("telemetryForceOn", false)
-        val on = telemetryUserOn() && (!BuildConfig.DEBUG || force)
+        // 送り先はビルドタイプで分かれている(debug=twylapse-debug / release=twylapse)ので、
+        //  ここで見るのは利用者の答えだけ。
+        val on = telemetryUserOn()
         val r = runCatching {
             com.google.firebase.analytics.FirebaseAnalytics.getInstance(this)
                 .setAnalyticsCollectionEnabled(on)

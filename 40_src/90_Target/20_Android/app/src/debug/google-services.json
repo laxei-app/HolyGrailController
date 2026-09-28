@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "170735235801",
+    "project_id": "twylapse-debug",
+    "storage_bucket": "twylapse-debug.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:170735235801:android:bbbd3392af63006a1884c8",
+        "android_client_info": {
+          "package_name": "app.laxei.twylapse"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDDZHYIO0dOwqOkUnt953lhZ_P52tb0Kio"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

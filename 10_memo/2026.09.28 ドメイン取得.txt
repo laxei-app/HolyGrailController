@@ -1,0 +1,14 @@
+﻿laxei.app ドメインを取得した。
+cloudeflare で。
+
+■DNS 設定を変更する。
+DNS records for laxei.app
+
+◎元
+"v=spf1 include:_spf.mx.cloudflare.net ~all"
+
+◎変更後
+"v=spf1 include:_spf.mx.cloudflare.net include:_spf.google.com ~all"
+
+やってもやらなくてもできるな。
+
