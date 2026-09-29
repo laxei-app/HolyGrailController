@@ -519,14 +519,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
             }
         })
 
+        // 【状態を聞くのは一覧を作る前(2026-09-29 実機で判明)】温かい起動では、ネイティブは
+        //  撮り続けているのに新しい画面は何も知らない。**一覧を作ってから聞くと、一度
+        //  「未開始(カチンコ)」で描かれてしまい**、次のきっかけ(30秒スイープ or 状態の変化)が
+        //  来るまで戻らない。撮影は動いているのに止まって見えるので、先に聞く。
+        if (warmStart) syncCaptureStateFromNative()
         restorePlan()    // 保存済み計画があれば復元、無ければ出荷時計画を表示(再生成しない)
         refreshPlanList()   // 複数計画リスト(分割バー上)を構築
         applyAllMasterDetail()   // 横向きなら一覧のある画面を左右2分割にする
         restoreEdgeState()  // 再起動時: エッジが撮影中なら状態を復元(item9)
-        // 冷たい起動(プロセスが作られた)なら、記録から撮影を再開する。
-        //  温かい起動(閉じただけでプロセスは生きていた)なら**再開してはいけない** — もう撮っている。
-        //  状態を聞き直して一覧の表示だけ合わせる。
-        if (warmStart) { syncCaptureStateFromNative() } else { resumePhoneCapture() }
+        // 冷たい起動(プロセスが作られた)なら、記録から撮影を再開する(非同期)。
+        if (!warmStart) resumePhoneCapture()
         Thread { try { HgeNative.nativePresenceStart() } catch (_: Exception) {} }.start()  // P4: 常駐プレゼンスマップ開始
     }
 
