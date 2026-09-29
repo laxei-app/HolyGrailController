@@ -71,6 +71,15 @@ class CaptureService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    // 動き出した時刻(端末の稼働時間で測る。利用者が時計を変えてもずれない)。
+    //  止まるときに「何時間動いたか」をログへ残す。**上限に当たったのか、メーカーの省電力に
+    //  殺されたのか、正常に終わったのかを、後から記録だけで見分けるため**。
+    private var startedAtMs = 0L
+
+    private fun ranMinutes(): Long =
+        if (startedAtMs == 0L) 0L else (android.os.SystemClock.elapsedRealtime() - startedAtMs) / 60000L
+
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP_ALL) {
             // 通知の「すべて中止」。画面が無くても止められるのが要点。
@@ -85,6 +94,10 @@ class CaptureService : Service() {
         if (lines.isEmpty()) { running = false; stopForegroundCompat(); stopSelf(); return START_NOT_STICKY }
         ensureChannel()
         startForeground(NOTE_ID, buildNote(lines))
+        if (startedAtMs == 0L) {
+            startedAtMs = android.os.SystemClock.elapsedRealtime()
+            logEvent("start n=" + lines.size, false)
+        }
         running = true
         // START_NOT_STICKY にする。OS に殺されて作り直されても、**撮影の状態はプロセスと一緒に
         //  失われている**ので、空のサービスだけが蘇っても意味が無い。その場合は次の起動で
@@ -93,8 +106,67 @@ class CaptureService : Service() {
     }
 
     override fun onDestroy() {
+        // 正常に止めたときも、外から殺されたときも通る(殺されると通らないこともある)。
+        logEvent("stop after " + ranMinutes() + "min", false)
         running = false
         super.onDestroy()
+    }
+
+    // ================= 時間の上限に当たったとき(2026-09-29 依頼) =================
+    // Android 15 から、一部の種類のフォアグラウンドサービスに**1日6時間の上限**が入った。
+    // 上限に達すると「もう終わりです」とここへ知らせが来る。**数秒以内に自分で止めないと
+    // ANR 扱いで落とされる**ので、行儀よく畳む。
+    //
+    // 【いまは当たらない見込み】上限は dataSync / mediaProcessing が対象で、こちらは
+    //  connectedDevice。しかも**この手の制限は targetSdk がその版に上がってから効く**のが
+    //  通例で、いまの targetSdk は 34。**それでも入れておく**のは、呼ばれたときに
+    //  「黙って死んだ」ではなく**記録が残る**ようにするため。保険としては安い。
+    //
+    // 【2引数の版に override を付けていない理由】Android 15 の
+    //  onTimeout(startId, fgsType) は compileSdk 35 でないと見えない(いまは 34。
+    //  上げるには AGP も上げる必要がある)。**名前と引数が同じなら実行時には上書きされる**ので、
+    //  override を付けずに同じ形で置いてある。compileSdk を 35 へ上げたときに override を付ける。
+    override fun onTimeout(startId: Int) {
+        handleTimeout(-1)
+    }
+
+    fun onTimeout(startId: Int, fgsType: Int) {
+        handleTimeout(fgsType)
+    }
+
+    private fun handleTimeout(fgsType: Int) {
+        val min = ranMinutes()
+        logEvent("timeout after " + min + "min type=" + fgsType, true)
+        // 撮影を先に止める。**止めてから畳むこと** — 落とされてから止まると、
+        //  撮影レポートが書かれないまま終わる。
+        runCatching { HgeNative.nativeCaptureStop() }
+        // 前面の通知は消えるので、消せる通知で理由を残す。黙って終わったように見せない。
+        runCatching {
+            val nm = getSystemService(NotificationManager::class.java)
+            val open = PendingIntent.getActivity(this, 2,
+                Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            val n = androidx.core.app.NotificationCompat.Builder(this, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_note_capture)
+                .setContentTitle("撮影を終えました")
+                .setContentText("端末の制限（連続して動ける時間の上限）に達したため終了しました")
+                .setStyle(androidx.core.app.NotificationCompat.BigTextStyle()
+                    .bigText("端末の制限（連続して動ける時間の上限）に達したため、" +
+                             (if (min > 0) "約${min / 60}時間${min % 60}分で" else "") +
+                             "撮影を終了しました。アプリを開いたままにしておくと、この制限は働きません。"))
+                .setContentIntent(open)
+                .setAutoCancel(true)
+                .build()
+            nm?.notify(NOTE_ID + 1, n)
+        }
+        running = false
+        stopForegroundCompat()
+        stopSelf()
+    }
+
+    // 撮影ログへ残す(端末に残る記録。撮影レポートと突き合わせて読む)。
+    private fun logEvent(msg: String, err: Boolean) {
+        runCatching { HgeNative.nativeLogEvent("FGS", msg, err) }
     }
 
     private fun stopForegroundCompat() {
