@@ -27,8 +27,18 @@
     <!-- BLE(<31)と撮影場所の現在地取得(§7.9)の両方で使うためSDK上限なし -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
-    <!-- 「権限、端末設定」画面から電池の最適化の対象外を頼む(2026-09-21)。長時間の撮影を前面で続けるため -->
+    <!-- 「権限、端末設定」画面から電池の最適化の対象外を頼む(2026-09-21)。長時間の撮影を続けるため -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <!-- 【撮影中はアプリを閉じても続ける(2026-09-29 依頼)】フォアグラウンドサービス。
+         種類は connectedDevice(外部カメラを Wi-Fi で操作する = 外部機器とのやり取り)。
+         dataSync は Android 15 で1日6時間の上限が入っており、夕方〜明け方は超えてしまう。
+         connectedDevice を名乗るには、下のいずれかの権限が要る(CHANGE_NETWORK_STATE /
+         CHANGE_WIFI_MULTICAST_STATE を既に持っているので条件を満たす)。
+         POST_NOTIFICATIONS が無くても撮影は続くが、**通知が見えない**(Android 13以降)。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- 【広告IDは集めない(2026-09-27)】Firebase の計測ライブラリは既定でこれを集め、
          AD_ID 権限もここへ勝手に足してくる。広告は出さないので使い道が無く、集めると
@@ -125,5 +135,14 @@
                 android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
                 android:resource="@xml/usb_device_filter" />
         </activity>
+        <!-- 撮影中に走らせるサービス(2026-09-29)。ランチャーからは見えない。
+             **stopWithTask="false" が要点** — 履歴からアプリを払っても撮影を止めない。
+             android:exported="false" で外部からは起動できない。 -->
+        <service
+            android:name="app.laxei.twylapse.CaptureService"
+            android:foregroundServiceType="connectedDevice"
+            android:exported="false"
+            android:stopWithTask="false" />
+
     </application>
 </manifest>

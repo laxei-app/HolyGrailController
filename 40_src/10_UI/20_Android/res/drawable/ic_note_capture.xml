@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 撮影中の通知に出す小さいアイコン(2026-09-29)。
+     【白一色の形で描くこと】通知の小アイコンは**形だけが使われ、色は OS が塗る**。
+     色付きの PNG を渡すと形が潰れるか、既定のアイコンに差し替えられてしまう。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFFFF">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M9,3L7.2,5H4C2.9,5 2,5.9 2,7v12c0,1.1 0.9,2 2,2h16c1.1,0 2,-0.9 2,-2V7c0,-1.1 -0.9,-2 -2,-2h-3.2L15,3H9zM12,8.5c2.49,0 4.5,2.01 4.5,4.5s-2.01,4.5 -4.5,4.5S7.5,15.49 7.5,13 9.51,8.5 12,8.5zM12,10.5c-1.38,0 -2.5,1.12 -2.5,2.5s1.12,2.5 2.5,2.5 2.5,-1.12 2.5,-2.5 -1.12,-2.5 -2.5,-2.5z" />
+</vector>

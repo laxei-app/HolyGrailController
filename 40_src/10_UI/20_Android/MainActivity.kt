@@ -454,7 +454,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         GearMaster.installBundledIfNewer(this, baseDir)   // nativeInit より前
         startGearMasterCheck(baseDir)                     // 1日1回、公開リポジトリを見に行く
         HgeNative.nativeSetLogDir(baseDir.absolutePath)
-        HgeNative.nativeInit()
+        val warmStart = nativeReady          // true = 撮影中に閉じられて、戻ってきたところ
+        if (!warmStart) { HgeNative.nativeInit(); nativeReady = true }
         applyTelemetryConsent()   // 統計とクラッシュ記録の可否(既定: リリース版だけ送る)
         crashKeys(); crashLog("app start")
         // スマホ⇄エッジの通信路(2026-08-14 指示)。選ぶのはスマホだけ。エッジは常に両方で待ち受ける。
@@ -522,7 +523,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         refreshPlanList()   // 複数計画リスト(分割バー上)を構築
         applyAllMasterDetail()   // 横向きなら一覧のある画面を左右2分割にする
         restoreEdgeState()  // 再起動時: エッジが撮影中なら状態を復元(item9)
-        resumePhoneCapture()  // 再起動時: スマホ直結で撮影中だった計画を再開(item2)
+        // 冷たい起動(プロセスが作られた)なら、記録から撮影を再開する。
+        //  温かい起動(閉じただけでプロセスは生きていた)なら**再開してはいけない** — もう撮っている。
+        //  状態を聞き直して一覧の表示だけ合わせる。
+        if (warmStart) { syncCaptureStateFromNative() } else { resumePhoneCapture() }
         Thread { try { HgeNative.nativePresenceStart() } catch (_: Exception) {} }.start()  // P4: 常駐プレゼンスマップ開始
     }
 
@@ -695,7 +699,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // エッジ端末書き込み画面(別の画面部品)から「ホーム」で戻ってきたときの引き継ぎ。
     //  あちらは finish() で呼び出し元(メニュー)へ戻るだけなので、印を置いてもらって
     //  こちらで撮影計画を出す。
-    companion object { @JvmStatic var goHomeOnResume = false }
+    companion object {
+        @JvmStatic var goHomeOnResume = false
+        // 【プロセスが生き残ったまま画面だけ作り直されたか(2026-09-29)】撮影中に閉じられても
+        //  サービスがプロセスを生かしているので、戻ってきたときネイティブは**撮り続けている**。
+        //  その場合は初期化も再開もしてはいけない(二重に始まる)。状態を聞き直して付け直すだけ。
+        @JvmStatic var nativeReady = false
+    }
 
     override fun onResume() {
         super.onResume()
@@ -1426,6 +1436,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 "外部端末を使わないなら無くても動きます。",
                 { permGranted(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT) },
                 { settlePermission(arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)) },
+                { openAppDetailsSettings() }, isPermission = true))
+        }
+        // 【撮影中の通知(2026-09-29)】これが無いと、閉じたあとも撮影は続くのに**通知が見えない**。
+        //  撮影そのものは止まらないので「揃っていない」赤にはするが、致命的ではない。
+        if (sdk >= 33) {
+            list.add(CheckItem("perm_notify", "通知の権限",
+                "撮影中にアプリを閉じても撮影を続けます。そのとき「撮影中」の通知を出して、" +
+                "進み具合の確認と中止ができるようにします。無くても撮影は続きますが、通知が見えません。",
+                { permGranted(Manifest.permission.POST_NOTIFICATIONS) },
+                { settlePermission(arrayOf(Manifest.permission.POST_NOTIFICATIONS)) },
                 { openAppDetailsSettings() }, isPermission = true))
         }
         if (sdk <= 28) {
@@ -4618,10 +4638,21 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 行の区切りは薄い線(2026-09-02 UI依頼)。所持カメラ/レンズの一覧と同じ見え方にする。
         //  副行が付いて1行が2段になったので、線が無いとどこまでが1件か分かりにくい。
         //  ※点滅処理(planBlink)は子を LinearLayout に絞って走査するので、線が挟まっても素通しする。
+        // 閉じても続ける対象(スマホ直結の外部カメラ)の行を、ここで一緒に集めて通知へ渡す。
+        //  一覧の作り直しは撮影の状態が変わるたびに通るので、枚数の更新もここで足りる。
+        val noteLines = ArrayList<String>()
         try {
             val arr = JSONArray(js)
             for (i in 0 until arr.length()) {
-                planListContainer.addView(buildPlanRow(arr.getJSONObject(i)))
+                val po = arr.getJSONObject(i)
+                val pid = po.optString("id")
+                val active = capturingPlans.contains(pid) || waitingPlans.contains(pid) ||
+                             startingPlans.contains(pid) || disconnectedPlans.contains(pid)
+                if (active && pid.isNotEmpty() && planEdgeName(pid).isEmpty() &&
+                    !po.optBoolean("camLocalOnly", false)) {
+                    noteLines.add(captureNoteLine(pid, po.optString("planName")))
+                }
+                planListContainer.addView(buildPlanRow(po))
                 planListContainer.addView(thinDivider())
             }
         } catch (_: Exception) {}
@@ -4637,6 +4668,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         planListScroll.requestFocus()
         // リスト件数が少なければ内容ぴったりまで縮める(item6: リスト最下段で止める)。
         setInitialSplit(R.id.plan_listContainer)
+        // 閉じても続ける対象があればサービスを動かし、無くなれば止める(ひな形の一覧では触らない)。
+        if (!tplMode) applyCaptureService(noteLines)
     }
 
     private fun buildPlanRow(p: JSONObject): View {
@@ -5156,6 +5189,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private fun showNoCameraDialog(id: String) {
+        // 【画面を閉じたあとは出さない(2026-09-29)】撮影は続いているので、閉じた後も
+        //  カメラ未検出の通知はやってくる。破棄済みの画面にダイアログを出すと落ちる。
+        if (!uiAlive || isFinishing || isDestroyed) return
         if (stoppingPlans.contains(id)) return      // 中止操作済み(停止確定待ち)は出さない
         if (nocamDialogShown.contains(id)) return   // 既に表示中/継続中は出さない
         // 項目11: 撮影開始前(待機中)のポップアップは最初の1回だけ。アイコンには×を出し続ける。
@@ -5452,9 +5488,21 @@ class MainActivity : AppCompatActivity(), HgeListener {
         return super.dispatchTouchEvent(ev)
     }
 
+    // 【撮影中は畳まない(2026-09-29 依頼)】以前はここで必ず nativeCaptureStop/nativeTerm を
+    //  呼んでいたので、**画面を閉じた時点で撮影が終わって**いた。サービスが動いている間は
+    //  何も畳まず、プロセスごと撮影を続けさせる。
+    //  畳まないのは撮影に要るものだけではなく**全部**。ネットワークのバインドもマルチキャストも、
+    //  外部カメラと話すのに要る。
     override fun onDestroy() {
         try { adView?.destroy() } catch (_: Exception) {}
         adView = null
+        if (keepRunningOnClose()) {
+            // 画面だけ消える。ネイティブの撮影スレッドと受け口(listener)はそのまま。
+            //  **この Activity は破棄済みなので、以後ダイアログを出してはいけない**(uiAlive)。
+            uiAlive = false
+            super.onDestroy()
+            return
+        }
         handler.removeCallbacks(dimRunnable)
         handler.removeCallbacks(edgePoll)
         handler.removeCallbacks(edgeSweep)
@@ -8671,7 +8719,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 v.adUnitId = kAdUnitBanner
                 v.adListener = object : com.google.android.gms.ads.AdListener() {
                     // 読み込めてから初めて出す。取れなければ枠ごと畳む。
-                    override fun onAdLoaded() { slot.visibility = View.VISIBLE }
+                    // 【必ず出す前に見直す】読み込みは非同期なので、**待っている間に撮影が
+                    //  始まっていることがある**。無条件に出すと、撮影中の画面に帯が出てしまう
+                    //  (閉じて戻ったときに実際に踏んだ)。
+                    override fun onAdLoaded() {
+                        slot.visibility = if (adsWanted()) View.VISIBLE else View.GONE
+                    }
                     override fun onAdFailedToLoad(e: com.google.android.gms.ads.LoadAdError) {
                         slot.visibility = View.GONE
                     }
@@ -8687,6 +8740,57 @@ class MainActivity : AppCompatActivity(), HgeListener {
             try { have.resume() } catch (_: Exception) {}
             if (slot.childCount > 0) slot.visibility = View.VISIBLE
         }
+    }
+
+    // ================= 撮影中はアプリを閉じても続ける(2026-09-29 依頼) =================
+    // 【対象(第1段階)】スマホが自分で撮っているもののうち、**外部カメラ(通信で撮る)だけ**。
+    //  ・外部端末(エッジ)に任せた計画 … 要らない。エッジが自分で撮っている
+    //  ・内蔵カメラ … カメラ型のサービスが要る(第2段階)。いまは対象にしない。中途半端に
+    //    生かすと、**プロセスは生きているのにカメラを使えず黙って撮れなくなる**ほうが危ない
+    // 【待機中も対象(ユーザー決定)】「撮影開始待ち」も撮影の一部として扱う。
+    //  窓の前で閉じられて始まらない、では意味が無い。
+    // 【黙って続ける(ユーザー決定)】閉じるときに確認はしない。スワイプで払われたときなど
+    //  聞けない閉じ方があるので、挙動を揃えたほうが分かりやすい。
+    private var uiAlive = true          // この Activity の画面がまだ生きているか(閉じた後の誤操作よけ)
+
+    // 通知に出す行を作って、サービスへ渡す(空ならサービスを止める)。
+    //  一覧を作り直すたびに呼ぶので、枚数と残り時間も付いてくる。
+    private fun applyCaptureService(lines: List<String>) {
+        try { CaptureService.apply(applicationContext, lines) } catch (_: Exception) {}
+    }
+
+    // 1件ぶんの行。"計画名  120/602枚  残り 1時間40分" / "計画名  撮影開始待ち"。
+    private fun captureNoteLine(id: String, name: String): String {
+        val nm = if (name.isEmpty()) "(名前なし)" else name
+        if (disconnectedPlans.contains(id)) return "$nm  カメラが見つかりません"
+        if (waitingPlans.contains(id) || startingPlans.contains(id)) return "$nm  撮影開始待ち"
+        val p = planProgress[id] ?: return "$nm  撮影中"
+        val m = p.remainSec / 60
+        val rest = if (m >= 60) "残り ${m / 60}時間${m % 60}分" else "残り ${m}分"
+        return "$nm  ${p.frame}/${p.total}枚  $rest"
+    }
+
+    // 閉じても畳まないか(=サービスが動いているか)。onDestroy の判断に使う。
+    private fun keepRunningOnClose(): Boolean = CaptureService.running
+
+    // 【戻ってきたときの付け直し】プロセスが生きたままなら、ネイティブ側は撮り続けている。
+    //  新しい Activity は状態を何も知らないので、計画ごとに今の状態を聞いて集合を作り直す。
+    //  (EV_STATE は「変わったとき」しか来ないので、付いた瞬間には何も届かない)
+    private fun syncCaptureStateFromNative() {
+        try {
+            val arr = JSONArray(HgeNative.nativeListPlans())
+            for (i in 0 until arr.length()) {
+                val id = arr.optJSONObject(i)?.optString("id") ?: continue
+                if (id.isEmpty() || planEdgeName(id).isNotEmpty()) continue
+                when (HgeNative.nativeGetStatePlan(id)) {
+                    HgeNative.ST_CAPTURING -> capturingPlans.add(id)
+                    HgeNative.ST_WAITING, HgeNative.ST_READY -> waitingPlans.add(id)
+                    HgeNative.ST_NOCAMERA, HgeNative.ST_DISCONNECTED, HgeNative.ST_SEARCHING ->
+                        disconnectedPlans.add(id)
+                    else -> {}
+                }
+            }
+        } catch (_: Exception) {}
     }
 
     private fun hgcPrefs() = getSharedPreferences("tlp", MODE_PRIVATE)
