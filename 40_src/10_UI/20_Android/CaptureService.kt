@@ -42,6 +42,7 @@ class CaptureService : Service() {
         private const val CHANNEL_ID = "capture"
         private const val NOTE_ID = 4801
         private const val EXTRA_LINES = "lines"
+        private const val EXTRA_CAMERA = "camera"   // 内蔵カメラで撮っている撮影が含まれるか
 
         // サービスが動いているか。MainActivity.onDestroy が「畳んでよいか」を判断するのに使う。
         @Volatile @JvmStatic var running = false
@@ -50,7 +51,7 @@ class CaptureService : Service() {
         // 走っている撮影の一覧を渡す。空なら止める。**状態が変わるたびに呼ぶ**(開始・終了・枚数の更新)。
         //  既に動いていれば通知の中身だけが差し替わる(startForeground を呼び直すのが作法)。
         @JvmStatic
-        fun apply(ctx: Context, lines: List<String>) {
+        fun apply(ctx: Context, lines: List<String>, needCamera: Boolean = false) {
             val app = ctx.applicationContext
             if (lines.isEmpty()) {
                 if (running) app.stopService(Intent(app, CaptureService::class.java))
@@ -58,6 +59,7 @@ class CaptureService : Service() {
             }
             val i = Intent(app, CaptureService::class.java)
                 .putStringArrayListExtra(EXTRA_LINES, ArrayList(lines))
+                .putExtra(EXTRA_CAMERA, needCamera)
             // 【必ず前面として始めること】撮影の開始は画面を見ながら押すので、この時点では
             //  アプリが見えている。**見えている間に始めたサービスだけ**が、閉じたあとも
             //  カメラや機器へのアクセスを続けられる。
@@ -93,7 +95,7 @@ class CaptureService : Service() {
         val lines = intent?.getStringArrayListExtra(EXTRA_LINES) ?: arrayListOf()
         if (lines.isEmpty()) { running = false; stopForegroundCompat(); stopSelf(); return START_NOT_STICKY }
         ensureChannel()
-        startForeground(NOTE_ID, buildNote(lines))
+        goForeground(buildNote(lines), intent?.getBooleanExtra(EXTRA_CAMERA, false) == true)
         if (startedAtMs == 0L) {
             startedAtMs = android.os.SystemClock.elapsedRealtime()
             logEvent("start n=" + lines.size, false)
@@ -167,6 +169,41 @@ class CaptureService : Service() {
     // 撮影ログへ残す(端末に残る記録。撮影レポートと突き合わせて読む)。
     private fun logEvent(msg: String, err: Boolean) {
         runCatching { HgeNative.nativeLogEvent("FGS", msg, err) }
+    }
+
+    // ================= サービスの種類(2026-09-30 依頼: 内蔵カメラ対応) =================
+    // 【内蔵カメラには「カメラ」型が要る】Android は、裏に回ったアプリからのカメラ利用を
+    //  塞いでいる。**カメラ型のフォアグラウンドサービスが動いている間だけ**、閉じたあとも
+    //  カメラを使い続けられる。connectedDevice だけだと、プロセスは生きているのに
+    //  カメラが開けず**黙って撮れなくなる**(第1段階で内蔵カメラを対象外にしていた理由)。
+    //
+    // 【見えている間に始めること】この決まりは「アプリが見えている間に始めたサービス」に
+    //  だけ効く。撮影の開始は画面を見ながら押すので条件を満たす。
+    //  **種類は最初に決まったまま変わらない** — 閉じている間に新しい撮影は始められないので、
+    //  内蔵カメラが混じるかどうかが途中で変わることはない。
+    //
+    // 【カメラ権限が無ければカメラ型を名乗らない】Android 14 以降、権限が無いのに
+    //  カメラ型を名乗ると SecurityException で落とされる。内蔵カメラの撮影は開始時に
+    //  権限を求めるので通常は持っているが、保険として落とす。
+    private fun goForeground(note: Notification, needCamera: Boolean) {
+        var type = 0
+        if (Build.VERSION.SDK_INT >= 29) {
+            type = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            val camOk = androidx.core.content.ContextCompat.checkSelfPermission(
+                this, android.Manifest.permission.CAMERA) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (needCamera && camOk) {
+                type = type or android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+            } else if (needCamera) {
+                logEvent("camera type skipped: no CAMERA permission", true)
+            }
+        }
+        try {
+            androidx.core.app.ServiceCompat.startForeground(this, NOTE_ID, note, type)
+        } catch (e: Exception) {
+            // 種類を名乗れなかった。撮影を止めはしないが、閉じたら続かないので記録は残す。
+            logEvent("startForeground failed: " + e, true)
+            runCatching { startForeground(NOTE_ID, note) }
+        }
     }
 
     private fun stopForegroundCompat() {

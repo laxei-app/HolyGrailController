@@ -38,6 +38,9 @@
          POST_NOTIFICATIONS が無くても撮影は続くが、**通知が見えない**(Android 13以降)。 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- 内蔵カメラで撮っている間も閉じて続けるため(2026-09-30)。**裏に回ったアプリは
+         カメラを使えない**決まりがあり、カメラ型のサービスだけがその例外になる。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- 【広告IDは集めない(2026-09-27)】Firebase の計測ライブラリは既定でこれを集め、
@@ -140,7 +143,7 @@
              android:exported="false" で外部からは起動できない。 -->
         <service
             android:name="app.laxei.twylapse.CaptureService"
-            android:foregroundServiceType="connectedDevice"
+            android:foregroundServiceType="connectedDevice|camera"
             android:exported="false"
             android:stopWithTask="false" />
 

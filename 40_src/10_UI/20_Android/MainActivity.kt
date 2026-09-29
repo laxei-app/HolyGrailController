@@ -4644,6 +4644,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 閉じても続ける対象(スマホ直結の外部カメラ)の行を、ここで一緒に集めて通知へ渡す。
         //  一覧の作り直しは撮影の状態が変わるたびに通るので、枚数の更新もここで足りる。
         val noteLines = ArrayList<String>()
+        var noteNeedsCamera = false
         try {
             val arr = JSONArray(js)
             for (i in 0 until arr.length()) {
@@ -4651,9 +4652,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 val pid = po.optString("id")
                 val active = capturingPlans.contains(pid) || waitingPlans.contains(pid) ||
                              startingPlans.contains(pid) || disconnectedPlans.contains(pid)
-                if (active && pid.isNotEmpty() && planEdgeName(pid).isEmpty() &&
-                    !po.optBoolean("camLocalOnly", false)) {
+                if (active && pid.isNotEmpty() && planEdgeName(pid).isEmpty()) {
                     noteLines.add(captureNoteLine(pid, po.optString("planName")))
+                    // 内蔵カメラが混じるならサービスは「カメラ」型で名乗る必要がある
+                    //  (そうしないと閉じたあとカメラを開けない)。
+                    if (po.optBoolean("camLocalOnly", false)) noteNeedsCamera = true
                 }
                 planListContainer.addView(buildPlanRow(po))
                 planListContainer.addView(thinDivider())
@@ -4672,7 +4675,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // リスト件数が少なければ内容ぴったりまで縮める(item6: リスト最下段で止める)。
         setInitialSplit(R.id.plan_listContainer)
         // 閉じても続ける対象があればサービスを動かし、無くなれば止める(ひな形の一覧では触らない)。
-        if (!tplMode) applyCaptureService(noteLines)
+        if (!tplMode) applyCaptureService(noteLines, noteNeedsCamera)
     }
 
     private fun buildPlanRow(p: JSONObject): View {
@@ -8746,10 +8749,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // ================= 撮影中はアプリを閉じても続ける(2026-09-29 依頼) =================
-    // 【対象(第1段階)】スマホが自分で撮っているもののうち、**外部カメラ(通信で撮る)だけ**。
-    //  ・外部端末(エッジ)に任せた計画 … 要らない。エッジが自分で撮っている
-    //  ・内蔵カメラ … カメラ型のサービスが要る(第2段階)。いまは対象にしない。中途半端に
-    //    生かすと、**プロセスは生きているのにカメラを使えず黙って撮れなくなる**ほうが危ない
+    // 【対象】スマホが自分で撮っているものすべて。**外部端末(エッジ)に任せた計画は対象外** —
+    //  エッジが自分で撮っているので、スマホを生かしておく理由が無い。
+    //  内蔵カメラは 2026-09-30 に対応した。**カメラ型のサービスで名乗る**必要があり、
+    //  そうしないとプロセスは生きているのにカメラを開けず黙って撮れなくなる(CaptureService)。
     // 【待機中も対象(ユーザー決定)】「撮影開始待ち」も撮影の一部として扱う。
     //  窓の前で閉じられて始まらない、では意味が無い。
     // 【黙って続ける(ユーザー決定)】閉じるときに確認はしない。スワイプで払われたときなど
@@ -8758,8 +8761,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // 通知に出す行を作って、サービスへ渡す(空ならサービスを止める)。
     //  一覧を作り直すたびに呼ぶので、枚数と残り時間も付いてくる。
-    private fun applyCaptureService(lines: List<String>) {
-        try { CaptureService.apply(applicationContext, lines) } catch (_: Exception) {}
+    private fun applyCaptureService(lines: List<String>, needCamera: Boolean = false) {
+        try { CaptureService.apply(applicationContext, lines, needCamera) } catch (_: Exception) {}
     }
 
     // 1件ぶんの行。"計画名  120/602枚  残り 1時間40分" / "計画名  撮影開始待ち"。
