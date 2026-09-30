@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <!-- 640.撮影場所リスト(§7.9)。上=登録済み場所の一覧(タップ選択)/下=選択場所の詳細(緯度経度/標高/メモ)。 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
@@ -18,7 +18,7 @@
         <ImageView android:id="@+id/places_back" android:layout_width="32dp" android:layout_height="32dp"
             android:layout_marginStart="8dp" android:clickable="true" android:focusable="true" android:src="@drawable/ic_back_r" />
         <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-            android:gravity="center" android:text="撮影場所リスト" android:textColor="#FFFFFF"
+            android:gravity="center" android:text="@string/title_places" android:textColor="#FFFFFF"
             android:textSize="20sp" android:textStyle="bold" />
         <View android:layout_width="40dp" android:layout_height="32dp" />
         <!-- 右上のメニューは廃止(2026-08-29 UI依頼)。題が中央に見えるよう幅だけ残す -->

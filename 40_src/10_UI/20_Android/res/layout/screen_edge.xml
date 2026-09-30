@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <!-- エッジ端末設定(2026-08-08 UI依頼)。従来は「エッジ端末の登録」ダイアログと
      「エッジ端末設定」ダイアログの2つに分かれていたものを、他の設定画面と同じ
      「上=一覧 / 分割バー / 下=入力」の1画面へ統合した。
@@ -21,7 +21,7 @@
         <ImageView android:id="@+id/edge_back" android:layout_width="32dp" android:layout_height="32dp"
             android:layout_marginStart="8dp" android:clickable="true" android:focusable="true" android:src="@drawable/ic_back_r" />
         <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-            android:gravity="center" android:text="端末設定" android:textColor="#FFFFFF"
+            android:gravity="center" android:text="@string/menu_edge_settings" android:textColor="#FFFFFF"
             android:textSize="20sp" android:textStyle="bold" />
         <View android:layout_width="40dp" android:layout_height="32dp" />
         <ImageView android:id="@+id/edge_menu" android:layout_width="32dp" android:layout_height="32dp"

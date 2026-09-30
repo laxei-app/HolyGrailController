@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <!-- エッジ端末へ USB でファームを書き込む画面(2026-08-26)。
      買ってきたばかりの端末には自分たちのファームが入っていないので、OTA では焼けない。
      ここだけが「開封した端末を使える状態にする」唯一の道になる。
@@ -22,7 +22,7 @@
         <ImageView android:id="@+id/fl_back" android:layout_width="32dp" android:layout_height="32dp"
             android:layout_marginStart="8dp" android:clickable="true" android:focusable="true" android:src="@drawable/ic_back_r" />
         <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-            android:gravity="center" android:text="ファームウェア書き換え (USB)" android:textColor="#FFFFFF"
+            android:gravity="center" android:text="@string/menu_edge_flash" android:textColor="#FFFFFF"
             android:textSize="20sp" android:textStyle="bold" />
         <View android:layout_width="40dp" android:layout_height="32dp" />
         <ImageView android:id="@+id/fl_menu" android:layout_width="32dp" android:layout_height="32dp"
@@ -33,17 +33,17 @@
     <TextView android:id="@+id/fl_state"
         android:layout_width="match_parent" android:layout_height="wrap_content"
         android:padding="12dp" android:textSize="16sp"
-        android:text="USB ケーブルで外部端末をつないでください。" />
+        android:text="@string/flash_connect" />
 
     <LinearLayout android:id="@+id/fl_buttons"
         android:layout_width="match_parent" android:layout_height="wrap_content"
         android:orientation="horizontal" android:padding="8dp">
         <Button android:id="@+id/fl_probe"
             android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-            android:text="調べる" />
+            android:text="@string/flash_check" />
         <Button android:id="@+id/fl_write"
             android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-            android:text="書き込む" />
+            android:text="@string/flash_write" />
     </LinearLayout>
 
     <!-- 「調べる」は1バイトも書かないので、いつ押しても端末を壊さない -->
@@ -51,7 +51,7 @@
         android:layout_width="match_parent" android:layout_height="wrap_content"
         android:paddingStart="12dp" android:paddingEnd="12dp" android:paddingBottom="4dp"
         android:textSize="12sp" android:textColor="#9E9E9E"
-        android:text="「調べる」は端末に何も書き込みません。" />
+        android:text="@string/flash_check_note" />
 
     <ProgressBar android:id="@+id/fl_bar"
         style="?android:attr/progressBarStyleHorizontal"

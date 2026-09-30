@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <!-- 650.カメラ予約表(項目17)。カメラごとに帯を出し、その下に「開始-終了 端末名 計画名」を並べる。
      同一カメラで使用時刻が重なる行は色を変え、行頭に×を表示する(その計画は開始できない)。
      予約表は撮影計画の作成/更新時にファイル(camReserve.json)へ作り直す(終了が過去の物は除く)。 -->
@@ -20,7 +20,7 @@
         <ImageView android:id="@+id/reserve_back" android:layout_width="32dp" android:layout_height="32dp"
             android:layout_marginStart="8dp" android:clickable="true" android:focusable="true" android:src="@drawable/ic_back_r" />
         <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-            android:gravity="center" android:text="カメラ予約表" android:textColor="#FFFFFF"
+            android:gravity="center" android:text="@string/menu_reserve" android:textColor="#FFFFFF"
             android:textSize="20sp" android:textStyle="bold" />
         <View android:layout_width="40dp" android:layout_height="32dp" />
         <ImageView android:id="@+id/reserve_menu" android:layout_width="32dp" android:layout_height="32dp"
@@ -29,7 +29,7 @@
 
     <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
         android:padding="8dp" android:textSize="12sp" android:textColor="#666666"
-        android:text="撮影終了が未来の計画だけを、カメラごとに表示します。使用時刻が重なる計画は ✕ 印で示し、開始できません。" />
+        android:text="@string/reserve_note" />
 
     <ScrollView
         android:layout_width="match_parent"

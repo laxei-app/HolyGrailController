@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <!-- 660.操作履歴(項目9)。撮影に関する操作を日時とともに記録して見せる(最新が一番上)。
      記録はスマホに保存する。エッジ端末側の操作は進捗ポーリングで得た状態の変化から拾う。 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -19,7 +19,7 @@
         <ImageView android:id="@+id/history_back" android:layout_width="32dp" android:layout_height="32dp"
             android:layout_marginStart="8dp" android:clickable="true" android:focusable="true" android:src="@drawable/ic_back_r" />
         <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-            android:gravity="center" android:text="操作履歴" android:textColor="#FFFFFF"
+            android:gravity="center" android:text="@string/menu_history" android:textColor="#FFFFFF"
             android:textSize="20sp" android:textStyle="bold" />
         <View android:layout_width="40dp" android:layout_height="32dp" />
         <ImageView android:id="@+id/history_menu" android:layout_width="32dp" android:layout_height="32dp"
@@ -34,9 +34,9 @@
         android:padding="8dp">
         <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
             android:textSize="12sp" android:textColor="#666666"
-            android:text="日時 / 操作内容 / 撮影計画 / 端末 / カメラ（最新が上）" />
+            android:text="@string/hist_header" />
         <Button android:id="@+id/history_clear" android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:text="履歴削除" android:textSize="12sp" />
+            android:text="@string/hist_clear" android:textSize="12sp" />
     </LinearLayout>
 
     <ScrollView

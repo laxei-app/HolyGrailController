@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <!-- 430 撮影中(仕様書10 §7.3.3)。撮影中の状況のみ表示。変更不可・撮影停止のみ。 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
@@ -18,7 +18,7 @@
         <ImageView android:id="@+id/cap_back" android:layout_width="32dp" android:layout_height="32dp"
             android:layout_marginStart="8dp" android:clickable="true" android:focusable="true" android:src="@drawable/ic_back_r" />
         <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-            android:gravity="center" android:text="撮影計画" android:textColor="#FFFFFF"
+            android:gravity="center" android:text="@string/title_plan" android:textColor="#FFFFFF"
             android:textSize="20sp" android:textStyle="bold" />
         <View android:layout_width="40dp" android:layout_height="32dp" />
         <ImageView android:id="@+id/cap_menu" android:layout_width="32dp" android:layout_height="32dp"
@@ -47,7 +47,7 @@
                 android:textSize="13sp" android:text="Canon EOS R10 / 16mm" />
             <TextView android:id="@+id/cap_dirText" android:layout_width="match_parent"
                 android:layout_height="wrap_content" android:textSize="13sp"
-                android:text="撮影方向: 90.0°   仰角: 10.0°" />
+                android:text="@string/cap_direction_ph" />
 
             <!-- 状況 -->
             <TextView android:id="@+id/cap_stateText" android:layout_width="match_parent"
@@ -60,7 +60,7 @@
 
             <!-- スケジュール(現在位置を強調) -->
             <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:layout_marginTop="12dp" android:text="スケジュール" android:textStyle="bold" />
+                android:layout_marginTop="12dp" android:text="@string/cap_schedule" android:textStyle="bold" />
             <LinearLayout android:id="@+id/cap_scheduleContainer"
                 android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:layout_marginTop="4dp" android:orientation="vertical" />
@@ -69,7 +69,7 @@
                 android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:layout_marginTop="16dp"
                 android:drawableStart="@drawable/ic_stop"
-                android:text="撮影停止" android:textSize="18sp" />
+                android:text="@string/cap_stop" android:textSize="18sp" />
         </LinearLayout>
     </ScrollView>
 </LinearLayout>

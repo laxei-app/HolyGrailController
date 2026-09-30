@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <!-- 632.レンズ追加リスト(マスタ)。メーカーごとに分類し▼で開閉、チェックして複数追加する。 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
@@ -18,7 +18,7 @@
         <ImageView android:id="@+id/lensadd_back" android:layout_width="32dp" android:layout_height="32dp"
             android:layout_marginStart="8dp" android:clickable="true" android:focusable="true" android:src="@drawable/ic_back_r" />
         <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-            android:gravity="center" android:text="レンズ追加" android:textColor="#FFFFFF"
+            android:gravity="center" android:text="@string/title_lens_add" android:textColor="#FFFFFF"
             android:textSize="20sp" android:textStyle="bold" />
         <View android:layout_width="40dp" android:layout_height="32dp" />
         <ImageView android:id="@+id/lensadd_menu" android:layout_width="32dp" android:layout_height="32dp"
@@ -27,7 +27,7 @@
 
     <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
         android:padding="8dp" android:textSize="12sp" android:textColor="#888888"
-        android:text="チェックして画面を離れると追加されます。" />
+        android:text="@string/gear_add_note" />
 
     <ScrollView android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
         <LinearLayout android:id="@+id/lensadd_container"
@@ -38,7 +38,7 @@
     <androidx.appcompat.widget.AppCompatButton android:id="@+id/lensadd_cancel"
         android:layout_width="wrap_content" android:layout_height="wrap_content"
         android:layout_gravity="end" android:layout_margin="12dp"
-        android:text="変更の取り消し" android:textColor="#FFFFFF" android:textAllCaps="false"
+        android:text="@string/undo_changes" android:textColor="#FFFFFF" android:textAllCaps="false"
         android:background="@drawable/btn_cancel_double"
         android:paddingLeft="20dp" android:paddingRight="20dp"
         android:paddingTop="8dp" android:paddingBottom="8dp" />

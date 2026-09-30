@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <!-- デバッグログ画面(2026-08-29 UI依頼)。
      ・上に題と戻るボタン(他の画面と同じ並び。右側は幅だけ残して釣り合わせる)
      ・何を採るか(撮影ログ/バッテリログ)のチェック
@@ -19,7 +19,7 @@
         <ImageView android:id="@+id/dlog_back" android:layout_width="32dp" android:layout_height="32dp"
             android:layout_marginStart="8dp" android:clickable="true" android:focusable="true" android:src="@drawable/ic_back_r" />
         <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-            android:gravity="center" android:text="デバッグログ" android:textColor="#FFFFFF"
+            android:gravity="center" android:text="@string/menu_debuglog" android:textColor="#FFFFFF"
             android:textSize="20sp" android:textStyle="bold" />
         <View android:layout_width="40dp" android:layout_height="32dp" />
         <ImageView android:id="@+id/dlog_menu" android:layout_width="32dp" android:layout_height="32dp"

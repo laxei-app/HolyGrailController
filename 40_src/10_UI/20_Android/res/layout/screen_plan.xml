@@ -38,7 +38,7 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:gravity="center"
-            android:text="撮影計画"
+            android:text="@string/title_plan"
             android:textColor="#FFFFFF"
             android:textSize="20sp"
             android:textStyle="bold" />
@@ -146,7 +146,7 @@
                             android:text="" />
                         <Button android:id="@+id/plan_resetButton"
                             android:layout_width="wrap_content" android:layout_height="wrap_content"
-                            android:text="リセット" android:textSize="12sp" />
+                            android:text="@string/reset" android:textSize="12sp" />
                     </LinearLayout>
 
                     <LinearLayout
@@ -155,7 +155,7 @@
                         android:gravity="center_vertical"
                         android:orientation="horizontal">
                         <TextView android:layout_width="96dp" android:layout_height="wrap_content"
-                            android:text="撮影開始" android:textSize="13sp" android:textStyle="bold" />
+                            android:text="@string/plan_start" android:textSize="13sp" android:textStyle="bold" />
                         <Button android:id="@+id/plan_startDate" style="?android:attr/buttonBarButtonStyle"
                             android:layout_width="wrap_content" android:layout_height="wrap_content"
                             android:minWidth="0dp" android:paddingStart="0dp" android:paddingEnd="8dp"
@@ -176,7 +176,7 @@
                         android:gravity="center_vertical"
                         android:orientation="horizontal">
                         <TextView android:layout_width="96dp" android:layout_height="wrap_content"
-                            android:text="撮影終了" android:textSize="13sp" android:textStyle="bold" />
+                            android:text="@string/plan_end" android:textSize="13sp" android:textStyle="bold" />
                         <Button android:id="@+id/plan_endDate" style="?android:attr/buttonBarButtonStyle"
                             android:layout_width="wrap_content" android:layout_height="wrap_content"
                             android:minWidth="0dp" android:paddingStart="0dp" android:paddingEnd="8dp"
@@ -198,7 +198,7 @@
                 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="10dp" android:orientation="horizontal">
                     <TextView android:id="@+id/plan_placeLabel" android:layout_width="96dp"
-                        android:layout_height="wrap_content" android:text="撮影場所" android:textStyle="bold"
+                        android:layout_height="wrap_content" android:text="@string/plan_place" android:textStyle="bold"
                         android:clickable="true" android:focusable="true" />
                     <LinearLayout android:layout_width="0dp" android:layout_weight="1"
                         android:layout_height="wrap_content" android:orientation="vertical">
@@ -215,7 +215,7 @@
                     android:layout_marginTop="10dp" android:orientation="horizontal"
                     android:gravity="center_vertical">
                     <TextView android:id="@+id/plan_edgeLabel" android:layout_width="96dp"
-                        android:layout_height="wrap_content" android:text="制御端末" android:textStyle="bold"
+                        android:layout_height="wrap_content" android:text="@string/plan_controller" android:textStyle="bold"
                         android:clickable="true" android:focusable="true" />
                     <Spinner android:id="@+id/plan_edgeSpinner" android:layout_width="0dp"
                         android:layout_weight="1" android:layout_height="wrap_content" />
@@ -225,7 +225,7 @@
                 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="12dp" android:orientation="horizontal">
                     <TextView android:id="@+id/plan_cameraLabel" android:layout_width="96dp"
-                        android:layout_height="wrap_content" android:text="カメラ" android:textStyle="bold"
+                        android:layout_height="wrap_content" android:text="@string/plan_camera" android:textStyle="bold"
                         android:clickable="true" android:focusable="true" />
                     <TextView android:id="@+id/plan_cameraText" android:layout_width="0dp"
                         android:layout_weight="1" android:layout_height="wrap_content"
@@ -237,7 +237,7 @@
                     android:layout_marginTop="12dp" android:orientation="horizontal"
                     android:gravity="center_vertical">
                     <TextView android:layout_width="96dp" android:layout_height="wrap_content"
-                        android:text="同期撮影" android:textStyle="bold" android:singleLine="true" />
+                        android:text="@string/plan_sync" android:textStyle="bold" android:singleLine="true" />
                     <Switch android:id="@+id/plan_syncShot" android:layout_width="wrap_content"
                         android:layout_height="wrap_content" />
                 </LinearLayout>
@@ -247,16 +247,16 @@
                     android:layout_marginTop="12dp" android:orientation="horizontal"
                     android:visibility="gone">
                     <TextView android:id="@+id/plan_subCamLabel" android:layout_width="96dp"
-                        android:layout_height="wrap_content" android:text="追加カメラ" android:textStyle="bold"
+                        android:layout_height="wrap_content" android:text="@string/plan_extra_cameras" android:textStyle="bold"
                         android:clickable="true" android:focusable="true" />
                     <TextView android:id="@+id/plan_subCamText" android:layout_width="0dp"
                         android:layout_weight="1" android:layout_height="wrap_content"
-                        android:clickable="true" android:focusable="true" android:text="未選択" />
+                        android:clickable="true" android:focusable="true" android:text="@string/not_selected" />
                 </LinearLayout>
                 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="12dp" android:orientation="horizontal">
                     <TextView android:id="@+id/plan_lensLabel" android:layout_width="96dp"
-                        android:layout_height="wrap_content" android:text="レンズ" android:textStyle="bold"
+                        android:layout_height="wrap_content" android:text="@string/plan_lens" android:textStyle="bold"
                         android:clickable="true" android:focusable="true" />
                     <TextView android:id="@+id/plan_lensText" android:layout_width="0dp"
                         android:layout_weight="1" android:layout_height="wrap_content"
@@ -270,10 +270,10 @@
                 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="12dp" android:orientation="horizontal" android:gravity="center_vertical">
                     <TextView android:layout_width="96dp" android:layout_height="wrap_content"
-                        android:text="撮影周期" android:textStyle="bold" />
+                        android:text="@string/plan_interval" android:textStyle="bold" />
                     <TextView android:id="@+id/plan_intervalText" android:layout_width="wrap_content"
                         android:layout_height="wrap_content" android:clickable="true" android:focusable="true"
-                        android:background="#F0F0F0" android:padding="6dp" android:text="15秒"
+                        android:background="#F0F0F0" android:padding="6dp" android:text="@string/plan_interval_ph"
                         android:textSize="15sp" android:textStyle="bold" />
                     <!-- NPF シャッター速度(参考表示) / 最小撮影周期。周期を決めるときの目安なので、
                          入力欄の真横に置く(2026-08-24 UI依頼)。 -->
@@ -281,12 +281,12 @@
                         android:layout_weight="1" android:layout_height="wrap_content"
                         android:layout_marginStart="10dp"
                         android:textSize="12sp" android:textColor="#888888"
-                        android:text="NPF -- 秒   最小周期 -- 秒" />
+                        android:text="@string/plan_npf_ph" />
                 </LinearLayout>
                 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="12dp" android:orientation="horizontal" android:gravity="center_vertical">
                     <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                        android:text="横向きで撮る(ランドスケープ)" android:textStyle="bold"
+                        android:text="@string/plan_landscape" android:textStyle="bold"
                         android:singleLine="true" />
                     <Switch android:id="@+id/plan_landscape" android:layout_width="wrap_content"
                         android:layout_height="wrap_content" android:layout_marginStart="12dp" />
@@ -298,14 +298,14 @@
 
                 <!-- 概要スケジュール(表示専用。時刻とイベントのみ)。撮影制御方法ボタンの上。 -->
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp" android:text="概要スケジュール" android:textStyle="bold" />
+                    android:layout_marginTop="12dp" android:text="@string/plan_schedule" android:textStyle="bold" />
                 <LinearLayout android:id="@+id/plan_overviewContainer"
                     android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="4dp" android:orientation="vertical" />
 
                 <!-- 撮影制御方法の編集ボタン(全種・常に定位置)。詳細な薄明帯は横スライドの薄明ページで編集する。 -->
                 <TextView android:id="@+id/plan_ccmEditLabel" android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp" android:text="撮影制御方法（タップで編集）" android:textSize="13sp" android:textStyle="bold" />
+                    android:layout_marginTop="12dp" android:text="@string/plan_ccm_tap" android:textSize="13sp" android:textStyle="bold" />
                 <LinearLayout android:id="@+id/plan_ccmButtons"
                     android:layout_width="match_parent" android:layout_height="wrap_content"
                     android:layout_marginTop="4dp" android:orientation="vertical" />
