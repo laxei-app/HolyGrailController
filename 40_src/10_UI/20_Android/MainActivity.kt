@@ -439,8 +439,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
     }
 
-    private val fmtDate = SimpleDateFormat("yyyy-MM-dd", Locale.US)
-    private val fmtTime = SimpleDateFormat("HH:mm", Locale.US)
+    // 【見せ方は言語で変わる(2026-10-01 依頼)】日本語=2026-09-29 19:50 /
+    //  英語=Sep 29, 2026 7:50 PM。**保存と通信は ISO のまま**(下の fmtIso)。
+    //  言語を変えると Activity が作り直されるので、一度作ればよい。
+    private val fmtDate: java.text.DateFormat by lazy { Loc.dateFmt(this) }
+    private val fmtTime: java.text.DateFormat by lazy { Loc.timeFmt(this) }
     private val fmtIso = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -995,6 +998,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // ============================================================
     private fun openGearMenu() { buildGearMenu(); flipper.displayedChild = 4 }
 
+    // 【画面の文字はリソースから引く(2026-10-01 依頼)】
+    //  英語 = res/values/strings.xml(既定) / 日本語 = res/values-ja/strings.xml。
+    //  行が長くなるのを避けるための短い別名。**文字列の足し算で文を組まないこと** —
+    //  語順が言語で変わるので、可変部はリソース側の %1$s で受ける。
+    private fun s(id: Int): String = getString(id)
+    private fun s(id: Int, vararg a: Any): String = getString(id, *a)
+    /** 数を伴う文(英語は単数・複数で変わる)。 */
+    private fun q(id: Int, n: Int): String = resources.getQuantityString(id, n, n)
+
     private fun gearBand(box: LinearLayout, title: String) {
         val tv = TextView(this); tv.text = title; tv.textSize = 14f; tv.setTypeface(null, Typeface.BOLD)
         tv.setTextColor(Color.WHITE); tv.setBackgroundColor(Color.parseColor("#5C6BC0"))
@@ -1027,6 +1039,32 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.addView(thinDivider())
     }
 
+    // 選択式の項目(右にドロップダウン)。言語のように「いくつかから選ぶ」もの用。
+    private fun gearSpinnerItem(box: LinearLayout, title: String, entries: List<String>,
+                                selected: Int, onSelect: (Int) -> Unit) {
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.setPadding(dp(28), dp(6), dp(12), dp(6))
+        val tv = TextView(this)
+        tv.text = title; tv.textSize = 16f; tv.setTextColor(Color.BLACK)
+        tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        tv.gravity = android.view.Gravity.CENTER_VERTICAL
+        val sp = android.widget.Spinner(this)
+        sp.adapter = android.widget.ArrayAdapter(this,
+            android.R.layout.simple_spinner_dropdown_item, entries)
+        sp.setSelection(selected, false)
+        // 組み上げた直後に一度呼ばれるので、同じ値なら何もしない。
+        sp.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                if (pos != selected) onSelect(pos)
+            }
+            override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
+        }
+        row.addView(tv); row.addView(sp)
+        box.addView(row)
+        box.addView(thinDivider())
+    }
+
     // --- スマホ⇄エッジの通信路(BLE か Wi-Fi か)。スマホだけが決める ---
     // 【既定は BLE(2026-09-26 ユーザー判断)】APモードの外部端末を Wi-Fi で相手にすると、
     //  スマホがその端末のAPへ入る必要があり、SSIDの切り替えが要るうえ**1台ずつ**しか扱えず、
@@ -1037,7 +1075,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         hgcPrefs().edit().putBoolean("edgeUseBle", on).apply()
         EdgeBleLink.close()                 // 経路を変えるので掴んでいた接続は捨てる
         HgeNative.nativeEdgeSetBle(on)
-        Toast.makeText(this, if (on) "外部端末とはBLEで通信します" else "外部端末とはWi-Fiで通信します",
+        Toast.makeText(this, s(if (on) R.string.toast_edge_ble_on else R.string.toast_edge_ble_off),
                        Toast.LENGTH_SHORT).show()
     }
 
@@ -1063,78 +1101,99 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.addView(tv)
     }
 
+    // 【言語を変える(2026-10-01 依頼)】**プロセスごと入れ直す**。
+    //  Activity だけ作り直すと onDestroy が Entity を畳み、その後始末で落ちる
+    //  (実機で踏んだ — detectSsdpBase::watchStop の thread::join)。入れ直せば
+    //  Entity は新しいプロセスで素直に立ち上がる。「出荷時設定に戻す」と同じ道。
+    private fun changeLanguage(tag: String) {
+        // 標準のひな形と撮影制御方法の名前は**保存データ**なので、
+        //  リソースを切り替えるだけでは変わらない。**落とす前に**付け替える。
+        renameStdNamesForLocale(tag)
+        Loc.save(this, tag)
+        RestartActivity.restart(this)
+    }
+
     private fun buildGearMenu() {
         enforceLogUnlockExpiry()        // 期限切れならここで閉じる(項目を出す前に)
         val box = findViewById<LinearLayout>(R.id.gmenu_container)
         box.removeAllViews()
-        gearBand(box, "撮影計画")
-        gearItem(box, "撮影計画") { flipper.displayedChild = 0 }
-        gearItem(box, "撮影場所") { openPlacesList() }
-        gearItem(box, "撮影計画ひな形") { openTemplates() }
-        gearItem(box, "カメラ予約表") { openReserveTable() }   // 項目17
-        gearBand(box, "撮影制御方法 初期値")
+        gearBand(box, s(R.string.band_plan))
+        gearItem(box, s(R.string.menu_plan)) { flipper.displayedChild = 0 }
+        gearItem(box, s(R.string.menu_places)) { openPlacesList() }
+        gearItem(box, s(R.string.menu_templates)) { openTemplates() }
+        gearItem(box, s(R.string.menu_reserve)) { openReserveTable() }   // 項目17
+        gearBand(box, s(R.string.band_ccm_default))
         // 【2 項目だけ(2026-09-07 UI依頼)】型(夜間/朝日/夕日/日中)は画面の上のタブで移る。最初は夜間を出す。
-        gearItem(box, "初期値") { openPresetScreen("night") }
-        gearItem(box, "色の設定") { openColorSetting("night") }
-        gearBand(box, "自動露出")
-        gearItem(box, "露出平滑化") { openSmoothingScreen() }
-        gearBand(box, "所持機材")
-        gearItem(box, "所持カメラ") { openCameraList() }
-        gearItem(box, "所持レンズ") { openLensList() }
+        gearItem(box, s(R.string.menu_ccm_default)) { openPresetScreen("night") }
+        gearItem(box, s(R.string.menu_colors)) { openColorSetting("night") }
+        gearBand(box, s(R.string.band_autoexp))
+        gearItem(box, s(R.string.menu_smoothing)) { openSmoothingScreen() }
+        gearBand(box, s(R.string.band_gear))
+        gearItem(box, s(R.string.menu_cameras)) { openCameraList() }
+        gearItem(box, s(R.string.menu_lenses)) { openLensList() }
         // 【free 版では丸ごと出さない(2026-09-29 依頼)】使えないものが見えていても
         //  「これ何？」になるだけなので、案内も置かずに消す。
         if (canEdge()) {
-        gearBand(box, "外部端末")
+        gearBand(box, s(R.string.band_edge))
         // 2026-08-08 UI依頼: 「登録」と「設定」を1画面へ統合した(登録は画面内の
         // 「＋ 新規エッジ端末」から行う)。
-        gearItem(box, "端末設定") { openEdgeSettings() }
+        gearItem(box, s(R.string.menu_edge_settings)) { openEdgeSettings() }
         // 買ってきたばかりの端末には自分たちのファームが入っていない。OTA も STA での自己更新も
         //  「今動いているファームが受け取って書く」仕組みなので最初の1回には使えず、
         //  USB で焼くここだけが「開封した端末を使える状態にする」道になる(2026-08-26)。
-        gearItem(box, "ファームウェア書き換え(USB)") {
+        gearItem(box, s(R.string.menu_edge_flash)) {
             startActivity(Intent(this, EdgeFlashActivity::class.java))
         }
         // 通信路の切替。エッジは常に Wi-Fi と BLE の両方で待ち受けているので、
         // ここを倒すだけで切り替わる(エッジへ知らせる必要は無い)。
         //  ・屋外でエッジが AP のときは BLE にすると SSID を切り替えずに全台と話せる
         //  ・エッジ側にモードを持たせないので、戻せなくなって現地へ行く経路は無い
-        gearSwitchItem(box, "外部端末とBLEで通信する", edgeUseBle()) { on -> setEdgeUseBle(on) }
+        gearSwitchItem(box, s(R.string.menu_edge_ble), edgeUseBle()) { on -> setEdgeUseBle(on) }
         }   // if (canEdge())
-        gearBand(box, "その他")
+        gearBand(box, s(R.string.band_other))
+        // 【言語(2026-10-01 依頼)】端末に合わせる / 日本語 / English。
+        //  覚えるのは AppCompat に任せるので、ここは選んで渡すだけ。
+        //  選ぶと Activity が作り直されるので、後始末は要らない。
+        gearSpinnerItem(box, s(R.string.menu_language),
+            listOf(s(R.string.lang_system), s(R.string.lang_ja), s(R.string.lang_en)),
+            when (Loc.selected(this)) { "ja" -> 1; "en" -> 2; else -> 0 }) { i ->
+            val tag = when (i) { 1 -> "ja"; 2 -> "en"; else -> Loc.SYSTEM }
+            if (tag != Loc.selected(this)) changeLanguage(tag)
+        }
         // 【機能拡張(2026-10-01 UI依頼)】買い切りのアドインの試用と購入。
         //  「スマホ権限、設定」の上に置く。
-        gearItem(box, "機能拡張") { openExtScreen() }
-        gearItem(box, "スマホ権限、設定") { openPermCheck() }
+        gearItem(box, s(R.string.menu_ext)) { openExtScreen() }
+        gearItem(box, s(R.string.menu_permcheck)) { openPermCheck() }
         // 使っているソフトウェアの権利表示(2026-09-27 UI依頼)。中身は原文のまま出すので翻訳しない。
-        gearItem(box, "著作権表示") { openNotices() }
-        gearBand(box, "ログ")
+        gearItem(box, s(R.string.menu_notices)) { openNotices() }
+        gearBand(box, s(R.string.band_log))
         // 撮影中/開始要求中はグレー表示で不可(コピー処理が撮影と競合しないように)。
         // 【撮影中でも開ける(2026-08-29 実機で気づいた)】この画面には性質の違う2つが同居する。
         //  記録する内容 = 次の撮影に効く設定。**撮影の様子がおかしいときこそ入れたい**
         //  ログ取得     = 重いコピー。撮影中は走らせたくない
         //  画面ごと塞ぐと前者ができなくなるので、塞ぐのは取得ボタンだけにする。
-        if (isLogUnlocked()) gearItem(box, "デバッグログ") { openDebugLog() }
+        if (isLogUnlocked()) gearItem(box, s(R.string.menu_debuglog)) { openDebugLog() }
         // 【開発用: 有料/free の行き来(2026-09-29)】購入の仕組みがまだ無い段階で、両方の
         //  見え方を実機で確かめるためのもの。**リリース版には存在しない** — 残すと
         //  それ自体が有料機能の抜け道になる。
         if (BuildConfig.DEBUG) {
             // 購入の仕組み(Play Billing)がまだ無い段階で、4つの状態を実機で行き来するためのもの。
             //  free → 試用中 → 外部カメラ購入 → 外部端末購入
-            gearSwitchItem(box, "【開発】外部カメラを購入済みにする", ownedExternal()) { on ->
+            gearSwitchItem(box, s(R.string.dev_own_camera), ownedExternal()) { on ->
                 hgcPrefs().edit().putBoolean("ownedExternal", on).apply()
                 if (!on) hgcPrefs().edit().putBoolean("ownedEdge", false).apply()  // Bは A が前提
                 afterEntitlementChanged()
             }
-            gearSwitchItem(box, "【開発】外部端末を購入済みにする", ownedEdge()) { on ->
+            gearSwitchItem(box, s(R.string.dev_own_edge), ownedEdge()) { on ->
                 hgcPrefs().edit().putBoolean("ownedEdge", on).apply()
                 if (on) hgcPrefs().edit().putBoolean("ownedExternal", true).apply()
                 afterEntitlementChanged()
             }
-            gearItem(box, "【開発】試用の状態を戻す(未開始へ)") {
+            gearItem(box, s(R.string.dev_trial_reset)) {
                 hgcPrefs().edit().putBoolean("trialStarted", false).putInt("trialUsedExternal", 0).apply()
                 afterEntitlementChanged()
             }
-            gearItem(box, "【開発】試用を1回使う (残り " + (if (trialRemain() >= 0) "${trialRemain()}" else "-") + ")") {
+            gearItem(box, s(R.string.dev_trial_use, if (trialRemain() >= 0) trialRemain().toString() else "-")) {
                 if (trialStarted()) {
                     hgcPrefs().edit().putInt("trialUsedExternal", trialUsed() + 1).apply()
                     afterEntitlementChanged()
@@ -1142,16 +1201,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
             }
         }
         // この2つは「撮影計画」ではなく「記録を見る」側なのでログの下へ置く(2026-08-23 UI依頼)。
-        gearItem(box, "操作履歴") { openHistory() }            // 項目9
-        gearItem(box, "撮影レポート") { openReportList() }     // 670: 撮影1回ぶんの結果と所見
+        gearItem(box, s(R.string.menu_history)) { openHistory() }            // 項目9
+        gearItem(box, s(R.string.menu_reports)) { openReportList() }     // 670: 撮影1回ぶんの結果と所見
 
-        gearBand(box, "初期化")
-        gearItem(box, "出荷時設定に戻す") { confirmFactoryReset() }
+        gearBand(box, s(R.string.band_reset))
+        gearItem(box, s(R.string.menu_factory_reset)) { confirmFactoryReset() }
 
         // 版数を一番下に出す(2026-08-08 UI依頼)。どのビルドを使っているかを画面だけで確認できる。
         // major.minor はエッジ端末と一致させる約束なので、食い違っていたらどちらかの書き込み漏れ。
         box.addView(TextView(this).apply {
-            text = "バージョン " + appVersionName()
+            text = s(R.string.version_label, appVersionName())
             textSize = 12f
             setTextColor(0xFF9E9E9E.toInt())
             setPadding(dp(16), dp(16), dp(16), dp(8))
@@ -1164,12 +1223,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 //  ように見える(実機で踏んだ)。
                 if (now - verTapAt > 2000) {
                     verTapCount = 0
-                    text = "バージョン " + appVersionName()
+                    text = s(R.string.version_label, appVersionName())
                 }
                 verTapAt = now
                 verTapCount++
                 if (isLogUnlocked()) {
-                    text = "バージョン " + appVersionName() + "  (デバッグログは表示中です)"
+                    text = s(R.string.version_label_unlocked, appVersionName())
                 } else if (verTapCount >= 7) {
                     verTapCount = 0
                     setLogUnlocked(true)
@@ -1784,37 +1843,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  申請でき、こちらでは止められない**。そこを正確に書く。
     private val kScreenExt = 19
 
-    private fun extCameraDesc() =
-        "Canon CCAPI を使ってカメラを制御します。\n" +
-        "カメラとの相性もあります。\n" +
-        "ご使用予定のカメラで問題なく動作することを十分に確かめてから購入をしてください。\n" +
-        "購入後48時間以内は、Google Play からご自身で返金を申請できます。\n" +
-        "それ以降の返金はお受けできません。\n" +
-        "試用では" + kTrialMaxExternal + "回の撮影がおこなえます。"
-
-    private fun extEdgeDesc() =
-        "M5Stack CoreS3 か M5StickS3 を別途購入する必要があります。\n" +
-        "これらの外部端末から外部カメラを制御して撮影することができます。\n" +
-        "個人情報の入ったスマホをカメラのそばに置いて撮影する必要が無くなります。\n" +
-        "また、離れた別の場所で複数カメラを制御することができるようになります。\n" +
-        "外部端末へのソフトウェアの書き込みもスマホからおこなえます。"
+    private fun extCameraDesc() = s(R.string.ext_camera_desc, kTrialMaxExternal)
+    private fun extEdgeDesc()   = s(R.string.ext_edge_desc)
 
     // 外部カメラが要る操作を止めたときの案内。**黙って押せないだけにしない**(理由と行き先を出す)。
     private fun promptExtNeeded() {
         val usedUp = trialStarted() && !ownedExternal() && trialRemain() <= 0
         androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle(if (usedUp) "試用の回数を使い切りました" else "外部カメラ機能が必要です")
-            .setMessage(
-                if (usedUp) "外部カメラでの撮影は、試用の" + kTrialMaxExternal + "回を使い切りました。\n" +
-                            "続けてお使いいただくには、機能拡張からご購入ください。\n" +
-
-                            "作成した撮影計画と登録したカメラはそのまま残っています。"
-                else        "お手持ちのカメラ(ミラーレス機など)で撮るには、機能拡張の\n" +
-                            "「外部カメラで撮影する」が必要です。\n" +
-
-                            "試用では" + kTrialMaxExternal + "回の撮影をお試しいただけます。")
-            .setPositiveButton("機能拡張へ") { _, _ -> openExtScreen() }
-            .setNegativeButton("閉じる", null)
+            .setTitle(if (usedUp) s(R.string.ext_trial_used_up) else s(R.string.ext_needed_title))
+            .setMessage(if (usedUp) s(R.string.ext_used_up_msg, kTrialMaxExternal)
+                        else        s(R.string.ext_needed_msg, kTrialMaxExternal))
+            .setPositiveButton(s(R.string.ext_needed_go)) { _, _ -> openExtScreen() }
+            .setNegativeButton(s(R.string.close), null)
             .show()
     }
 
@@ -1828,30 +1868,34 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.removeAllViews()
 
         // ---- 外部カメラで撮影する ----
-        extItem(box, "外部カメラで撮影する", extCameraDesc(),
+        extItem(box, s(R.string.ext_camera_title), extCameraDesc(),
             state = when {
-                ownedExternal()            -> "購入済み"
-                trialRemain() > 0          -> "試用中  残り${trialRemain()}回"
-                trialStarted()             -> "試用の回数を使い切りました"
-                else                       -> ""
+                ownedExternal()   -> s(R.string.ext_owned)
+                trialRemain() > 0 -> q(R.plurals.ext_trial_left, trialRemain())
+                trialStarted()    -> s(R.string.ext_trial_used_up)
+                else              -> ""
             },
+            owned = ownedExternal(),
             buttons = listOf(
-                Triple("試用", !trialStarted() && !ownedExternal(), { confirmStartTrial() }),
-                Triple("購入", trialStarted() && !ownedExternal(),  { purchase("external") })
+                Triple(s(R.string.ext_trial), !trialStarted() && !ownedExternal(), { confirmStartTrial() }),
+                Triple(s(R.string.ext_buy),   trialStarted() && !ownedExternal(),  { purchase("external") })
             ))
 
         // ---- 外部端末でカメラを制御する ----
-        extItem(box, "外部端末でカメラを制御する", extEdgeDesc(),
-            state = if (ownedEdge()) "購入済み" else "",
+        extItem(box, s(R.string.ext_edge_title), extEdgeDesc(),
+            state = if (ownedEdge()) s(R.string.ext_owned) else "",
+            owned = ownedEdge(),
             buttons = listOf(
                 // A を買っていないうちは押せない。理由は説明文の下に出す。
-                Triple("購入", ownedExternal() && !ownedEdge(), { purchase("edge") })
+                Triple(s(R.string.ext_buy), ownedExternal() && !ownedEdge(), { purchase("edge") })
             ),
-            note = if (!ownedExternal()) "「外部カメラで撮影する」を購入すると選べるようになります。" else "")
+            note = if (!ownedExternal()) s(R.string.ext_edge_needs_camera) else "")
     }
 
     // 1項目ぶん。題・右にボタンの並び・状態・説明文。
+    // 【状態の色は文字で見ない】訳すと startsWith が崩れるので、購入済みかどうかを引数で渡す。
     private fun extItem(box: LinearLayout, title: String, desc: String, state: String,
+                        owned: Boolean,
                         buttons: List<Triple<String, Boolean, () -> Unit>>, note: String = "") {
         val card = LinearLayout(this); card.orientation = LinearLayout.VERTICAL
         card.setPadding(dp(12), dp(12), dp(12), dp(12))
@@ -1877,7 +1921,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (state.isNotEmpty()) {
             card.addView(TextView(this).apply {
                 text = state; textSize = 14f
-                setTextColor(if (state.startsWith("購入済み")) 0xFF2E7D32.toInt() else 0xFF1565C0.toInt())
+                setTextColor(if (owned) 0xFF2E7D32.toInt() else 0xFF1565C0.toInt())
                 setPadding(0, dp(4), 0, 0)
             })
         }
@@ -1898,17 +1942,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 【試用の開始は戻せない】押し間違いで失わないよう確認を挟む(2026-10-01 依頼)。
     private fun confirmStartTrial() {
         androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("外部カメラ機能の試用")
-            .setMessage("外部カメラ機能の試用を開始します。\n" +
-                        "撮影" + kTrialMaxExternal + "回までお試しいただけます。\n" +
-
-                        "やり直しはできません。")
-            .setPositiveButton("試用を開始") { _, _ ->
+            .setTitle(s(R.string.ext_trial_confirm_title))
+            .setMessage(s(R.string.ext_trial_confirm_msg, kTrialMaxExternal))
+            .setPositiveButton(s(R.string.ext_trial_confirm_ok)) { _, _ ->
                 hgcPrefs().edit().putBoolean("trialStarted", true).putInt("trialUsedExternal", 0).apply()
                 HgeNative.nativeLogEvent("EXT", "trial started", false)
                 afterEntitlementChanged()
             }
-            .setNegativeButton("やめる", null)
+            .setNegativeButton(s(R.string.ext_trial_confirm_no), null)
             .show()
     }
 
@@ -1924,7 +1965,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             afterEntitlementChanged()
             return
         }
-        Toast.makeText(this, "準備中です", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, s(R.string.ext_buy_not_ready), Toast.LENGTH_SHORT).show()
     }
 
     private fun openNotices() {
@@ -1936,14 +1977,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val box = findViewById<LinearLayout>(R.id.nt_container)
         box.removeAllViews()
         box.addView(TextView(this).apply {
-            text = "この製品が使っているソフトウェアの権利表示です。項目を開くと原文を表示します" +
-                   "(原文のまま載せるため、日本語には直していません)。"
+            text = s(R.string.notices_intro)
             textSize = 13f; setTextColor(Color.parseColor("#616161"))
             setPadding(dp(12), dp(12), dp(12), dp(12))
         })
-        gearBand(box, "スマホ")
+        gearBand(box, s(R.string.band_phone))
         for (n in phoneNotices()) addNoticeRow(box, n)
-        gearBand(box, "外部端末")
+        gearBand(box, s(R.string.band_edge))
         for (n in edgeNotices()) addNoticeRow(box, n)
     }
 
@@ -5354,8 +5394,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val tv = findViewById<TextView>(R.id.plan_trialBanner) ?: return
         if (ownedExternal() || !trialStarted() || tplMode) { tv.visibility = View.GONE; return }
         val n = trialRemain()
-        tv.text = if (n > 0) "外部カメラ機能試用中  残り${n}回"
-                  else "外部カメラ機能の試用は終了しました(機能拡張から購入できます)"
+        tv.text = if (n > 0) q(R.plurals.ext_trial_banner, n) else s(R.string.ext_trial_over)
         tv.setTextColor(if (n > 0) 0xFF1565C0.toInt() else 0xFFD32F2F.toInt())
         tv.visibility = View.VISIBLE
     }
@@ -5710,6 +5749,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  何も畳まず、プロセスごと撮影を続けさせる。
     //  畳まないのは撮影に要るものだけではなく**全部**。ネットワークのバインドもマルチキャストも、
     //  外部カメラと話すのに要る。
+    // 言語(2026-10-01)。attachBaseContext で包むと、この部品のリソースが全部その言語になる。
+    override fun attachBaseContext(newBase: android.content.Context) {
+        super.attachBaseContext(Loc.wrap(newBase))
+    }
+
     override fun onDestroy() {
         try { adView?.destroy() } catch (_: Exception) {}
         adView = null
@@ -5953,7 +5997,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 updateTimeButtons()
             } catch (_: Exception) {}
             placeText.text = o.optString("place")
-            latlngText.text = o.optString("latlng") + "  標高 " + o.optInt("altitude") + "m"
+            latlngText.text = s(R.string.latlng_altitude, o.optString("latlng"),
+                                    Loc.altValue(this, o.optInt("altitude")), Loc.altUnit(this))
             // 同機種を複数台持つと名称だけでは区別できないので、カメラ本体で付けた名前を添える。
             val camAn = o.optString("cameraAssignedName")
             // 見出しはレイアウト側にあるので、ここは中身だけを入れる。
@@ -6331,7 +6376,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         else if (a.camSerial.isNotEmpty() && b.camSerial.isNotEmpty()) a.camSerial == b.camSerial
         else a.camModel.isNotEmpty() && a.camModel == b.camModel
 
-    private val reserveFmt = SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.JAPAN)
+    private val reserveFmt: java.text.DateFormat by lazy { Loc.dateTimeFmt(this) }
     // 計画一覧の start/end は Entity の dtToStr 形式("yyyy-MM-ddTHH:mm:ss"。T区切り)。
     private val planDtFmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.JAPAN)
 
@@ -6516,7 +6561,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //   lost camera    … カメラがオフラインになった(撮影が止まった)
     //   connect camera … カメラがオンラインになった
     //   factory reset  … 出荷時設定に戻した(履歴ごと消した直後に、この1件だけ書く)
-    private val histFmt = SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.JAPAN)
+    private val histFmt: java.text.DateFormat by lazy { Loc.dateTimeFmt(this) }
     private val histLastState = HashMap<String, Int>()   // planId → 直近の状態(遷移の判定用)
     private val histUserStop = HashSet<String>()          // ユーザー中止済み(後続のIDLEを auto end にしない)
 
@@ -6579,8 +6624,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun openHistory() { buildHistory(); flipper.displayedChild = 13 }
 
-    private val histDateFmt = SimpleDateFormat("yyyy.MM.dd (E)", Locale.JAPAN)
-    private val histTimeFmt = SimpleDateFormat("HH:mm", Locale.JAPAN)
+    private val histDateFmt: java.text.DateFormat by lazy { Loc.dowDateFmt(this) }
+    private val histTimeFmt: java.text.DateFormat by lazy { Loc.timeFmt(this) }
 
     private fun buildHistory() {
         val box = findViewById<LinearLayout>(R.id.history_container)
@@ -7172,8 +7217,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
             (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }.map { o ->
                 val name = o.optString("name")
                 ListItem(name, name,
-                    "%.4f, %.4f  標高 %dm".format(o.optDouble("latitude", 0.0), o.optDouble("longitude", 0.0),
-                                                  o.optDouble("altitude", 0.0).toInt()) +
+                    s(R.string.latlng_altitude,
+                      "%.4f, %.4f".format(o.optDouble("latitude", 0.0), o.optDouble("longitude", 0.0)),
+                      Loc.altValue(this, o.optDouble("altitude", 0.0).toInt()), Loc.altUnit(this)) +
                         (if (o.optString("memo").isNotEmpty()) "  ${o.optString("memo")}" else ""),
                     listOf("削除" to {
                         dataExec.execute { HgeNative.nativeRemovePlace(name)
@@ -7242,13 +7288,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
             openMapPicker(la0, lo0) { la, lo -> onPlaceCoord(la, lo) }
         })
         btnRow.addView(linkText("✎ 貼り付け") { commitListNameEdit(R.id.places_container); showPlacePasteDialog("%.6f, %.6f".format(placeLat, placeLng)) { la, lo -> onPlaceCoord(la, lo) } })
-        btnRow.addView(linkText("＋ 現在地") { commitListNameEdit(R.id.places_container); fetchCurrentLocation { la, lo, alt -> if (alt != 0.0) placeAltEt?.setText(alt.toInt().toString()); onPlaceCoord(la, lo) } })
+        btnRow.addView(linkText("＋ 現在地") { commitListNameEdit(R.id.places_container); fetchCurrentLocation { la, lo, alt -> if (alt != 0.0) placeAltEt?.setText(Loc.altValue(this, alt.toInt()).toString()); onPlaceCoord(la, lo) } })
         box.addView(btnRow)
         val coordTv = TextView(this).apply { textSize = 18f; setTextColor(Color.BLACK); setPadding(0, dp(2), 0, dp(8)) }
         placeCoordTv = coordTv; box.addView(coordTv); refreshPlaceCoordText()
         // 標高(緯度経度から自動取得。手動再取得も可)
         val altHdr = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        altHdr.addView(TextView(this).apply { text = "標高 [m]"; textSize = 13f; setTextColor(Color.GRAY) })
+        altHdr.addView(TextView(this).apply { text = s(R.string.label_altitude_unit, Loc.altUnit(this@MainActivity))
+                                              textSize = 13f; setTextColor(Color.GRAY) })
         altHdr.addView(linkText("　🗻 緯度経度から取得") {
             if (placeLat == 0.0 && placeLng == 0.0) Toast.makeText(this, "先に緯度・経度を設定してください", Toast.LENGTH_SHORT).show()
             else fetchElevationInto(placeLat, placeLng)
@@ -7317,9 +7364,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 val elev = arr?.optDouble(0, Double.NaN) ?: Double.NaN
                 if (!elev.isNaN()) runOnUiThread {
                     if (selPlace == target) {   // 取得中に別の場所へ切替えていたら反映しない
-                        placeAltEt?.setText(elev.toInt().toString())
+                        placeAltEt?.setText(Loc.altValue(this, elev.toInt()).toString())
                         persistPlaceDetail(false, rebuildList = true)
-                        Toast.makeText(this, "標高を取得: ${elev.toInt()}m", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, s(R.string.toast_altitude_got,
+                            Loc.altValue(this, elev.toInt()), Loc.altUnit(this)), Toast.LENGTH_SHORT).show()
                     }
                 }
             } catch (e: Exception) {
@@ -7383,7 +7431,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun persistPlaceDetail(rebuild: Boolean, origName: String? = null, newName: String? = null, rebuildList: Boolean = false) {
         val key = origName ?: selPlace ?: return
         val name = newName ?: selPlace ?: key
-        val alt = placeAltEt?.text?.toString()?.trim()?.toDoubleOrNull() ?: 0.0
+        // 【単位は見せ方だけ(2026-10-01)】持つのは常にメートル。英語のときだけ
+        //  欄にはフィートが入っているので、保存の前に戻す。
+        val alt = Loc.altToMeters(this,
+            (placeAltEt?.text?.toString()?.trim()?.toDoubleOrNull() ?: 0.0).toInt()).toDouble()
         val memo = placeMemoEt?.text?.toString() ?: ""
         val auto = placeAutoCb?.isChecked ?: false
         val json = JSONObject().apply {
@@ -7557,20 +7608,103 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  この判定はそのまま効く(`stdTplDone` は消えるので、もう一度ここを通って入る)。
     // 【二重挿入の防止】`stdTplDone` で見張るほか、Entity 側も tplKind + カメラ名で
     //  既にあるものは作らない。二重の歯止めになっている。
-    private fun seedNamesJson(): String =
-        JSONObject().put("night", "夜間スマホ").put("sunrise", "朝日スマホ")
-                    .put("sunset", "夕日スマホ").put("day", "日中スマホ")
-            .put("ccm", JSONObject().put("night", "夜間").put("sunrise", "朝日").put("sunset", "夕日").put("day", "日中"))
+    // 【標準の名前はリソースから(2026-10-01 依頼)】ここで作った名前は
+    //  Entity が**ファイルへ書く**。後で言語を変えても自動では変わらないので、
+    //  renameStdNamesForLocale() が付け替える。
+    //  ctx を差し替えれば**別の言語の名前**を作れる(付け替えの対応表を作るため)。
+    private fun seedNamesJson(c: android.content.Context = this): String =
+        JSONObject().put("night",   c.getString(R.string.std_ccm_phone_night))
+                    .put("sunrise", c.getString(R.string.std_ccm_phone_sunrise))
+                    .put("sunset",  c.getString(R.string.std_ccm_phone_sunset))
+                    .put("day",     c.getString(R.string.std_ccm_phone_day))
+            .put("ccm", JSONObject()
+                .put("night",   c.getString(R.string.std_ccm_night))
+                .put("sunrise", c.getString(R.string.std_ccm_sunrise))
+                .put("sunset",  c.getString(R.string.std_ccm_sunset))
+                .put("day",     c.getString(R.string.std_ccm_day)))
             .put("tpl", JSONObject()
-                .put("star_sunrise",          "星景(日の出含む)")
-                .put("night_sunrise",         "夜景(日の出含む)")
-                .put("star_sunrise_sunstar",  "星景(日の出光条)")
-                .put("night_sunrise_sunstar", "夜景(日の出光条)")
-                .put("star_sunset",           "星景(日の入含む)")
-                .put("night_sunset",          "夜景(日の入含む)")
-                .put("star_sunset_sunstar",   "星景(日の入光条)")
-                .put("night_sunset_sunstar",  "夜景(日の入光条)"))
+                .put("star_sunrise",          c.getString(R.string.std_tpl_star_sunrise))
+                .put("night_sunrise",         c.getString(R.string.std_tpl_night_sunrise))
+                .put("star_sunrise_sunstar",  c.getString(R.string.std_tpl_star_sunrise_sunstar))
+                .put("night_sunrise_sunstar", c.getString(R.string.std_tpl_night_sunrise_sunstar))
+                .put("star_sunset",           c.getString(R.string.std_tpl_star_sunset))
+                .put("night_sunset",          c.getString(R.string.std_tpl_night_sunset))
+                .put("star_sunset_sunstar",   c.getString(R.string.std_tpl_star_sunset_sunstar))
+                .put("night_sunset_sunstar",  c.getString(R.string.std_tpl_night_sunset_sunstar)))
             .toString()
+
+    /** その言語でリソースを引くための Context。tag が空なら端末の言語。 */
+    private fun localeCtx(tag: String): android.content.Context {
+        val cfg = android.content.res.Configuration(resources.configuration)
+        val lc = if (tag.isEmpty()) {
+            val sys = android.content.res.Resources.getSystem().configuration.locales
+            if (sys.isEmpty) java.util.Locale.US else sys.get(0)
+        } else java.util.Locale.forLanguageTag(tag)
+        cfg.setLocale(lc)
+        return createConfigurationContext(cfg)
+    }
+
+    // 【言語を変えたときの付け替え(2026-10-01 ユーザー判断)】
+    //  ひな形と撮影制御方法の名前は**保存データ**なので、リソースを切り替えても
+    //  変わらない。日本語で入れたあと英語へ替えると、英語の画面に日本語の名前が
+    //  残るので、ここで書き換える。
+    //
+    //  **標準のまま(未改名)のものだけ**を対象にする — 名前が完全に一致したものだけ。
+    //  利用者が付け直した名前はその人のものなので触らない。
+    //  ひな形の名前は Entity が「カメラ名 + 半角空白 + 題」で作るので、その形で照合する。
+    //  計画(利用者が作ったもの)の中に取り込まれた名前は**計画の持ち物**なので変えない。
+    private fun renameStdNamesForLocale(newTag: String) {
+        val from = try { JSONObject(seedNamesJson(this)) } catch (_: Exception) { return }
+        val to   = try { JSONObject(seedNamesJson(localeCtx(newTag))) } catch (_: Exception) { return }
+
+        // --- ひな形 ---
+        val fTpl = from.optJSONObject("tpl") ?: JSONObject()
+        val tTpl = to.optJSONObject("tpl") ?: JSONObject()
+        try {
+            val arr = JSONArray(HgeNative.nativeListTemplates())
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val id = o.optString("id"); if (id.isEmpty()) continue
+                val name = o.optString("planName")
+                val cam = o.optString("camName")
+                val keys = fTpl.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    val old = fTpl.optString(k); val neu = tTpl.optString(k)
+                    if (old.isEmpty() || neu.isEmpty() || old == neu) continue
+                    if (name == cam + " " + old) { HgeNative.nativeRenameTemplate(id, cam + " " + neu); break }
+                }
+            }
+        } catch (_: Exception) {}
+
+        // --- 撮影制御方法の雛形 ---
+        //  内蔵カメラ用(night/sunrise/...)も標準名(ccm.night/...)も、同じ 4 つの型に
+        //  入っているので、型ごとに両方を見る。優先指定も名前で持っているので一緒に直す。
+        val fCcm = from.optJSONObject("ccm") ?: JSONObject()
+        val tCcm = to.optJSONObject("ccm") ?: JSONObject()
+        for (type in listOf("night", "sunrise", "sunset", "day")) {
+            val pairs = listOf(
+                from.optString(type) to to.optString(type),          // 内蔵カメラ用
+                fCcm.optString(type) to tCcm.optString(type))        // 標準
+            try {
+                val arr = JSONArray(HgeNative.nativeGetCcmPresets(type))
+                val pref = HgeNative.nativeGetPreferredCcm(type)
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val name = o.optString("name")
+                    for ((old, neu) in pairs) {
+                        if (old.isEmpty() || neu.isEmpty() || old == neu || name != old) continue
+                        o.put("name", neu)
+                        if (HgeNative.nativeSetCcmPreset(type, old, o.toString()) == 0 && pref == old) {
+                            HgeNative.nativeSetPreferredCcm(type, neu)
+                        }
+                        break
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+        HgeNative.nativeLogEvent("LANG", "renamed std names for " + (if (newTag.isEmpty()) "system" else newTag), false)
+    }
 
     private fun seedR3TemplatesIfEntitled() {
         if (!canExternalCamera()) return
@@ -7660,7 +7794,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     //  値だけ差し替える。作り直すと入力欄が壊れ、選択が動いたように見える。
                     if (selPlace == (newName ?: name)) {
                         placeLat = la; placeLng = lo; refreshPlaceCoordText()
-                        placeAltEt?.setText(elev.toInt().toString())
+                        placeAltEt?.setText(Loc.altValue(this, elev.toInt()).toString())
                     }
                     // 一覧の作り直しは入力中の欄を壊すので、どこにも入力中でないときだけ行う
                     //  (作り直さなくても、次に場所を選び直した時点で最新になる)。

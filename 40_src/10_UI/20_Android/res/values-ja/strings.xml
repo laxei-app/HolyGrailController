@@ -1,5 +1,126 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 日本語環境のアプリ名(2026-09-21 改名)。他の言語は values/strings.xml の TwyLapse -->
+<!-- 【日本語】既定(英語)は values/strings.xml。名前は必ず両方に揃えること。 -->
 <resources>
     <string name="app_name">トワイラプス</string>
+
+    <!-- ===== 共通 ===== -->
+    <string name="ok">OK</string>
+    <string name="cancel">キャンセル</string>
+    <string name="close">閉じる</string>
+    <string name="delete">削除</string>
+    <string name="save">保存</string>
+    <string name="yes">はい</string>
+    <string name="no">いいえ</string>
+    <string name="add_new">＋ 新規追加</string>
+
+    <!-- ===== メニュー(600) ===== -->
+    <string name="menu_title">メニュー</string>
+
+    <string name="band_plan">撮影計画</string>
+    <string name="menu_plan">撮影計画</string>
+    <string name="menu_places">撮影場所</string>
+    <string name="menu_templates">撮影計画ひな形</string>
+    <string name="menu_reserve">カメラ予約表</string>
+
+    <string name="band_ccm_default">撮影制御方法 初期値</string>
+    <string name="menu_ccm_default">初期値</string>
+    <string name="menu_colors">色の設定</string>
+
+    <string name="band_autoexp">自動露出</string>
+    <string name="menu_smoothing">露出平滑化</string>
+
+    <string name="band_gear">所持機材</string>
+    <string name="menu_cameras">所持カメラ</string>
+    <string name="menu_lenses">所持レンズ</string>
+
+    <string name="band_edge">外部端末</string>
+    <string name="menu_edge_settings">端末設定</string>
+    <string name="menu_edge_flash">ファームウェア書き換え(USB)</string>
+    <string name="menu_edge_ble">外部端末とBLEで通信する</string>
+    <string name="toast_edge_ble_on">外部端末とはBLEで通信します</string>
+    <string name="toast_edge_ble_off">外部端末とはWi-Fiで通信します</string>
+
+    <string name="band_other">その他</string>
+    <string name="menu_language">言語</string>
+    <string name="menu_ext">機能拡張</string>
+    <string name="menu_permcheck">スマホ権限、設定</string>
+    <string name="menu_notices">著作権表示</string>
+
+    <string name="band_log">ログ</string>
+    <string name="menu_debuglog">デバッグログ</string>
+    <string name="menu_history">操作履歴</string>
+    <string name="menu_reports">撮影レポート</string>
+
+    <string name="band_reset">初期化</string>
+    <string name="menu_factory_reset">出荷時設定に戻す</string>
+
+    <string name="version_label">バージョン %1$s</string>
+    <string name="version_label_unlocked">バージョン %1$s  (デバッグログは表示中です)</string>
+    <string name="version_taps_left">バージョン %1$s  (あと%2$d回)</string>
+
+    <!-- ===== 言語(2026-10-01 依頼) ===== -->
+    <string name="lang_system">スマホに合わせる</string>
+
+    <!-- ===== 機能拡張(2026-10-01) ===== -->
+    <string name="ext_title">機能拡張</string>
+    <string name="ext_trial">試用</string>
+    <string name="ext_buy">購入</string>
+    <string name="ext_owned">購入済み</string>
+    <!-- 日本語は単数・複数を区別しないので other だけでよい -->
+    <plurals name="ext_trial_left">
+        <item quantity="other">試用中  残り%1$d回</item>
+    </plurals>
+    <plurals name="ext_trial_banner">
+        <item quantity="other">外部カメラ機能試用中  残り%1$d回</item>
+    </plurals>
+
+    <string name="ext_camera_title">外部カメラで撮影する</string>
+    <string name="ext_camera_desc">Canon CCAPI を使ってカメラを制御します。\nカメラとの相性もあります。\nご使用予定のカメラで問題なく動作することを十分に確かめてから購入をしてください。\n購入後48時間以内は、Google Play からご自身で返金を申請できます。\nそれ以降の返金はお受けできません。\n試用では%1$d回の撮影がおこなえます。</string>
+
+    <string name="ext_edge_title">外部端末でカメラを制御する</string>
+    <string name="ext_edge_desc">M5Stack CoreS3 か M5StickS3 を別途購入する必要があります。\nこれらの外部端末から外部カメラを制御して撮影することができます。\n個人情報の入ったスマホをカメラのそばに置いて撮影する必要が無くなります。\nまた、離れた別の場所で複数カメラを制御することができるようになります。\n外部端末へのソフトウェアの書き込みもスマホからおこなえます。</string>
+    <string name="ext_edge_needs_camera">「外部カメラで撮影する」を購入すると選べるようになります。</string>
+
+    <string name="ext_trial_confirm_title">外部カメラ機能の試用</string>
+    <string name="ext_trial_confirm_msg">外部カメラ機能の試用を開始します。\n撮影%1$d回までお試しいただけます。\nやり直しはできません。</string>
+    <string name="ext_trial_confirm_ok">試用を開始</string>
+    <string name="ext_trial_confirm_no">やめる</string>
+
+    <string name="ext_needed_title">外部カメラ機能が必要です</string>
+    <string name="ext_needed_msg">お手持ちのカメラ(ミラーレス機など)で撮るには、機能拡張の\n「外部カメラで撮影する」が必要です。\n試用では%1$d回の撮影をお試しいただけます。</string>
+    <string name="ext_needed_go">機能拡張へ</string>
+    <string name="ext_buy_not_ready">購入の準備中です</string>
+
+    <string name="ext_trial_used_up">試用の回数を使い切りました</string>
+    <string name="ext_used_up_msg">外部カメラでの撮影は、試用の%1$d回を使い切りました。
+続けてお使いいただくには、機能拡張からご購入ください。
+作成した撮影計画と登録したカメラはそのまま残っています。</string>
+
+    <string name="band_phone">スマホ</string>
+    <string name="ext_trial_over">外部カメラ機能の試用は終了しました(機能拡張から購入できます)</string>
+    <string name="notices_intro">この製品が使っているソフトウェアの権利表示です。項目を開くと原文を表示します(原文のまま載せるため、日本語には直していません)。</string>
+
+    <!-- ===== 標準の名前(ひな形・撮影制御方法) ===== -->
+    <string name="std_ccm_phone_night">夜間スマホ</string>
+    <string name="std_ccm_phone_sunrise">朝日スマホ</string>
+    <string name="std_ccm_phone_sunset">夕日スマホ</string>
+    <string name="std_ccm_phone_day">日中スマホ</string>
+    <string name="std_ccm_night">夜間</string>
+    <string name="std_ccm_sunrise">朝日</string>
+    <string name="std_ccm_sunset">夕日</string>
+    <string name="std_ccm_day">日中</string>
+    <string name="std_tpl_star_sunrise">星景(日の出含む)</string>
+    <string name="std_tpl_night_sunrise">夜景(日の出含む)</string>
+    <string name="std_tpl_star_sunrise_sunstar">星景(日の出光条)</string>
+    <string name="std_tpl_night_sunrise_sunstar">夜景(日の出光条)</string>
+    <string name="std_tpl_star_sunset">星景(日の入含む)</string>
+    <string name="std_tpl_night_sunset">夜景(日の入含む)</string>
+    <string name="std_tpl_star_sunset_sunstar">星景(日の入光条)</string>
+    <string name="std_tpl_night_sunset_sunstar">夜景(日の入光条)</string>
+
+    <!-- ===== 単位 ===== -->
+    <string name="label_altitude">標高</string>
+    <string name="label_altitude_unit">標高 [%1$s]</string>
+    <string name="latlng_altitude">%1$s  標高 %2$d%3$s</string>
+    <string name="toast_altitude_got">標高を取得: %1$d%2$s</string>
 </resources>

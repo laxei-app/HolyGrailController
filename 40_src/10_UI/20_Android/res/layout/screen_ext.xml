@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <!-- 機能拡張(2026-10-01 UI依頼)。買い切りのアドイン2つ(外部カメラ / 外部端末)の
      試用と購入。中身は Kotlin で作る。 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
@@ -18,7 +18,7 @@
         <ImageView android:id="@+id/ex_back" android:layout_width="32dp" android:layout_height="32dp"
             android:layout_marginStart="8dp" android:clickable="true" android:focusable="true" android:src="@drawable/ic_back_r" />
         <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-            android:gravity="center" android:text="機能拡張" android:textColor="#FFFFFF"
+            android:gravity="center" android:text="@string/ext_title" android:textColor="#FFFFFF"
             android:textSize="20sp" android:textStyle="bold" />
         <View android:layout_width="40dp" android:layout_height="32dp" />
         <ImageView android:id="@+id/ex_menu" android:layout_width="32dp" android:layout_height="32dp"

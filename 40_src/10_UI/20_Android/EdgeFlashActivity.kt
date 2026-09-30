@@ -69,6 +69,11 @@ class EdgeFlashActivity : AppCompatActivity() {
         override fun onReceive(c: Context?, i: Intent?) = refreshState()
     }
 
+    // 言語(2026-10-01)。attachBaseContext で包むと、この部品のリソースが全部その言語になる。
+    override fun attachBaseContext(newBase: android.content.Context) {
+        super.attachBaseContext(Loc.wrap(newBase))
+    }
+
     override fun onCreate(saved: Bundle?) {
         super.onCreate(saved)
         setContentView(R.layout.activity_edge_flash)

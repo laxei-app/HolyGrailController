@@ -71,6 +71,11 @@ class CaptureService : Service() {
         }
     }
 
+    // 言語(2026-10-01)。attachBaseContext で包むと、この部品のリソースが全部その言語になる。
+    override fun attachBaseContext(newBase: android.content.Context) {
+        super.attachBaseContext(Loc.wrap(newBase))
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     // 動き出した時刻(端末の稼働時間で測る。利用者が時計を変えてもずれない)。

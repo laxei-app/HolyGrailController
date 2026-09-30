@@ -1,4 +1,146 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- 【既定(英語)】ここに無い言語の端末はこのファイルが使われる。日本語は values-ja/。
+     ・語順は言語で変わるので、可変部は必ず %1$s のプレースホルダで受ける(足し算で組まない)
+     ・数を伴う文は <plurals> にする
+     ・日付・時刻・単位は Loc.kt が組み立てる(ここには単位の記号だけ置く) -->
 <resources>
     <string name="app_name">TwyLapse</string>
+
+    <!-- ===== 共通 ===== -->
+    <string name="ok">OK</string>
+    <string name="cancel">Cancel</string>
+    <string name="close">Close</string>
+    <string name="delete">Delete</string>
+    <string name="save">Save</string>
+    <string name="yes">Yes</string>
+    <string name="no">No</string>
+    <string name="add_new">+ Add new</string>
+
+    <!-- ===== メニュー(600) ===== -->
+    <string name="menu_title">Menu</string>
+
+    <string name="band_plan">Shoot plans</string>
+    <string name="menu_plan">Shoot plan</string>
+    <string name="menu_places">Locations</string>
+    <string name="menu_templates">Plan templates</string>
+    <string name="menu_reserve">Camera bookings</string>
+
+    <string name="band_ccm_default">Capture control defaults</string>
+    <string name="menu_ccm_default">Defaults</string>
+    <string name="menu_colors">Colors</string>
+
+    <string name="band_autoexp">Auto exposure</string>
+    <string name="menu_smoothing">Exposure smoothing</string>
+
+    <string name="band_gear">My gear</string>
+    <string name="menu_cameras">My cameras</string>
+    <string name="menu_lenses">My lenses</string>
+
+    <string name="band_edge">External device</string>
+    <string name="menu_edge_settings">Device settings</string>
+    <string name="menu_edge_flash">Update firmware (USB)</string>
+    <string name="menu_edge_ble">Talk to the device over BLE</string>
+    <string name="toast_edge_ble_on">The app will talk to external devices over BLE</string>
+    <string name="toast_edge_ble_off">The app will talk to external devices over Wi-Fi</string>
+
+    <string name="band_other">Other</string>
+    <string name="menu_language">Language</string>
+    <string name="menu_ext">Add-ons</string>
+    <string name="menu_permcheck">Permissions and settings</string>
+    <string name="menu_notices">Open source licenses</string>
+
+    <string name="band_log">Log</string>
+    <string name="menu_debuglog">Debug log</string>
+    <string name="menu_history">Activity history</string>
+    <string name="menu_reports">Capture reports</string>
+
+    <string name="band_reset">Reset</string>
+    <string name="menu_factory_reset">Reset to factory settings</string>
+
+    <string name="version_label">Version %1$s</string>
+    <string name="version_label_unlocked">Version %1$s  (debug log is shown)</string>
+    <string name="version_taps_left">Version %1$s  (%2$d more taps)</string>
+
+    <!-- ===== 言語(2026-10-01 依頼) ===== -->
+    <!-- 自分の言語の名前は**その言語で**書く。英語版の画面でも「日本語」と出るのが正しい
+         (読めない言語の名前が並んでいても選べないため)。 -->
+    <string name="lang_system">Match the phone</string>
+    <string name="lang_ja" translatable="false">日本語</string>
+    <string name="lang_en" translatable="false">English</string>
+
+    <!-- ===== 機能拡張(2026-10-01) ===== -->
+    <string name="ext_title">Add-ons</string>
+    <string name="ext_trial">Try</string>
+    <string name="ext_buy">Buy</string>
+    <string name="ext_owned">Purchased</string>
+    <plurals name="ext_trial_left">
+        <item quantity="one">Trial  %1$d shoot left</item>
+        <item quantity="other">Trial  %1$d shoots left</item>
+    </plurals>
+    <plurals name="ext_trial_banner">
+        <item quantity="one">Trying external cameras  %1$d shoot left</item>
+        <item quantity="other">Trying external cameras  %1$d shoots left</item>
+    </plurals>
+
+    <string name="ext_camera_title">Shoot with an external camera</string>
+    <string name="ext_camera_desc">Controls your camera through Canon CCAPI.\nHow well it works depends on the camera.\nPlease make sure it works with the camera you plan to use before you buy.\nWithin 48 hours of purchase you can request a refund yourself through Google Play.\nWe cannot refund after that.\nThe trial lets you shoot %1$d times.</string>
+
+    <string name="ext_edge_title">Control the camera from an external device</string>
+    <string name="ext_edge_desc">You need to buy an M5Stack CoreS3 or M5StickS3 separately.\nThese devices can control an external camera and shoot for you.\nYou no longer have to leave your phone, with all your personal data on it, next to the camera.\nYou can also control several cameras from somewhere else.\nThe app can write the software to the device for you.</string>
+    <string name="ext_edge_needs_camera">Buy "Shoot with an external camera" to unlock this.</string>
+
+    <string name="ext_trial_confirm_title">Try external cameras</string>
+    <string name="ext_trial_confirm_msg">This starts your trial of external camera support.\nYou can shoot %1$d times.\nThis cannot be undone.</string>
+    <string name="ext_trial_confirm_ok">Start the trial</string>
+    <string name="ext_trial_confirm_no">Not now</string>
+
+    <string name="ext_needed_title">You need external camera support</string>
+    <string name="ext_needed_msg">To shoot with your own camera (a mirrorless body, for example) you need the "Shoot with an external camera" add-on.\nThe trial lets you shoot %1$d times.</string>
+    <string name="ext_needed_go">Go to Add-ons</string>
+    <string name="ext_buy_not_ready">Purchases are not available yet</string>
+
+    <string name="ext_trial_used_up">You have used up the trial</string>
+    <string name="ext_used_up_msg">You have used all %1$d trial shoots with an external camera.
+Buy the add-on to keep using it.
+The plans you made and the cameras you added are still there.</string>
+
+    <string name="band_phone">Phone</string>
+    <string name="ext_trial_over">The external camera trial has ended (you can buy it under Add-ons)</string>
+    <string name="notices_intro">These are the licenses of the software this product uses. Open an item to read the original text.</string>
+
+    <!-- ===== 標準の名前(ひな形・撮影制御方法) =====
+         これらは**ファイルへ保存される名前**。言語を変えたときに
+         renameStdNamesForLocale() が「標準のまま(未改名)」のものだけ付け替えるので、
+         **一度出した訳語を後から変えないこと**(変えると古い名前が取り残される)。 -->
+    <string name="std_ccm_phone_night">Night (phone)</string>
+    <string name="std_ccm_phone_sunrise">Sunrise (phone)</string>
+    <string name="std_ccm_phone_sunset">Sunset (phone)</string>
+    <string name="std_ccm_phone_day">Daytime (phone)</string>
+    <string name="std_ccm_night">Night</string>
+    <string name="std_ccm_sunrise">Sunrise</string>
+    <string name="std_ccm_sunset">Sunset</string>
+    <string name="std_ccm_day">Daytime</string>
+    <string name="std_tpl_star_sunrise">Starscape (with sunrise)</string>
+    <string name="std_tpl_night_sunrise">Nightscape (with sunrise)</string>
+    <string name="std_tpl_star_sunrise_sunstar">Starscape (sunrise sunstar)</string>
+    <string name="std_tpl_night_sunrise_sunstar">Nightscape (sunrise sunstar)</string>
+    <string name="std_tpl_star_sunset">Starscape (with sunset)</string>
+    <string name="std_tpl_night_sunset">Nightscape (with sunset)</string>
+    <string name="std_tpl_star_sunset_sunstar">Starscape (sunset sunstar)</string>
+    <string name="std_tpl_night_sunset_sunstar">Nightscape (sunset sunstar)</string>
+
+    <!-- ===== 単位 ===== -->
+    <string name="unit_m" translatable="false">m</string>
+    <string name="unit_ft" translatable="false">ft</string>
+    <string name="label_altitude">Altitude</string>
+    <string name="label_altitude_unit">Altitude [%1$s]</string>
+    <string name="latlng_altitude">%1$s  Altitude %2$d%3$s</string>
+
+    <string name="toast_altitude_got">Altitude: %1$d%2$s</string>
+
+    <!-- ===== 開発用(リリース版には出ない。訳さない) ===== -->
+    <string name="dev_own_camera" translatable="false">[dev] Mark external camera as purchased</string>
+    <string name="dev_own_edge" translatable="false">[dev] Mark external device as purchased</string>
+    <string name="dev_trial_reset" translatable="false">[dev] Reset the trial (back to not started)</string>
+    <string name="dev_trial_use" translatable="false">[dev] Use one trial shoot (left: %1$s)</string>
 </resources>
