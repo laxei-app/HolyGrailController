@@ -166,6 +166,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val total = o.optInt("total")
         if (total <= 0) return
         planProgress[planId] = CapProgress(o.optInt("frame"), total, o.optInt("remainSec"))
+        leaveFootprint()   // 生きている印。次の起動で「なぜ終わったか」を見分けるのに使う
     }
     // 項目11: 撮影開始前(待機中)に未検出ポップアップを出した計画 id。待機中は1回だけ出すために使う。
     //  clearNoCam(状態復帰)では消さない — 消すと NOCAMERA↔SEARCHING の往復で毎回出てしまう。
@@ -457,6 +458,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val warmStart = nativeReady          // true = 撮影中に閉じられて、戻ってきたところ
         if (!warmStart) { HgeNative.nativeInit(); nativeReady = true }
         applyTelemetryConsent()   // 統計とクラッシュ記録の可否(既定: リリース版だけ送る)
+        if (!warmStart) judgeLastExit()   // 前回の終わり方を推定(冷たい起動のときだけ意味がある)
         crashKeys(); crashLog("app start")
         // スマホ⇄エッジの通信路(2026-08-14 指示)。選ぶのはスマホだけ。エッジは常に両方で待ち受ける。
         EdgeBleLink.init(this)
@@ -523,6 +525,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  撮り続けているのに新しい画面は何も知らない。**一覧を作ってから聞くと、一度
         //  「未開始(カチンコ)」で描かれてしまい**、次のきっかけ(30秒スイープ or 状態の変化)が
         //  来るまで戻らない。撮影は動いているのに止まって見えるので、先に聞く。
+        // 前回が途中で終わっていれば、Entity が interrupted のレポートを作っている。
+        //  それを拾って統計の対を閉じる(理由も添える)。**nativeInit の後でないと作られていない。**
+        if (!warmStart) sendPhoneInterruptedReports()
         if (warmStart) syncCaptureStateFromNative()
         restorePlan()    // 保存済み計画があれば復元、無ければ出荷時計画を表示(再生成しない)
         refreshPlanList()   // 複数計画リスト(分割バー上)を構築
@@ -6575,13 +6580,23 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val b = android.os.Bundle()
         // レポートの camera は "メーカー 型番"。利用者が付けた名前は入らない。
         b.putString("camera_model", o.optString("camera").ifEmpty { "unknown" })
-        b.putString("device_kind", edgeModel[edgeName]?.takeIf { it.isNotEmpty() && it != "Edge" } ?: "edge")
+        // 【エッジのレポートか、スマホ自身のレポートか】edgeName が空なら後者。
+        b.putString("device_kind",
+            if (edgeName.isEmpty()) "phone"
+            else edgeModel[edgeName]?.takeIf { it.isNotEmpty() && it != "Edge" } ?: "edge")
         b.putString("source", "report")
         // 古いファームには endReason が無い。その場合は「不明」として数える(completed と混ぜない)。
         b.putString("end_reason", o.optString("endReason").ifEmpty { "unknown" })
         // 【途中で終わった撮影の shotAt は「見つけた時刻」】いつ落ちたかは端末にも分からない。
         //  終わった時刻として扱うと「何時に終わるか」の統計が狂うので、その場合は入れない。
         val interrupted = o.optString("endReason") == "interrupted"
+        // 途中で終わったときだけ、推定した理由を添える。**機種名と一緒に上がる**ので、
+        //  公開後に「この機種は省電力で殺されている/この機種では落ちている」が区別できる。
+        // 【スマホ自身のぶんだけ】エッジのレポートの中断はエッジ側で起きたもので、
+        //  こちらで推定した理由(落ちた/再起動/電池)は当てはまらない。
+        if (interrupted && edgeName.isEmpty() && lastExitCause.isNotEmpty()) {
+            b.putString("interrupt_cause", lastExitCause)
+        }
         if (!interrupted && shotAt.length >= 16) b.putString("end_local", shotAt.substring(11, 16))
         if (!interrupted && begMs > 0L && endMs > begMs) b.putLong("duration_min", (endMs - begMs) / 60000L)
         b.putLong("frames", (o.optJSONObject("capture")?.optInt("frames") ?: 0).toLong())
@@ -6590,6 +6605,36 @@ class MainActivity : AppCompatActivity(), HgeListener {
             if (d > 0L) b.putLong("delayed_days", d)
         }
         tlmLog("capture_end", b)
+    }
+
+    // 【スマホ自身の「途中で終わった」撮影を統計へ送る(2026-09-30 依頼)】
+    //  撮影が始まったとき capture_start は送られているが、アプリが死んだので capture_end が
+    //  出ていない。次の起動で Entity が interrupted のレポートを作るので、**それを拾って
+    //  capture_end を送り、対を閉じる**。理由(interrupt_cause)も一緒に上がる。
+    //  二重に送らないよう、送ったレポートのファイル名を覚えておく(直近50件だけ保つ)。
+    private fun sendPhoneInterruptedReports() {
+        Thread {
+            try {
+                val dir = java.io.File(getExternalFilesDir(null) ?: filesDir, "log")
+                val sent = hgcPrefs().getStringSet("tlmSentReports", emptySet())!!.toMutableSet()
+                var changed = false
+                dir.listFiles { f -> f.name.startsWith("report_") && f.name.endsWith(".json") }
+                    ?.sortedBy { it.name }?.forEach { f ->
+                        if (sent.contains(f.name)) return@forEach
+                        val o = try { JSONObject(f.readText()) } catch (_: Exception) { return@forEach }
+                        // エッジのレポートは引き取ったときに送っているので、ここでは扱わない。
+                        if (o.optString("edge").isNotEmpty()) { sent.add(f.name); changed = true; return@forEach }
+                        if (o.optString("endReason") == "interrupted") {
+                            runOnUiThread { telemetryFromReport(o, "") }
+                        }
+                        sent.add(f.name); changed = true
+                    }
+                if (changed) {
+                    val keep = sent.sorted().takeLast(50).toSet()
+                    hgcPrefs().edit().putStringSet("tlmSentReports", keep).apply()
+                }
+            } catch (_: Exception) {}
+        }.start()
     }
 
     private fun collectEdgeReports(edge: Edge) {
@@ -6682,6 +6727,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
         repRow(box, "出力日時", o.optString("shotAt"))
 
         repBand(box, "撮影")
+        // 【終わり方を出す(2026-09-30 依頼)】以前はファイルにしか入っておらず、画面から
+        //  「完了したのか途中で切れたのか」が分からなかった。コマ数だけでは判断できない。
+        run {
+            val er = o.optString("endReason")
+            val txt = endReasonText(er)
+            val hint = if (er == "interrupted") {
+                // 理由はレポートには書かれていない(Entity が作るため)。この起動で推定した値を添える。
+                "撮り始めの印が残っていた=最後まで行かなかった。" +
+                (if (lastExitCause.isNotEmpty()) causeText(lastExitCause) else "")
+            } else ""
+            repRow(box, "終わり方", txt, hint,
+                   if (er == "interrupted") 0xFFD32F2F.toInt() else Color.BLACK)
+        }
         repRow(box, "コマ数", "${cap.optInt("frames")}")
         repRow(box, "シャッター失敗", "%d (%.1f%%)".format(cap.optInt("shootFail"), cap.optDouble("shootFailPct")))
 
@@ -6852,7 +6910,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // 1行 = 見出し / 値。数字の読み方(hint)は小さく灰色で値の下へ添える。
-    private fun repRow(box: LinearLayout, label: String, value: String, hint: String = "") {
+    private fun repRow(box: LinearLayout, label: String, value: String, hint: String = "",
+                       valueColor: Int = Color.BLACK) {
         val row = LinearLayout(this)
         row.orientation = LinearLayout.HORIZONTAL
         row.setPadding(dp(4), dp(4), dp(4), dp(4))
@@ -6861,7 +6920,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         })
         row.addView(TextView(this).apply {
-            text = value; textSize = 14f; setTextColor(Color.BLACK)
+            text = value; textSize = 14f; setTextColor(valueColor)
             setTypeface(Typeface.MONOSPACE, Typeface.BOLD)
             gravity = Gravity.END
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.3f)
@@ -8797,6 +8856,85 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 }
             }
         } catch (_: Exception) {}
+    }
+
+    // ================= 途中で終わった撮影の「理由」を残す(2026-09-30 依頼) =================
+    // 【何のため】撮影が途中で終わったこと自体は、撮り始めに置く印(inflight)で既に検出でき、
+    //  `endReason="interrupted"` のレポートが作られる。だが**なぜ終わったのかが分からない**。
+    //  利用者に知らせる必要は無い(ユーザー決定)。**こちらが情報を集められればよい。**
+    //
+    // 【どう見分けるか】アプリが動いている間に「足跡」を残しておき、次の起動で読む。
+    //  ・落ちた           … Crashlytics の「前回落ちたか」
+    //  ・端末が再起動した … **端末の稼働時間が巻き戻っている**(elapsedRealtime は再起動で0に戻る)
+    //  ・電池切れ         … 最後に控えた電池残量が低い
+    //  ・外から止められた … どれでもない(メーカーの省電力など。**痕跡が残らないのが普通**)
+    //
+    // 【なぜ Android 層に置くか】Crashlytics も端末の稼働時間も電池も Android 固有。
+    //  Entity(C++)には持ち込まない。レポート自体は Entity が作るので、**理由は表示と統計の
+    //  ときに後から添える**(レポートのファイルには書き込まない)。
+    private val kCauseCrash = "crash"
+    private val kCauseReboot = "reboot"
+    private val kCauseBattery = "battery"
+    private val kCauseKilled = "killed"
+
+    // この起動で判定した「前回の終わり方」。interrupted のレポートに添える。
+    private var lastExitCause = ""
+
+    // 足跡を残す。撮影が動いている間だけでよいので、コマが進むたびに呼ぶ(60秒に1回へ間引く)。
+    private var footprintAtMs = 0L
+    private fun leaveFootprint() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - footprintAtMs < 60_000L) return
+        footprintAtMs = now
+        val lv = try {
+            val i = registerReceiver(null, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            val l = i?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
+            val sc = i?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, 100) ?: 100
+            if (l < 0 || sc <= 0) -1 else l * 100 / sc
+        } catch (_: Exception) { -1 }
+        hgcPrefs().edit().putLong("runElapsed", now).putInt("runBattery", lv).apply()
+    }
+
+    // 起動時に一度だけ。足跡と突き合わせて、前回の終わり方を決める。
+    private fun judgeLastExit() {
+        val p = hgcPrefs()
+        val prevElapsed = p.getLong("runElapsed", 0L)
+        val prevBattery = p.getInt("runBattery", -1)
+        val crashed = try {
+            com.google.firebase.crashlytics.FirebaseCrashlytics.getInstance().didCrashOnPreviousExecution()
+        } catch (_: Exception) { false }
+        val now = android.os.SystemClock.elapsedRealtime()
+        lastExitCause = when {
+            crashed                               -> kCauseCrash
+            prevElapsed > 0L && now < prevElapsed -> kCauseReboot   // 稼働時間が巻き戻った=再起動
+            prevBattery in 0..5                   -> kCauseBattery
+            else                                  -> kCauseKilled
+        }
+        // 足跡は使い終わったら捨てる(次の撮影で置き直す)。残すと次の判定を誤らせる。
+        p.edit().remove("runElapsed").remove("runBattery").apply()
+        HgeNative.nativeLogEvent("EXIT", "last exit guess=" + lastExitCause +
+            " elapsedPrev=" + prevElapsed + " battPrev=" + prevBattery, false)
+    }
+
+    // 画面に出す言葉。レポートの「終わり方」に添える。
+    private fun causeText(c: String): String = when (c) {
+        kCauseCrash   -> "アプリが強制終了しました"
+        kCauseReboot  -> "端末が再起動したようです"
+        kCauseBattery -> "電池が切れたようです"
+        kCauseKilled  -> "外部から停止されたようです(端末の省電力設定をご確認ください)"
+        else          -> ""
+    }
+
+    // レポートの「終わり方」。endReason はレポートのファイルに入っている。
+    private fun endReasonText(r: String): String = when (r) {
+        "completed"    -> "完了"
+        "stopped", "user_stopped" -> "中止"
+        "interrupted"  -> "途中で終了"
+        "camera_error" -> "カメラのエラー"
+        "camera_lost"  -> "カメラを見失った"
+        "power"        -> "電源が切れた"
+        ""             -> "不明"
+        else           -> r
     }
 
     private fun hgcPrefs() = getSharedPreferences("tlp", MODE_PRIVATE)
