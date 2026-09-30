@@ -350,12 +350,19 @@ namespace netThread
     }
 
 	// スレッドの終了
+    // 【二重に呼ばれても安全に(2026-10-01)】detectSsdpBase::watchStop と同じ形。
+    //  同じハンドルを 2 回 threadEnd すると解放済みを join してプロセスごと落ちるので、
+    //  ハンドルを**先に取り上げてから**待つ(2人目は空を見る)。
     void deInit(void)
     {
-        { std::lock_guard<std::mutex> lock(mtx); stopThread = true; }
+        std::vector<void*> mine;
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            stopThread = true;
+            mine.swap(workers_);
+        }
         cv_request.notify_all();                    // 全ワーカーを起こして終了させる
-        for (void* h : workers_) { ossc::threadEnd(h); }
-        workers_.clear();
+        for (void* h : mine) { ossc::threadEnd(h); }
         net::deInit();          // net の終了(全ワーカー停止後に1回)
     }
 

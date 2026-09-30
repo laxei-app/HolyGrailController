@@ -2105,7 +2105,14 @@ int32_t hge_init(void)
 		dataManager::setLogOffset(g_offMin);
 	}
 	netThread::init();
-	hge::role::registerBackends();	// この役割が扱うカメラの探索元(共通は何も知らない)
+	// 【探索元を足すのは一度だけ(2026-10-01)】hge_term のあともう一度 hge_init する道がある
+	//  (アプリを閉じて開き直す)。毎回足すと backends() の配列が伸びて**位置が変わり**、
+	//  同じ配列を回している在否監視スレッドが解放済みを触って落ちる
+	//  (実機で踏んだ: SIGSEGV in cameraController::identifyTargets)。
+	//  役割の探索元は途中で変わらないので、入れるのは初回だけでよい
+	//  (内蔵カメラを足す jniBridge も同じ形で見張っている)。
+	static bool s_backendsAdded = false;
+	if (!s_backendsAdded) { s_backendsAdded = true; hge::role::registerBackends(); }
 	hge::role::loadPersisted();	// 無人再起動後の「前回IP直結」用に不揮発の既知カメラを読み込む(エッジ役)
 	// カメラを探し始める前に所持カメラを読んでおく。読み込みでダイジェスト認証の資格情報が
 	//  候補に入る(エッジ役は所持を持たないが、撮影計画の受信/読み込みで同じ入口を通る)。

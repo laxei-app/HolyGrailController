@@ -4,6 +4,7 @@
 #include "detectBase.h"
 #include "deviceDiscovery.h"
 #include <atomic>
+#include <mutex>
 
 // SSDP(UPnP)で検出する受信バックエンドの中間基底。
 // 能動 M-SEARCH(deviceDiscovery::search)→重複統合→apiBase 生成/初期化までを共通化する。
@@ -30,6 +31,14 @@ private:
 	// 探索の共通部。identifyOnly=true なら apiBase を作らず、身元(記述子)だけで out へ入れる。
 	size_t discover(std::vector<class device>& out, bool identifyOnly, const deviceMatch& want = nullptr);
 	errCode watchLoop();
+	// 【開始と停止は同時に走らせない(2026-10-01)】
+	//  hge_term(主スレッド) と presenceMonitor::stop(別スレッド) の両方が
+	//  cameraController::watchStop() を呼ぶ。錠が無いと両方が同じ watchThread_ を見て
+	//  **同じスレッドを 2 回 join し、解放済みを触ってプロセスごと落ちる**
+	//  (実機で踏んだ: "thread::join failed: Invalid argument" / SIGABRT)。
+	//  join を錠を持ったまま待つので、**後から呼んだ方は畳み終わるまで待たされる**。
+	//  待ち受けループは watchRunning_(atomic) しか見ないので錠を取らない。
+	std::mutex            watchMtx_;
 	std::atomic<bool>     watchRunning_{ false };
 	void*                 watchThread_ = nullptr;	// ossc スレッドハンドル
 	void*                 watchSock_   = nullptr;	// net::ssdpListen* ハンドル

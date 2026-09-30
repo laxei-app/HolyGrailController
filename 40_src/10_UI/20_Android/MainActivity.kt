@@ -5770,10 +5770,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
         handler.removeCallbacks(edgeTimeSync)
         handler.removeCallbacks(hgePump)
         stopEdgeApBinding()   // プロセスのネットワークバインドを解除(次アプリ/他通信のため)
-        Thread { try { HgeNative.nativePresenceStop() } catch (_: Exception) {} }.start()  // P4: 常駐プレゼンスマップ停止
+        // 【在否監視を先に止め切る(2026-10-01)】nativePresenceStop と nativeTerm は
+        //  両方とも SSDP 待ち受けを畳む。同時に走らせると**同じスレッドを 2 回 join して
+        //  プロセスごと落ちていた**。Entity 側にも錠を入れたが、**止める順を正しくする**のが先。
+        //  止まらないときに画面を巻き込まないよう、待つのは 1.5 秒まで。
+        val pstop = Thread { try { HgeNative.nativePresenceStop() } catch (_: Exception) {} }
+        pstop.start()
+        try { pstop.join(1500) } catch (_: Exception) {}
         HgeNative.nativeSetListener(null)
         HgeNative.nativeCaptureStop()
         HgeNative.nativeTerm()
+        // 【畳んだなら「温かい起動」ではない(2026-10-01)】これを戻さないと、次に開いたとき
+        //  nativeInit を飛ばして**畳んだままの Entity で動き続ける**。画面はファイルを読むだけなので
+        //  普通に見えるが、netThread が止まっているので**カメラも外部端末も黙って見つからなくなる**。
+        nativeReady = false
         releaseMulticastLock()
         super.onDestroy()
     }

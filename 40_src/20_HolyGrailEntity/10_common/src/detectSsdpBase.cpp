@@ -178,7 +178,8 @@ detectSsdpBase::~detectSsdpBase()
 // 待ち受け無しで戻る(呼び出し側は60秒ごとの能動再探索で復帰する)。
 void detectSsdpBase::watchStart(std::function<void()> onAppear)
 {
-	if (watchRunning_) { return; }
+	std::lock_guard<std::mutex> lk(watchMtx_);	// watchStop と排他(生きているハンドルを上書きしない)
+	if (watchRunning_ || watchThread_ != nullptr) { return; }
 	onAppear_  = std::move(onAppear);
 	watchSock_ = net::ssdpListenStart();
 	if (watchSock_ == nullptr) { return; }	// 非対応/失敗 → 待ち受け無し
@@ -187,8 +188,13 @@ void detectSsdpBase::watchStart(std::function<void()> onAppear)
 	watchThread_ = ossc::threadNet(fn, nullptr, 4096);	// NOTIFY待ち受けは軽量(内部DRAM節約)
 }
 
+// 【二重に呼ばれても安全に(2026-10-01)】hge_term と presenceMonitor::stop の両方が
+//  別のスレッドからここへ来る。錠を取らずにいたため、同じスレッドを 2 回 join して
+//  プロセスごと落ちていた。**錠を持ったまま畳む** — 後から呼んだ方は待たされ、
+//  終わったときにはすべて nullptr なので何もせずに戻る。
 void detectSsdpBase::watchStop()
 {
+	std::lock_guard<std::mutex> lk(watchMtx_);
 	if (!watchRunning_ && watchThread_ == nullptr) { return; }
 	watchRunning_ = false;
 	if (watchThread_ != nullptr) { ossc::threadEnd(watchThread_); watchThread_ = nullptr; }	// join
