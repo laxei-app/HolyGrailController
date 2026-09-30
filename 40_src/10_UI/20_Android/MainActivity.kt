@@ -459,6 +459,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (!warmStart) { HgeNative.nativeInit(); nativeReady = true }
         applyTelemetryConsent()   // 統計とクラッシュ記録の可否(既定: リリース版だけ送る)
         if (!warmStart) judgeLastExit()   // 前回の終わり方を推定(冷たい起動のときだけ意味がある)
+        migratePaidOwned()                // 旧 paidOwned を2つの購入へ移す(一度だけ)
         crashKeys(); crashLog("app start")
         // スマホ⇄エッジの通信路(2026-08-14 指示)。選ぶのはスマホだけ。エッジは常に両方で待ち受ける。
         EdgeBleLink.init(this)
@@ -500,7 +501,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  無いまま走ると探索が黙って空を返し、「端末が全部消えた」ように見えてしまう。
         //  1台も登録していない人には何も聞かない(外部端末を使わないなら要らない権限のため)。
         //  free 版は外部端末を使わないので、権限も聞かない(2026-09-29)。
-        if (isPaid() && edgeUseBle() && edges.isNotEmpty()) { ensureBlePermissions {} }
+        if (canEdge() && edgeUseBle() && edges.isNotEmpty()) { ensureBlePermissions {} }
         loadEdgeHeld()          // エッジが持っている計画(=編集ロック)。アプリを終了しても保つ
         applyLogOptsToSelf()    // デバッグログの取捨(既定は採らない)を自分の記録へ効かせる
         refreshEdgeSpinner()
@@ -744,7 +745,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                              R.id.cameralist_back, R.id.cameraadd_back, R.id.lenslist_back, R.id.lensadd_back,
                              R.id.color_back, R.id.smooth_back, R.id.places_back, R.id.reserve_back,
                              R.id.history_back, R.id.report_back, R.id.edge_back, R.id.dlog_back, R.id.pc_back,
-                             R.id.nt_back)
+                             R.id.nt_back, R.id.ex_back)
         for (id in ids) { findViewById<ImageView>(id)?.setOnClickListener { goBackOneScreen() } }
     }
 
@@ -785,6 +786,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     else { flipper.displayedChild = 4; buildGearMenu() } }
             17 -> { flipper.displayedChild = 4; buildGearMenu() }        // 権限、端末設定 → メニュー
             18 -> { flipper.displayedChild = 4; buildGearMenu() }        // 著作権表示 → メニュー
+            19 -> { flipper.displayedChild = 4; buildGearMenu() }        // 機能拡張 → メニュー
             else -> { flipper.displayedChild = 0 }
         }
         return true
@@ -891,6 +893,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         wireHeader(R.id.edge_home, R.id.edge_menu) { stashEdgeForm(); gotoScreen(it) }
         wireHeader(R.id.pc_home, R.id.pc_menu) { gotoScreen(it) }
         wireHeader(R.id.nt_home, R.id.nt_menu) { gotoScreen(it) }
+        wireHeader(R.id.ex_home, R.id.ex_menu) { gotoScreen(it) }
         wireHeader(R.id.dlog_home, R.id.dlog_menu) { dest ->
             // 取得中は戻らせない(端末の戻るキーと同じ扱い)。
             if (dlogBusy) Toast.makeText(this, "取得中です。中断してから移動してください", Toast.LENGTH_SHORT).show()
@@ -1080,7 +1083,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         gearItem(box, "所持レンズ") { openLensList() }
         // 【free 版では丸ごと出さない(2026-09-29 依頼)】使えないものが見えていても
         //  「これ何？」になるだけなので、案内も置かずに消す。
-        if (isPaid()) {
+        if (canEdge()) {
         gearBand(box, "外部端末")
         // 2026-08-08 UI依頼: 「登録」と「設定」を1画面へ統合した(登録は画面内の
         // 「＋ 新規エッジ端末」から行う)。
@@ -1096,8 +1099,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  ・屋外でエッジが AP のときは BLE にすると SSID を切り替えずに全台と話せる
         //  ・エッジ側にモードを持たせないので、戻せなくなって現地へ行く経路は無い
         gearSwitchItem(box, "外部端末とBLEで通信する", edgeUseBle()) { on -> setEdgeUseBle(on) }
-        }   // if (isPaid())
+        }   // if (canEdge())
         gearBand(box, "その他")
+        // 【機能拡張(2026-10-01 UI依頼)】買い切りのアドインの試用と購入。
+        //  「スマホ権限、設定」の上に置く。
+        gearItem(box, "機能拡張") { openExtScreen() }
         gearItem(box, "スマホ権限、設定") { openPermCheck() }
         // 使っているソフトウェアの権利表示(2026-09-27 UI依頼)。中身は原文のまま出すので翻訳しない。
         gearItem(box, "著作権表示") { openNotices() }
@@ -1112,11 +1118,27 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  見え方を実機で確かめるためのもの。**リリース版には存在しない** — 残すと
         //  それ自体が有料機能の抜け道になる。
         if (BuildConfig.DEBUG) {
-            gearSwitchItem(box, "【開発】有料版として動かす", isPaid()) { on ->
-                hgcPrefs().edit().putBoolean("paidOwned", on).apply()
-                applyPaidGating()
-                buildGearMenu()      // 外部端末の区画が出る/消えるので組み直す
-                refreshPlanList()
+            // 購入の仕組み(Play Billing)がまだ無い段階で、4つの状態を実機で行き来するためのもの。
+            //  free → 試用中 → 外部カメラ購入 → 外部端末購入
+            gearSwitchItem(box, "【開発】外部カメラを購入済みにする", ownedExternal()) { on ->
+                hgcPrefs().edit().putBoolean("ownedExternal", on).apply()
+                if (!on) hgcPrefs().edit().putBoolean("ownedEdge", false).apply()  // Bは A が前提
+                afterEntitlementChanged()
+            }
+            gearSwitchItem(box, "【開発】外部端末を購入済みにする", ownedEdge()) { on ->
+                hgcPrefs().edit().putBoolean("ownedEdge", on).apply()
+                if (on) hgcPrefs().edit().putBoolean("ownedExternal", true).apply()
+                afterEntitlementChanged()
+            }
+            gearItem(box, "【開発】試用の状態を戻す(未開始へ)") {
+                hgcPrefs().edit().putBoolean("trialStarted", false).putInt("trialUsedExternal", 0).apply()
+                afterEntitlementChanged()
+            }
+            gearItem(box, "【開発】試用を1回使う (残り " + (if (trialRemain() >= 0) "${trialRemain()}" else "-") + ")") {
+                if (trialStarted()) {
+                    hgcPrefs().edit().putInt("trialUsedExternal", trialUsed() + 1).apply()
+                    afterEntitlementChanged()
+                }
             }
         }
         // この2つは「撮影計画」ではなく「記録を見る」側なのでログの下へ置く(2026-08-23 UI依頼)。
@@ -1204,12 +1226,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 java.io.File(base, d).listFiles()?.forEach { it.delete() }
             }
             // **commit を使う**。apply は非同期で、書き終わる前にプロセスを落とすと消えない。
-            // 【paidOwned だけは残す(2026-09-29 依頼)】購入の記録は利用者が作ったデータでは
-            //  なく**領収書**なので、初期化の対象として筋が違う。消すと、**圏外で初期化した人が
-            //  野外で有料機能を失う**(オンラインに戻るまで Play へ問い合わせられない)。
-            val keepPaid = isPaid()
+            // 【購入と試用の記録だけは残す(2026-09-29/10-01 依頼)】購入の記録は利用者が作った
+            //  データではなく**領収書**なので、初期化の対象として筋が違う。消すと、**圏外で
+            //  初期化した人が野外で有料機能を失う**(オンラインに戻るまで Play へ問い合わせ
+            //  られない)。試用の消費回数も残す — 消せると初期化が試用のやり直しになる。
+            val keepExt = ownedExternal(); val keepEdge = ownedEdge()
+            val keepTrialOn = trialStarted(); val keepTrialUsed = trialUsed()
             hgcPrefs().edit().clear().commit()
-            if (keepPaid) hgcPrefs().edit().putBoolean("paidOwned", true).commit()
+            hgcPrefs().edit()
+                .putBoolean("ownedExternal", keepExt).putBoolean("ownedEdge", keepEdge)
+                .putBoolean("trialStarted", keepTrialOn).putInt("trialUsedExternal", keepTrialUsed)
+                .commit()
             getSharedPreferences("gearMaster", MODE_PRIVATE).edit().clear().commit()
             // 【初期化したことは操作履歴に残す(2026-09-06 依頼)】履歴ごと消した直後に、この1件だけを
             //  書いて新しい履歴の先頭にする。計画・端末・カメラは無いので空。
@@ -1438,7 +1465,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             { openAppDetailsSettings() }, isPermission = true))
         // 【free 版では外部端末向けの項目を出さない(2026-09-29 依頼)】使えない機能のために
         //  権限を求めるのは筋が通らないし、「赤い未設定」が消せないまま残ることになる。
-        if (sdk >= 31 && isPaid()) {
+        if (sdk >= 31 && canEdge()) {
             list.add(CheckItem("perm_nearby", "付近のデバイスの権限(Bluetooth)",
                 "外部端末を Bluetooth で探して登録・設定するときと、外部端末と BLE で通信するときに使います。" +
                 "外部端末を使わないなら無くても動きます。",
@@ -1474,7 +1501,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                                    android.provider.Settings.Secure.LOCATION_MODE_OFF }.getOrDefault(false)
             },
             { openSystemSettings(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS) }))
-        if (isPaid()) {
+        if (canEdge()) {
             list.add(CheckItem("set_bluetooth", "Bluetooth を ON",
                 "外部端末の登録・設定(プロビジョニング)と、外部端末との BLE 通信に使います。外部端末を使わないなら不要です。",
                 { (getSystemService(BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)?.adapter?.isEnabled == true },
@@ -1742,6 +1769,163 @@ class MainActivity : AppCompatActivity(), HgeListener {
         Notice("tjpgd_e", "TJpgDec - Tiny JPEG Decompressor", "Original (BSD-like)",
             "", R.raw.lic_tjpgd)
     )
+
+    // ================= 機能拡張の画面(2026-10-01 UI依頼) =================
+    // 買い切りのアドイン2つの試用と購入。**進み方は free → Aの試用 → Aを購入 → Bを購入**。
+    //  ・A(外部カメラ)  「試用」と「購入」。**試用は1回押すと二度と押せない**(確認を挟む)。
+    //    **購入は試用を開始したら有効**にする — 審査する人は外部カメラを持っておらず、
+    //    「試用で撮影1回」を条件にすると**購入フローを確認できない**ため。
+    //  ・B(外部端末)    「購入」だけ。試用は無い(カメラとの相性も端末との相性も問題にならない)。
+    //    **A を購入した後でないと有効にならない**(エッジは外部カメラを操作する機械なので、
+    //    A が無いと B だけ持っていても意味が無い)。
+    // 【説明文に Sony を書かない】Camera Remote PTP は調査段階でコードが無い。いま書くと
+    //  事実と違う説明での販売になる。**実装してからリリースし、そのとき足す**(ユーザー決定)。
+    // 【返金の文面】「応じられません」とは書けない。**48時間以内は利用者が Play から自分で
+    //  申請でき、こちらでは止められない**。そこを正確に書く。
+    private val kScreenExt = 19
+
+    private fun extCameraDesc() =
+        "Canon CCAPI を使ってカメラを制御します。\n" +
+        "カメラとの相性もあります。\n" +
+        "ご使用予定のカメラで問題なく動作することを十分に確かめてから購入をしてください。\n" +
+        "購入後48時間以内は、Google Play からご自身で返金を申請できます。\n" +
+        "それ以降の返金はお受けできません。\n" +
+        "試用では" + kTrialMaxExternal + "回の撮影がおこなえます。"
+
+    private fun extEdgeDesc() =
+        "M5Stack CoreS3 か M5StickS3 を別途購入する必要があります。\n" +
+        "これらの外部端末から外部カメラを制御して撮影することができます。\n" +
+        "個人情報の入ったスマホをカメラのそばに置いて撮影する必要が無くなります。\n" +
+        "また、離れた別の場所で複数カメラを制御することができるようになります。\n" +
+        "外部端末へのソフトウェアの書き込みもスマホからおこなえます。"
+
+    // 外部カメラが要る操作を止めたときの案内。**黙って押せないだけにしない**(理由と行き先を出す)。
+    private fun promptExtNeeded() {
+        val usedUp = trialStarted() && !ownedExternal() && trialRemain() <= 0
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle(if (usedUp) "試用の回数を使い切りました" else "外部カメラ機能が必要です")
+            .setMessage(
+                if (usedUp) "外部カメラでの撮影は、試用の" + kTrialMaxExternal + "回を使い切りました。\n" +
+                            "続けてお使いいただくには、機能拡張からご購入ください。\n" +
+
+                            "作成した撮影計画と登録したカメラはそのまま残っています。"
+                else        "お手持ちのカメラ(ミラーレス機など)で撮るには、機能拡張の\n" +
+                            "「外部カメラで撮影する」が必要です。\n" +
+
+                            "試用では" + kTrialMaxExternal + "回の撮影をお試しいただけます。")
+            .setPositiveButton("機能拡張へ") { _, _ -> openExtScreen() }
+            .setNegativeButton("閉じる", null)
+            .show()
+    }
+
+    private fun openExtScreen() {
+        buildExtScreen()
+        flipper.displayedChild = kScreenExt
+    }
+
+    private fun buildExtScreen() {
+        val box = findViewById<LinearLayout>(R.id.ex_container) ?: return
+        box.removeAllViews()
+
+        // ---- 外部カメラで撮影する ----
+        extItem(box, "外部カメラで撮影する", extCameraDesc(),
+            state = when {
+                ownedExternal()            -> "購入済み"
+                trialRemain() > 0          -> "試用中  残り${trialRemain()}回"
+                trialStarted()             -> "試用の回数を使い切りました"
+                else                       -> ""
+            },
+            buttons = listOf(
+                Triple("試用", !trialStarted() && !ownedExternal(), { confirmStartTrial() }),
+                Triple("購入", trialStarted() && !ownedExternal(),  { purchase("external") })
+            ))
+
+        // ---- 外部端末でカメラを制御する ----
+        extItem(box, "外部端末でカメラを制御する", extEdgeDesc(),
+            state = if (ownedEdge()) "購入済み" else "",
+            buttons = listOf(
+                // A を買っていないうちは押せない。理由は説明文の下に出す。
+                Triple("購入", ownedExternal() && !ownedEdge(), { purchase("edge") })
+            ),
+            note = if (!ownedExternal()) "「外部カメラで撮影する」を購入すると選べるようになります。" else "")
+    }
+
+    // 1項目ぶん。題・右にボタンの並び・状態・説明文。
+    private fun extItem(box: LinearLayout, title: String, desc: String, state: String,
+                        buttons: List<Triple<String, Boolean, () -> Unit>>, note: String = "") {
+        val card = LinearLayout(this); card.orientation = LinearLayout.VERTICAL
+        card.setPadding(dp(12), dp(12), dp(12), dp(12))
+
+        val head = LinearLayout(this); head.orientation = LinearLayout.HORIZONTAL
+        head.gravity = Gravity.CENTER_VERTICAL
+        head.addView(TextView(this).apply {
+            text = title; textSize = 16f; setTextColor(Color.BLACK)
+            setTypeface(null, Typeface.BOLD)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        for ((label, enabled, action) in buttons) {
+            val b = blueButton(label) { action() }
+            b.isEnabled = enabled
+            (b.layoutParams as LinearLayout.LayoutParams).let { lp ->
+                lp.width = ViewGroup.LayoutParams.WRAP_CONTENT
+                lp.marginStart = dp(8); b.layoutParams = lp
+            }
+            head.addView(b)
+        }
+        card.addView(head)
+
+        if (state.isNotEmpty()) {
+            card.addView(TextView(this).apply {
+                text = state; textSize = 14f
+                setTextColor(if (state.startsWith("購入済み")) 0xFF2E7D32.toInt() else 0xFF1565C0.toInt())
+                setPadding(0, dp(4), 0, 0)
+            })
+        }
+        card.addView(TextView(this).apply {
+            text = desc; textSize = 13f; setTextColor(Color.parseColor("#424242"))
+            setPadding(0, dp(8), 0, 0)
+        })
+        if (note.isNotEmpty()) {
+            card.addView(TextView(this).apply {
+                text = note; textSize = 13f; setTextColor(Color.parseColor("#757575"))
+                setPadding(0, dp(6), 0, 0)
+            })
+        }
+        box.addView(card)
+        box.addView(thinDivider())
+    }
+
+    // 【試用の開始は戻せない】押し間違いで失わないよう確認を挟む(2026-10-01 依頼)。
+    private fun confirmStartTrial() {
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("外部カメラ機能の試用")
+            .setMessage("外部カメラ機能の試用を開始します。\n" +
+                        "撮影" + kTrialMaxExternal + "回までお試しいただけます。\n" +
+
+                        "やり直しはできません。")
+            .setPositiveButton("試用を開始") { _, _ ->
+                hgcPrefs().edit().putBoolean("trialStarted", true).putInt("trialUsedExternal", 0).apply()
+                HgeNative.nativeLogEvent("EXT", "trial started", false)
+                afterEntitlementChanged()
+            }
+            .setNegativeButton("やめる", null)
+            .show()
+    }
+
+    // 購入。**Play Billing は第3段階**なので、いまは入口だけ。
+    //  デバッグ版では即座に権利を与えて、切り替えの作り込みを実機で通せるようにする。
+    private fun purchase(sku: String) {
+        if (BuildConfig.DEBUG) {
+            val e = hgcPrefs().edit()
+            if (sku == "external") e.putBoolean("ownedExternal", true)
+            else { e.putBoolean("ownedEdge", true).putBoolean("ownedExternal", true) }
+            e.apply()
+            HgeNative.nativeLogEvent("EXT", "purchased(debug) " + sku, false)
+            afterEntitlementChanged()
+            return
+        }
+        Toast.makeText(this, "準備中です", Toast.LENGTH_SHORT).show()
+    }
 
     private fun openNotices() {
         buildNoticesScreen()
@@ -3492,7 +3676,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun choosePlanCamera() {
         val arr = camArray(HgeNative.nativeGetOwnedCameras())
         if (arr.length() == 0) { openCameraList(); return }
-        val cams = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optJSONObject("camera") }
+        // 【外部カメラを使えないときは内蔵だけ出す(2026-10-01 依頼)】選べてしまうと、
+        //  選んだ後で「開始できません」と言うことになる。**選ばせない**ほうが親切。
+        //  性質はカメラの記録(localOnly=この端末でしか撮れない=内蔵)で見る。
+        val all = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optJSONObject("camera") }
+        val cams = if (canExternalCamera()) all else all.filter { it.optBoolean("localOnly", false) }
+        if (cams.isEmpty()) { promptExtNeeded(); return }
         val names = cams.map { it.optString("name") }
         // 選択肢は「名称(カメラ本体で付けた名前)」。同機種を2台持つと名称だけでは
         //  どちらか分からないため(2026-08-19 依頼)。選ぶキーは従来どおり名称。
@@ -4629,7 +4818,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun applyTplMode() {
         // ひな形は端末を持たない。free 版は外部端末に関する機能を一切出さない(2026-09-29)。
         findViewById<View>(R.id.plan_edgeRow)?.visibility =
-            if (tplMode || !isPaid()) View.GONE else View.VISIBLE
+            if (tplMode || !canEdge()) View.GONE else View.VISIBLE
         // ホームは「撮影計画ひな形」のときだけ出す。撮影計画そのものがホームなので、
         //  そこでは押す意味がない(場所は空けたままにして題を中央に保つ)。
         findViewById<View>(R.id.plan_home)?.visibility = if (tplMode) View.VISIBLE else View.INVISIBLE
@@ -4681,6 +4870,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         setInitialSplit(R.id.plan_listContainer)
         // 閉じても続ける対象があればサービスを動かし、無くなれば止める(ひな形の一覧では触らない)。
         if (!tplMode) applyCaptureService(noteLines, noteNeedsCamera)
+        refreshTrialBanner()
     }
 
     private fun buildPlanRow(p: JSONObject): View {
@@ -4981,6 +5171,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private fun startPlan(id: String) {
+        // 【外部カメラの計画は、使える人だけ開始できる(2026-10-01 依頼)】試用を使い切っても
+        //  計画は消さない。**開始できないだけ**にして、理由と購入への導線を出す。
+        if (!planCamLocalOnly(id) && !canExternalCamera()) { promptExtNeeded(); return }
         warnPlanTzIfDiffers(id)
         // 項目A/17: 開始アイコンをタップした瞬間に予約表で二重使用を確かめる。同じカメラを別の計画が
         // 重なる時間で使うなら、開始も「エッジ端末への送信」も一切行わない(1件目は可・2件目以降は不可)。
@@ -5154,6 +5347,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  ステータス行の文言はここだけで作る。ポーリングやイベントは「集合と planProgress を更新して
     //  この関数を呼ぶ」だけにする(受信した場所ごとに文字列を組み立てると、経路によって出る内容が
     //  食い違い、切り替え直後だけ枚数が消える、といったことが起きる)。
+    // 「外部カメラ機能試用中 残りxx回」。**撮影の状態とは別の行**に出す(2026-10-01 依頼)。
+    //  試用していないとき・購入済みのときは出さない。使い切ったら残り0として出し続ける
+    //  (何が起きているのか分からないまま機能が消えるのを避ける)。
+    private fun refreshTrialBanner() {
+        val tv = findViewById<TextView>(R.id.plan_trialBanner) ?: return
+        if (ownedExternal() || !trialStarted() || tplMode) { tv.visibility = View.GONE; return }
+        val n = trialRemain()
+        tv.text = if (n > 0) "外部カメラ機能試用中  残り${n}回"
+                  else "外部カメラ機能の試用は終了しました(機能拡張から購入できます)"
+        tv.setTextColor(if (n > 0) 0xFF1565C0.toInt() else 0xFFD32F2F.toInt())
+        tv.visibility = View.VISIBLE
+    }
+
     private fun refreshCaptureStatusForCurrent() {
         if (!::captureStatus.isInitialized) return
         val id = currentPlanId
@@ -7331,8 +7537,29 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  最上位 = スマホ用の撮影制御方法初期値の名前(型ごと。内蔵カメラのひな形の撮影制御方法もこの名前)
         //  ccm    = ミラーレス機のひな形の撮影制御方法の名前
         //  tpl    = 標準ひな形の名前(種類ごと。題名は「カメラ名 + これ」)
-        val names = JSONObject().put("night", "夜間スマホ").put("sunrise", "朝日スマホ")
-                                .put("sunset", "夕日スマホ").put("day", "日中スマホ")
+        val names = seedNamesJson()
+        if (!hgcPrefs().getBoolean("builtinSeedDone", false)) {
+            val found = try { HgeNative.nativeRegisterBuiltinCameras(names) } catch (_: Exception) { 0 }
+            if (found > 0) { hgcPrefs().edit().putBoolean("builtinSeedDone", true).commit() }
+        }
+        // 【EOS R3 のひな形は free では入れない(2026-10-01 依頼)】外部カメラを使えない人に
+        //  ミラーレス機のひな形が並んでいても使えない。**試用の開始か購入で入れる**。
+        //  入れる条件と二重挿入の防止は seedR3TemplatesIfEntitled() にまとめてある。
+        seedR3TemplatesIfEntitled()
+    }
+
+    // ミラーレス機の既定(EOS R3)の標準ひな形。**場所の種の後・内蔵カメラの後**に呼ぶこと
+    //  (内蔵カメラを先にしないと「撮影計画の初期値にするカメラ」が EOS R3 になりかねない)。
+    //
+    // 【いつ入れるか】外部カメラを使える人にだけ入れる = **試用の開始 or 購入**のとき。
+    //  free の初期インストールでは入れない。
+    // 【出荷時設定に戻しても】購入済みなら入れ直す。`ownedExternal` は初期化で消えないので
+    //  この判定はそのまま効く(`stdTplDone` は消えるので、もう一度ここを通って入る)。
+    // 【二重挿入の防止】`stdTplDone` で見張るほか、Entity 側も tplKind + カメラ名で
+    //  既にあるものは作らない。二重の歯止めになっている。
+    private fun seedNamesJson(): String =
+        JSONObject().put("night", "夜間スマホ").put("sunrise", "朝日スマホ")
+                    .put("sunset", "夕日スマホ").put("day", "日中スマホ")
             .put("ccm", JSONObject().put("night", "夜間").put("sunrise", "朝日").put("sunset", "夕日").put("day", "日中"))
             .put("tpl", JSONObject()
                 .put("star_sunrise",          "星景(日の出含む)")
@@ -7344,15 +7571,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 .put("star_sunset_sunstar",   "星景(日の入光条)")
                 .put("night_sunset_sunstar",  "夜景(日の入光条)"))
             .toString()
-        if (!hgcPrefs().getBoolean("builtinSeedDone", false)) {
-            val found = try { HgeNative.nativeRegisterBuiltinCameras(names) } catch (_: Exception) { 0 }
-            if (found > 0) { hgcPrefs().edit().putBoolean("builtinSeedDone", true).commit() }
-        }
-        // ミラーレス機の既定(EOS R3)の標準ひな形もここで(場所の種の後・内蔵カメラの後。
-        //  内蔵カメラを先にしないと「撮影計画の初期値にするカメラ」が EOS R3 になりかねない)。
-        if (!hgcPrefs().getBoolean("stdTplDone", false)) {
+
+    private fun seedR3TemplatesIfEntitled() {
+        if (!canExternalCamera()) return
+        if (hgcPrefs().getBoolean("stdTplDone", false)) return
+        val names = seedNamesJson()
+        dataExec.execute {
             val r = try { HgeNative.nativeSeedStandardTemplates(names) } catch (_: Exception) { -1 }
-            if (r == 0) { hgcPrefs().edit().putBoolean("stdTplDone", true).commit() }
+            if (r == 0) {
+                hgcPrefs().edit().putBoolean("stdTplDone", true).commit()
+                HgeNative.nativeLogEvent("EXT", "seeded R3 templates", false)
+            }
         }
     }
 
@@ -8580,6 +8809,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         for (id in tlmActive.keys.toList()) {
             if (active.contains(id)) continue
             val s = tlmActive.remove(id) ?: continue
+            countTrialIfExternal(id, s.frames)   // 試用の消費はここで1回だけ
             val (reason, notice) = tlmEndReason(id, s)
             val mins = ((System.currentTimeMillis() - s.startMs) / 60000L).toInt()
             crashLog("capture end " + reason + " frames=" + s.frames + " min=" + mins)
@@ -8596,6 +8826,23 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 if (notice != 0) putLong("notice_code", notice.toLong())
             })
         }
+    }
+
+    // 【試用の消費(2026-10-01 依頼)】数えるのは**外部カメラで1コマ以上撮れた撮影**だけ。
+    //  ・0コマで終わったもの(カメラが見つからない等)は**数えない** — 利用者の落ち度ではない
+    //  ・途中で中止しても、コマが撮れていれば1回(価値は受け取っている)
+    //  ・内蔵カメラの撮影は数えない
+    //  ・購入済みなら数えない(意味が無い)
+    //  判定は撮影の**終わり**で1回だけ。開始時の可否は startPlan が見ている
+    //  (走っている撮影は、残りが尽きても最後まで走らせる)。
+    private fun countTrialIfExternal(planId: String, frames: Int) {
+        if (ownedExternal() || !trialStarted()) return
+        if (frames < 1) return
+        if (planCamLocalOnly(planId)) return
+        val n = trialUsed() + 1
+        hgcPrefs().edit().putInt("trialUsedExternal", n).apply()
+        HgeNative.nativeLogEvent("EXT", "trial used " + n + "/" + kTrialMaxExternal, false)
+        if (n >= kTrialMaxExternal) { applyPaidGating() }   // 使い切ったら外部カメラの機能を閉じる
     }
 
     // ================= Crashlytics(落ちたときの記録)(2026-09-27 依頼) =================
@@ -8705,13 +8952,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
         showTelemetryConsentDialog(true)
     }
 
-    // ================= free版 / 有料版(2026-09-29 依頼) =================
-    // アプリは1本で、アプリ内購入(買い切り1品)で切り替える。free は外部端末に関する機能を
-    //  一切出さず、画面の最下段に広告の帯が出る。有料は広告が出ず、外部端末が使える。
+    // ================= 機能拡張(free / 試用 / 購入)(2026-10-01 依頼) =================
+    // アプリは1本。**買い切りのアドインを2つ**(外部カメラ / 外部端末)売る。進み方は
+    //   free → Aの試用 → Aを購入 → Bを購入
+    // で、**Bの購入はAを購入した後**にしか出さない(エッジは外部カメラを操作する機械なので、
+    // Aが無いとBだけ持っていても意味が無い)。
     //
-    // 【読む側はここだけ】出し分けは **isPaid() しか見ない**。Play Billing は「paidOwned を
-    //  書く側」として後から足す。こうしておくと課金が影も形も無いうちから切り替えを
-    //  作り込んで実機で通せる(デバッグ専用のトグルで両方の状態を行き来できる)。
+    // 【読む側は能力で聞く】段階ではなく「何ができるか」で判断する。後で構成が変わっても
+    //  呼び出し側を直さずに済む。
+    //    canExternalCamera()  外部カメラを使えるか(購入 または 試用中)
+    //    canEdge()            外部端末を使えるか(購入だけ。試用は無い)
+    //    ownedExternal()      広告が消えるか(**最初の購入で消える**。試用中は出たまま)
+    //
     // 【置き場】tlp の prefs。**getExternalFilesDir の下には絶対に置かない** — あそこは
     //  ファイルマネージャで取り出せるので、置いた瞬間に「配れば誰でも有料版」になる。
     //  同じ理由で**引き継ぎ用のファイルは作らない**。機種変更は、同じ Google アカウントで
@@ -8720,9 +8972,50 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  保存した値をそのまま使う。**自分からは閉じない**。queryPurchases は「空」と
     //  「持っていない」を見分けられないうえ、返金された人が使い続ける損害より
     //  **払った人を野外で締め出す損害のほうがはるかに大きい**。
-    // 【出荷時設定に戻す】paidOwned は消さない。利用者のデータではなく**領収書**なので、
-    //  初期化の対象として筋が違う(doFactoryReset で明示的に取り置いている)。
-    private fun isPaid(): Boolean = hgcPrefs().getBoolean("paidOwned", false)
+    // 【出荷時設定に戻す】購入と試用の記録は消さない。利用者が作ったデータではなく**領収書**
+    //  なので、初期化の対象として筋が違う(doFactoryReset で明示的に取り置いている)。
+    // 【試用は回数制】日数だと、曇りが続いたときに**一度も体験しないまま失う**。天候に完全に
+    //  依存するアプリなので回数で数える。時計を戻す不正も効かない。
+    //  **アンインストールすれば戻るが、塞がない** — オフライン前提では照合を必ず
+    //  「通信できなければ通す」にせざるを得ず、機内モードで破れるため。
+    private val kTrialMaxExternal = 10
+
+    private fun ownedExternal(): Boolean = hgcPrefs().getBoolean("ownedExternal", false)
+    private fun ownedEdge():     Boolean = hgcPrefs().getBoolean("ownedEdge", false)
+    private fun trialStarted():  Boolean = hgcPrefs().getBoolean("trialStarted", false)
+    private fun trialUsed():     Int     = hgcPrefs().getInt("trialUsedExternal", 0)
+    // 試用の残り。購入済み/未開始は -1(表示しない)。
+    private fun trialRemain(): Int =
+        if (ownedExternal() || !trialStarted()) -1 else (kTrialMaxExternal - trialUsed()).coerceAtLeast(0)
+
+    private fun canExternalCamera(): Boolean = ownedExternal() || trialRemain() > 0
+    private fun canEdge(): Boolean = ownedEdge()
+
+    // 【旧 paidOwned からの移し替え】開発機は paidOwned で全部入りだった。
+    //  一度だけ両方の購入へ移す(出荷前なので利用者には存在しない経路)。
+    private fun migratePaidOwned() {
+        val p = hgcPrefs()
+        if (!p.contains("paidOwned")) return
+        val was = p.getBoolean("paidOwned", false)
+        p.edit().remove("paidOwned")
+            .putBoolean("ownedExternal", was || p.getBoolean("ownedExternal", false))
+            .putBoolean("ownedEdge",     was || p.getBoolean("ownedEdge", false))
+            .apply()
+    }
+
+    // 購入/試用の状態が変わったあとの共通の後始末。**ここを通す**(画面ごとに書かない)。
+    private fun afterEntitlementChanged() {
+        applyPaidGating()
+        seedR3TemplatesIfEntitled()
+        if (::flipper.isInitialized) {
+            when (flipper.displayedChild) {
+                kScreenMenu -> buildGearMenu()
+                kScreenExt  -> buildExtScreen()
+                else -> {}
+            }
+        }
+        refreshPlanList(); updateReadOnly()
+    }
 
     // 有料/free が変わったときに、画面と常駐処理をその状態へ揃える。
     //  起動時と、デバッグ用トグルを倒したときに呼ぶ。購入で true になったときもここを通す。
@@ -8734,20 +9027,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
         try {
             val cn = android.content.ComponentName(this, EdgeFlashActivity::class.java)
             packageManager.setComponentEnabledSetting(cn,
-                if (isPaid()) PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+                if (canEdge()) PackageManager.COMPONENT_ENABLED_STATE_ENABLED
                 else PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
                 PackageManager.DONT_KILL_APP)
         } catch (_: Exception) {}
         // 外部端末の常駐処理(30秒スイープと時刻同期)は free では走らせない。
         //  電池と通信を使ううえ、BLE 探索は権限も要る。
         handler.removeCallbacks(edgeSweep); handler.removeCallbacks(edgeTimeSync)
-        if (isPaid()) {
+        if (canEdge()) {
             handler.postDelayed(edgeTimeSync, 3000)
             handler.postDelayed(edgeSweep, 6000)
         }
         if (::flipper.isInitialized) {
             findViewById<View>(R.id.plan_edgeRow)?.visibility =
-                if (isPaid() && !tplMode) View.VISIBLE else View.GONE
+                if (canEdge() && !tplMode) View.VISIBLE else View.GONE
             applyAdBand()
         }
     }
@@ -8766,7 +9059,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private var adView: com.google.android.gms.ads.AdView? = null
     private var adsInited = false
 
-    private fun adsWanted(): Boolean = !isPaid() && !isCaptureBusy()
+    // 広告は**最初の購入(外部カメラ)で消える**。試用中は出たまま(ユーザー決定)。
+    private fun adsWanted(): Boolean = !ownedExternal() && !isCaptureBusy()
 
     // 有料/free・撮影の状態が変わるたびに呼ぶ。起動時・画面遷移・撮影状態の更新から。
     private fun applyAdBand() {

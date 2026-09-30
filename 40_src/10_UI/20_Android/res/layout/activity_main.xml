@@ -33,6 +33,7 @@
     <include layout="@layout/screen_debuglog" />
     <include layout="@layout/screen_permcheck" />
     <include layout="@layout/screen_notices" />
+    <include layout="@layout/screen_ext" />
 </ViewFlipper>
 
     <FrameLayout android:id="@+id/ad_slot"

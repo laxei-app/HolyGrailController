@@ -114,6 +114,19 @@
                     android:layout_height="wrap_content"
                     android:orientation="vertical">
 
+                    <!-- 【機能拡張の試用中だけ出す行(2026-10-01 UI依頼)】撮影の状態と場所を
+                         取り合わないよう、**別の行として上に積む**。ふだんは gone。 -->
+                    <TextView
+                        android:id="@+id/plan_trialBanner"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textColor="#1565C0"
+                        android:textStyle="bold"
+                        android:textSize="13sp"
+                        android:paddingBottom="2dp"
+                        android:visibility="gone"
+                        android:text="" />
+
                     <!-- 撮影開始の上の行。左は撮影中の進捗、右は「変更の取り消し」。
                          進捗は出ていないときも場所を残す(visibility は gone にしない)。
                          撮影を始めても下の行が上下に動かないようにするため。 -->
