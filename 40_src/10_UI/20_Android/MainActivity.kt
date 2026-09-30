@@ -6463,8 +6463,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val name = o.optString("name")
             val notes = o.optInt("noteCount")
             val edge = o.optString("edge")
-            val sub = "%s / %s  %d枚%s%s".format(
+            // 途中で終わったものは一覧でも分かるようにする(2026-09-30 依頼)。
+            //  並んだ中から異常なものを探せないと、詳細を開くまで気づけない。
+            val er = o.optString("endReason")
+            val sub = "%s / %s  %d枚%s%s%s".format(
                 o.optString("plan"), o.optString("camera"), o.optInt("frames"),
+                if (er == "interrupted") "  ⚠途中で終了" else "",
                 if (edge.isNotEmpty()) "   $edge" else "",
                 if (notes > 0) "   所見 ${notes}件" else "")
             val title = o.optString("shotAt").ifEmpty { name }
@@ -8904,15 +8908,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
             com.google.firebase.crashlytics.FirebaseCrashlytics.getInstance().didCrashOnPreviousExecution()
         } catch (_: Exception) { false }
         val now = android.os.SystemClock.elapsedRealtime()
+        // 【足跡が無ければ何も言わない】足跡は撮影中にしか置かない。無い＝前回は撮影して
+        //  いなかった、ということなので「殺された」と決めつけない(毎回そう出ると紛らわしい)。
+        //  中断のレポートが出るのは撮影していた場合だけなので、そこだけ理由を付ければよい。
         lastExitCause = when {
-            crashed                               -> kCauseCrash
-            prevElapsed > 0L && now < prevElapsed -> kCauseReboot   // 稼働時間が巻き戻った=再起動
-            prevBattery in 0..5                   -> kCauseBattery
-            else                                  -> kCauseKilled
+            crashed                  -> kCauseCrash
+            prevElapsed <= 0L        -> ""                 // 前回は撮影していない
+            now < prevElapsed        -> kCauseReboot       // 稼働時間が巻き戻った=再起動
+            prevBattery in 0..5      -> kCauseBattery
+            else                     -> kCauseKilled
         }
         // 足跡は使い終わったら捨てる(次の撮影で置き直す)。残すと次の判定を誤らせる。
         p.edit().remove("runElapsed").remove("runBattery").apply()
-        HgeNative.nativeLogEvent("EXIT", "last exit guess=" + lastExitCause +
+        HgeNative.nativeLogEvent("EXIT", "last exit guess=" + lastExitCause.ifEmpty { "(not capturing)" } +
             " elapsedPrev=" + prevElapsed + " battPrev=" + prevBattery, false)
     }
 

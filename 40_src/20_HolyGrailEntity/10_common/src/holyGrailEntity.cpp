@@ -2092,6 +2092,18 @@ static int32_t copyOut(const std::string& s, char* buf, int32_t* inoutLen);
 int32_t hge_init(void)
 {
 	if (g_inited) { return ERR_HGC_OK; }
+	// 【ログの時刻を最初に合わせる(2026-09-30)】ログの時刻に使う g_logOff は 0(UTC)で始まり、
+	//  以前は**最初に撮影計画を読むときに初めて**設定していた。そのため BOOT / 中断レポートの
+	//  復旧 / 起動直後の診断ログが**全部 UTC**になり、後続の行と9時間ずれて並んでいた
+	//  (実機のログを読み違える原因になった)。一番読みたいログが一番ずれていたので、
+	//  **何か書く前に**合わせる。計画を読むときの設定はそのまま残す(TZ変更に追従するため)。
+	{
+		const std::time_t now = std::time(nullptr);
+		hgc::dateTime nowDt; int off = 0;
+		localFromTime(now, nowDt, off);
+		g_offMin = off;
+		dataManager::setLogOffset(g_offMin);
+	}
 	netThread::init();
 	hge::role::registerBackends();	// この役割が扱うカメラの探索元(共通は何も知らない)
 	hge::role::loadPersisted();	// 無人再起動後の「前回IP直結」用に不揮発の既知カメラを読み込む(エッジ役)

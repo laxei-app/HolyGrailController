@@ -1972,6 +1972,9 @@ std::string dataManager::reportListJson(void)
 				e["shotAt"]    = f.value("shotAt", std::string());
 				e["frames"]    = f.contains("capture") ? f["capture"].value("frames", 0) : 0;
 				e["noteCount"] = f.contains("notes") && f["notes"].is_array() ? static_cast<int>(f["notes"].size()) : 0;
+				// 一覧で「途中で終わった」を見分けられるように終わり方も渡す(2026-09-30 依頼)。
+				//  これが無いと、コマ数だけでは完了か中断か分からない。
+				e["endReason"] = f.value("endReason", std::string());
 			}
 		}
 		arr.push_back(e);
