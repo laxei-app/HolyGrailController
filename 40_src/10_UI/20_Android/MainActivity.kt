@@ -165,7 +165,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (planId.isEmpty()) return
         val total = o.optInt("total")
         if (total <= 0) return
-        planProgress[planId] = CapProgress(o.optInt("frame"), total, o.optInt("remainSec"))
+        val frame = o.optInt("frame")
+        planProgress[planId] = CapProgress(frame, total, o.optInt("remainSec"))
+        // 【ここで控える(2026-10-01 ユーザー指示)】試用の消費は「何コマ撮れたか」で決まるが、
+        //  以前は一覧を作り直すとき(= 状態が変わったとき)にしか拾っていなかった。
+        //  撮影中は「撮影中」のままなので作り直されず、しかも終わるときは
+        //  **planProgress を捨ててから**数えようとするので、最後の値も拾えない。
+        //  結果、実際には 0 コマと見なされて**ほぼ数えられていなかった**。
+        //  進捗が届いたその場で控えれば、画面の更新や終わり方に左右されない。
+        tlmActive[planId]?.let { if (frame > it.frames) it.frames = frame }
         leaveFootprint()   // 生きている印。次の起動で「なぜ終わったか」を見分けるのに使う
     }
     // 項目11: 撮影開始前(待機中)に未検出ポップアップを出した計画 id。待機中は1回だけ出すために使う。
@@ -738,6 +746,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     override fun onResume() {
         super.onResume()
+        // 【取りこぼしの受け皿(2026-10-01)】閉じている間に終わった撮影もここで数える。
+        countTrialFromReports()
         if (goHomeOnResume) { goHomeOnResume = false; if (::flipper.isInitialized) gotoScreen(kScreenHome) }
         // 統計とクラッシュ記録を送ってよいか(まだ答えを貰っていなければ尋ねる)。
         //  初回起動で位置情報の確認が出ている間は見送り、片付いてから出す。
@@ -1252,7 +1262,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 afterEntitlementChanged()
             }
             gearItem(box, s(R.string.dev_trial_reset)) {
-                hgcPrefs().edit().putBoolean("trialStarted", false).putInt("trialUsedExternal", 0).apply()
+                hgcPrefs().edit().putBoolean("trialStarted", false).putInt("trialUsedExternal", 0)
+                    .remove("trialSeenShotAt").apply()
                 afterEntitlementChanged()
             }
             gearItem(box, s(R.string.dev_trial_use, if (trialRemain() >= 0) trialRemain().toString() else "-")) {
@@ -1933,6 +1944,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private fun openExtScreen() {
+        countTrialFromReports()   // 開く前に最新にする(取りこぼしの受け皿)
         buildExtScreen()
         flipper.displayedChild = kScreenExt
     }
@@ -2019,7 +2031,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .setTitle(s(R.string.ext_trial_confirm_title))
             .setMessage(s(R.string.ext_trial_confirm_msg, kTrialMaxExternal))
             .setPositiveButton(s(R.string.ext_trial_confirm_ok)) { _, _ ->
-                hgcPrefs().edit().putBoolean("trialStarted", true).putInt("trialUsedExternal", 0).apply()
+                // 【数え始める基準(2026-10-01)】この時刻より後のレポートだけを数える。
+        //  入れておかないと、始めた瞬間に昔の撮影を全部数えて使い切る。
+        hgcPrefs().edit().putBoolean("trialStarted", true).putInt("trialUsedExternal", 0)
+            .putString("trialSeenShotAt", nowStamp()).apply()
                 HgeNative.nativeLogEvent("EXT", "trial started", false)
                 afterEntitlementChanged()
             }
@@ -5512,6 +5527,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (currentPlanId == id) captureStatus.text = ""
         refreshPlanList(); updateReadOnly()
         Thread { runCatching { doStop() } }.start()
+        // 【試用の消費(2026-10-01)】**中止では IDLE が来ないことがある**(すぐ下の
+        //  「保険」がまさにそれを言っている)。IDLE 側だけに置くと中止のぶんが数えられない。
+        //  レポートが書けた頃を狙って見る(二重に数える心配は無い — shotAt で弾く)。
+        handler.postDelayed({ countTrialFromReports() }, 5000)
+        handler.postDelayed({ countTrialFromReports() }, 20000)
         // 保険: 一定時間内に IDLE を検知できなくても抑止/集合を掃除し、UIとポーリングを正常化する。
         handler.postDelayed({
             if (stoppingPlans.remove(id)) {
@@ -9211,7 +9231,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         for (id in tlmActive.keys.toList()) {
             if (active.contains(id)) continue
             val s = tlmActive.remove(id) ?: continue
-            countTrialIfExternal(id, s.frames)   // 試用の消費はここで1回だけ
             val (reason, notice) = tlmEndReason(id, s)
             val mins = ((System.currentTimeMillis() - s.startMs) / 60000L).toInt()
             crashLog("capture end " + reason + " frames=" + s.frames + " min=" + mins)
@@ -9230,22 +9249,58 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
     }
 
-    // 【試用の消費(2026-10-01 依頼)】数えるのは**外部カメラで1コマ以上撮れた撮影**だけ。
-    //  ・0コマで終わったもの(カメラが見つからない等)は**数えない** — 利用者の落ち度ではない
-    //  ・途中で中止しても、コマが撮れていれば1回(価値は受け取っている)
-    //  ・内蔵カメラの撮影は数えない
-    //  ・購入済みなら数えない(意味が無い)
-    //  判定は撮影の**終わり**で1回だけ。開始時の可否は startPlan が見ている
-    //  (走っている撮影は、残りが尽きても最後まで走らせる)。
-    private fun countTrialIfExternal(planId: String, frames: Int) {
+    // 【試用の消費は「撮影レポート」で数える(2026-10-01 ユーザー提案)】
+    //
+    // 【なぜレポートか】撮影が終われば**必ず 1 件**書かれ、中に**実測のコマ数**が入っている。
+    //  以前は画面の更新(一覧の作り直し)に相乗りして数えていたが、撮影中は
+    //  「撮影中」のままなので作り直されず、しかも終わるときは**コマ数を捨ててから**
+    //  数えようとしていたので、実際には 0 コマと見なされ**ほぼ数えられていなかった**。
+    //  レポートなら、画面を見ていなくても、途中でアプリが落ちても、後から数えられる。
+    //
+    // 【二重に数えない】数えたところまでの shotAt を覚える。一覧は shotAt の新しい順で、
+    //  書式は "YYYY-MM-DD HH:MM:SS" なので文字列の比較がそのまま時系列になる。
+    //
+    // 【数えないもの】
+    //  ・0 コマで終わったもの(カメラが見つからない等)。利用者の落ち度ではない
+    //  ・内蔵カメラの撮影(試用の対象外)
+    //  ・購入済み(意味が無い)
+    //  途中で中止しても、コマが撮れていれば 1 回(価値は受け取っている)。
+    private fun countTrialFromReports() {
         if (ownedExternal() || !trialStarted()) return
-        if (frames < 1) return
-        if (planCamLocalOnly(planId)) return
-        val n = trialUsed() + 1
-        hgcPrefs().edit().putInt("trialUsedExternal", n).apply()
+        val pf = hgcPrefs()
+        val seen = pf.getString("trialSeenShotAt", "") ?: ""
+        if (seen.isEmpty()) {
+            // 【昔のレポートを巻き込まない】基準が無いときは「今」を入れて終わる。
+            //  試用を始める前に撮ったものまで数えると、開始の瞬間に使い切る。
+            pf.edit().putString("trialSeenShotAt", nowStamp()).apply()
+            return
+        }
+        val arr = try { JSONArray(HgeNative.nativeReportList()) } catch (_: Exception) { return }
+        var newest = seen
+        var add = 0
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val shotAt = o.optString("shotAt")
+            if (shotAt.isEmpty()) continue
+            if (shotAt > newest) { newest = shotAt }
+            if (shotAt <= seen) continue                       // 数えたことがある
+            if (o.optInt("frames", 0) < 1) continue            // 1 コマも撮れていない
+            if (o.optBoolean("camLocalOnly", false)) continue   // 内蔵カメラ
+            ++add
+        }
+        if (newest != seen) { pf.edit().putString("trialSeenShotAt", newest).apply() }
+        if (add <= 0) return
+        val n = (trialUsed() + add).coerceAtMost(kTrialMaxExternal)
+        if (n == trialUsed()) return
+        pf.edit().putInt("trialUsedExternal", n).apply()
         HgeNative.nativeLogEvent("EXT", "trial used " + n + "/" + kTrialMaxExternal, false)
-        if (n >= kTrialMaxExternal) { applyPaidGating() }   // 使い切ったら外部カメラの機能を閉じる
+        if (n >= kTrialMaxExternal) { applyPaidGating() }	// 使い切ったら外部カメラの機能を閉じる
+        if (flipper.displayedChild == kScreenExt) { buildExtScreen() }	// 開いているなら残りを書き換える
     }
+
+    // レポートの shotAt と同じ書式の「今」。比較に使うので書式を合わせる。
+    private fun nowStamp(): String =
+        SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(java.util.Date())
 
     // ================= Crashlytics(落ちたときの記録)(2026-09-27 依頼) =================
     // 依存を入れただけでは「どこで落ちたか」しか残らない。このアプリの不具合は
@@ -10630,6 +10685,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     if (disconnectedPlans.remove(pid)) changed = true
                     clearNoCam(pid)
                     planProgress.remove(pid)   // 終わった計画の枚数は捨てる(次に選んだとき古い値を出さない)
+                    // 【試用の消費(2026-10-01)】レポートは終わった**直後**に書かれるので、
+                    //  この瞬間にはまだ無いことがある。少し待ってから見る。
+                    //  取りこぼしても、次に機能拡張を開いたときや次の起動で数えられる。
+                    //  実測: 終わってからレポートが出来るまで**十数秒**かかることがある
+                    //  (動画の仕上げなど)。早すぎると見失うので、間を置いて二度見る。
+                    handler.postDelayed({ countTrialFromReports() }, 5000)
+                    handler.postDelayed({ countTrialFromReports() }, 20000)
                     refreshCaptureStatusForCurrent()
                 }
                 // その他(READY 等)は無視

@@ -1748,6 +1748,9 @@ std::string dataManager::writeCaptureReport(const captureReport& r, const hgc::c
 	j["plan"]    = plan.name;
 	j["planId"]  = (planId ? planId : "");
 	j["camera"]  = plan.camera.maker + " " + plan.camera.model;
+	// 【この端末の内蔵カメラか(2026-10-01 依頼)】試用の消費をレポートで数えるので、
+	//  外部カメラかどうかを**撮影時の事実として**残す。計画は後で消されることがある。
+	j["camLocalOnly"] = plan.camera.localOnly;
 	j["lens"]    = plan.lens.name;
 	{
 		char ws[20], we[20];
@@ -1971,6 +1974,9 @@ std::string dataManager::reportListJson(void)
 				e["edge"]      = f.value("edge", std::string());	// エッジから回収したものだけ入る(空=スマホ直結)
 				e["shotAt"]    = f.value("shotAt", std::string());
 				e["frames"]    = f.contains("capture") ? f["capture"].value("frames", 0) : 0;
+				// 古いレポートには無い。無ければ false(外部カメラ扱い)になるが、
+				// 数える側は「試用を始めた後のレポート」しか見ないので巻き込まれない。
+				e["camLocalOnly"] = f.value("camLocalOnly", false);
 				e["noteCount"] = f.contains("notes") && f["notes"].is_array() ? static_cast<int>(f["notes"].size()) : 0;
 				// 一覧で「途中で終わった」を見分けられるように終わり方も渡す(2026-09-30 依頼)。
 				//  これが無いと、コマ数だけでは完了か中断か分からない。
