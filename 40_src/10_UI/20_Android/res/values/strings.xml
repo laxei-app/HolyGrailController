@@ -304,7 +304,6 @@ The plans you made and the cameras you added are still there.</string>
     <string name="delete_all">Delete all</string>
     <string name="all_set">Everything is set</string>
     <string name="other">Other</string>
-    <string name="other_manual">Other (type it in)</string>
     <string name="templates_tab">Templates</string>
     <string name="tpl_empty_short">No templates yet. Make one with \"Save as template\" in the ⋮ menu.</string>
     <string name="tpl_empty">No templates yet. Make one with the ⋮ menu of a plan.</string>
@@ -415,7 +414,6 @@ The plans you made and the cameras you added are still there.</string>
     <string name="edge_add_hint">Add a device with \"+ New device\" above</string>
     <string name="tlm_short_desc">Sends crash records and usage statistics to the developer.</string>
     <string name="unknown">Unknown</string>
-    <string name="tz_china">China +08:00</string>
     <string name="abort">Abort</string>
     <string name="aborted">Aborted.</string>
     <string name="stop_word">Stop</string>
@@ -469,7 +467,6 @@ The plans you made and the cameras you added are still there.</string>
     <string name="busy_fetch_hide">Still fetching. Abort it before hiding this.</string>
     <string name="cancel_short">Cancel</string>
     <string name="lv_discard_stale">Stale frames discarded</string>
-    <string name="tz_taiwan">Taiwan +08:00</string>
     <string name="conv_partial">Started before it settled</string>
     <string name="conv_ok">Settled</string>
     <string name="sync_alone">A synchronised shoot must run on its own. Stop the overlapping shoot or move its time.</string>
@@ -581,7 +578,6 @@ The plans you made and the cameras you added are still there.</string>
     <string name="sunset_word">Sunset</string>
     <string name="sunrise_word">Sunrise</string>
     <string name="set_autotime">Set date, time and time zone automatically</string>
-    <string name="tz_japan">Japan +09:00</string>
     <string name="focus_untested">Too dark to check</string>
     <string name="limit_bright">Bright limit</string>
     <string name="use_bright_as_ref">Use the bright limit as the reference</string>
@@ -709,7 +705,6 @@ The plans you made and the cameras you added are still there.</string>
     <string name="exp_apply_retry">Exposure retries</string>
     <string name="color_b">Blue B</string>
     <string name="still_settings">Stills</string>
-    <string name="tz_korea">Korea +09:00</string>
     <string name="quality_high">High</string>
     <string name="ccm_from_defaults">(defaults)</string>
     <string name="add_unlisted_camera2">+ Add a camera that is not listed</string>
@@ -786,7 +781,6 @@ The plans you made and the cameras you added are still there.</string>
     <string name="busy_measured">Measured over %1$d frames. The time the camera is busy writing.</string>
     <string name="retry_breakdown">Exposure %1$d / metering %2$d</string>
     <string name="tz_this_phone">This phone (%1$s)</string>
-    <string name="tz_mongolia">Mongolia +08:00</string>
     <string name="sched_now">"▶ %1$s   %2$s  (now)"</string>
     <string name="sched_row">"%1$s   %2$s"</string>
     <string name="video_from">The video is built from the frames shot with %1$s. It goes into Movies/TwyLapse.</string>
@@ -916,4 +910,12 @@ The plans you made and the cameras you added are still there.</string>
     <string name="ble_no_cred">The CRED characteristic is missing</string>
     <string name="ble_qr_requested">Asked the device to show its QR code (it did not answer)</string>
     <string name="ble_sent_timeout">Sent (timed out waiting for the device to answer)</string>
+    <string name="tz_search_hint">Search by city or country</string>
+    <string name="tz_sort_by">Sort</string>
+    <string name="tz_sort_city">City</string>
+    <string name="tz_sort_offset">Offset</string>
+    <string name="tz_dst_mark">DST</string>
+    <string name="tz_dst_note">For places that use daylight saving, the offset as of now is stored. Pick again after the clocks change.</string>
+    <string name="tz_no_hit">No match</string>
+    <string name="tz_manual">Enter the offset by hand</string>
 </resources>

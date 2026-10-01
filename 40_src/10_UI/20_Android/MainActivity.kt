@@ -7408,33 +7408,159 @@ class MainActivity : AppCompatActivity(), HgeListener {
         return "%s%02d:%02d".format(sign, a / 60, a % 60)
     }
 
-    // タイムゾーンを手で入れる。よく使う候補を出しつつ、任意の値も入れられるようにする。
-    //  緯度経度からタイムゾーンを自動で決めることはできない(オフラインで引く手段が無く、
-    //  経度からの近似は国境付近で外れる)。手で選ぶのが確実。
+    // 【タイムゾーンの選択(2026-10-01 依頼)】都市を検索して選ぶ。
+    //  緯度経度から自動で決めることはできない(オフラインで引く手段が無く、
+    //  経度からの近似は国境付近で外れる)ので、手で選ぶ。
+    //
+    // 【持つのは「時差(分)」だけ】計画は時差を持って外部端末へも渡す。
+    //  端末側にはタイムゾーン表が無いので、ID を持っても解釈できない。
+    //  そのため**選んだ時点の時差**を求めて入れる — 夏時間の地域は切り替わったら
+    //  選び直しが要る。これは一覧の下に明記してある。
+    private class TzCity(val id: String, val city: String, val country: String) {
+        var offMin = 0
+        var dst = false
+    }
+
+    private var tzCitiesCache: List<TzCity>? = null
+
+    private fun tzCities(): List<TzCity> {
+        tzCitiesCache?.let { return it }
+        val now = System.currentTimeMillis()
+        val out = ArrayList<TzCity>()
+        for (line in resources.getStringArray(R.array.tz_cities)) {
+            val p = line.split("|")
+            if (p.size < 3) continue
+            val c = TzCity(p[0], p[1], p[2])
+            val z = java.util.TimeZone.getTimeZone(p[0])
+            c.offMin = z.getOffset(now) / 60000
+            c.dst = z.inDaylightTime(java.util.Date(now))
+            out.add(c)
+        }
+        tzCitiesCache = out
+        return out
+    }
+
     private fun showPlaceTzDialog(onPick: (Int) -> Unit) {
-        val cands = listOf(
-            s(R.string.tz_this_phone, tzLabel(nowOffMin())) to nowOffMin(),
-            s(R.string.tz_japan) to 540, s(R.string.tz_mongolia) to 480, s(R.string.tz_china) to 480,
-            s(R.string.tz_taiwan) to 480, s(R.string.tz_korea) to 540, "UTC +00:00" to 0)
-        val labels = cands.map { it.first } + listOf(s(R.string.other_manual))
-        androidx.appcompat.app.AlertDialog.Builder(this)
+        val col = java.text.Collator.getInstance(Loc.locale(this))
+        var byOffset = false           // false=都市名順 / true=時差順
+        var query = ""
+
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL
+                                              setPadding(dp(12), dp(8), dp(12), dp(4)) }
+
+        // このスマホ — 一番よく使うので検索の上に固定する
+        lateinit var dlg: androidx.appcompat.app.AlertDialog
+        root.addView(TextView(this).apply {
+            text = s(R.string.tz_this_phone, tzLabel(nowOffMin()))
+            textSize = 16f; setTextColor(0xFF1565C0.toInt())
+            setPadding(dp(4), dp(8), dp(4), dp(8))
+            setOnClickListener { onPick(nowOffMin()); dlg.dismiss() }
+        })
+        root.addView(thinDivider())
+
+        val search = EditText(this).apply {
+            hint = s(R.string.tz_search_hint); textSize = 15f
+            inputType = InputType.TYPE_CLASS_TEXT
+            setSingleLine(true)
+        }
+        root.addView(search)
+
+        // 並び替えの切替
+        val sortRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL
+                                                 gravity = Gravity.CENTER_VERTICAL
+                                                 setPadding(dp(4), dp(6), dp(4), dp(6)) }
+        sortRow.addView(TextView(this).apply {
+            text = s(R.string.tz_sort_by); textSize = 13f; setTextColor(Color.GRAY) })
+        val byCityTv = TextView(this).apply { text = s(R.string.tz_sort_city); textSize = 15f
+                                              setPadding(dp(12), dp(4), dp(12), dp(4)) }
+        val byOffTv = TextView(this).apply { text = s(R.string.tz_sort_offset); textSize = 15f
+                                             setPadding(dp(12), dp(4), dp(12), dp(4)) }
+        sortRow.addView(byCityTv); sortRow.addView(byOffTv)
+        root.addView(sortRow)
+
+        val list = android.widget.ListView(this)
+        root.addView(list, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+            (resources.displayMetrics.heightPixels * 0.5).toInt()))
+
+        root.addView(TextView(this).apply {
+            text = s(R.string.tz_dst_note); textSize = 12f; setTextColor(Color.GRAY)
+            setPadding(dp(4), dp(6), dp(4), dp(2))
+        })
+
+        val shown = ArrayList<TzCity>()
+        val adapter = object : android.widget.BaseAdapter() {
+            override fun getCount() = shown.size
+            override fun getItem(i: Int): Any = shown[i]
+            override fun getItemId(i: Int) = i.toLong()
+            override fun getView(i: Int, conv: View?, parent: ViewGroup?): View {
+                val row = (conv as? LinearLayout) ?: LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(4), dp(10), dp(4), dp(10))
+                    addView(TextView(this@MainActivity).apply { textSize = 16f; setTextColor(Color.BLACK) },
+                            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                    addView(TextView(this@MainActivity).apply { textSize = 15f; setTextColor(0xFF1565C0.toInt()) })
+                }
+                val c = shown[i]
+                (row.getChildAt(0) as TextView).text =
+                    c.city + "   " + c.country + (if (c.dst) "  (" + s(R.string.tz_dst_mark) + ")" else "")
+                (row.getChildAt(1) as TextView).text = tzLabel(c.offMin)
+                return row
+            }
+        }
+        list.adapter = adapter
+
+        fun refill() {
+            val q = query.trim().lowercase()
+            val hit = tzCities().filter {
+                q.isEmpty() || it.city.lowercase().contains(q) || it.country.lowercase().contains(q) ||
+                it.id.lowercase().contains(q)
+            }
+            // 時差順のときも、同じ時差の中は都市名順に並べる。
+            val sorted = if (byOffset) hit.sortedWith(compareBy({ it.offMin }, { col.getCollationKey(it.city) }))
+                         else hit.sortedWith(compareBy({ col.getCollationKey(it.city) }))
+            shown.clear(); shown.addAll(sorted); adapter.notifyDataSetChanged()
+        }
+        fun paintSort() {
+            byCityTv.setTextColor(if (byOffset) Color.GRAY else 0xFF1565C0.toInt())
+            byOffTv.setTextColor(if (byOffset) 0xFF1565C0.toInt() else Color.GRAY)
+            byCityTv.setTypeface(null, if (byOffset) Typeface.NORMAL else Typeface.BOLD)
+            byOffTv.setTypeface(null, if (byOffset) Typeface.BOLD else Typeface.NORMAL)
+        }
+        byCityTv.setOnClickListener { byOffset = false; paintSort(); refill() }
+        byOffTv.setOnClickListener { byOffset = true; paintSort(); refill() }
+        search.addTextChangedListener(object : android.text.TextWatcher {
+            override fun afterTextChanged(sx: android.text.Editable?) { query = sx?.toString() ?: ""; refill() }
+            override fun beforeTextChanged(c: CharSequence?, a: Int, b: Int, d: Int) {}
+            override fun onTextChanged(c: CharSequence?, a: Int, b: Int, d: Int) {}
+        })
+        paintSort(); refill()
+
+        dlg = androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle(s(R.string.timezone))
-            .setItems(labels.toTypedArray()) { _, which ->
-                if (which < cands.size) { onPick(cands[which].second); return@setItems }
-                val et = EditText(this)
-                et.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_SIGNED or InputType.TYPE_NUMBER_FLAG_DECIMAL
-                et.hint = s(R.string.tz_offset_hint)
-                androidx.appcompat.app.AlertDialog.Builder(this)
-                    .setTitle(s(R.string.tz_offset))
-                    .setView(et)
-                    .setPositiveButton("OK") { _, _ ->
-                        val h = et.text.toString().trim().toDoubleOrNull()
-                        if (h == null || h < -12.0 || h > 14.0) {
-                            Toast.makeText(this, s(R.string.tz_range), Toast.LENGTH_SHORT).show()
-                        } else onPick(Math.round(h * 60.0).toInt())
-                    }
-                    .setNegativeButton(s(R.string.cancel_word), null).show()
-            }.show()
+            .setView(root)
+            .setNeutralButton(s(R.string.tz_manual)) { _, _ -> showTzManualDialog(onPick) }
+            .setNegativeButton(s(R.string.cancel_word), null)
+            .create()
+        list.setOnItemClickListener { _, _, i, _ -> onPick(shown[i].offMin); dlg.dismiss() }
+        dlg.show()
+    }
+
+    // 一覧に無い地域用。時差を直接入れる。
+    private fun showTzManualDialog(onPick: (Int) -> Unit) {
+        val et = EditText(this)
+        et.inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_SIGNED or InputType.TYPE_NUMBER_FLAG_DECIMAL
+        et.hint = s(R.string.tz_offset_hint)
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle(s(R.string.tz_offset))
+            .setView(et)
+            .setPositiveButton("OK") { _, _ ->
+                val h = et.text.toString().trim().toDoubleOrNull()
+                if (h == null || h < -12.0 || h > 14.0) {
+                    Toast.makeText(this, s(R.string.tz_range), Toast.LENGTH_SHORT).show()
+                } else onPick(Math.round(h * 60.0).toInt())
+            }
+            .setNegativeButton(s(R.string.cancel_word), null).show()
     }
 
     private fun toDms(v: Double, pos: Char, neg: Char): String {

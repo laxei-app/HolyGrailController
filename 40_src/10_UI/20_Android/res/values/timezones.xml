@@ -1,0 +1,207 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 【タイムゾーンの都市一覧(2026-10-01 依頼)】
+     1行 = "IANAのID|都市|国"。**ID は両方の言語に入れておく**
+     (並びがずれても取り違えないように)。時差は端末のタイムゾーン表から
+     **選んだ時点で**求めるので、ここには書かない(夏時間で変わるため)。 -->
+<resources>
+    <string-array name="tz_cities">
+        <item>Asia/Tokyo|Tokyo|Japan</item>
+        <item>Asia/Seoul|Seoul|South Korea</item>
+        <item>Asia/Pyongyang|Pyongyang|North Korea</item>
+        <item>Asia/Shanghai|Shanghai|China</item>
+        <item>Asia/Shanghai|Beijing|China</item>
+        <item>Asia/Hong_Kong|Hong Kong|Hong Kong</item>
+        <item>Asia/Macau|Macau|Macau</item>
+        <item>Asia/Taipei|Taipei|Taiwan</item>
+        <item>Asia/Ulaanbaatar|Ulaanbaatar|Mongolia</item>
+        <item>Asia/Singapore|Singapore|Singapore</item>
+        <item>Asia/Kuala_Lumpur|Kuala Lumpur|Malaysia</item>
+        <item>Asia/Jakarta|Jakarta|Indonesia</item>
+        <item>Asia/Makassar|Bali (Denpasar)|Indonesia</item>
+        <item>Asia/Bangkok|Bangkok|Thailand</item>
+        <item>Asia/Ho_Chi_Minh|Ho Chi Minh City|Vietnam</item>
+        <item>Asia/Ho_Chi_Minh|Hanoi|Vietnam</item>
+        <item>Asia/Manila|Manila|Philippines</item>
+        <item>Asia/Yangon|Yangon|Myanmar</item>
+        <item>Asia/Phnom_Penh|Phnom Penh|Cambodia</item>
+        <item>Asia/Vientiane|Vientiane|Laos</item>
+        <item>Asia/Brunei|Bandar Seri Begawan|Brunei</item>
+        <item>Asia/Kolkata|Delhi|India</item>
+        <item>Asia/Kolkata|Mumbai|India</item>
+        <item>Asia/Kolkata|Kolkata|India</item>
+        <item>Asia/Dhaka|Dhaka|Bangladesh</item>
+        <item>Asia/Kathmandu|Kathmandu|Nepal</item>
+        <item>Asia/Thimphu|Thimphu|Bhutan</item>
+        <item>Asia/Colombo|Colombo|Sri Lanka</item>
+        <item>Indian/Maldives|Male|Maldives</item>
+        <item>Asia/Karachi|Karachi|Pakistan</item>
+        <item>Asia/Kabul|Kabul|Afghanistan</item>
+        <item>Asia/Tashkent|Tashkent|Uzbekistan</item>
+        <item>Asia/Almaty|Almaty|Kazakhstan</item>
+        <item>Asia/Bishkek|Bishkek|Kyrgyzstan</item>
+        <item>Asia/Dushanbe|Dushanbe|Tajikistan</item>
+        <item>Asia/Ashgabat|Ashgabat|Turkmenistan</item>
+        <item>Asia/Dubai|Dubai|UAE</item>
+        <item>Asia/Qatar|Doha|Qatar</item>
+        <item>Asia/Riyadh|Riyadh|Saudi Arabia</item>
+        <item>Asia/Kuwait|Kuwait City|Kuwait</item>
+        <item>Asia/Baghdad|Baghdad|Iraq</item>
+        <item>Asia/Tehran|Tehran|Iran</item>
+        <item>Asia/Jerusalem|Jerusalem|Israel</item>
+        <item>Asia/Amman|Amman|Jordan</item>
+        <item>Asia/Beirut|Beirut|Lebanon</item>
+        <item>Asia/Damascus|Damascus|Syria</item>
+        <item>Asia/Baku|Baku|Azerbaijan</item>
+        <item>Asia/Tbilisi|Tbilisi|Georgia</item>
+        <item>Asia/Yerevan|Yerevan|Armenia</item>
+        <item>Europe/Istanbul|Istanbul|Turkey</item>
+        <item>Europe/Moscow|Moscow|Russia</item>
+        <item>Europe/Samara|Samara|Russia</item>
+        <item>Asia/Yekaterinburg|Yekaterinburg|Russia</item>
+        <item>Asia/Omsk|Omsk|Russia</item>
+        <item>Asia/Novosibirsk|Novosibirsk|Russia</item>
+        <item>Asia/Krasnoyarsk|Krasnoyarsk|Russia</item>
+        <item>Asia/Irkutsk|Irkutsk|Russia</item>
+        <item>Asia/Yakutsk|Yakutsk|Russia</item>
+        <item>Asia/Vladivostok|Vladivostok|Russia</item>
+        <item>Asia/Magadan|Magadan|Russia</item>
+        <item>Asia/Kamchatka|Petropavlovsk-Kamchatsky|Russia</item>
+        <item>Europe/Minsk|Minsk|Belarus</item>
+        <item>Europe/Kyiv|Kyiv|Ukraine</item>
+        <item>Europe/London|London|United Kingdom</item>
+        <item>Europe/Dublin|Dublin|Ireland</item>
+        <item>Atlantic/Reykjavik|Reykjavik|Iceland</item>
+        <item>Europe/Lisbon|Lisbon|Portugal</item>
+        <item>Europe/Madrid|Madrid|Spain</item>
+        <item>Europe/Madrid|Barcelona|Spain</item>
+        <item>Europe/Paris|Paris|France</item>
+        <item>Europe/Brussels|Brussels|Belgium</item>
+        <item>Europe/Amsterdam|Amsterdam|Netherlands</item>
+        <item>Europe/Luxembourg|Luxembourg|Luxembourg</item>
+        <item>Europe/Berlin|Berlin|Germany</item>
+        <item>Europe/Berlin|Munich|Germany</item>
+        <item>Europe/Zurich|Zurich|Switzerland</item>
+        <item>Europe/Vienna|Vienna|Austria</item>
+        <item>Europe/Rome|Rome|Italy</item>
+        <item>Europe/Rome|Milan|Italy</item>
+        <item>Europe/Monaco|Monaco|Monaco</item>
+        <item>Europe/Malta|Valletta|Malta</item>
+        <item>Europe/Prague|Prague|Czechia</item>
+        <item>Europe/Warsaw|Warsaw|Poland</item>
+        <item>Europe/Budapest|Budapest|Hungary</item>
+        <item>Europe/Bratislava|Bratislava|Slovakia</item>
+        <item>Europe/Ljubljana|Ljubljana|Slovenia</item>
+        <item>Europe/Zagreb|Zagreb|Croatia</item>
+        <item>Europe/Sarajevo|Sarajevo|Bosnia and Herzegovina</item>
+        <item>Europe/Belgrade|Belgrade|Serbia</item>
+        <item>Europe/Bucharest|Bucharest|Romania</item>
+        <item>Europe/Sofia|Sofia|Bulgaria</item>
+        <item>Europe/Athens|Athens|Greece</item>
+        <item>Europe/Stockholm|Stockholm|Sweden</item>
+        <item>Europe/Oslo|Oslo|Norway</item>
+        <item>Europe/Copenhagen|Copenhagen|Denmark</item>
+        <item>Europe/Helsinki|Helsinki|Finland</item>
+        <item>Europe/Tallinn|Tallinn|Estonia</item>
+        <item>Europe/Riga|Riga|Latvia</item>
+        <item>Europe/Vilnius|Vilnius|Lithuania</item>
+        <item>Atlantic/Faroe|Torshavn|Faroe Islands</item>
+        <item>Atlantic/Azores|Ponta Delgada|Azores</item>
+        <item>Atlantic/Canary|Las Palmas|Canary Islands</item>
+        <item>Africa/Casablanca|Casablanca|Morocco</item>
+        <item>Africa/Algiers|Algiers|Algeria</item>
+        <item>Africa/Tunis|Tunis|Tunisia</item>
+        <item>Africa/Tripoli|Tripoli|Libya</item>
+        <item>Africa/Cairo|Cairo|Egypt</item>
+        <item>Africa/Khartoum|Khartoum|Sudan</item>
+        <item>Africa/Addis_Ababa|Addis Ababa|Ethiopia</item>
+        <item>Africa/Nairobi|Nairobi|Kenya</item>
+        <item>Africa/Kampala|Kampala|Uganda</item>
+        <item>Africa/Dar_es_Salaam|Dar es Salaam|Tanzania</item>
+        <item>Africa/Lagos|Lagos|Nigeria</item>
+        <item>Africa/Accra|Accra|Ghana</item>
+        <item>Africa/Abidjan|Abidjan|Cote d’Ivoire</item>
+        <item>Africa/Dakar|Dakar|Senegal</item>
+        <item>Africa/Kinshasa|Kinshasa|DR Congo</item>
+        <item>Africa/Luanda|Luanda|Angola</item>
+        <item>Africa/Maputo|Maputo|Mozambique</item>
+        <item>Africa/Harare|Harare|Zimbabwe</item>
+        <item>Africa/Windhoek|Windhoek|Namibia</item>
+        <item>Africa/Johannesburg|Johannesburg|South Africa</item>
+        <item>Africa/Johannesburg|Cape Town|South Africa</item>
+        <item>Indian/Mauritius|Port Louis|Mauritius</item>
+        <item>Atlantic/Cape_Verde|Praia|Cape Verde</item>
+        <item>America/New_York|New York|United States</item>
+        <item>America/New_York|Washington DC|United States</item>
+        <item>America/New_York|Boston|United States</item>
+        <item>America/New_York|Miami|United States</item>
+        <item>America/Chicago|Chicago|United States</item>
+        <item>America/Chicago|Houston|United States</item>
+        <item>America/Denver|Denver|United States</item>
+        <item>America/Phoenix|Phoenix|United States</item>
+        <item>America/Los_Angeles|Los Angeles|United States</item>
+        <item>America/Los_Angeles|San Francisco|United States</item>
+        <item>America/Los_Angeles|Seattle|United States</item>
+        <item>America/Los_Angeles|Las Vegas|United States</item>
+        <item>America/Anchorage|Anchorage|United States</item>
+        <item>Pacific/Honolulu|Honolulu|United States</item>
+        <item>America/Toronto|Toronto|Canada</item>
+        <item>America/Toronto|Montreal|Canada</item>
+        <item>America/Winnipeg|Winnipeg|Canada</item>
+        <item>America/Edmonton|Calgary|Canada</item>
+        <item>America/Vancouver|Vancouver|Canada</item>
+        <item>America/Halifax|Halifax|Canada</item>
+        <item>America/St_Johns|St. John’s|Canada</item>
+        <item>America/Mexico_City|Mexico City|Mexico</item>
+        <item>America/Cancun|Cancun|Mexico</item>
+        <item>America/Tijuana|Tijuana|Mexico</item>
+        <item>America/Guatemala|Guatemala City|Guatemala</item>
+        <item>America/Costa_Rica|San Jose|Costa Rica</item>
+        <item>America/Panama|Panama City|Panama</item>
+        <item>America/Havana|Havana|Cuba</item>
+        <item>America/Jamaica|Kingston|Jamaica</item>
+        <item>America/Santo_Domingo|Santo Domingo|Dominican Republic</item>
+        <item>America/Puerto_Rico|San Juan|Puerto Rico</item>
+        <item>America/Nassau|Nassau|Bahamas</item>
+        <item>America/Barbados|Bridgetown|Barbados</item>
+        <item>Atlantic/Bermuda|Hamilton|Bermuda</item>
+        <item>America/Nuuk|Nuuk|Greenland</item>
+        <item>America/Bogota|Bogota|Colombia</item>
+        <item>America/Lima|Lima|Peru</item>
+        <item>America/Guayaquil|Quito|Ecuador</item>
+        <item>America/Caracas|Caracas|Venezuela</item>
+        <item>America/La_Paz|La Paz|Bolivia</item>
+        <item>America/Asuncion|Asuncion|Paraguay</item>
+        <item>America/Santiago|Santiago|Chile</item>
+        <item>America/Argentina/Buenos_Aires|Buenos Aires|Argentina</item>
+        <item>America/Montevideo|Montevideo|Uruguay</item>
+        <item>America/Sao_Paulo|Sao Paulo|Brazil</item>
+        <item>America/Sao_Paulo|Rio de Janeiro|Brazil</item>
+        <item>America/Manaus|Manaus|Brazil</item>
+        <item>Atlantic/South_Georgia|Grytviken|South Georgia</item>
+        <item>Australia/Sydney|Sydney|Australia</item>
+        <item>Australia/Melbourne|Melbourne|Australia</item>
+        <item>Australia/Brisbane|Brisbane|Australia</item>
+        <item>Australia/Adelaide|Adelaide|Australia</item>
+        <item>Australia/Perth|Perth|Australia</item>
+        <item>Australia/Darwin|Darwin|Australia</item>
+        <item>Australia/Hobart|Hobart|Australia</item>
+        <item>Pacific/Auckland|Auckland|New Zealand</item>
+        <item>Pacific/Auckland|Wellington|New Zealand</item>
+        <item>Pacific/Chatham|Chatham Islands|New Zealand</item>
+        <item>Pacific/Fiji|Suva|Fiji</item>
+        <item>Pacific/Port_Moresby|Port Moresby|Papua New Guinea</item>
+        <item>Pacific/Noumea|Noumea|New Caledonia</item>
+        <item>Pacific/Guadalcanal|Honiara|Solomon Islands</item>
+        <item>Pacific/Guam|Hagatna|Guam</item>
+        <item>Pacific/Saipan|Saipan|Northern Mariana Islands</item>
+        <item>Pacific/Palau|Koror|Palau</item>
+        <item>Pacific/Tahiti|Papeete|French Polynesia</item>
+        <item>Pacific/Apia|Apia|Samoa</item>
+        <item>Pacific/Pago_Pago|Pago Pago|American Samoa</item>
+        <item>Pacific/Tongatapu|Nukualofa|Tonga</item>
+        <item>Pacific/Kiritimati|Kiritimati|Kiribati</item>
+        <item>Pacific/Majuro|Majuro|Marshall Islands</item>
+        <item>Pacific/Nauru|Yaren|Nauru</item>
+        <item>UTC|UTC|Coordinated Universal Time</item>
+    </string-array>
+</resources>

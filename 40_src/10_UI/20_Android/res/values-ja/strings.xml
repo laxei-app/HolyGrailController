@@ -284,7 +284,6 @@
     <string name="delete_all">すべて削除</string>
     <string name="all_set">すべて揃っています</string>
     <string name="other">その他</string>
-    <string name="other_manual">その他(手入力)</string>
     <string name="templates_tab">ひな形</string>
     <string name="tpl_empty_short">ひな形がありません。⋮の「ひな形に保存」で作れます</string>
     <string name="tpl_empty">ひな形がありません。撮影計画の⋮から「ひな形に保存」で作れます</string>
@@ -395,7 +394,6 @@
     <string name="edge_add_hint">上の「＋ 新規端末」で端末を追加してください</string>
     <string name="tlm_short_desc">不具合の記録と使われ方の統計を開発者へ送ります。</string>
     <string name="unknown">不明</string>
-    <string name="tz_china">中国 +08:00</string>
     <string name="abort">中断</string>
     <string name="aborted">中断しました。</string>
     <string name="stop_word">中止</string>
@@ -449,7 +447,6 @@
     <string name="busy_fetch_hide">取得中です。中断してから隠してください</string>
     <string name="cancel_short">取消</string>
     <string name="lv_discard_stale">古い映像を破棄</string>
-    <string name="tz_taiwan">台湾 +08:00</string>
     <string name="conv_partial">合わせきれず開始</string>
     <string name="conv_ok">合わせられた</string>
     <string name="sync_alone">同期撮影は単独で行います。時間が重なる撮影を止めるか、時間をずらしてください</string>
@@ -561,7 +558,6 @@
     <string name="sunset_word">日の入り</string>
     <string name="sunrise_word">日の出</string>
     <string name="set_autotime">日時とタイムゾーンを自動設定</string>
-    <string name="tz_japan">日本 +09:00</string>
     <string name="focus_untested">明るさが足りず確かめられなかった</string>
     <string name="limit_bright">明所限界</string>
     <string name="use_bright_as_ref">明所限界を基準にする</string>
@@ -689,7 +685,6 @@
     <string name="exp_apply_retry">露出設定リトライ</string>
     <string name="color_b">青 B</string>
     <string name="still_settings">静止画設定</string>
-    <string name="tz_korea">韓国 +09:00</string>
     <string name="quality_high">高</string>
     <string name="ccm_from_defaults">（初期値）</string>
     <string name="add_unlisted_camera2">＋ 一覧に無いカメラを追加</string>
@@ -766,7 +761,6 @@
     <string name="busy_measured">%1$dコマで実測。カメラが記録で塞がっている時間</string>
     <string name="retry_breakdown">露出設定 %1$d / 測光 %2$d</string>
     <string name="tz_this_phone">このスマホ (%1$s)</string>
-    <string name="tz_mongolia">モンゴル +08:00</string>
     <string name="sched_now">"▶ %1$s   %2$s  (現在)"</string>
     <string name="sched_row">"%1$s   %2$s"</string>
     <string name="video_from">動画は %1$s で撮ったコマから作ります。保存先は Movies/TwyLapse。</string>
@@ -896,4 +890,12 @@
     <string name="ble_no_cred">CRED特性無し</string>
     <string name="ble_qr_requested">QR表示を要求しました(端末からの応答なし)</string>
     <string name="ble_sent_timeout">送信完了(端末の応答待ちタイムアウト)</string>
+    <string name="tz_search_hint">都市名・国名で検索</string>
+    <string name="tz_sort_by">並び替え</string>
+    <string name="tz_sort_city">都市名</string>
+    <string name="tz_sort_offset">時差</string>
+    <string name="tz_dst_mark">夏時間</string>
+    <string name="tz_dst_note">夏時間のある地域は、いま時点の時差を入れます。切り替わったら選び直してください。</string>
+    <string name="tz_no_hit">見つかりません</string>
+    <string name="tz_manual">時差を手で入れる</string>
 </resources>
