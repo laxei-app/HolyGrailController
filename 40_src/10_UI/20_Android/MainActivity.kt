@@ -568,6 +568,23 @@ class MainActivity : AppCompatActivity(), HgeListener {
             keepBg?.let { colorBgPicker?.setColor(it, true) }
         }
         if (::planPager.isInitialized) { planPager.post { planPager.setCurrent(page, false) } }
+        // 【幅が変わったら広告を作り直す(2026-10-01)】縦で要求した幅のままだと、
+        //  横にしたときにまた両脇が空く。**幅が実際に変わったときだけ**要求し直す。
+        //  ここは**まだレイアウト前**で枠の幅が古いままなので、post で後回しにする
+        //  (古い幅で要求すると、横にしても縦の幅の広告が中央に出る。実機で踏んだ)。
+        findViewById<android.widget.FrameLayout>(R.id.ad_slot)?.post {
+            if (adView != null && adWidthDp != adWidthDpNow()) { rebuildAdBand() }
+        }
+    }
+
+    // 幅が変わったときだけ。古いものを捨てて、次の applyAdBand で作り直す。
+    private fun rebuildAdBand() {
+        val slot = findViewById<android.widget.FrameLayout>(R.id.ad_slot) ?: return
+        try { adView?.destroy() } catch (_: Exception) {}
+        adView = null
+        slot.removeAllViews()
+        slot.visibility = View.GONE
+        applyAdBand()
     }
 
     // アプリ再起動時、スマホ直結で撮影中だった計画(/asset/capturing.json)を再開する(item2)。
@@ -9334,6 +9351,29 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private val kAdUnitBanner = "ca-app-pub-3940256099942544/6300978111"   // Google 公開のテスト用バナー
     private var adView: com.google.android.gms.ads.AdView? = null
     private var adsInited = false
+    private var adWidthDp = 0      // いま出している幅。縦横で変わるので覚えておく
+
+    // 【幅いっぱいに出す(2026-10-01 依頼)】AdSize.BANNER は 320×50dp の**固定**なので、
+    //  幅の広い端末だと両脇が空く。アンカー型アダプティブなら**頃いた幅で要求**でき、
+    //  高さは SDK が決める(スマホで 50〜60dp)。古い SMART_BANNER の後継で、Google の推奨。
+    //  【切り欠きとナビ領域を引く(2026-10-01 実機で踏んだ)】
+    //   bounds は**画面全体**なので、横向きだと実際に使える幅より広い。
+    //   そのまま要求すると SDK が "Ad size will not fit on screen" で**読み込みを断る**
+    //   (a_w=1078 / s_w=1022)。枚ごと広告が出なくなる。
+    //   枠が既に置かれていればその幅が一番確か。
+    private fun adWidthDpNow(): Int {
+        val dm = resources.displayMetrics
+        val slotPx = findViewById<android.widget.FrameLayout>(R.id.ad_slot)?.width ?: 0
+        val px = if (slotPx > 0) slotPx.toFloat()
+                 else if (android.os.Build.VERSION.SDK_INT >= 30) {
+                     val wm = windowManager.currentWindowMetrics
+                     val ins = wm.windowInsets.getInsetsIgnoringVisibility(
+                         android.view.WindowInsets.Type.systemBars() or
+                         android.view.WindowInsets.Type.displayCutout())
+                     (wm.bounds.width() - ins.left - ins.right).toFloat()
+                 } else dm.widthPixels.toFloat()
+        return (px / dm.density).toInt().coerceAtLeast(320)
+    }
 
     // 広告は**最初の購入(外部カメラ)で消える**。試用中は出たまま(ユーザー決定)。
     private fun adsWanted(): Boolean = !ownedExternal() && !isCaptureBusy()
@@ -9354,7 +9394,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (have == null) {
             try {
                 val v = com.google.android.gms.ads.AdView(this)
-                v.setAdSize(com.google.android.gms.ads.AdSize.BANNER)
+                adWidthDp = adWidthDpNow()
+                val sz = com.google.android.gms.ads.AdSize
+                    .getCurrentOrientationAnchoredAdaptiveBannerAdSize(this, adWidthDp)
+                v.setAdSize(sz)
+                HgeNative.nativeLogEvent("AD", "banner " + sz.width + "x" + sz.height + " dp", false)
                 v.adUnitId = kAdUnitBanner
                 v.adListener = object : com.google.android.gms.ads.AdListener() {
                     // 読み込めてから初めて出す。取れなければ枠ごと畳む。
@@ -9368,7 +9412,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         slot.visibility = View.GONE
                     }
                 }
-                slot.addView(v)
+                slot.addView(v, android.widget.FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                 adView = v
                 v.loadAd(com.google.android.gms.ads.AdRequest.Builder().build())
             } catch (_: Exception) {
