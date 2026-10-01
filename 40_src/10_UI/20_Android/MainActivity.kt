@@ -7316,7 +7316,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun selectPlace(name: String) {
         if (name == selPlace) return
         persistPlaceDetail(false)
-        selPlace = name; buildPlacesList(); buildPlaceDetail()
+        selPlace = name
+        // 【保存の後ろへ並べる(2026-10-01 ユーザー指示)】保存は dataExec(1本のスレッド)。
+        //  ここですぐに一覧を作ると**保存が終わる前の値を読んでしまう**。
+        //  座標を即保存しなくなったので、ここを通らないと一覧が古いまま残る。
+        dataExec.execute { runOnUiThread { buildPlacesList(); buildPlaceDetail() } }
     }
 
     private fun commitPlaceRename(orig: String, newName: String) {
@@ -7402,12 +7406,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 自動挿入(項目10: 全体で1つだけ。ONにすると他の場所の指定は自動的に外れる)
         val cb = CheckBox(this).apply { text = s(R.string.auto_insert_place); isChecked = o.optBoolean("autoInsert", false) }
         placeAutoCb = cb; box.addView(cb)
-        cb.setOnCheckedChangeListener { _, _ ->
-            // 即保存してリストを作り直す(他の場所のチェックが外れたことを表示へ反映するため)。
-            persistPlaceDetail(false, rebuildList = true)
-        }
-        // 項目2: 標高/メモ/タイムゾーンの未保存編集を dirty 判定。
-        //  (座標/自動挿入は一覧の表示を更新する必要があり即保存なので、基準がその場で更新される)
+        // 【ここで保存しない(2026-10-01 ユーザー指示)】他の場所のチェックが外れるのは
+        //  保存のとき。画面を抜けるまではここだけが変わる(取り消せる)。
+        // 【この画面の入力は全部「未保存」(2026-10-01 ユーザー指示)】
+        //  座標・標高・タイムゾーン・メモ・自動挿入のどれを変えても「変更の取り消し」で戻る。
+        //  以前は座標と自動挿入だけ即保存していたが、**基準は更新されないまま**だったので、
+        //  ボタンは赤くなるのに押しても何も起きない(保存済みの値を読み直すだけ)という状態だった。
         startDirtyWatch(placeCancel) { placeDetailSig() }
     }
 
@@ -7417,7 +7421,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun onPlaceCoord(lat: Double, lng: Double) {
         placeLat = lat; placeLng = lng; refreshPlaceCoordText()
-        persistPlaceDetail(false, rebuildList = true)   // 座標変更を即保存し一覧の座標表示も更新
+        // 【ここで保存しない(2026-10-01 ユーザー指示)】保存は画面を抜けるとき。
+        //  即保存すると**地図で選び間違えても戻せない**。一覧の座標表示が
+        //  その場で更新されなくなるが、所持カメラのシリアルと同じ扱いで揃える。
         fetchElevationInto(lat, lng)                    // 標高を緯度経度から自動取得(§7.9。Open-Meteo 全世界・無料)
     }
 
@@ -7438,7 +7444,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 if (!elev.isNaN()) runOnUiThread {
                     if (selPlace == target) {   // 取得中に別の場所へ切替えていたら反映しない
                         placeAltEt?.setText(Loc.altValue(this, elev.toInt()).toString())
-                        persistPlaceDetail(false, rebuildList = true)
                         Toast.makeText(this, s(R.string.toast_altitude_got,
                             Loc.altValue(this, elev.toInt()), Loc.altUnit(this)), Toast.LENGTH_SHORT).show()
                     }
@@ -7627,7 +7632,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // 詳細の 標高/メモ/自動挿入/座標 を JSON にして Entity へ保存する。origName=改名前キー。
-    private fun persistPlaceDetail(rebuild: Boolean, origName: String? = null, newName: String? = null, rebuildList: Boolean = false) {
+    private fun persistPlaceDetail(rebuild: Boolean, origName: String? = null, newName: String? = null) {
         val key = origName ?: selPlace ?: return
         val name = newName ?: selPlace ?: key
         // 【単位は見せ方だけ(2026-10-01)】持つのは常にメートル。英語のときだけ
@@ -7644,7 +7649,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         dataExec.execute {
             HgeNative.nativeSetPlaceDetail(key, json)
             if (rebuild) runOnUiThread { buildPlacesList(); buildPlaceDetail() }
-            else if (rebuildList) runOnUiThread { buildPlacesList() }   // 座標だけ更新(詳細の入力欄は保持)
         }
     }
 
