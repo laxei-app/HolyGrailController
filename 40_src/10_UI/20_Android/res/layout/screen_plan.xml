@@ -13,7 +13,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:background="#1565C0"
+        android:background="@color/tc_header_bg"
         android:gravity="center_vertical"
         android:padding="8dp">
 
@@ -39,7 +39,7 @@
             android:layout_weight="1"
             android:gravity="center"
             android:text="@string/title_plan"
-            android:textColor="#FFFFFF"
+            android:textColor="@color/tc_header_fg"
             android:textSize="20sp"
             android:textStyle="bold" />
 
@@ -58,7 +58,7 @@
         android:id="@+id/plan_tabs"
         android:layout_width="match_parent"
         android:layout_height="40dp"
-        android:background="#E3F2FD"
+        android:background="@color/tc_selected_bg"
         app:tabMode="scrollable"
         app:tabGravity="start"
         app:tabMinWidth="72dp"
@@ -90,7 +90,7 @@
             </ScrollView>
             <FrameLayout android:id="@+id/plan_listDivider"
                 android:layout_width="match_parent" android:layout_height="26dp"
-                android:background="#ECEFF1" android:clickable="true" android:focusable="true">
+                android:background="@color/tc_surface_alt" android:clickable="true" android:focusable="true">
                 <View android:layout_width="48dp" android:layout_height="5dp" android:layout_gravity="center"
                     android:background="@drawable/divider_handle" />
             </FrameLayout>
@@ -120,7 +120,7 @@
                         android:id="@+id/plan_trialBanner"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:textColor="#1565C0"
+                        android:textColor="@color/tc_link"
                         android:textStyle="bold"
                         android:textSize="13sp"
                         android:paddingBottom="2dp"
@@ -140,7 +140,7 @@
                             android:layout_width="0dp"
                             android:layout_weight="1"
                             android:layout_height="wrap_content"
-                            android:textColor="#D32F2F"
+                            android:textColor="@color/tc_danger"
                             android:textStyle="bold"
                             android:textSize="13sp"
                             android:text="" />
@@ -273,14 +273,14 @@
                         android:text="@string/plan_interval" android:textStyle="bold" />
                     <TextView android:id="@+id/plan_intervalText" android:layout_width="wrap_content"
                         android:layout_height="wrap_content" android:clickable="true" android:focusable="true"
-                        android:background="#F0F0F0" android:padding="6dp" android:text="@string/plan_interval_ph"
+                        android:background="@color/tc_field_bg" android:padding="6dp" android:text="@string/plan_interval_ph"
                         android:textSize="15sp" android:textStyle="bold" />
                     <!-- NPF シャッター速度(参考表示) / 最小撮影周期。周期を決めるときの目安なので、
                          入力欄の真横に置く(2026-08-24 UI依頼)。 -->
                     <TextView android:id="@+id/plan_npfText" android:layout_width="0dp"
                         android:layout_weight="1" android:layout_height="wrap_content"
                         android:layout_marginStart="10dp"
-                        android:textSize="12sp" android:textColor="#888888"
+                        android:textSize="12sp" android:textColor="@color/tc_text_sub"
                         android:text="@string/plan_npf_ph" />
                 </LinearLayout>
                 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"

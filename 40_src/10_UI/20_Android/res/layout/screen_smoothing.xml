@@ -9,7 +9,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:background="#1565C0"
+        android:background="@color/tc_header_bg"
         android:gravity="center_vertical"
         android:padding="8dp">
         <ImageView android:id="@+id/smooth_home" android:layout_width="32dp" android:layout_height="32dp"
@@ -18,7 +18,7 @@
         <ImageView android:id="@+id/smooth_back" android:layout_width="32dp" android:layout_height="32dp"
             android:layout_marginStart="8dp" android:clickable="true" android:focusable="true" android:src="@drawable/ic_back_r" />
         <TextView android:id="@+id/smooth_title" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-            android:gravity="center" android:text="@string/menu_smoothing" android:textColor="#FFFFFF"
+            android:gravity="center" android:text="@string/menu_smoothing" android:textColor="@color/tc_header_fg"
             android:textSize="20sp" android:textStyle="bold" />
         <View android:layout_width="40dp" android:layout_height="32dp" />
         <!-- 右上のメニューは廃止(2026-08-29 UI依頼)。題が中央に見えるよう幅だけ残す -->
@@ -35,7 +35,7 @@
             <androidx.appcompat.widget.AppCompatButton android:id="@+id/smooth_cancel"
                 android:layout_width="wrap_content" android:layout_height="wrap_content"
                 android:layout_gravity="end" android:text="@string/undo_changes"
-                android:textColor="#FFFFFF" android:textAllCaps="false"
+                android:textColor="@color/tc_header_fg" android:textAllCaps="false"
                 android:background="@drawable/btn_cancel_double"
                 android:paddingLeft="20dp" android:paddingRight="20dp"
                 android:paddingTop="8dp" android:paddingBottom="8dp"
@@ -50,7 +50,7 @@
                 <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginStart="24dp" android:layout_marginEnd="24dp">
                     <com.google.android.material.slider.Slider android:id="@+id/smooth_hyst_seek" android:layout_width="match_parent" android:layout_height="wrap_content" />
                 </FrameLayout>
-                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:textSize="11sp" android:textColor="#888888"
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:textSize="11sp" android:textColor="@color/tc_text_sub"
                     android:text="@string/smooth_hyst_help" />
             </LinearLayout>
 
@@ -63,7 +63,7 @@
                 <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginStart="24dp" android:layout_marginEnd="24dp">
                     <com.google.android.material.slider.Slider android:id="@+id/smooth_ma_seek" android:layout_width="match_parent" android:layout_height="wrap_content" />
                 </FrameLayout>
-                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:textSize="11sp" android:textColor="#888888"
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:textSize="11sp" android:textColor="@color/tc_text_sub"
                     android:text="@string/smooth_min_help" />
             </LinearLayout>
         </LinearLayout>

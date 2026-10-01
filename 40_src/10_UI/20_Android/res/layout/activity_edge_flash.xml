@@ -13,7 +13,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:background="#1565C0"
+        android:background="@color/tc_header_bg"
         android:gravity="center_vertical"
         android:padding="8dp">
         <ImageView android:id="@+id/fl_home" android:layout_width="32dp" android:layout_height="32dp"
@@ -22,7 +22,7 @@
         <ImageView android:id="@+id/fl_back" android:layout_width="32dp" android:layout_height="32dp"
             android:layout_marginStart="8dp" android:clickable="true" android:focusable="true" android:src="@drawable/ic_back_r" />
         <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-            android:gravity="center" android:text="@string/menu_edge_flash" android:textColor="#FFFFFF"
+            android:gravity="center" android:text="@string/menu_edge_flash" android:textColor="@color/tc_header_fg"
             android:textSize="20sp" android:textStyle="bold" />
         <View android:layout_width="40dp" android:layout_height="32dp" />
         <ImageView android:id="@+id/fl_menu" android:layout_width="32dp" android:layout_height="32dp"
@@ -50,7 +50,7 @@
     <TextView android:id="@+id/fl_note"
         android:layout_width="match_parent" android:layout_height="wrap_content"
         android:paddingStart="12dp" android:paddingEnd="12dp" android:paddingBottom="4dp"
-        android:textSize="12sp" android:textColor="#9E9E9E"
+        android:textSize="12sp" android:textColor="@color/tc_text_dim"
         android:text="@string/flash_check_note" />
 
     <ProgressBar android:id="@+id/fl_bar"

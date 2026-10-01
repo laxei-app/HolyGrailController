@@ -1,6 +1,47 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 暗いテーマ用。colorOnSurface = #E6E1E5 (M3 の既定パレット)。説明は values/colors.xml。 -->
+<!-- 暗いとき。名前と並びは values/colors.xml と必ず揃えること。
+     ねらいは「夜に見てまぶしくない」。白を使わず、文字は明るいグレーまでに留める。 -->
 <resources>
+    <!-- 文字 -->
+    <color name="tc_text">#E3E3E3</color>
+    <color name="tc_text_dark">#E3E3E3</color>
+    <color name="tc_text_mid">#ABABAB</color>
+    <color name="tc_text_weak">#B5B5B5</color>
+    <color name="tc_text_sub">#A0A0A0</color>
+    <color name="tc_text_dim">#7E7E7E</color>
+    <color name="tc_disabled_fg">#5A5A5A</color>
+
+    <!-- 意味のある色。暗い地で沈まないよう、明るい側より淡くする -->
+    <color name="tc_link">#7FB3FF</color>
+    <color name="tc_danger">#FF8A80</color>
+    <color name="tc_danger_deep">#FFA9A2</color>
+    <color name="tc_ok">#81C784</color>
+    <color name="tc_warn">#FFB74D</color>
+
+    <!-- 面 -->
+    <color name="tc_surface">#121212</color>
+    <color name="tc_surface_alt">#1E2226</color>
+    <color name="tc_field_bg">#2A2D31</color>
+    <color name="tc_selected_bg">#12304B</color>
+    <color name="tc_divider">#3A3A3A</color>
+    <color name="tc_divider_mid">#5A5A5A</color>
+
+    <!-- 帯 -->
+    <color name="tc_header_bg">#0D3B6E</color>
+    <color name="tc_header_fg">#E3E3E3</color>
+    <color name="tc_band_bg">#39406B</color>
+    <color name="tc_band_fg">#E3E3E3</color>
+    <color name="tc_section_bg">#2C3A42</color>
+    <color name="tc_section_fg">#E3E3E3</color>
+
+    <!-- つまみ(左右分割・ページの印) -->
+    <color name="tc_handle_bg">#342E4A</color>
+    <color name="tc_handle_fg">#DCD5F0</color>
+
+    <!-- 広告の帯。明暗で変えない -->
+    <color name="tc_ad_band">#424242</color>
+
+    <!-- 押せないボタンの色。暗いテーマの colorOnSurface = #E6E1E5 (M3 の既定パレット) -->
     <color name="btn_disabled_bg">#1FE6E1E5</color>
     <color name="btn_disabled_text">#61E6E1E5</color>
 </resources>

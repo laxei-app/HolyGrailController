@@ -918,4 +918,8 @@ The plans you made and the cameras you added are still there.</string>
     <string name="tz_dst_note">For places that use daylight saving, the offset as of now is stored. Pick again after the clocks change.</string>
     <string name="tz_no_hit">No match</string>
     <string name="tz_manual">Enter the offset by hand</string>
+    <string name="menu_theme">Theme</string>
+    <string name="theme_system">Match the phone</string>
+    <string name="theme_light">Light</string>
+    <string name="theme_dark">Dark</string>
 </resources>

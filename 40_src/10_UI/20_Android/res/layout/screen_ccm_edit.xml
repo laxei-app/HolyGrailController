@@ -11,7 +11,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:background="#1565C0"
+        android:background="@color/tc_header_bg"
         android:gravity="center_vertical"
         android:padding="8dp">
         <ImageView android:id="@+id/edit_home" android:layout_width="32dp" android:layout_height="32dp"
@@ -20,7 +20,7 @@
         <ImageView android:id="@+id/edit_back" android:layout_width="32dp" android:layout_height="32dp"
             android:layout_marginStart="8dp" android:clickable="true" android:focusable="true" android:src="@drawable/ic_back_r" />
         <TextView android:id="@+id/edit_title" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-            android:gravity="center" android:text="@string/title_ccm_edit" android:textColor="#FFFFFF"
+            android:gravity="center" android:text="@string/title_ccm_edit" android:textColor="@color/tc_header_fg"
             android:textSize="20sp" android:textStyle="bold" />
         <View android:layout_width="40dp" android:layout_height="32dp" />
         <ImageView android:id="@+id/edit_menu" android:layout_width="32dp" android:layout_height="32dp"
@@ -32,7 +32,7 @@
         android:id="@+id/edit_tabs"
         android:layout_width="match_parent"
         android:layout_height="40dp"
-        android:background="#E3F2FD"
+        android:background="@color/tc_selected_bg"
         app:tabMode="scrollable"
         app:tabGravity="start"
         app:tabMinWidth="72dp"
@@ -50,7 +50,7 @@
     </ScrollView>
     <FrameLayout android:id="@+id/edit_presetDivider"
         android:layout_width="match_parent" android:layout_height="26dp"
-        android:background="#ECEFF1" android:clickable="true" android:focusable="true">
+        android:background="@color/tc_surface_alt" android:clickable="true" android:focusable="true">
         <View android:layout_width="48dp" android:layout_height="5dp" android:layout_gravity="center"
             android:background="@drawable/divider_handle" />
     </FrameLayout>
@@ -69,17 +69,17 @@
             <!-- 色の設定(システム共通へ移行。色はメニュー「色の設定」で設定する) -->
             <LinearLayout android:id="@+id/edit_color_row" android:visibility="gone" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical">
                 <TextView android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="@string/menu_colors" android:textStyle="bold" />
-                <View android:id="@+id/edit_color_swatch" android:layout_width="40dp" android:layout_height="28dp" android:background="#888888" />
+                <View android:id="@+id/edit_color_swatch" android:layout_width="40dp" android:layout_height="28dp" android:background="@color/tc_divider_mid" />
                 <Button android:id="@+id/edit_color_btn" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="8dp" android:text="@string/change" />
             </LinearLayout>
 
             <!-- 太陽高度(スライダー)。明暗バー下地・つまみ●・値はセンター。薄明帯ラベルはコードで生成。 -->
             <LinearLayout android:id="@+id/edit_alt_section" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="12dp">
-                <TextView android:id="@+id/edit_alt_start" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="end" android:fontFamily="monospace" android:textSize="12sp" android:textColor="#1565C0" android:text="" />
+                <TextView android:id="@+id/edit_alt_start" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="end" android:fontFamily="monospace" android:textSize="12sp" android:textColor="@color/tc_link" android:text="" />
                 <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content">
                     <TextView android:id="@+id/edit_alt_title" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="start|center_vertical" android:text="@string/ccm_sun_alt" android:textStyle="bold" />
                     <TextView android:id="@+id/edit_alt_val" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="center" android:gravity="center" android:textSize="18sp" android:textStyle="bold" android:text="@string/ccm_sun_alt_ph" />
-                    <TextView android:id="@+id/edit_alt_end" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="end|center_vertical" android:fontFamily="monospace" android:textSize="12sp" android:textColor="#1565C0" android:text="" />
+                    <TextView android:id="@+id/edit_alt_end" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="end|center_vertical" android:fontFamily="monospace" android:textSize="12sp" android:textColor="@color/tc_link" android:text="" />
                 </FrameLayout>
                 <LinearLayout android:id="@+id/edit_alt_bands" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginStart="24dp" android:layout_marginEnd="24dp" />
                 <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginStart="24dp" android:layout_marginEnd="24dp">
@@ -108,7 +108,7 @@
                 <!-- 暗所限界に設定(夜間・計画/ひな形のときだけ。2026-09-21 UI依頼)。見た目は端末設定のボタン(btn_blue_round)と同じ -->
                 <Button android:id="@+id/edit_set_dark_btn" android:layout_width="wrap_content" android:layout_height="wrap_content"
                     android:layout_marginStart="8dp" android:text="@string/ccm_set_dark_limit" android:textAllCaps="false" android:textSize="12sp"
-                    android:textColor="#FFFFFF" android:background="@drawable/btn_blue_round" android:stateListAnimator="@null"
+                    android:textColor="@color/tc_header_fg" android:background="@drawable/btn_blue_round" android:stateListAnimator="@null"
                     android:paddingStart="16dp" android:paddingEnd="16dp" android:paddingTop="8dp" android:paddingBottom="8dp"
                     android:minWidth="0dp" android:minHeight="0dp" android:visibility="gone" />
             </LinearLayout>
@@ -160,7 +160,7 @@
                 <FrameLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginStart="24dp" android:layout_marginEnd="24dp">
                     <com.google.android.material.slider.Slider android:id="@+id/edit_ma_seek" android:layout_width="match_parent" android:layout_height="wrap_content" />
                 </FrameLayout>
-                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:textSize="11sp" android:textColor="#888888"
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:textSize="11sp" android:textColor="@color/tc_text_sub"
                     android:text="@string/ccm_smooth_help" />
             </LinearLayout>
 
@@ -168,7 +168,7 @@
             <LinearLayout android:id="@+id/edit_limit_section" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="12dp">
                 <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/ccm_limits" android:textStyle="bold" />
                 <LinearLayout android:id="@+id/edit_limit_container" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:layout_marginTop="4dp" />
-                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:textSize="11sp" android:textColor="#888888"
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:textSize="11sp" android:textColor="@color/tc_text_sub"
                     android:text="@string/ccm_limits_help" />
             </LinearLayout>
 

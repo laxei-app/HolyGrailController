@@ -10,7 +10,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:background="#1565C0"
+        android:background="@color/tc_header_bg"
         android:gravity="center_vertical"
         android:padding="8dp">
         <ImageView android:id="@+id/color_home" android:layout_width="32dp" android:layout_height="32dp"
@@ -19,7 +19,7 @@
         <ImageView android:id="@+id/color_back" android:layout_width="32dp" android:layout_height="32dp"
             android:layout_marginStart="8dp" android:clickable="true" android:focusable="true" android:src="@drawable/ic_back_r" />
         <TextView android:id="@+id/color_title" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-            android:gravity="center" android:text="@string/menu_colors" android:textColor="#FFFFFF"
+            android:gravity="center" android:text="@string/menu_colors" android:textColor="@color/tc_header_fg"
             android:textSize="20sp" android:textStyle="bold" />
         <View android:layout_width="40dp" android:layout_height="32dp" />
         <!-- 右上のメニューは廃止(2026-08-29 UI依頼)。題が中央に見えるよう幅だけ残す -->
@@ -32,7 +32,7 @@
         android:id="@+id/color_tabs"
         android:layout_width="match_parent"
         android:layout_height="40dp"
-        android:background="#E3F2FD"
+        android:background="@color/tc_selected_bg"
         app:tabMode="scrollable"
         app:tabGravity="start"
         app:tabMinWidth="72dp"

@@ -1,12 +1,58 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 押せないボタンの色(2026-08-29 UI依頼)。
-     ファーム書き込み画面のボタンは素の Button で、テーマ(Theme.Material3.DayNight)の
-     既定そのままで描かれている。Material3 の無効状態は
-       背景 = colorOnSurface の 12%(=0x1F) / 文字 = colorOnSurface の 38%(=0x61)
-     で決まる。丸い青ボタン(btn_blue_round)は背景を自前で持つため既定に乗れないので、
-     **同じ計算結果をここに置いて合わせる**。値を変えるときは両方(明/暗)そろえること。
-     明るいテーマの colorOnSurface = #1C1B1F (M3 の既定パレット) -->
+<!-- 【画面の色(2026-10-01 依頼)】明るいとき。暗いときは res/values-night/colors.xml。
+     端末のダークモード(と、メニューの「スマホのテーマ」)で入れ替わる。
+
+     ・名前は**使い道**で付ける(色の名前にしない)。暗い側で値が変わるため
+     ・**図の色はここに入れない** — 薄明の帯・星空・方位盤は「空の明るさ」や
+       「天体の色」を表していて、画面の明暗とは関係がない
+     ・撮影制御方法の色は利用者が決めるので、ここではなく ccmColor() が地色に合わせる -->
 <resources>
+    <!-- 文字 -->
+    <color name="tc_text">#000000</color>
+    <color name="tc_text_dark">#222222</color>
+    <color name="tc_text_mid">#666666</color>
+    <color name="tc_text_weak">#616161</color>
+    <color name="tc_text_sub">#888888</color>
+    <color name="tc_text_dim">#9E9E9E</color>
+    <color name="tc_disabled_fg">#EEEEEE</color>
+
+    <!-- 意味のある色 -->
+    <color name="tc_link">#1565C0</color>
+    <color name="tc_danger">#D32F2F</color>
+    <color name="tc_danger_deep">#B71C1C</color>
+    <color name="tc_ok">#2E7D32</color>
+    <color name="tc_warn">#EF6C00</color>
+
+    <!-- 面 -->
+    <color name="tc_surface">#FFFFFF</color>
+    <color name="tc_surface_alt">#ECEFF1</color>
+    <color name="tc_field_bg">#F0F0F0</color>
+    <color name="tc_selected_bg">#E3F2FD</color>
+    <color name="tc_divider">#DDDDDD</color>
+    <color name="tc_divider_mid">#888888</color>
+
+    <!-- 帯 -->
+    <color name="tc_header_bg">#1565C0</color>
+    <color name="tc_header_fg">#FFFFFF</color>
+    <color name="tc_band_bg">#5C6BC0</color>
+    <color name="tc_band_fg">#FFFFFF</color>
+    <color name="tc_section_bg">#455A64</color>
+    <color name="tc_section_fg">#FFFFFF</color>
+
+    <!-- つまみ(左右分割・ページの印) -->
+    <color name="tc_handle_bg">#D1C4E9</color>
+    <color name="tc_handle_fg">#222222</color>
+
+    <!-- 広告の帯。明暗で変えない(広告そのものが明るいため) -->
+    <color name="tc_ad_band">#424242</color>
+
+    <!-- 押せないボタンの色(2026-08-29 UI依頼)。
+         ファーム書き込み画面のボタンは素の Button で、テーマ(Theme.Material3.DayNight)の
+         既定そのままで描かれている。Material3 の無効状態は
+           背景 = colorOnSurface の 12%(=0x1F) / 文字 = colorOnSurface の 38%(=0x61)
+         で決まる。丸い青ボタン(btn_blue_round)は背景を自前で持つため既定に乗れないので、
+         **同じ計算結果をここに置いて合わせる**。値を変えるときは両方(明/暗)そろえること。
+         明るいテーマの colorOnSurface = #1C1B1F (M3 の既定パレット) -->
     <color name="btn_disabled_bg">#1F1C1B1F</color>
     <color name="btn_disabled_text">#611C1B1F</color>
 </resources>

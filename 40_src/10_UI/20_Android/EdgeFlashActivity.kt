@@ -71,6 +71,7 @@ class EdgeFlashActivity : AppCompatActivity() {
 
     // 言語(2026-10-01)。attachBaseContext で包むと、この部品のリソースが全部その言語になる。
     override fun attachBaseContext(newBase: android.content.Context) {
+        Loc.applyTheme(newBase)
         super.attachBaseContext(Loc.wrap(newBase))
     }
 

@@ -1026,15 +1026,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun gearBand(box: LinearLayout, title: String) {
         val tv = TextView(this); tv.text = title; tv.textSize = 14f; tv.setTypeface(null, Typeface.BOLD)
-        tv.setTextColor(Color.WHITE); tv.setBackgroundColor(Color.parseColor("#5C6BC0"))
+        tv.setTextColor(Color.WHITE); tv.setBackgroundColor(getColor(R.color.tc_band_bg))
         tv.setPadding(dp(12), dp(6), dp(12), dp(6))
         box.addView(tv)
     }
     private fun gearItem(box: LinearLayout, title: String, enabled: Boolean = true, onClick: () -> Unit) {
         val tv = TextView(this); tv.text = title; tv.textSize = 16f
         tv.setPadding(dp(28), dp(12), dp(12), dp(12))
-        if (enabled) { tv.setTextColor(Color.BLACK); tv.setOnClickListener { onClick() } }
-        else { tv.setTextColor(Color.parseColor("#BBBBBB")) }   // グレー表示(撮影中/開始要求中は不可)
+        if (enabled) { tv.setTextColor(getColor(R.color.tc_text)); tv.setOnClickListener { onClick() } }
+        else { tv.setTextColor(getColor(R.color.tc_text_sub)) }   // グレー表示(撮影中/開始要求中は不可)
         box.addView(tv)
         box.addView(thinDivider())
     }
@@ -1045,7 +1045,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         row.orientation = LinearLayout.HORIZONTAL
         row.setPadding(dp(28), dp(6), dp(12), dp(6))
         val tv = TextView(this)
-        tv.text = title; tv.textSize = 16f; tv.setTextColor(Color.BLACK)
+        tv.text = title; tv.textSize = 16f; tv.setTextColor(getColor(R.color.tc_text))
         tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         tv.gravity = android.view.Gravity.CENTER_VERTICAL
         val sw = android.widget.Switch(this)
@@ -1063,7 +1063,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         row.orientation = LinearLayout.HORIZONTAL
         row.setPadding(dp(28), dp(6), dp(12), dp(6))
         val tv = TextView(this)
-        tv.text = title; tv.textSize = 16f; tv.setTextColor(Color.BLACK)
+        tv.text = title; tv.textSize = 16f; tv.setTextColor(getColor(R.color.tc_text))
         tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         tv.gravity = android.view.Gravity.CENTER_VERTICAL
         val sp = android.widget.Spinner(this)
@@ -1100,7 +1100,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun gearExpandItem(box: LinearLayout, title: String, open: Boolean, onToggle: () -> Unit) {
         val tv = TextView(this); tv.text = (if (open) "▼ " else "▶ ") + title; tv.textSize = 16f
         tv.setPadding(dp(28), dp(12), dp(12), dp(12))
-        tv.setTextColor(Color.BLACK)
+        tv.setTextColor(getColor(R.color.tc_text))
         tv.setOnClickListener { onToggle() }
         box.addView(tv)
         box.addView(thinDivider())
@@ -1171,6 +1171,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 【言語(2026-10-01 依頼)】端末に合わせる / 日本語 / English。
         //  覚えるのは AppCompat に任せるので、ここは選んで渡すだけ。
         //  選ぶと Activity が作り直されるので、後始末は要らない。
+        // 【明暗(2026-10-01 依頼)】夜に白い画面はまぶしい。既定は端末に合わせる。
+        gearSpinnerItem(box, s(R.string.menu_theme),
+            listOf(s(R.string.theme_system), s(R.string.theme_light), s(R.string.theme_dark)),
+            when (Loc.themeMode(this)) { "light" -> 1; "dark" -> 2; else -> 0 }) { i ->
+            val v = when (i) { 1 -> "light"; 2 -> "dark"; else -> Loc.THEME_SYSTEM }
+            if (v != Loc.themeMode(this)) { Loc.saveTheme(this, v); RestartActivity.restart(this) }
+        }
         gearSpinnerItem(box, s(R.string.menu_language),
             listOf(s(R.string.lang_system), s(R.string.lang_ja), s(R.string.lang_en)),
             when (Loc.selected(this)) { "ja" -> 1; "en" -> 2; else -> 0 }) { i ->
@@ -1229,7 +1236,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.addView(TextView(this).apply {
             text = s(R.string.version_label, appVersionName())
             textSize = 12f
-            setTextColor(0xFF9E9E9E.toInt())
+            setTextColor(getColor(R.color.tc_text_dim))
             setPadding(dp(16), dp(16), dp(16), dp(8))
             // 7回叩くとデバッグログが現れる(隠し機能)。残り回数はこの行に出す。
             //  すぐ消える通知は使わない(画面に残るものだけで伝える)。
@@ -1641,19 +1648,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val cb = CheckBox(this); cb.isChecked = ok; cb.isClickable = false; cb.isFocusable = false
             head.addView(cb, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             val tv = TextView(this); tv.text = item.title; tv.textSize = 16f
-            tv.setTextColor(if (ok || item.optional) Color.BLACK else Color.parseColor("#C62828"))
+            tv.setTextColor(if (ok || item.optional) getColor(R.color.tc_text) else getColor(R.color.tc_danger_deep))
             tv.setPadding(dp(8), 0, 0, 0)
             head.addView(tv, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
             val expanded = permCheckExpanded.contains(item.key)
             val arrow = TextView(this); arrow.text = if (expanded) "▲" else "▼"; arrow.textSize = 14f
-            arrow.setTextColor(Color.parseColor("#1565C0")); arrow.setPadding(dp(12), dp(4), dp(4), dp(4))
+            arrow.setTextColor(getColor(R.color.tc_link)); arrow.setPadding(dp(12), dp(4), dp(4), dp(4))
             head.addView(arrow)
             card.addView(head)
             // 開いたときの中身: 説明 + 設定する
             val body = LinearLayout(this); body.orientation = LinearLayout.VERTICAL
             body.setPadding(dp(44), 0, dp(12), dp(10))
             body.visibility = if (expanded) View.VISIBLE else View.GONE
-            val desc = TextView(this); desc.text = item.desc; desc.textSize = 14f; desc.setTextColor(Color.parseColor("#424242"))
+            val desc = TextView(this); desc.text = item.desc; desc.textSize = 14f; desc.setTextColor(getColor(R.color.tc_text_weak))
             body.addView(desc)
             // 常に押せる。設定済みは「設定を開く」で取り消せる場所へ。撮影中の権限変更だけ止める(アプリが作り直される)。
             val capturing = localCaptureActive()
@@ -1675,7 +1682,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         val sum = TextView(this)
         sum.text = if (okCount == needCount) s(R.string.all_set) else s(R.string.perm_missing_count, needCount - okCount)
-        sum.textSize = 13f; sum.setTextColor(Color.parseColor("#616161")); sum.setPadding(dp(12), dp(12), dp(12), dp(12))
+        sum.textSize = 13f; sum.setTextColor(getColor(R.color.tc_text_weak)); sum.setPadding(dp(12), dp(12), dp(12), dp(12))
         box.addView(sum, 0)
     }
 
@@ -1920,7 +1927,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val head = LinearLayout(this); head.orientation = LinearLayout.HORIZONTAL
         head.gravity = Gravity.CENTER_VERTICAL
         head.addView(TextView(this).apply {
-            text = title; textSize = 16f; setTextColor(Color.BLACK)
+            text = title; textSize = 16f; setTextColor(getColor(R.color.tc_text))
             setTypeface(null, Typeface.BOLD)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         })
@@ -1938,17 +1945,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (state.isNotEmpty()) {
             card.addView(TextView(this).apply {
                 text = state; textSize = 14f
-                setTextColor(if (owned) 0xFF2E7D32.toInt() else 0xFF1565C0.toInt())
+                setTextColor(if (owned) getColor(R.color.tc_ok) else getColor(R.color.tc_link))
                 setPadding(0, dp(4), 0, 0)
             })
         }
         card.addView(TextView(this).apply {
-            text = desc; textSize = 13f; setTextColor(Color.parseColor("#424242"))
+            text = desc; textSize = 13f; setTextColor(getColor(R.color.tc_text_weak))
             setPadding(0, dp(8), 0, 0)
         })
         if (note.isNotEmpty()) {
             card.addView(TextView(this).apply {
-                text = note; textSize = 13f; setTextColor(Color.parseColor("#757575"))
+                text = note; textSize = 13f; setTextColor(getColor(R.color.tc_text_weak))
                 setPadding(0, dp(6), 0, 0)
             })
         }
@@ -1995,7 +2002,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.removeAllViews()
         box.addView(TextView(this).apply {
             text = s(R.string.notices_intro)
-            textSize = 13f; setTextColor(Color.parseColor("#616161"))
+            textSize = 13f; setTextColor(getColor(R.color.tc_text_weak))
             setPadding(dp(12), dp(12), dp(12), dp(12))
         })
         gearBand(box, s(R.string.band_phone))
@@ -2011,23 +2018,23 @@ class MainActivity : AppCompatActivity(), HgeListener {
         head.setPadding(dp(12), dp(10), dp(12), dp(10))
         val names = LinearLayout(this); names.orientation = LinearLayout.VERTICAL
         names.addView(TextView(this).apply {
-            text = n.title; textSize = 16f; setTextColor(Color.BLACK)
+            text = n.title; textSize = 16f; setTextColor(getColor(R.color.tc_text))
         })
         names.addView(TextView(this).apply {
-            text = n.lic; textSize = 12f; setTextColor(Color.parseColor("#616161"))
+            text = n.lic; textSize = 12f; setTextColor(getColor(R.color.tc_text_weak))
         })
         head.addView(names, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         val expanded = noticesExpanded.contains(n.key)
         val arrow = TextView(this).apply {
             text = if (expanded) "▲" else "▼"; textSize = 14f
-            setTextColor(Color.parseColor("#1565C0")); setPadding(dp(12), dp(4), dp(4), dp(4))
+            setTextColor(getColor(R.color.tc_link)); setPadding(dp(12), dp(4), dp(4), dp(4))
         }
         head.addView(arrow)
         card.addView(head)
 
         // 本文。条文は最大 46KB あるので、開いたときに初めて読む(画面を作るたびに全部読むと重い)。
         val body = TextView(this).apply {
-            textSize = 11f; setTextColor(Color.parseColor("#212121"))
+            textSize = 11f; setTextColor(getColor(R.color.tc_text_dark))
             typeface = Typeface.MONOSPACE
             setPadding(dp(16), 0, dp(12), dp(12))
             visibility = if (expanded) View.VISIBLE else View.GONE
@@ -2099,7 +2106,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             // エッジのぶんはエッジ端末設定にある。ここに全部置くと「どの端末の話か」が
             //  分からなくなるため、持ち主のところへ置く(2026-08-29 UI依頼)。
             text = s(R.string.log_opt_note_phone)
-            textSize = 12f; setTextColor(Color.GRAY); setPadding(0, 0, 0, dp(4))
+            textSize = 12f; setTextColor(getColor(R.color.tc_text_sub)); setPadding(0, 0, 0, dp(4))
         })
         val shotCb = CheckBox(this).apply {
             text = s(R.string.log_capture)
@@ -2117,7 +2124,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (isCaptureBusy()) {
             ops.addView(TextView(this).apply {
                 text = s(R.string.busy_shooting)
-                textSize = 12f; setTextColor(Color.GRAY); setPadding(0, dp(2), 0, 0)
+                textSize = 12f; setTextColor(getColor(R.color.tc_text_sub)); setPadding(0, dp(2), 0, 0)
             })
         }
 
@@ -2134,12 +2141,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (online.isEmpty()) {
             ops.addView(TextView(this).apply {
                 text = s(R.string.no_online_edge)
-                textSize = 12f; setTextColor(Color.GRAY); setPadding(dp(8), 0, 0, 0)
+                textSize = 12f; setTextColor(getColor(R.color.tc_text_sub)); setPadding(dp(8), 0, 0, 0)
             })
         }
 
         heading(s(R.string.status_word), st)
-        val pg = TextView(this).apply { textSize = 13f; setTextColor(Color.DKGRAY) }
+        val pg = TextView(this).apply { textSize = 13f; setTextColor(getColor(R.color.tc_text_weak)) }
         st.addView(pg); dlogProgress = pg
 
         // 【隠す(2026-09-27 依頼)】この画面は隠し機能なので、閉じる口をここに置く。
@@ -2149,7 +2156,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         ops.addView(TextView(this).apply {
             text = s(R.string.hide_log_desc) +
                    s(R.string.unhide_hint)
-            textSize = 12f; setTextColor(Color.GRAY); setPadding(0, 0, 0, dp(4))
+            textSize = 12f; setTextColor(getColor(R.color.tc_text_sub)); setPadding(0, 0, 0, dp(4))
         })
         val hideBtn = blueButton(s(R.string.hide_word)) {
             if (dlogBusy) {
@@ -2171,7 +2178,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun setDlogEnabled(on: Boolean) {
         dlogShotCb?.isEnabled = on
         for (cb in dlogTargets.values) { cb.isEnabled = on }
-        val c = if (on) Color.BLACK else Color.GRAY
+        val c = if (on) getColor(R.color.tc_text) else getColor(R.color.tc_text_sub)
         dlogShotCb?.setTextColor(c)
         for (cb in dlogTargets.values) { cb.setTextColor(c) }
         dlogRunBtn?.text = if (dlogBusy) s(R.string.abort) else s(R.string.log_fetch)
@@ -2317,14 +2324,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val land = resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
         val lab1 = TextView(this); lab1.text = s(R.string.text_color); lab1.textSize = 14f
         val p1 = com.jaredrummler.android.colorpicker.ColorPickerView(this)
-        p1.setAlphaSliderVisible(true); p1.setColor(ccmTextColor(t), true)
+        p1.setAlphaSliderVisible(true); p1.setColor(ccmTextColorRaw(t), true)
         // ピッカー変更で即タイトル文字色に反映(その場で見た目確認)。
         p1.setOnColorChangedListener { c -> findViewById<TextView>(R.id.color_title).setTextColor(0xFF000000.toInt() or (c and 0xFFFFFF)) }
         colorTextPicker = p1
         val lab2 = TextView(this); lab2.text = s(R.string.bg_color); lab2.textSize = 14f
         if (!land) lab2.setPadding(0, dp(16), 0, 0)
         val p2 = com.jaredrummler.android.colorpicker.ColorPickerView(this)
-        p2.setAlphaSliderVisible(true); p2.setColor(ccmColor(t), true)
+        p2.setAlphaSliderVisible(true); p2.setColor(ccmColorRaw(t), true)
         // ピッカー変更で即タイトル背景色に反映。
         p2.setOnColorChangedListener { c -> findViewById<View>(R.id.color_header).setBackgroundColor(0xFF000000.toInt() or (c and 0xFFFFFF)) }
         colorBgPicker = p2
@@ -2576,7 +2583,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         btn.isEnabled = enabled
         btn.background = androidx.core.content.ContextCompat.getDrawable(
             this, if (enabled) R.drawable.btn_cancel_double else R.drawable.btn_cancel_gray)
-        btn.setTextColor(if (enabled) Color.WHITE else 0xFFEEEEEE.toInt())
+        btn.setTextColor(if (enabled) Color.WHITE else getColor(R.color.tc_disabled_fg))
     }
 
     // 初期値リストから選択(§7.4.1)。型のプリセット名一覧をポップアップし、選んだ内容を
@@ -2820,7 +2827,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun linkText(text: String, onClick: () -> Unit): TextView {
         val tv = TextView(this); tv.text = text; tv.textSize = 15f
-        tv.setTextColor(Color.parseColor("#1565C0"))
+        tv.setTextColor(getColor(R.color.tc_link))
         tv.setPadding(dp(4), dp(10), dp(4), dp(10))
         tv.setOnClickListener { onClick() }
         return tv
@@ -2851,7 +2858,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun thinDivider(): View {
         val v = View(this)
         v.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1)
-        v.setBackgroundColor(0xFFDDDDDD.toInt())
+        v.setBackgroundColor(getColor(R.color.tc_divider))
         return v
     }
 
@@ -2888,7 +2895,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val e = EditText(this); e.setText(title); e.isSingleLine = true
             e.textSize = if (selected) 19f else 16f
             e.setTypeface(null, if (selected) Typeface.BOLD else Typeface.NORMAL)
-            e.setTextColor(if (selected) Color.BLACK else Color.parseColor("#888888"))
+            e.setTextColor(if (selected) getColor(R.color.tc_text) else getColor(R.color.tc_text_sub))
             e.setBackgroundColor(0x00000000); e.setPadding(0, 0, 0, 0)
             e.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
             e.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
@@ -2907,11 +2914,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val t = TextView(this); t.text = title
             t.textSize = if (selected) 19f else 16f
             t.setTypeface(null, if (selected) Typeface.BOLD else Typeface.NORMAL)
-            t.setTextColor(if (selected) Color.BLACK else Color.parseColor("#888888"))
+            t.setTextColor(if (selected) getColor(R.color.tc_text) else getColor(R.color.tc_text_sub))
             txt.addView(t)
             txt.setOnClickListener { onSelect() }
         }
-        if (sub.isNotEmpty()) { val s = TextView(this); s.text = sub; s.textSize = 12f; s.setTextColor(Color.GRAY); s.setOnClickListener { onSelect() }; txt.addView(s) }
+        if (sub.isNotEmpty()) { val s = TextView(this); s.text = sub; s.textSize = 12f; s.setTextColor(getColor(R.color.tc_text_sub)); s.setOnClickListener { onSelect() }; txt.addView(s) }
         row.addView(txt)
         if (menuItems.isNotEmpty()) { row.addView(ctxMenuButton(menuItems)) }
         return row
@@ -3090,7 +3097,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val note = TextView(this)
             note.text = s(R.string.edge_holds_camera, heldBy.joinToString(", ")) +
                         s(R.string.edge_lock_note)
-            note.textSize = 13f; note.setTextColor(0xFFB71C1C.toInt()); note.setPadding(dp(4), dp(4), dp(4), dp(8))
+            note.textSize = 13f; note.setTextColor(getColor(R.color.tc_danger_deep)); note.setPadding(dp(4), dp(4), dp(4), dp(8))
             box.addView(note)
         }
         box.addView(editRow(s(R.string.maker), "maker", cam.optString("maker")))
@@ -3128,7 +3135,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             //  空のままなら認証なしの機体として扱う(要求は 401 を受けてから作るので、事前設定は不要)。
             box.addView(thinDivider())
             val ahdr = TextView(this); ahdr.text = s(R.string.cam_auth_section); ahdr.textSize = 13f
-            ahdr.setTextColor(Color.GRAY); ahdr.setPadding(0, dp(8), 0, dp(4)); box.addView(ahdr)
+            ahdr.setTextColor(getColor(R.color.tc_text_sub)); ahdr.setPadding(0, dp(8), 0, dp(4)); box.addView(ahdr)
             box.addView(editRow(s(R.string.user_id), "authUser", cam.optString("authUser")))
             // パスワードは JSON では暗号文なので、平文はネイティブから別途もらう。
             box.addView(editRowPass(s(R.string.password), "authPass", HgeNative.nativeOwnedCameraAuthPass(sel)))
@@ -3137,7 +3144,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
         // 組み合わせるレンズ(先頭=初期値)。並べ替えはハンドルをドラッグ(ss/iso/fnと同じ)。
         box.addView(thinDivider())
-        val hdr = TextView(this); hdr.text = s(R.string.lenses_for_camera); hdr.textSize = 13f; hdr.setTextColor(Color.GRAY)
+        val hdr = TextView(this); hdr.text = s(R.string.lenses_for_camera); hdr.textSize = 13f; hdr.setTextColor(getColor(R.color.tc_text_sub))
         hdr.setPadding(0, dp(8), 0, dp(4)); box.addView(hdr)
         ocObj?.optJSONArray("lensList")?.let { ll -> for (i in 0 until ll.length()) ll.optJSONObject(i)?.optString("name")?.let { camLensNames.add(it) } }
         val lensBox = LinearLayout(this); lensBox.orientation = LinearLayout.VERTICAL
@@ -3190,7 +3197,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL; row.gravity = Gravity.CENTER_VERTICAL
                 row.setBackgroundColor(0xFFF2EEFA.toInt()); row.setPadding(dp(2), dp(2), dp(2), dp(2))
                 val handle = TextView(this); handle.text = "▲\n▼"; handle.textSize = 12f; handle.gravity = Gravity.CENTER
-                handle.setBackgroundColor(0xFFD1C4E9.toInt())
+                handle.setBackgroundColor(getColor(R.color.tc_handle_bg))
                 handle.layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
                 handle.setOnTouchListener(lensDragTouch(idx))
                 val tv = TextView(this); tv.text = nm; tv.textSize = 14f
@@ -3226,7 +3233,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
     private fun lensHighlight(rawY: Float) {
         val g = lensGapFor(rawY)
-        for (k in lensGapViews.indices) lensGapViews[k].setBackgroundColor(if (k == g) 0xFF1565C0.toInt() else 0x00000000)
+        for (k in lensGapViews.indices) lensGapViews[k].setBackgroundColor(if (k == g) getColor(R.color.tc_link) else 0x00000000)
     }
     private fun lensDrop(rawY: Float) {
         val g = lensGapFor(rawY); val from = lensDragFrom; lensDragFrom = -1
@@ -3477,7 +3484,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.addView(editRow2(s(R.string.exp_fn), "fn", l.optDouble("fn", 0.0).toString(), "fnMax", l.optDouble("fnMax", 0.0).toString(), "〜", "", true))
         box.addView(editRow(s(R.string.focal_length), "focalLength", l.optDouble("focalLength", 0.0).toString(), true))
         val note = TextView(this); note.text = s(R.string.zoom_focal_note)
-        note.textSize = 12f; note.setTextColor(Color.GRAY); note.setPadding(0, dp(8), 0, dp(8)); box.addView(note)
+        note.textSize = 12f; note.setTextColor(getColor(R.color.tc_text_sub)); note.setPadding(0, dp(8), 0, dp(8)); box.addView(note)
         // 項目2: 「変更の取り消し」を dirty 連動に。
         startDirtyWatch(lensCancel) { lensDetailSig() }
         // 編集不可(readOnly)のレンズは表示だけにする(内蔵カメラのレンズ。値は端末が答えたもの。削除は一覧から可)。
@@ -3605,7 +3612,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         row.setPadding(0, dp(3), 0, dp(3))
         val lab = TextView(this); lab.text = label; lab.textSize = 14f; lab.width = dp(118)
         val v = TextView(this); v.text = value; v.textSize = 14f
-        v.setTextColor(if (value == s(R.string.undefined)) Color.GRAY else Color.DKGRAY)
+        v.setTextColor(if (value == s(R.string.undefined)) getColor(R.color.tc_text_sub) else getColor(R.color.tc_text_weak))
         v.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         row.addView(lab); row.addView(v)
         return row
@@ -3944,12 +3951,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val scale = LinearLayout(this); scale.orientation = LinearLayout.HORIZONTAL
         for (i in bands.indices) {
             val tv = TextView(this); tv.text = ticks.getOrElse(i) { "" }; tv.textSize = 9f
-            tv.setTextColor(0xFF888888.toInt())
+            tv.setTextColor(getColor(R.color.tc_text_sub))
             tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, bands[i].weight)
             scale.addView(tv)
         }
         val end = TextView(this); end.text = ticks.getOrElse(bands.size) { "" }; end.textSize = 9f
-        end.setTextColor(0xFF888888.toInt()); end.gravity = Gravity.END
+        end.setTextColor(getColor(R.color.tc_text_sub)); end.gravity = Gravity.END
         end.layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         scale.addView(end)
         container.addView(scale)
@@ -4518,7 +4525,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 fun lbl() = s(R.string.ref_tap_to_switch,
                     when (initMode) { 0 -> s(R.string.limit_bright); 1 -> s(R.string.midpoint); else -> s(R.string.limit_dark) })
                 tv.text = lbl(); tv.textSize = 14f; tv.setPadding(dp(8), dp(8), dp(8), dp(8))
-                tv.setBackgroundColor(0xFFD1C4E9.toInt()); tv.setTextColor(0xFF222222.toInt())
+                tv.setBackgroundColor(getColor(R.color.tc_handle_bg)); tv.setTextColor(getColor(R.color.tc_text_dark))
                 tv.setOnClickListener { initMode = (initMode + 1) % 3; tv.text = lbl(); refreshInit() }
                 container.addView(tv)
             } else {   // 朝日/夕日: 明所限界 or 暗所限界 のチェックボックス(従来どおり)
@@ -4542,7 +4549,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             row.setPadding(dp(4), dp(2), dp(4), 0)
             fun col(text: String, weight: Float) {
                 val tv = TextView(this@MainActivity); tv.text = text; tv.textSize = 11f
-                tv.setTextColor(0xFF666666.toInt()); tv.gravity = Gravity.CENTER
+                tv.setTextColor(getColor(R.color.tc_text_mid)); tv.gravity = Gravity.CENTER
                 tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, weight)
                 row.addView(tv)
             }
@@ -4563,10 +4570,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
             valRow.gravity = Gravity.CENTER_VERTICAL
             val name = TextView(this@MainActivity); name.text = nameFor(t); name.textSize = 14f; name.setTypeface(null, Typeface.BOLD)
             name.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1.5f)
-            val brightTv = makeValTv(0xFF222222.toInt())
+            val brightTv = makeValTv(getColor(R.color.tc_text_dark))
             valRow.addView(name)
             run {
-                val darkTv = makeValTv(0xFF222222.toInt()); val initTv = makeValTv(0xFF1565C0.toInt())
+                val darkTv = makeValTv(getColor(R.color.tc_text_dark)); val initTv = makeValTv(getColor(R.color.tc_link))
                 val rspacer = View(this@MainActivity); rspacer.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                 valRow.addView(darkTv); valRow.addView(initTv); valRow.addView(brightTv); valRow.addView(rspacer)
                 darkTvs[t] = darkTv; brightTvs[t] = brightTv; initTvs[t] = initTv
@@ -4577,7 +4584,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val slRow = LinearLayout(this@MainActivity); slRow.orientation = LinearLayout.HORIZONTAL; slRow.gravity = Gravity.CENTER_VERTICAL
             val handle = TextView(this@MainActivity)
             handle.text = "▲\n▼"; handle.textSize = 12f; handle.gravity = Gravity.CENTER
-            handle.setBackgroundColor(0xFFD1C4E9.toInt()); handle.setPadding(dp(4), dp(2), dp(4), dp(2))
+            handle.setBackgroundColor(getColor(R.color.tc_handle_bg)); handle.setPadding(dp(4), dp(2), dp(4), dp(2))
             handle.layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
             handle.setOnTouchListener(dragTouch(i))
             slRow.addView(handle)
@@ -4641,7 +4648,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         private fun highlightGap(rawY: Float) {
             val g = gapFor(rawY)
             for (k in dividers.indices) {
-                dividers[k].setBackgroundColor(if (k == g) 0xFF1565C0.toInt() else 0x00000000)   // 移動先(青)
+                dividers[k].setBackgroundColor(if (k == g) getColor(R.color.tc_link) else 0x00000000)   // 移動先(青)
             }
         }
 
@@ -4750,7 +4757,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // クリック不可と色だけをここで固定する。
         endDate.isClickable = false
         endDate.isFocusable = false
-        endDate.setTextColor(0xFF9E9E9E.toInt())
+        endDate.setTextColor(getColor(R.color.tc_text_dim))
     }
 
     // 開始/終了時刻をEntityへ渡してスケジュールを再生成させる(結果はEV_SCHEDULEで反映)。
@@ -4948,7 +4955,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         row.orientation = LinearLayout.HORIZONTAL
         row.gravity = Gravity.CENTER_VERTICAL
         row.setPadding(dp(4), dp(6), dp(4), dp(6))
-        if (id == currentPlanId) row.setBackgroundColor(0xFFE3F2FD.toInt())
+        if (id == currentPlanId) row.setBackgroundColor(getColor(R.color.tc_selected_bg))
         // 左アイコン(指示1/2): 未検出=✖点灯 / 撮影中=点滅 / 待機(窓前)=点灯 / 撮影可=開始(ICO開始D) / 不可=空。
         val icon = ImageView(this)
         icon.layoutParams = LinearLayout.LayoutParams(dp(32), dp(32)).apply { rightMargin = dp(6) }
@@ -5052,7 +5059,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         subTv.text = if (tplMode) camTxt + "  " + p.optString("lens").ifEmpty { s(R.string.lens_undefined) }
                      else planEdgeName(id).ifEmpty { kPhoneEdgeLabel } + "  " + camTxt
         subTv.textSize = 12f
-        subTv.setTextColor(Color.GRAY)
+        subTv.setTextColor(getColor(R.color.tc_text_sub))
         subTv.isSingleLine = true
         subTv.setPadding(dp(4), 0, dp(4), 0)
         subTv.setOnClickListener { if (tplMode) selectTplRow(id) else selectPlanRow(id) }   // 副行のタップでも行を選べる
@@ -5418,7 +5425,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (ownedExternal() || !trialStarted() || tplMode) { tv.visibility = View.GONE; return }
         val n = trialRemain()
         tv.text = if (n > 0) q(R.plurals.ext_trial_banner, n) else s(R.string.ext_trial_over)
-        tv.setTextColor(if (n > 0) 0xFF1565C0.toInt() else 0xFFD32F2F.toInt())
+        tv.setTextColor(if (n > 0) getColor(R.color.tc_link) else getColor(R.color.tc_danger))
         tv.visibility = View.VISIBLE
     }
 
@@ -5432,13 +5439,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         when {
             id.isEmpty() -> captureStatus.text = ""
-            disconnectedPlans.contains(id) -> show(s(R.string.st_cam_not_found, sfx), 0xFFD32F2F.toInt())
+            disconnectedPlans.contains(id) -> show(s(R.string.st_cam_not_found, sfx), getColor(R.color.tc_danger))
             capturingPlans.contains(id)    -> {
                 val head = if (onEdge) s(R.string.st_edge_shooting) else s(R.string.st_shooting)
                 val p = planProgress[id]
-                show(if (p != null) s(R.string.st_progress, head, p.frame, p.total, p.remainSec) else head, 0xFF2E7D32.toInt())
+                show(if (p != null) s(R.string.st_progress, head, p.frame, p.total, p.remainSec) else head, getColor(R.color.tc_ok))
             }
-            waitingPlans.contains(id) || startingPlans.contains(id) -> show(s(R.string.st_waiting, sfx), 0xFF1565C0.toInt())
+            waitingPlans.contains(id) || startingPlans.contains(id) -> show(s(R.string.st_waiting, sfx), getColor(R.color.tc_link))
             else -> captureStatus.text = ""
         }
     }
@@ -5739,7 +5746,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (!dimArmed || dimView != null) return
         val root = findViewById<ViewGroup>(android.R.id.content) ?: return
         val v = View(this).apply {
-            setBackgroundColor(Color.BLACK)
+            setBackgroundColor(getColor(R.color.tc_text))
             isClickable = true; isFocusable = true
             elevation = 10_000f   // どの画面・ダイアログ枠より手前
             setOnTouchListener { _, ev ->
@@ -5774,6 +5781,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  外部カメラと話すのに要る。
     // 言語(2026-10-01)。attachBaseContext で包むと、この部品のリソースが全部その言語になる。
     override fun attachBaseContext(newBase: android.content.Context) {
+        Loc.applyTheme(newBase)     // 明暗は super より先に決める(あとからだと作り直しになる)
         super.attachBaseContext(Loc.wrap(newBase))
     }
 
@@ -6167,7 +6175,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; setPadding(dp(24), dp(8), dp(24), dp(4))
             addView(TextView(this@MainActivity).apply {
-                text = s(R.string.paste_latlng_hint); textSize = 12f; setTextColor(0xFF888888.toInt())
+                text = s(R.string.paste_latlng_hint); textSize = 12f; setTextColor(getColor(R.color.tc_text_sub))
             })
             addView(et)
         }
@@ -6221,7 +6229,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         map.overlays.add(0, org.osmdroid.views.overlay.MapEventsOverlay(recv))
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            addView(TextView(this@MainActivity).apply { text = s(R.string.map_tap_hint); textSize = 12f; setPadding(dp(16), dp(8), dp(16), dp(4)); setTextColor(0xFF888888.toInt()) })
+            addView(TextView(this@MainActivity).apply { text = s(R.string.map_tap_hint); textSize = 12f; setPadding(dp(16), dp(8), dp(16), dp(4)); setTextColor(getColor(R.color.tc_text_sub)) })
             // 地図は残り全部(高さ0＋weight)。ダイアログ自体を画面いっぱいにするので、
             //  題とボタンを除いた分を地図が使う(2026-09-04 UI依頼)。
             addView(map, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
@@ -6231,7 +6239,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             //  見えていることが条件なので、地図のすぐ下に常に出す。押すと出典へ。
             addView(TextView(this@MainActivity).apply {
                 text = s(R.string.map_credit)
-                textSize = 11f; setTextColor(0xFF555555.toInt())
+                textSize = 11f; setTextColor(getColor(R.color.tc_text_mid))
                 setPadding(dp(16), dp(4), dp(16), dp(8))
                 setOnClickListener {
                     try {
@@ -6327,7 +6335,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (p.selected() == null || p.selected() !in keys) { p.setSelected(keys.firstOrNull()) }
         if (items.isEmpty() && p.emptyText.isNotEmpty()) {
             box.addView(TextView(this).apply {
-                text = p.emptyText; setPadding(dp(8), dp(6), 0, dp(6)); setTextColor(Color.GRAY)
+                text = p.emptyText; setPadding(dp(8), dp(6), 0, dp(6)); setTextColor(getColor(R.color.tc_text_sub))
             })
         }
         for (it in items) {
@@ -6548,7 +6556,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val list = buildReservations()
         saveReservations(list)
         if (list.isEmpty()) {
-            box.addView(TextView(this).apply { text = s(R.string.no_bookings); setTextColor(Color.GRAY) })
+            box.addView(TextView(this).apply { text = s(R.string.no_bookings); setTextColor(getColor(R.color.tc_text_sub)) })
             return
         }
         var curCam = ""
@@ -6559,7 +6567,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     text = curCam
                     setTypeface(null, Typeface.BOLD)
                     setTextColor(Color.WHITE)
-                    setBackgroundColor(0xFF455A64.toInt())
+                    setBackgroundColor(getColor(R.color.tc_section_bg))
                     setPadding(dp(8), dp(6), dp(8), dp(6))
                     layoutParams = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -6575,8 +6583,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 text = (if (r.conflict) "✕ " else "　") + line   // 重なりは行頭に ✕
                 textSize = 13f
                 setPadding(dp(8), dp(4), dp(8), dp(4))
-                if (r.conflict) { setTextColor(0xFFC62828.toInt()); setBackgroundColor(0xFFFFEBEE.toInt()) }
-                else            { setTextColor(Color.DKGRAY) }
+                if (r.conflict) { setTextColor(getColor(R.color.tc_danger_deep)); setBackgroundColor(0xFFFFEBEE.toInt()) }
+                else            { setTextColor(getColor(R.color.tc_text_weak)) }
             })
         }
     }
@@ -6665,7 +6673,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.removeAllViews()
         val arr = histLoad()
         if (arr.length() == 0) {
-            box.addView(TextView(this).apply { text = s(R.string.no_history); setTextColor(Color.GRAY) })
+            box.addView(TextView(this).apply { text = s(R.string.no_history); setTextColor(getColor(R.color.tc_text_sub)) })
             return
         }
         // 項目B: 日付ごとのブロックにする。日付見出しを1回だけ出し、同じ日付の行は時刻から表示する
@@ -6681,7 +6689,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     text = day
                     setTypeface(null, Typeface.BOLD)
                     setTextColor(Color.WHITE)
-                    setBackgroundColor(0xFF455A64.toInt())
+                    setBackgroundColor(getColor(R.color.tc_section_bg))
                     setPadding(dp(8), dp(6), dp(8), dp(6))
                     layoutParams = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -6695,7 +6703,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 text = line
                 textSize = 12f
                 typeface = Typeface.MONOSPACE          // 桁を揃えて読みやすくする
-                setTextColor(Color.DKGRAY)
+                setTextColor(getColor(R.color.tc_text_weak))
                 setPadding(dp(8), dp(5), dp(8), dp(5))
             })
         }
@@ -6735,7 +6743,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.removeAllViews()
         val arr = try { JSONArray(HgeNative.nativeReportList()) } catch (_: Exception) { JSONArray() }
         if (arr.length() == 0) {
-            box.addView(TextView(this).apply { text = s(R.string.no_reports); setTextColor(Color.GRAY) })
+            box.addView(TextView(this).apply { text = s(R.string.no_reports); setTextColor(getColor(R.color.tc_text_sub)) })
             selectedReport = null
             return
         }
@@ -6992,7 +7000,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (name.isNullOrEmpty()) { return }
         val o = try { JSONObject(HgeNative.nativeReportJson(name)) } catch (_: Exception) { null }
         if (o == null) {
-            box.addView(TextView(this).apply { text = s(R.string.rep_unreadable); setTextColor(Color.RED) })
+            box.addView(TextView(this).apply { text = s(R.string.rep_unreadable); setTextColor(getColor(R.color.tc_danger)) })
             return
         }
         val win = o.optJSONObject("window") ?: JSONObject()
@@ -7026,7 +7034,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 (if (lastExitCause.isNotEmpty()) causeText(lastExitCause) else "")
             } else ""
             repRow(box, s(R.string.end_reason_label), txt, hint,
-                   if (er == "interrupted") 0xFFD32F2F.toInt() else Color.BLACK)
+                   if (er == "interrupted") getColor(R.color.tc_danger) else getColor(R.color.tc_text))
         }
         repRow(box, s(R.string.frames_label), "${cap.optInt("frames")}")
         repRow(box, s(R.string.shutter_fail), "%d (%.1f%%)".format(cap.optInt("shootFail"), cap.optDouble("shootFailPct")))
@@ -7170,7 +7178,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 box.addView(TextView(this).apply {
                     text = s(R.string.bullet) + reportNoteText(notes.optInt(i))
                     textSize = 14f
-                    setTextColor(0xFFB71C1C.toInt())
+                    setTextColor(getColor(R.color.tc_danger_deep))
                     setPadding(dp(4), dp(6), dp(4), dp(6))
                 })
             }
@@ -7180,7 +7188,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun repHead(box: LinearLayout, title: String) {
         box.addView(TextView(this).apply {
             text = title.ifEmpty { s(R.string.no_title) }
-            textSize = 19f; setTypeface(null, Typeface.BOLD); setTextColor(Color.BLACK)
+            textSize = 19f; setTypeface(null, Typeface.BOLD); setTextColor(getColor(R.color.tc_text))
             setPadding(0, 0, 0, dp(6))
         })
     }
@@ -7189,7 +7197,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.addView(TextView(this).apply {
             text = title
             setTypeface(null, Typeface.BOLD); setTextColor(Color.WHITE)
-            setBackgroundColor(0xFF455A64.toInt())
+            setBackgroundColor(getColor(R.color.tc_section_bg))
             setPadding(dp(8), dp(6), dp(8), dp(6))
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -7199,12 +7207,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // 1行 = 見出し / 値。数字の読み方(hint)は小さく灰色で値の下へ添える。
     private fun repRow(box: LinearLayout, label: String, value: String, hint: String = "",
-                       valueColor: Int = Color.BLACK) {
+                       valueColor: Int = getColor(R.color.tc_text)) {
         val row = LinearLayout(this)
         row.orientation = LinearLayout.HORIZONTAL
         row.setPadding(dp(4), dp(4), dp(4), dp(4))
         row.addView(TextView(this).apply {
-            text = label; textSize = 14f; setTextColor(Color.DKGRAY)
+            text = label; textSize = 14f; setTextColor(getColor(R.color.tc_text_weak))
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         })
         row.addView(TextView(this).apply {
@@ -7216,7 +7224,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.addView(row)
         if (hint.isNotEmpty()) {
             box.addView(TextView(this).apply {
-                text = hint; textSize = 11f; setTextColor(Color.parseColor("#888888"))
+                text = hint; textSize = 11f; setTextColor(getColor(R.color.tc_text_sub))
                 setPadding(dp(4), 0, dp(4), dp(6))
             })
         }
@@ -7310,7 +7318,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val placeCancel = addCancelButton(box, atTop = true) { buildPlaceDetail() }
         placeLat = o.optDouble("latitude", 0.0); placeLng = o.optDouble("longitude", 0.0)
         // 緯度・経度(DMS表示) + 取得手段(地図/貼り付け/現在地)
-        box.addView(TextView(this).apply { text = s(R.string.lat_lng); textSize = 13f; setTextColor(Color.GRAY); setPadding(0, dp(4), 0, dp(2)) })
+        box.addView(TextView(this).apply { text = s(R.string.lat_lng); textSize = 13f; setTextColor(getColor(R.color.tc_text_sub)); setPadding(0, dp(4), 0, dp(2)) })
         val btnRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         btnRow.addView(linkText(s(R.string.pick_from_map)) {
             // 名前にカーソルが残ったままでも、ここで改名を確定させてから開く。
@@ -7323,12 +7331,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
         btnRow.addView(linkText(s(R.string.act_paste)) { commitListNameEdit(R.id.places_container); showPlacePasteDialog("%.6f, %.6f".format(placeLat, placeLng)) { la, lo -> onPlaceCoord(la, lo) } })
         btnRow.addView(linkText(s(R.string.use_my_location)) { commitListNameEdit(R.id.places_container); fetchCurrentLocation { la, lo, alt -> if (alt != 0.0) placeAltEt?.setText(Loc.altValue(this, alt.toInt()).toString()); onPlaceCoord(la, lo) } })
         box.addView(btnRow)
-        val coordTv = TextView(this).apply { textSize = 18f; setTextColor(Color.BLACK); setPadding(0, dp(2), 0, dp(8)) }
+        val coordTv = TextView(this).apply { textSize = 18f; setTextColor(getColor(R.color.tc_text)); setPadding(0, dp(2), 0, dp(8)) }
         placeCoordTv = coordTv; box.addView(coordTv); refreshPlaceCoordText()
         // 標高(緯度経度から自動取得。手動再取得も可)
         val altHdr = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         altHdr.addView(TextView(this).apply { text = s(R.string.label_altitude_unit, Loc.altUnit(this@MainActivity))
-                                              textSize = 13f; setTextColor(Color.GRAY) })
+                                              textSize = 13f; setTextColor(getColor(R.color.tc_text_sub)) })
         altHdr.addView(linkText(s(R.string.act_alt_from_latlng)) {
             if (placeLat == 0.0 && placeLng == 0.0) Toast.makeText(this, s(R.string.need_latlng_first), Toast.LENGTH_SHORT).show()
             else fetchElevationInto(placeLat, placeLng)
@@ -7345,9 +7353,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //   計画を現地へ持って行くと切替時刻が時差ぶんずれた。場所が持てば、どの端末で走らせても
         //   同じ瞬間になる。**既定は端末の値**なので、国内で使う限り気にしなくてよい。
         placeTzOffMin = o.optInt("tzOffMin", nowOffMin())
-        box.addView(TextView(this).apply { text = s(R.string.timezone); textSize = 13f; setTextColor(Color.GRAY); setPadding(0, dp(8), 0, dp(2)) })
+        box.addView(TextView(this).apply { text = s(R.string.timezone); textSize = 13f; setTextColor(getColor(R.color.tc_text_sub)); setPadding(0, dp(8), 0, dp(2)) })
         val tzRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        val tzTv = TextView(this).apply { textSize = 18f; setTextColor(Color.BLACK); text = tzLabel(placeTzOffMin) }
+        val tzTv = TextView(this).apply { textSize = 18f; setTextColor(getColor(R.color.tc_text)); text = tzLabel(placeTzOffMin) }
         tzRow.addView(tzTv)
         tzRow.addView(linkText(s(R.string.act_edit)) { showPlaceTzDialog { off -> placeTzOffMin = off; tzTv.text = tzLabel(off); persistPlaceDetail(false, rebuildList = true) } })
         tzRow.addView(linkText(s(R.string.act_match_phone)) {
@@ -7355,7 +7363,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         })
         box.addView(tzRow)
         // メモ(説明)
-        box.addView(TextView(this).apply { text = s(R.string.memo); textSize = 13f; setTextColor(Color.GRAY); setPadding(0, dp(8), 0, dp(2)) })
+        box.addView(TextView(this).apply { text = s(R.string.memo); textSize = 13f; setTextColor(getColor(R.color.tc_text_sub)); setPadding(0, dp(8), 0, dp(2)) })
         val memoEt = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
             minLines = 2; gravity = Gravity.TOP or Gravity.START; setText(o.optString("memo"))
@@ -7469,7 +7477,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         lateinit var dlg: androidx.appcompat.app.AlertDialog
         root.addView(TextView(this).apply {
             text = s(R.string.tz_this_phone, tzLabel(nowOffMin()))
-            textSize = 16f; setTextColor(0xFF1565C0.toInt())
+            textSize = 16f; setTextColor(getColor(R.color.tc_link))
             setPadding(dp(4), dp(8), dp(4), dp(8))
             setOnClickListener { onPick(nowOffMin()); dlg.dismiss() }
         })
@@ -7487,7 +7495,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                                                  gravity = Gravity.CENTER_VERTICAL
                                                  setPadding(dp(4), dp(6), dp(4), dp(6)) }
         sortRow.addView(TextView(this).apply {
-            text = s(R.string.tz_sort_by); textSize = 13f; setTextColor(Color.GRAY) })
+            text = s(R.string.tz_sort_by); textSize = 13f; setTextColor(getColor(R.color.tc_text_sub)) })
         val byCityTv = TextView(this).apply { text = s(R.string.tz_sort_city); textSize = 15f
                                               setPadding(dp(12), dp(4), dp(12), dp(4)) }
         val byOffTv = TextView(this).apply { text = s(R.string.tz_sort_offset); textSize = 15f
@@ -7500,7 +7508,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             (resources.displayMetrics.heightPixels * 0.5).toInt()))
 
         root.addView(TextView(this).apply {
-            text = s(R.string.tz_dst_note); textSize = 12f; setTextColor(Color.GRAY)
+            text = s(R.string.tz_dst_note); textSize = 12f; setTextColor(getColor(R.color.tc_text_sub))
             setPadding(dp(4), dp(6), dp(4), dp(2))
         })
 
@@ -7514,9 +7522,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
                     setPadding(dp(4), dp(10), dp(4), dp(10))
-                    addView(TextView(this@MainActivity).apply { textSize = 16f; setTextColor(Color.BLACK) },
+                    addView(TextView(this@MainActivity).apply { textSize = 16f; setTextColor(getColor(R.color.tc_text)) },
                             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-                    addView(TextView(this@MainActivity).apply { textSize = 15f; setTextColor(0xFF1565C0.toInt()) })
+                    addView(TextView(this@MainActivity).apply { textSize = 15f; setTextColor(getColor(R.color.tc_link)) })
                 }
                 val c = shown[i]
                 (row.getChildAt(0) as TextView).text =
@@ -7539,8 +7547,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             shown.clear(); shown.addAll(sorted); adapter.notifyDataSetChanged()
         }
         fun paintSort() {
-            byCityTv.setTextColor(if (byOffset) Color.GRAY else 0xFF1565C0.toInt())
-            byOffTv.setTextColor(if (byOffset) 0xFF1565C0.toInt() else Color.GRAY)
+            byCityTv.setTextColor(if (byOffset) getColor(R.color.tc_text_sub) else getColor(R.color.tc_link))
+            byOffTv.setTextColor(if (byOffset) getColor(R.color.tc_link) else getColor(R.color.tc_text_sub))
             byCityTv.setTypeface(null, if (byOffset) Typeface.NORMAL else Typeface.BOLD)
             byOffTv.setTypeface(null, if (byOffset) Typeface.BOLD else Typeface.NORMAL)
         }
@@ -8036,8 +8044,35 @@ class MainActivity : AppCompatActivity(), HgeListener {
         } catch (_: Exception) {}
     }
 
-    private fun ccmColor(type: Int): Int = 0xFF000000.toInt() or (ccmBgMap[type] ?: 0xEEEEEE)
-    private fun ccmTextColor(type: Int): Int = 0xFF000000.toInt() or (ccmTextMap[type] ?: 0x222222)
+    // 【利用者が決めた色を地色に合わせる(2026-10-01 依頼)】
+    //  明るい画面向けに選んだ色を暗い地にそのまま出すと夜にまぶしい。
+    //  **色味は残して明るさだけ寄せる** — 地は沈め、文字は浮かせる。
+    //  設定は1つのままで済む。**色を選ぶ画面だけは生の値**を見せること
+    //  (合わせた値を見せると、開くたびに色がずれていく)。
+    private fun ccmColorRaw(type: Int): Int = 0xFF000000.toInt() or (ccmBgMap[type] ?: 0xEEEEEE)
+    private fun ccmTextColorRaw(type: Int): Int = 0xFF000000.toInt() or (ccmTextMap[type] ?: 0x222222)
+    private fun ccmColor(type: Int): Int = themeAdapt(ccmColorRaw(type), true)
+    private fun ccmTextColor(type: Int): Int = themeAdapt(ccmTextColorRaw(type), false)
+
+    private fun isNight(): Boolean =
+        (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
+
+    private fun themeAdapt(c: Int, isBg: Boolean): Int {
+        if (!isNight()) return c
+        val a = (c ushr 24) and 0xFF
+        var r = (c shr 16) and 0xFF; var g = (c shr 8) and 0xFF; var b = c and 0xFF
+        if (isBg) {                      // 地は沈める。各成分を同じ割合で落とすので色味は残る
+            r = (r * 0.42).toInt(); g = (g * 0.42).toInt(); b = (b * 0.42).toInt()
+        } else {                         // 文字は暗いものだけ白へ寄せる
+            val lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0
+            if (lum < 0.72) {
+                val k = (0.72 - lum) / (1.0 - lum)
+                r = (r + (255 - r) * k).toInt(); g = (g + (255 - g) * k).toInt(); b = (b + (255 - b) * k).toInt()
+            }
+        }
+        return (a shl 24) or (r shl 16) or (g shl 8) or b
+    }
 
     // 画面タイトルバーにシステム共通色(背景/文字)を適用する。
     private fun applyHeaderColor(headerId: Int, titleId: Int, type: Int) {
@@ -8151,7 +8186,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 val ty = runs[k].type
                 val col = if (ty in 1..7) ccmColor(ty) else 0
                 val lbl = if (ty in 1..7) ccmTypeName[ty] else null
-                val txtCol = if (ty in 1..7) ccmTextColor(ty) else 0xFF212121.toInt()
+                val txtCol = if (ty in 1..7) ccmTextColor(ty) else getColor(R.color.tc_text_dark)
                 segs.add(BandView.Seg(pos[k], pos[k + 1], col, lbl, ty, txtCol))
             }
         }
@@ -8276,7 +8311,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         evs.sortBy { it.t }
         if (evs.isEmpty()) {
-            val tv = TextView(this); tv.text = "—"; tv.textSize = 13f; tv.setTextColor(0xFF888888.toInt())
+            val tv = TextView(this); tv.text = "—"; tv.textSize = 13f; tv.setTextColor(getColor(R.color.tc_text_sub))
             planOverview.addView(tv); return
         }
 
@@ -8418,7 +8453,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     for (k in 0 until sa.length()) {
                         val s = sa.getJSONObject(k); val ty = s.optInt("type")
                         val col = if (ty in 1..7) ccmColor(ty) else 0
-                        val tc = if (ty in 1..7) ccmTextColor(ty) else 0xFF212121.toInt()
+                        val tc = if (ty in 1..7) ccmTextColor(ty) else getColor(R.color.tc_text_dark)
                         val nm = ccmTypeName[ty] ?: s.optString("name")
                         segs.add(ScheduleView.Seg(ty, nm, s.optDouble("altTop"),
                             s.optDouble("altBottom"), s.optBoolean("used"), col, tc))
@@ -8451,7 +8486,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 nameTv.setTypeface(null, Typeface.BOLD); nameTv.textSize = 15f
                 nameTv.maxLines = 1; nameTv.ellipsize = android.text.TextUtils.TruncateAt.END
                 nameTv.setPadding(dp(12), dp(6), dp(12), dp(6))
-                nameTv.setBackgroundColor(0xFFE3F2FD.toInt())
+                nameTv.setBackgroundColor(getColor(R.color.tc_selected_bg))
                 page.addView(nameTv, LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                 page.addView(sv, LinearLayout.LayoutParams(
@@ -8551,7 +8586,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         nameTv.setTypeface(null, Typeface.BOLD); nameTv.textSize = 15f
         nameTv.maxLines = 1; nameTv.ellipsize = android.text.TextUtils.TruncateAt.END
         nameTv.setPadding(dp(12), dp(6), dp(12), dp(6))
-        nameTv.setBackgroundColor(0xFFE3F2FD.toInt())
+        nameTv.setBackgroundColor(getColor(R.color.tc_selected_bg))
         page.addView(nameTv, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
@@ -8561,7 +8596,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         page.addView(sv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
         val ed = !planReadOnly
-        val hint = TextView(this); hint.textSize = 12f; hint.setTextColor(Color.parseColor("#616161"))
+        val hint = TextView(this); hint.textSize = 12f; hint.setTextColor(getColor(R.color.tc_text_weak))
         hint.setPadding(dp(4), dp(8), dp(4), dp(4))
         // 【内容の位置を撮影計画の画面と揃える(2026-09-23 UI依頼)】あちらは見出し 96dp のすぐ右から
         //  値が始まる。こちらも見出しはそのままの位置に置き、内容だけ 96dp の位置から始める。
@@ -8622,7 +8657,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         refreshVideoHint(hint)
         val note = TextView(this)
         note.text = s(R.string.video_from, cam)
-        note.textSize = 12f; note.setTextColor(Color.parseColor("#616161")); note.setPadding(dp(4), dp(10), dp(4), dp(4))
+        note.textSize = 12f; note.setTextColor(getColor(R.color.tc_text_weak)); note.setPadding(dp(4), dp(10), dp(4), dp(4))
         box.addView(note)
         // ── 静止画 ─────────────────────────────────────────
         // 1コマずつの画像を残すか。**利用者が見える場所**(Pictures/TwyLapse)へ置く。
@@ -8634,7 +8669,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.addView(videoIndent(cbDng, indent))
         box.addView(videoIndent(cbJpg, indent))
         val stillNote = TextView(this)
-        stillNote.textSize = 12f; stillNote.setTextColor(Color.parseColor("#616161"))
+        stillNote.textSize = 12f; stillNote.setTextColor(getColor(R.color.tc_text_weak))
         stillNote.setPadding(dp(4), dp(8), dp(4), dp(4))
         box.addView(stillNote)
         refreshStillNote(stillNote)
@@ -8688,7 +8723,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 集まりの見出し(帯)。メニューの帯と同じ体裁。
     private fun videoBand(title: String): TextView {
         val tv = TextView(this); tv.text = title; tv.textSize = 14f; tv.setTypeface(null, Typeface.BOLD)
-        tv.setTextColor(Color.WHITE); tv.setBackgroundColor(Color.parseColor("#5C6BC0"))
+        tv.setTextColor(Color.WHITE); tv.setBackgroundColor(getColor(R.color.tc_band_bg))
         tv.setPadding(dp(12), dp(6), dp(12), dp(6))
         tv.tag = Color.WHITE
         val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
@@ -8700,7 +8735,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun videoCheck(title: String, checked: Boolean, enabled: Boolean): android.widget.CheckBox {
         val cb = android.widget.CheckBox(this)
-        cb.text = title; cb.textSize = 15f; cb.tag = Color.BLACK
+        cb.text = title; cb.textSize = 15f; cb.tag = getColor(R.color.tc_text)
         cb.isChecked = checked; cb.isEnabled = enabled
         return cb
     }
@@ -8740,7 +8775,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun videoLabel(s: String): TextView {
         val tv = TextView(this); tv.text = s; tv.textSize = 14f; tv.setTypeface(null, Typeface.BOLD)
         tv.setPadding(dp(4), dp(12), dp(4), dp(2))
-        tv.tag = Color.BLACK		// 灰色から戻すときの色(videoSetEnabled)
+        tv.tag = getColor(R.color.tc_text)		// 灰色から戻すときの色(videoSetEnabled)
         return tv
     }
 
@@ -8758,8 +8793,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (v is ViewGroup) { for (i in 0 until v.childCount) { videoSetEnabled(v.getChildAt(i), on) } }
         v.isEnabled = on
         if (v is TextView) {
-            val normal = (v.tag as? Int) ?: Color.BLACK
-            v.setTextColor(if (on) normal else Color.parseColor("#BBBBBB"))
+            val normal = (v.tag as? Int) ?: getColor(R.color.tc_text)
+            v.setTextColor(if (on) normal else getColor(R.color.tc_text_sub))
         }
     }
 
@@ -8769,7 +8804,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         g.orientation = LinearLayout.VERTICAL
         for ((i, n) in names.withIndex()) {
             val r = android.widget.RadioButton(this)
-            r.text = n; r.textSize = 15f; r.id = View.generateViewId(); r.tag = Color.BLACK
+            r.text = n; r.textSize = 15f; r.id = View.generateViewId(); r.tag = getColor(R.color.tc_text)
             r.isChecked = (i == sel); r.isEnabled = enabled
             r.setOnCheckedChangeListener { _, c -> if (c && !videoSyncing) onPick(i) }
             g.addView(r)
@@ -8792,7 +8827,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             tv.text = if (sub.isEmpty()) s else s + "\n" + sub
             tv.textSize = 13f
             tv.gravity = Gravity.CENTER_HORIZONTAL
-            tv.setTextColor(Color.parseColor("#424242")); tv.tag = Color.parseColor("#424242")
+            tv.setTextColor(getColor(R.color.tc_text_weak)); tv.tag = getColor(R.color.tc_text_weak)
             tv.setTypeface(null, if (i == sel) Typeface.BOLD else Typeface.NORMAL)
             row.addView(tv, FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
@@ -9888,7 +9923,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (selectedEdgeName.isEmpty()) {
             box.addView(TextView(ctx).apply {
                 text = s(R.string.edge_add_hint)
-                setTextColor(Color.GRAY); setPadding(0, dp(16), 0, dp(16))
+                setTextColor(getColor(R.color.tc_text_sub)); setPadding(0, dp(16), 0, dp(16))
             })
             return
         }
@@ -10072,7 +10107,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             })
             box.addView(TextView(ctx).apply {
                 text = s(R.string.log_opt_note_edge)
-                textSize = 12f; setTextColor(Color.GRAY); setPadding(0, 0, 0, dp(2))
+                textSize = 12f; setTextColor(getColor(R.color.tc_text_sub)); setPadding(0, 0, 0, dp(2))
             })
             val lo = loadEdgeLogOpt(selectedEdgeName)
             fun logCb(label: String, on: Boolean, set: (Boolean) -> Unit): CheckBox {
@@ -10100,7 +10135,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             setViewTreeEnabled(box, false)
             box.addView(TextView(ctx).apply {
                 text = s(R.string.edge_busy_settings, selectedEdgeName)
-                textSize = 12f; setTextColor(Color.parseColor("#C62828")); setPadding(0, dp(10), 0, 0)
+                textSize = 12f; setTextColor(getColor(R.color.tc_danger_deep)); setPadding(0, dp(10), 0, 0)
             })
         }
     }
@@ -10997,7 +11032,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val fm = paint.fontMetrics
         val h = Math.ceil((fm.bottom - fm.top).toDouble()).toInt().coerceIn(1, 100)
         val bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
-        val cv = android.graphics.Canvas(bmp); cv.drawColor(Color.BLACK)
+        val cv = android.graphics.Canvas(bmp); cv.drawColor(getColor(R.color.tc_text))
         cv.drawText(name, 0f, -fm.top, paint)
         val bpr = (w + 7) / 8
         val out = java.io.ByteArrayOutputStream()

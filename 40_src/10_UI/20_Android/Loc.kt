@@ -3,6 +3,7 @@ package app.laxei.twylapse
 import android.content.Context
 import android.content.res.Configuration
 import android.provider.Settings
+import androidx.appcompat.app.AppCompatDelegate
 import java.text.DateFormat
 import java.text.NumberFormat
 import java.text.SimpleDateFormat
@@ -41,6 +42,32 @@ object Loc {
 
     /** 選ばれている言語。スマホに合わせるなら "" */
     fun selected(ctx: Context): String = prefs(ctx).getString(KEY, SYSTEM) ?: SYSTEM
+
+    // ---- 明暗(2026-10-01 依頼) ------------------------------------------
+    //
+    // 【OS の仕組みに乗る】テーマは Theme.Material3.DayNight なので、
+    //  端末のダークモードで res/values-night/ が選ばれる。
+    //  アプリ側で上書きするのは AppCompatDelegate が正規の道。
+    //  **attachBaseContext で先に呼ぶ**のが要点 — 画面ができたあとに変えると
+    //  Activity を作り直しにいくので、言語と同じく**プロセスごと入れ直す**。
+
+    const val THEME_SYSTEM = ""   // 端末に合わせる
+
+    fun themeMode(ctx: Context): String =
+        prefs(ctx).getString("themeMode", THEME_SYSTEM) ?: THEME_SYSTEM
+
+    fun saveTheme(ctx: Context, v: String) {
+        prefs(ctx).edit().putString("themeMode", v).commit()   // 直後に落とすので commit
+    }
+
+    /** attachBaseContext から、super より先に呼ぶ。 */
+    fun applyTheme(ctx: Context) {
+        AppCompatDelegate.setDefaultNightMode(when (themeMode(ctx)) {
+            "light" -> AppCompatDelegate.MODE_NIGHT_NO
+            "dark"  -> AppCompatDelegate.MODE_NIGHT_YES
+            else    -> AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
+        })
+    }
 
     /** 覚えるだけ。効かせるには**入れ直し**が要る(呼んだ側が RestartActivity へ)。 */
     fun save(ctx: Context, tag: String) {

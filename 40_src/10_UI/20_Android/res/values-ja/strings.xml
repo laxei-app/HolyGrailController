@@ -898,4 +898,8 @@
     <string name="tz_dst_note">夏時間のある地域は、いま時点の時差を入れます。切り替わったら選び直してください。</string>
     <string name="tz_no_hit">見つかりません</string>
     <string name="tz_manual">時差を手で入れる</string>
+    <string name="menu_theme">スマホのテーマ</string>
+    <string name="theme_system">端末に合わせる</string>
+    <string name="theme_light">明るい</string>
+    <string name="theme_dark">暗い</string>
 </resources>
