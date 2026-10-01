@@ -7382,9 +7382,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val tzRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         val tzTv = TextView(this).apply { textSize = 18f; setTextColor(getColor(R.color.tc_text)); text = tzLabel(placeTzOffMin) }
         tzRow.addView(tzTv)
-        tzRow.addView(linkText(s(R.string.act_edit)) { showPlaceTzDialog { off -> placeTzOffMin = off; tzTv.text = tzLabel(off); persistPlaceDetail(false, rebuildList = true) } })
+        // 【選んだ瞬間に保存しない(2026-10-01 ユーザー指示)】標高やメモと同じく、
+        //  画面を抜けるまではやり直せるようにする。即保存すると「変更の取り消し」が
+        //  その場で灰色に戻り、**選び間違えても戻せない**。
+        //  保存は画面を抜けるとき(leavePlacesList / selectPlace)がやる。
+        //  一覧にはタイムゾーンを出していないので、作り直す必要も無い。
+        tzRow.addView(linkText(s(R.string.act_edit)) { showPlaceTzDialog { off -> placeTzOffMin = off; tzTv.text = tzLabel(off) } })
         tzRow.addView(linkText(s(R.string.act_match_phone)) {
-            placeTzOffMin = nowOffMin(); tzTv.text = tzLabel(placeTzOffMin); persistPlaceDetail(false, rebuildList = true)
+            placeTzOffMin = nowOffMin(); tzTv.text = tzLabel(placeTzOffMin)
         })
         box.addView(tzRow)
         // メモ(説明)
@@ -7401,12 +7406,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
             // 即保存してリストを作り直す(他の場所のチェックが外れたことを表示へ反映するため)。
             persistPlaceDetail(false, rebuildList = true)
         }
-        // 項目2: 標高/メモの未保存編集を dirty 判定(座標/自動挿入は即保存で作り直されるため基準が更新される)。
+        // 項目2: 標高/メモ/タイムゾーンの未保存編集を dirty 判定。
+        //  (座標/自動挿入は一覧の表示を更新する必要があり即保存なので、基準がその場で更新される)
         startDirtyWatch(placeCancel) { placeDetailSig() }
     }
 
     private fun placeDetailSig(): String =
-        "$placeLat,$placeLng,alt=${placeAltEt?.text},memo=${placeMemoEt?.text},auto=${placeAutoCb?.isChecked == true}"
+        "$placeLat,$placeLng,alt=${placeAltEt?.text},memo=${placeMemoEt?.text}," +
+        "auto=${placeAutoCb?.isChecked == true},tz=$placeTzOffMin"
 
     private fun onPlaceCoord(lat: Double, lng: Double) {
         placeLat = lat; placeLng = lng; refreshPlaceCoordText()
