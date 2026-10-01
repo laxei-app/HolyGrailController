@@ -122,6 +122,18 @@ errCode captureRunner::ready(const hgc::cs& plan, device* dev,
 	dev_    = dev;
 	smooth_ = smooth;
 	off_    = utcOffsetMin;
+	// 【何コマ撮るつもりかを先に伝える(2026-10-01 依頼)】端末に溜める実装は、
+	//  始める前に空きが足りるかを見積もる。そのための材料。後からでは間に合わない
+	//  (保存先を開くのは establishSession の中なので、それより前に渡す)。
+	if (dev->apiBase != nullptr)
+	{
+		const long long s = hgc::toUnixUtc(plan_.start, off_);
+		const long long e = hgc::toUnixUtc(plan_.end,   off_);
+		const double iv = (plan_.interval > 0.0) ? plan_.interval : 15.0;
+		int n = (e > s) ? static_cast<int>((e - s) / iv) : 1;
+		if (n < 1) { n = 1; }
+		dev->apiBase->setPlannedShots(n);
+	}
 	return ERR_HGC_OK;
 }
 
@@ -1218,6 +1230,25 @@ errCode captureRunner::loop(void)
 	{
 		long long now = static_cast<long long>(std::time(nullptr));
 		if (now >= endSec) { break; }				// 計画終了
+
+		// 【端末からのお知らせ(2026-10-01 依頼)】保存先の空きが尽きた場合など。
+		//  接続断と違って stop は**待っても直らない**ので、再接続は試さずに終える。
+		//  抜けた先で restoreShootingMode を通るので、**動画は必ず閉じられる**。
+		if (dev_ != nullptr && dev_->apiBase != nullptr)
+		{
+			long long dn1 = 0;
+			bool      dstop = false;
+			const int dnc = dev_->apiBase->takeDeviceNotice(dn1, dstop);
+			if (dnc != 0)
+			{
+				char nb[96];
+				std::snprintf(nb, sizeof(nb), "device notice %d (n1=%lld)%s",
+				              dnc, dn1, dstop ? " - cannot continue" : "");
+				dataManager::logEvent("CAMERA", nb, dstop);
+				if (onNotice_) { onNotice_(dnc, dn1); }
+			}
+			if (dstop) { break; }
+		}
 
 		// APから抜けた相手には投げない(上の宣言の説明を参照)。
 		if (!camIp.empty() && linkDown::generation(camIp) != linkGen)

@@ -970,7 +970,7 @@ Java_app_laxei_twylapse_HgeNative_nativeRawStackWriteDng(JNIEnv* env, jobject /*
                                                          jint whiteLevel, jfloatArray black, jfloatArray gains,
                                                          jfloatArray ccm, jfloatArray shading, jint cols, jint rows,
                                                          jstring model, jstring dateTime,
-                                                         jdouble expSec, jint iso)
+                                                         jdouble expSec, jint iso, jint orientation)
 {
 	const uint32_t* full = g_stack.fullSum();
 	if (fd < 0) { return JNI_FALSE; }
@@ -997,6 +997,7 @@ Java_app_laxei_twylapse_HgeNative_nativeRawStackWriteDng(JNIEnv* env, jobject /*
 	if (d != nullptr) { info.dateTime = d; }
 	info.exposureSec = static_cast<double>(expSec);
 	info.iso         = static_cast<int>(iso);
+	info.orientation = static_cast<int>(orientation);
 
 	const bool ok = rawStack::writeDng(static_cast<int>(fd), full, g_stack.width(), g_stack.height(),
 	                                   g_stack.cfaPattern(), p, info);

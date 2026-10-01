@@ -32,6 +32,10 @@ namespace rawStack
 		int    iso          = 0;
 		double focalMm      = 0.0;
 		double fnumber      = 0.0;
+		// 【撮った向き(2026-10-01 依頼)】EXIF と同じ並び(1=そのまま / 6=時計90度 /
+		//  3=180度 / 8=270度)。センサーの画像は端末の置き方と関係なく出てくるので、
+		//  どちらが下かは重力で測って Kotlin から渡す。
+		int    orientation  = 1;
 	};
 
 	// fd へ書く(ギャラリーへ出すため、開くのは Kotlin 側)。戻り=書けたか。

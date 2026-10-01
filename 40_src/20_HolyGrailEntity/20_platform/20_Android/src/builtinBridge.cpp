@@ -202,6 +202,32 @@ namespace builtinCam
 		return static_cast<int>(r);
 	}
 
+	// 【保存先の空き(2026-10-01 依頼)】測れないときは -1 を返す。
+	//  呼ぶ側は -1 を「満杯」と取らないこと — 測れない端末で撮影を止めてしまう。
+	long long storageFreeBytes(void)
+	{
+		attach a;
+		if (!a.ok()) { return -1; }
+		jmethodID mid = a.env->GetStaticMethodID(a.cls, "storageFreeBytes", "()J");
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); mid = nullptr; }
+		if (mid == nullptr) { return -1; }
+		jlong r = a.env->CallStaticLongMethod(a.cls, mid);
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); r = -1; }
+		return static_cast<long long>(r);
+	}
+
+	long long videoBytes(void)
+	{
+		attach a;
+		if (!a.ok()) { return 0; }
+		jmethodID mid = a.env->GetStaticMethodID(a.cls, "videoBytes", "()J");
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); mid = nullptr; }
+		if (mid == nullptr) { return 0; }
+		jlong r = a.env->CallStaticLongMethod(a.cls, mid);
+		if (a.env->ExceptionCheck()) { a.env->ExceptionClear(); r = 0; }
+		return static_cast<long long>(r);
+	}
+
 	std::string videoStart(const std::string& optJson, const std::string& planName)
 	{
 		attach a;

@@ -60,6 +60,10 @@ namespace builtinCam
 	//  planName=ファイル名の頭に使う計画名(撮影側から渡す。UI に頼ると再起動後の再開で抜ける)。
 	// optJson: 計画の動画設定(csjson::videoToJson)。空なら既定(1920x1440・30fps・標準)。
 	std::string videoStart(const std::string& optJson, const std::string& planName);	// 戻り=ギャラリーでの名前。"" =失敗
+	// 保存先の空き[バイト]。-1 = 測れない(そのときは見張らない)
+	long long   storageFreeBytes(void);
+	// いまの動画(完成品+切れ端)の大きさ[バイト]。作り直しにこれと同じ量がもう一つ要る
+	long long   videoBytes(void);
 	bool        videoAddJpeg(const std::vector<uint8_t>& jpeg);
 	std::string videoFinish(void);								// 出来上がりの場所("" =失敗)
 	std::string videoReport(void);								// コマの大きさの振れ("" =作っていない)

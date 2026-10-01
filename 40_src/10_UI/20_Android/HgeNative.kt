@@ -113,7 +113,8 @@ object HgeNative {
     // 足したものを DNG(フルサイズ)として fd へ書く。fd はネイティブ側が閉じる
     external fun nativeRawStackWriteDng(fd: Int, whiteLevel: Int, black: FloatArray, gains: FloatArray,
                                         ccm: FloatArray, shading: FloatArray?, cols: Int, rows: Int,
-                                        model: String, dateTime: String, expSec: Double, iso: Int): Boolean
+                                        model: String, dateTime: String, expSec: Double, iso: Int,
+                                        orientation: Int): Boolean
     external fun nativeRawStackAdd(buf: java.nio.ByteBuffer, rowStride: Int): Boolean
     external fun nativeRawStackFrames(): Int
     external fun nativeRawStackDevelop(bitmap: android.graphics.Bitmap, whiteLevel: Int, black: FloatArray,
@@ -295,6 +296,13 @@ object HgeNative {
 
     @JvmStatic
     fun videoFinish(): String = BuiltinVideo.finish()
+
+    // 保存先の空きと、いまの動画の大きさ(2026-10-01 ユーザ指示)。どちらもバイト。
+    //  freeBytes は測れなければ -1(そのときは見張らない)。
+    @JvmStatic
+    fun storageFreeBytes(): Long = BuiltinStill.freeBytes()
+    @JvmStatic
+    fun videoBytes(): Long = BuiltinVideo.fullBytes()
 
     // ネイティブから呼び返される BLE のエッジ探索。見つかった端末名(TLP- を除く)を返す。
     //  BLE には UDP ブロードキャストが無いので、検索はアドバタイズのスキャンで代える。

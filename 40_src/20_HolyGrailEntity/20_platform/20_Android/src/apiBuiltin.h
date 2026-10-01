@@ -39,6 +39,11 @@ public:
 	int takeBudgetMs(void) const;
 	// 【フレームを続けて失う=カメラを開き直す(2026-09-07 ユーザー指示)】キヤノン機の「3 回続けて失敗したら
 	//  手を打つ」と同じ境界。1 フレームの中の撮り直しは Kotlin 側(MAX_RETRY_PER_BURST=2 コマ)。
+	// 【保存先の空き(2026-10-01 依頼)】撮る前に「最後まで撮るとどれだけ要るか」を知る。
+	void setPlannedShots(int shots) override { plannedShots_ = (shots > 0) ? shots : 0; }
+	// 端末から利用者へ伝えたいことを渡す(渡したら消す)。stop は残る。
+	int  takeDeviceNotice(long long& n1, bool& stop) override;
+
 	static constexpr int kMaxLostFrames = 3;
 	int lostStreak_ = 0;
 
@@ -269,6 +274,34 @@ private:
 	std::string sessionLabel_;	// 計画名(動画のファイル名の頭)
 	std::string videoOpt_;		// 動画設定の JSON(空=既定。make=false なら動画を作らない)
 	hgc::videoSet out_;			// 出力設定(動画/jpg/DNG)。撮影を始めるときに計画から取り出す
+
+	// ── 保存先の空きを見張る(2026-10-01 ユーザー指示) ──────────────
+	//
+	// 【なぜ要るか】内蔵カメラでは動画と画像を**端末に**溜める。DNG は1コマ 25MB あり、
+	//  一晩(約1700コマ)で 40GB を超える。空きが尽きると書き込みが失敗し始めるが、
+	//  落ちはしない(例外は握りつぶされる)ので、**撮影は続くのに何も残らない**という
+	//  一番たちの悪い終わり方になる。それを防ぐ。
+	//
+	// 【諦める順(ユーザー決定)】DNG → jpg → 動画。動画だけは最後まで残す。
+	// 【残す量】いまの動画の大きさ + kStorageReserve。区切りのたびに
+	//  「完成品+切れ端 → 新しい完成品」を作り直すので、**その瞬間だけ同じ大きさの
+	//  空きがもう一つ要る**。ここを見誤ると、一番残したい動画が途中で止まる。
+	static constexpr long long kStorageReserve = 300LL * 1024 * 1024;	// 300MB
+	static constexpr int kMaxVideoFailStreak = 3;	// 動画がこれだけ続けて書けなければ終える
+
+	int  plannedShots_ = 0;		// この計画で撮るつもりのコマ数(captureRunner が渡す)
+	int  videoFailStreak_ = 0;	// 動画を続けて書けなかった回数
+	int  pendingNotice_ = 0;	// まだ伝えていないお知らせ(notice の番号)
+	long long pendingN1_ = 0;
+	bool stopAsking_ = false;	// もう撮り続けられない
+	bool storageWarned_ = false;	// jpg/DNG が書けない警告を出したか(1回だけ)
+
+	// 1コマあたりの見積もり[バイト]。カメラを開いた後でないと画素数が分からない。
+	void estimatePerShot(long long& video, long long& jpg, long long& dng) const;
+	// 始める前に足りるか見る。足りなければお知らせを立てて false。
+	bool checkStorageBeforeStart(void);
+	// 毎コマ見張る。減っていたら軽い方から諦め、全部書けなくなったら終わる。
+	void watchStorage(void);
 };
 
 #endif // _API_BUILTIN_H_

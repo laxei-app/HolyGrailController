@@ -6002,6 +6002,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     }
                     // カメラ未検出・カメラ使用中など、撮影開始の失敗をユーザーへ通知する。
                     if (msg.isNotEmpty()) Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+                    // 【保存先の空きは通知欄にも残す(2026-10-01 ユーザー指示)】
+                    //  Toast は数秒で消える。撮影は一晩動くので、画面を見ていない間に
+                    //  起きたことが**朝まで残らないと気づけない**。他のお知らせはその場で
+                    //  手を打てるものなので Toast のままでよい。
+                    if (nt == 14 || nt == 15 || nt == 16) {
+                        CaptureService.postAlert(this,
+                            s(if (nt == 15) R.string.storage_note_low else R.string.storage_note_stop), msg)
+                    }
                 }
             }
     }
@@ -6025,6 +6033,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         53 -> s(R.string.reconnected_idle)
         54 -> s(R.string.first_exp_failed, n1)
         55 -> s(R.string.converge_failed)
+        // 【保存先の空き(2026-10-01 依頼)】内蔵カメラで撮るときだけ出る。
+        //  14 の n1 は「あと何 MB 足りないか」。数字は端末が計算して送ってくる。
+        14 -> s(R.string.storage_full, n1)
+        15 -> if (n1 >= 2L) s(R.string.storage_low_jpg) else s(R.string.storage_low_dng)
+        16 -> s(R.string.storage_stopped)
         60 -> s(R.string.camera_in_use)
         67 -> s(R.string.edge_owned_by_other)
         // 台数の上限は端末(エッジ/スマホ)が決めて n1 で送ってくる。ここでは埋めるだけで、

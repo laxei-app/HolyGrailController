@@ -54,6 +54,15 @@ object BuiltinCamera {
     //  消される。輪郭強調も点光源を不自然にする。どちらも切れる端末では切る。
     //  切れるかは端末が答える。**対応していない値を要求すると撮影要求ごと弾かれる**ので、
     //  開くときに確かめて覚えておき、使えるときだけ載せる。
+    // 【撮った向き(2026-10-01 ユーザ指示)】
+    //  sensorOri   : センサーから出た画像を**時計回りに何度回せば**、端末を自然な向きで
+    //                持ったときに正立するか(端末が答える。背面カメラは通常 90)。
+    //  devOri      : 端末をどう置いて撮っているか(重力で測る。DeviceTilt の規約)。
+    //  この2つを合わせると、保存した画素を正立させる回転角(imageRotation)が出る。
+    private var sensorOri = 0
+    private var facingFront = false
+    @Volatile private var devOri = 0
+
     private var canNrOff = false
     private var canEdgeOff = false
     // 【ピントを無限遠に置く(2026-09-23 ユーザー指示)】AF を切ったまま位置を指定しないと、レンズは
@@ -587,6 +596,10 @@ object BuiltinCamera {
         // 一覧を持たない端末もある。**持っていないときは試す**(受け付けなければ黙って無視される)。
         canCtlOff = c.get(CameraCharacteristics.CONTROL_AVAILABLE_MODES)
                      ?.any { it.toInt() == CameraMetadata.CONTROL_MODE_OFF } ?: true
+        // 向きの諸元。答えない端末では 0 のまま(回さない)。
+        sensorOri = c.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        facingFront = (c.get(CameraCharacteristics.LENS_FACING) ==
+                       CameraCharacteristics.LENS_FACING_FRONT)
         ctlOff = false; focusIgnored = false
         focusDpt = loadFocus(physId)	// 前に実測で決めた位置(無ければ無限遠)
 
@@ -685,6 +698,31 @@ object BuiltinCamera {
     fun sessionBegin() {
         pending = null; pendingJpeg = null
         focusProbed = false
+        // 【向きはここで1度だけ測る(2026-10-01 ユーザ指示)】毎コマ測り直すと、
+        //  風で揺れたり三脚を直したりしたときに1本の動画の途中で上下が変わる。
+        //  カメラを開いた後に呼ばれるので、ここで sensorOri も揃っている。
+        val ctx = appCtx
+        devOri = if (ctx != null) DeviceTilt.measure(ctx) else 0
+        Log.i("TLP-ORI", "orientation: sensor=" + sensorOri + " device=" + devOri +
+                    " -> rotate " + imageRotation() + " (" + DeviceTilt.why() + ")")
+    }
+
+    // 保存した画素を**時計回りにこの角度回すと正立する**。0/90/180/270。
+    //  動画の回転ヒント、jpg の EXIF、DNG の Orientation はどれもこの角度で表せる。
+    //  式は Camera2 の規定(SENSOR_ORIENTATION の説明にあるもの)そのまま。
+    @JvmStatic
+    fun imageRotation(): Int {
+        val d = if (facingFront) -devOri else devOri
+        return ((sensorOri + d) % 360 + 360) % 360
+    }
+
+    // EXIF / DNG の Orientation タグ(1..8)。回転角とは別の並びなのでここで直す。
+    @JvmStatic
+    fun exifOrientation(): Int = when (imageRotation()) {
+        90   -> 6
+        180  -> 3
+        270  -> 8
+        else -> 1
     }
 
     // ── 撮る ────────────────────────────────────────────────
@@ -839,6 +877,9 @@ object BuiltinCamera {
             // 手動ピントを聞かない端末では 3A ごと切る(focusProbe が必要と判断したときだけ)。
             if (ctlOff) { req.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_OFF) }
             req.set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_DAYLIGHT)
+            // 【撮った向き(2026-10-01)】JPEG で出す端末では、これを渡すと端末が EXIF を入れる。
+            //  RAW で出す端末では効かないので、そちらは BuiltinStill / dngWrite が入れる。
+            runCatching { req.set(CaptureRequest.JPEG_ORIENTATION, imageRotation()) }
             // 星を消さないための2行。端末が対応しているときだけ載せる(上の canNrOff/canEdgeOff)。
             if (canNrOff)   { req.set(CaptureRequest.NOISE_REDUCTION_MODE, CameraMetadata.NOISE_REDUCTION_MODE_OFF) }
             if (canEdgeOff) { req.set(CaptureRequest.EDGE_MODE, CameraMetadata.EDGE_MODE_OFF) }
@@ -1038,7 +1079,7 @@ object BuiltinCamera {
                 dngOk = runCatching {
                     HgeNative.nativeRawStackWriteDng(fd, whiteLevel, black, gains, ccm, shading, cols, rows,
                         android.os.Build.MODEL ?: "phone", stamp,
-                        expNs.toDouble() / 1e9 * frames, iso)
+                        expNs.toDouble() / 1e9 * frames, iso, exifOrientation())
                 }.getOrDefault(false)
             }
             BuiltinStill.closeDng(dngOk)

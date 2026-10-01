@@ -46,12 +46,54 @@ object BuiltinStill {
         } else { null }
     }
 
+    // 【保存先の空き[バイト](2026-10-01 ユーザ指示)】
+    //  jpg/DNG(MediaStore 経由)も動画の作業領域(アプリの外部領域)も、同じボリュームの上にある。
+    //  だから 1 か所測れば足りる。
+    //
+    //  **availableBytes を使う**(freeBytes ではなく)。Android は空きの一部を
+    //  系統のために取ってあり、アプリが実際に書けるのは availableBytes の分だけ。
+    //  freeBytes を信じると、まだあるつもりで書けなくなる。
+    @JvmStatic
+    fun freeBytes(): Long = try {
+        val f = android.os.Environment.getExternalStorageDirectory()
+        android.os.StatFs(f.absolutePath).availableBytes
+    } catch (e: Exception) {
+        -1L     // 測れない端末では見張らない(止める判断に使わない)
+    }
+
     private fun nextName(ext: String): String =
         String.format(Locale.US, "tlp_%05d.%s", seq, ext)
 
+    // 【撮った向きを jpg に入れる(2026-10-01 ユーザ指示)】
+    //  RAW から現像した jpg は C++ が作っていて EXIF が無いので、ここで APP1 を先頭へ挿す。
+    //  端末が JPEG で出す経路ではすでに EXIF が入っているので**触らない**
+    //  (二重に入れると、読む側がどちらを見るかは決まっていない)。
+    //  向きだけの最小の EXIF を自分で組む — 34 バイト。これのために書庫を
+    //  足すと、ある程度大きな jpg を丸ごと読み書きし直すことになる(毎コマ 2〜8MB)。
+    private fun withOrientation(src: ByteArray, ori: Int): ByteArray {
+        if (ori <= 1 || src.size < 4) { return src }
+        if ((src[0].toInt() and 0xFF) != 0xFF || (src[1].toInt() and 0xFF) != 0xD8) { return src }
+        // すでに APP1(EXIF) があるなら何もしない。
+        if (src.size > 4 && (src[2].toInt() and 0xFF) == 0xFF && (src[3].toInt() and 0xFF) == 0xE1) { return src }
+        val app1 = byteArrayOf(
+            0xFF.toByte(), 0xE1.toByte(), 0x00, 0x22,            // APP1, 長さ 34
+            0x45, 0x78, 0x69, 0x66, 0x00, 0x00,                  // "Exif\u0000\u0000"
+            0x49, 0x49, 0x2A, 0x00, 0x08, 0x00, 0x00, 0x00,      // TIFF ヘッダ(リトルエンディアン)
+            0x01, 0x00,                                          // IFD0 の項目数 = 1
+            0x12, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00,      // タグ 0x0112 Orientation, SHORT, 1個
+            ori.toByte(), 0x00, 0x00, 0x00,                      // 値
+            0x00, 0x00, 0x00, 0x00)                              // 次の IFD は無い
+        val out = ByteArray(2 + app1.size + (src.size - 2))
+        out[0] = src[0]; out[1] = src[1]
+        System.arraycopy(app1, 0, out, 2, app1.size)
+        System.arraycopy(src, 2, out, 2 + app1.size, src.size - 2)
+        return out
+    }
+
     // jpg を 1 枚残す。戻り=残せたか。
     @JvmStatic
-    fun saveJpeg(bytes: ByteArray?): Boolean {
+    fun saveJpeg(raw: ByteArray?): Boolean {
+        val bytes = if (raw == null) null else withOrientation(raw, BuiltinCamera.exifOrientation())
         if (bytes == null || bytes.isEmpty()) { return false }
         val ctx = appCtx ?: return false
         if (album.isEmpty()) { begin("tlp") }

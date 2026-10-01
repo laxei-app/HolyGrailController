@@ -165,7 +165,11 @@ namespace rawStack
 		ifd.push_back(eAscii(271, info.maker));					// Make
 		ifd.push_back(eAscii(272, info.model));					// Model
 		ifd.push_back(eLong(273, 0));							// StripOffsets(後で入れる)
-		ifd.push_back(eShort(274, 1));							// Orientation
+		{
+			// 入っていない/範囲外のときは 1(そのまま)。読む側が困る値を書かない。
+			const int o = (info.orientation >= 1 && info.orientation <= 8) ? info.orientation : 1;
+			ifd.push_back(eShort(274, static_cast<uint16_t>(o)));	// Orientation
+		}
 		ifd.push_back(eShort(277, 1));							// SamplesPerPixel
 		ifd.push_back(eLong(278, static_cast<uint32_t>(h)));	// RowsPerStrip = 全部で1枚
 		ifd.push_back(eLong(279, static_cast<uint32_t>(w) * h * 2));	// StripByteCounts

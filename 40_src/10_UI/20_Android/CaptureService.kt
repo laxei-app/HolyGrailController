@@ -40,6 +40,37 @@ class CaptureService : Service() {
     companion object {
         const val ACTION_STOP_ALL = "app.laxei.twylapse.action.STOP_ALL"
         private const val CHANNEL_ID = "capture"
+
+        // 【消せる通知を外から出す(2026-10-01 ユーザー指示)】
+        //  保存先の空きが尽きたときの知らせは Toast だけでは届かない。
+        //  撮影は一晩動くので、**朝まで残る形**でないと気づけない。
+        //  チャネルは前面サービスと同じものを使う(増やすと設定が煩雑になる)。
+        @JvmStatic
+        fun postAlert(ctx: android.content.Context, title: String, body: String) {
+            runCatching {
+                val nm = ctx.getSystemService(NotificationManager::class.java) ?: return
+                if (android.os.Build.VERSION.SDK_INT >= 26 &&
+                    nm.getNotificationChannel(CHANNEL_ID) == null) {
+                    // 撮影が始まる前に出すこともあるので、無ければここで作る。
+                    val ch = NotificationChannel(CHANNEL_ID, ctx.getString(R.string.fgs_shooting),
+                                                 NotificationManager.IMPORTANCE_LOW)
+                    ch.description = ctx.getString(R.string.fgs_channel_desc)
+                    nm.createNotificationChannel(ch)
+                }
+                val open = PendingIntent.getActivity(ctx, 3,
+                    Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+                val n = androidx.core.app.NotificationCompat.Builder(ctx, CHANNEL_ID)
+                    .setSmallIcon(R.drawable.ic_note_capture)
+                    .setContentTitle(title)
+                    .setContentText(body)
+                    .setStyle(androidx.core.app.NotificationCompat.BigTextStyle().bigText(body))
+                    .setContentIntent(open)
+                    .setAutoCancel(true)
+                    .build()
+                nm.notify(NOTE_ID + 2, n)
+            }
+        }
         private const val NOTE_ID = 4801
         private const val EXTRA_LINES = "lines"
         private const val EXTRA_CAMERA = "camera"   // 内蔵カメラで撮っている撮影が含まれるか

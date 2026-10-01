@@ -922,4 +922,10 @@ The plans you made and the cameras you added are still there.</string>
     <string name="theme_system">Match the phone</string>
     <string name="theme_light">Light</string>
     <string name="theme_dark">Dark</string>
+    <string name="storage_full">Not enough free space to start. %1$d MB more is needed. Turning off DNG in the output settings frees up the most.</string>
+    <string name="storage_low_dng">Running low on space, so DNG files are no longer saved. The shoot continues.</string>
+    <string name="storage_low_jpg">Running low on space, so still images are no longer saved. The video keeps recording.</string>
+    <string name="storage_stopped">The shoot ended because the phone ran out of free space. The video recorded up to that point has been saved.</string>
+    <string name="storage_note_stop">Not enough free space</string>
+    <string name="storage_note_low">Running low on free space</string>
 </resources>

@@ -486,6 +486,20 @@ errCode apiBuiltin::setupShootingModeManual(void)
 	//  1コマ目として動画と jpg に入る**(実機で確認。以降の番号も1つずれる)。
 	builtinCam::sessionBegin();
 	rawStack::noiseReset();
+	// 【保存先の空きを先に見る(2026-10-01 ユーザ指示)】出力設定を決めてから
+	//  見積もりたいので、先に videoOpt_ を解きつける(下でもう一度使う)。
+	stopAsking_ = false; pendingNotice_ = 0; pendingN1_ = 0;
+	videoFailStreak_ = 0; storageWarned_ = false;
+	{
+		hgc::videoSet vs0;
+		if (!videoOpt_.empty() && csjson::videoFromJson(videoOpt_, vs0)) { out_ = vs0; }
+		if (!this->checkStorageBeforeStart())
+		{
+			// 足りない。**何も開かずに戻る** — 半端なファイルを残さない。
+			//  撮影ループは最初の周で takeDeviceNotice を見て終わる。
+			return ERR_HGC_OK;
+		}
+	}
 	focusChecked_ = false;
 	worstOk_ = false;
 	// 【動画をここで開く(2026-09-05)】撮影の区切りと動画の区切りを一致させる。
@@ -555,6 +569,125 @@ void apiBuiltin::checkFocus(void)
 	if (!(fn > 0.0)) { fn = apertures_.empty() ? 0.0 : apertures_.front(); }
 	const std::string rep = builtinCam::focusProbe(meterSec_, static_cast<int>(meterIso_ + 0.5), fn);
 	if (!rep.empty()) { dataManager::logEvent("CAMERA", ("builtin " + rep).c_str()); }
+}
+
+// ── 保存先の空き(2026-10-01 ユーザ指示) ──────────────────────────
+//
+// 1コマあたりの見積もり。画素数から出すので、端末が変わってもそのまま使える。
+//  動画 : 画素数 × 品質(bit/画素) ÷ 8。品質の値は BuiltinVideo.kBpp と**揃えてある**。
+//  jpg  : 現像結果(カメラの1/2)。実測でおよそ 0.33 バイト/画素(2040×1536 で 1.0MB)。
+//  DNG  : 束ねる前のフルサイズの 16 ビット生データ。画素数 × 2 + ヘッダ。
+void apiBuiltin::estimatePerShot(long long& video, long long& jpg, long long& dng) const
+{
+	video = 0; jpg = 0; dng = 0;
+	double wmm = 0.0, hmm = 0.0;
+	uint32_t pw = 0, ph = 0;
+	if (const_cast<apiBuiltin*>(this)->readSensorSpec(wmm, hmm, pw, ph) != ERR_HGC_OK) { return; }
+	if (pw == 0 || ph == 0) { return; }
+	// 保存する画像は 2×2 束ねたもの(カメラの1/2)。
+	const long long halfPx = static_cast<long long>(pw / 2) * static_cast<long long>(ph / 2);
+	if (out_.make)
+	{
+		// 大きさ: 0=保存した画像そのまま / 1=1920x1440 / 2=1920x1080
+		long long px = halfPx;
+		if (out_.size == 1) { px = 1920LL * 1440; }
+		else if (out_.size == 2) { px = 1920LL * 1080; }
+		static const double kBpp[3] = { 0.20, 0.50, 1.20 };
+		const int q = (out_.quality <= 2) ? out_.quality : 2;
+		video = static_cast<long long>(static_cast<double>(px) * kBpp[q] / 8.0);
+	}
+	if (out_.jpg) { jpg = static_cast<long long>(static_cast<double>(halfPx) * 0.33); }
+	if (out_.dng && rawOk_)
+	{
+		dng = static_cast<long long>(pw) * static_cast<long long>(ph) * 2 + (1LL << 20);
+	}
+}
+
+// 始める前に足りるか見る。足りなければ false(撮影は始まらない)。
+//
+// 【始める前に言うのが要】始めてから「空きがありません」では遅い。夜を一つ損ねる。
+//  コマ数と出力設定から必要量は正確に出せるので、出発前に判る。
+bool apiBuiltin::checkStorageBeforeStart(void)
+{
+	const long long freeB = builtinCam::storageFreeBytes();
+	if (freeB < 0) { return true; }		// 測れない端末では止めない
+	if (plannedShots_ <= 0) { return true; }	// コマ数が分からなければ判らない
+
+	long long v = 0, j = 0, d = 0;
+	this->estimatePerShot(v, j, d);
+	const long long shots = plannedShots_;
+	// 動画は**2倍**見る。区切りの作り直しで、完成品と同じ量が瞬間的にもう一つ要る。
+	const long long need = shots * v * 2 + shots * j + shots * d + kStorageReserve;
+	{
+		char b[220];
+		std::snprintf(b, sizeof(b),
+		              "storage: free %lldMB, need %lldMB for %lld shots "
+		              "(video %lldKB + jpg %lldKB + dng %lldKB per shot)",
+		              freeB >> 20, need >> 20, shots, v >> 10, j >> 10, d >> 10);
+		dataManager::logEvent("CAMERA", b, need > freeB);
+	}
+	if (need <= freeB) { return true; }
+
+	// 足りない。あとどれだけ要るかを添えて伝える(利用者が手を打てるように)。
+	pendingNotice_ = static_cast<int>(hgc::notice::phoneStorageFull);
+	pendingN1_     = (need - freeB) >> 20;		// 不足[MB]
+	stopAsking_    = true;
+	return false;
+}
+
+// 毎コマ見張る。減っていたら DNG → jpg の順に諸め、動画も書けなくなったら終わる。
+void apiBuiltin::watchStorage(void)
+{
+	if (stopAsking_) { return; }
+	const long long freeB = builtinCam::storageFreeBytes();
+	if (freeB < 0) { return; }		// 測れない端末では見張らない
+
+	// 常に残しておく量 = いまの動画の大きさ(作り直し用) + 予備。
+	const long long keep = builtinCam::videoBytes() + kStorageReserve;
+	long long v = 0, j = 0, d = 0;
+	this->estimatePerShot(v, j, d);
+
+	int reduced = 0;		// 1 = DNG を止めた / 2 = jpg も止めた
+	if (out_.dng && freeB < keep + d)
+	{
+		out_.dng = false;
+		builtinCam::setWantDng(false);
+		reduced = 1;
+		dataManager::logEvent("CAMERA", "storage low: stopped writing DNG", true);
+	}
+	// 空きはこのコマでは変わらないので、極端に少なければ 1 コマで両方止まる。
+	if (out_.jpg && freeB < keep + j)
+	{
+		out_.jpg = false;
+		reduced = 2;
+		dataManager::logEvent("CAMERA", "storage low: stopped writing jpg", true);
+	}
+	if (reduced != 0 && pendingNotice_ == 0)
+	{
+		pendingNotice_ = static_cast<int>(hgc::notice::phoneStorageReduced);
+		pendingN1_     = reduced;
+	}
+	if (freeB < keep)
+	{
+		// 動画を作り直す余地が無い。これ以上続けても**残したい動画を壊すだけ**。
+		char b[160];
+		std::snprintf(b, sizeof(b), "storage exhausted: free %lldMB < keep %lldMB. stopping",
+		              freeB >> 20, keep >> 20);
+		dataManager::logEvent("CAMERA", b, true);
+		pendingNotice_ = static_cast<int>(hgc::notice::phoneStorageStopped);
+		pendingN1_     = 0;
+		stopAsking_    = true;
+	}
+}
+
+// 端末から利用者へ伝えたいことを渡す。渡したら消す(同じことを毎コマ言わない)。
+int apiBuiltin::takeDeviceNotice(long long& n1, bool& stop)
+{
+	stop = stopAsking_;		// stop は消さない(終わるまで true のまま)
+	const int c = pendingNotice_;
+	n1 = pendingN1_;
+	pendingNotice_ = 0; pendingN1_ = 0;
+	return c;
 }
 
 errCode apiBuiltin::restoreShootingMode(void)
@@ -665,10 +798,29 @@ void apiBuiltin::collectPending(void)
 			dataManager::logEvent("CAMERA",
 				("builtin: wanted physical " + id_ + " but got " + act).c_str(), true);
 		}
+		// 【書く前に空きを見る(2026-10-01 ユーザ指示)】減っていたら輕い方から諸める。
+		//  StatFs は数 ms 。周期は 15 秒以上あるので毎コマ見ても差し支えない。
+		this->watchStorage();
 		this->saveShot(jpeg);
 		this->takeNoise();	// 画質の目安(測れている回だけ。数コマに1度)
 		// 受け取ったその場で動画へ1コマ足す。周期が15秒以上あるので符号化は間に合う。
-		builtinCam::videoAddJpeg(jpeg);
+		// 【書けないのが続いたら終える(2026-10-01 ユーザ指示)】空きがあるのに書けないのは
+		//  別の異常(保存先の不調・権限の変化・ファイルシステムのエラー)で、続けても直らない。
+		//  カメラを回し続けて電池を使うだけになるので、終わる。
+		//  動画を作らない設定のときは false が返るので**数えない**。
+		{
+			const bool vok = builtinCam::videoAddJpeg(jpeg);
+			if (!out_.make || stopAsking_) { videoFailStreak_ = 0; }
+			else if (vok) { videoFailStreak_ = 0; }
+			else if (++videoFailStreak_ >= kMaxVideoFailStreak)
+			{
+				dataManager::logEvent("CAMERA",
+					"video write failed 3 times in a row. stopping the capture", true);
+				pendingNotice_ = static_cast<int>(hgc::notice::phoneStorageStopped);
+				pendingN1_     = 0;
+				stopAsking_    = true;
+			}
+		}
 		lastJpeg_.swap(jpeg);
 	}
 }
@@ -706,8 +858,14 @@ void apiBuiltin::saveShot(const std::vector<uint8_t>& jpeg)
 	if (!out_.jpg && !(out_.dng && rawOk_)) { return; }
 	if (out_.jpg && !builtinCam::stillSaveJpeg(jpeg))
 	{
-		// 書けないときは残量不足が疑わしい。毎コマ言っても仕方ないので最初の1回だけ。
-		if (shotSeq_ == 0) { dataManager::logEvent("CAMERA", "builtin: cannot save shot", true); }
+		// 書けないときは残量不足が疑わしい。毎コマ言っても仕方ないので 1 回だけ。
+		//  【「最初のコマだけ」をやめた(2026-10-01)】空きが尽きるのは夜中なので、
+		//   shotSeq_==0 では**一番知りたい場面で何も残らない**。
+		if (!storageWarned_)
+		{
+			storageWarned_ = true;
+			dataManager::logEvent("CAMERA", "builtin: cannot save shot", true);
+		}
 	}
 	++shotSeq_;
 	builtinCam::stillNextFrame();

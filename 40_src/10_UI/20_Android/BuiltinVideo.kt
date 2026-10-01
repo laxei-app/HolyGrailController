@@ -128,10 +128,22 @@ object BuiltinVideo {
     private var argb: IntArray? = null
     private var scaled: Bitmap? = null
     private var sizeFixed = true		// 大きさが決まっているか(カメラの1/2 は最初のコマで決まる)
+    // 再生時に回す角度。1回の撮影で一定(途中で変えると切れ端と完成品で食い違う)。
+    private var rotation = 0
     private var pendingOpen = false		// 大きさが決まるまで符号化器を開かずに待っている
 
     @JvmStatic
     fun isOpen(): Boolean = codec != null
+
+    // 【いまの完成品の大きさ[バイト](2026-10-01 ユーザ指示)】
+    //  区切りのたびに「完成品+切れ端 → 新しい完成品」を作り直すので、
+    //  **その瞬間だけ完成品と同じ大きさの空きがもう一つ要る**。
+    //  ここを見誤ると、作り直しに失敗して**一番残したい動画が途中で止まる**。
+    @JvmStatic
+    fun fullBytes(): Long = try {
+        (fullFile?.takeIf { it.exists() }?.length() ?: 0L) +
+        (segFile?.takeIf { it.exists() }?.length() ?: 0L)
+    } catch (e: Exception) { 0L }
 
     // 書き出しを始める。optJson = 計画の動画設定(空なら既定)。戻り=ギャラリーでの名前("" =失敗)。
     @JvmStatic
@@ -164,6 +176,7 @@ object BuiltinVideo {
         fullFile = File(dir, displayName)
         segFile  = File(dir, "seg_$displayName")
         fullFrames = 0; publishedUri = null
+        rotation = BuiltinCamera.imageRotation()
         // 1回の撮影ごとに見張りをやり直す(学習したビットレートも持ち越さない)。
         rcBitrate = 0; rcWanted = 0; encMax = 0
         sizes.clear(); starveRun = 0; raises = 0
@@ -270,6 +283,11 @@ object BuiltinVideo {
             Log.i("TLP-VID", "encoder ${c.name} ${outW}x$outH q$quality " +
                              "${rcBitrate / 1000}kbit/frame (max ${encMax / 1000}k) rcFps=$kRcFps")
             muxer = MediaMuxer(seg.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            // 【撮った向き(2026-10-01 ユーザ指示)】画素はセンサーから出たままで、
+            //  「再生時にこれだけ回す」を MP4 の中身に書く。スマホの縦動画と同じやり方。
+            //  画素を実際に回さないのは、再符号化で画質を落とさず、縦向きでも符号化器の
+            //  得意な大きさ(横長)のまま扱えるため。
+            runCatching { muxer?.setOrientationHint(rotation) }
             track = -1; started = false; segFrames = 0
             segStartMs = System.currentTimeMillis()
             return true
@@ -373,6 +391,7 @@ object BuiltinVideo {
         try {
             runCatching { out.delete() }
             mux = MediaMuxer(out.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+            runCatching { mux.setOrientationHint(rotation) }   // 完成品にも同じ向きを
             for (f in inputs) {
                 val ex = MediaExtractor()
                 FileInputStream(f).use { fis -> ex.setDataSource(fis.fd) }

@@ -902,4 +902,10 @@
     <string name="theme_system">端末に合わせる</string>
     <string name="theme_light">明るい</string>
     <string name="theme_dark">暗い</string>
+    <string name="storage_full">端末の空き容量が足りないため撮影を始められません。あと %1$d MB 必要です。出力設定で DNG を外すと大きく減らせます。</string>
+    <string name="storage_low_dng">空き容量が減ったため DNG の保存をやめました。撮影は続けています。</string>
+    <string name="storage_low_jpg">空き容量が減ったため静止画の保存をやめました。動画の撮影は続けています。</string>
+    <string name="storage_stopped">端末の空き容量がなくなったため撮影を終了しました。そこまでの動画は保存されています。</string>
+    <string name="storage_note_stop">保存先の空きが足りません</string>
+    <string name="storage_note_low">保存先の空きが減っています</string>
 </resources>
