@@ -123,6 +123,10 @@ object BuiltinVideo {
     private fun safeName(s: String): String =
         s.replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001f]"), "_").trim().ifEmpty { "tlp" }
     private var publishedUri: Uri? = null   // ギャラリーに出してある完成品(API 29+)
+    // 【片付けてよいかの印(2026-10-01 ユーザー指示)】
+    //  ギャラリーへ出せているときだけ作業領域の完成品を消す。
+    //  出せていないのに消すと、**その夜の成果物が世の中から消える**。
+    private var publishedOk = false
 
     // 作業用。毎コマ確保し直すと 1920x1440 で 11MB を掴んでは捨てることになる。
     private var argb: IntArray? = null
@@ -175,8 +179,9 @@ object BuiltinVideo {
         workDir  = dir
         fullFile = File(dir, displayName)
         segFile  = File(dir, "seg_$displayName")
-        fullFrames = 0; publishedUri = null
+        fullFrames = 0; publishedUri = null; publishedOk = false
         rotation = BuiltinCamera.imageRotation()
+        sweepOldWork(dir)   // 前回までの残骸をここで片付ける
         // 1回の撮影ごとに見張りをやり直す(学習したビットレートも持ち越さない)。
         rcBitrate = 0; rcWanted = 0; encMax = 0
         sizes.clear(); starveRun = 0; raises = 0
@@ -219,7 +224,41 @@ object BuiltinVideo {
         argb = null
         try { scaled?.recycle() } catch (_: Exception) {}
         scaled = null
+        // 【作業領域を空にする(2026-10-01 ユーザー指示)】
+        //  完成品はギャラリー(Movies/TwyLapse)へ出してあるので、こちらは控え。
+        //  残しておくと撮影のたびに積み上がり(実測 1.2GB)、**自動バックアップの
+        //  25MB の枠を超えて、計画も設定もまとめて保存されなくなる**。
+        //  【出せていないときは残す】唯一の成果物なので、消したらその夜が消える。
+        //  次の撮影の sweepOldWork が、十分古くなってから片付ける。
+        if (publishedOk) {
+            runCatching { fullFile?.delete() }
+            runCatching { segFile?.delete() }
+        } else if (out.isNotEmpty()) {
+            Log.w("TLP-VID", "keeping the work file: not published yet")
+        }
         return out
+    }
+
+    // 【残骸を片付ける(2026-10-01 ユーザー指示)】電池切れや異常終了で、片付けられないまま
+    //  残った作業ファイルが積み上がる。撮影を始めるときに、十分古いものを落とす。
+    //
+    //  【なぜ「古いもの」だけか】この置き場は**複数の撮影で共有する**(2台同時・
+    //  パノラマ)。今書いている他のセッションのファイルを消してはいけない。
+    //  書き続けているファイルは更新時刻が新しいので、そこで見分ける。
+    private const val kWorkKeepMs = 2L * 24 * 60 * 60 * 1000   // 2 日
+    private fun sweepOldWork(dir: File) {
+        runCatching {
+            val limit = System.currentTimeMillis() - kWorkKeepMs
+            var n = 0
+            var bytes = 0L
+            dir.listFiles()?.forEach { f ->
+                if (f.isFile && f.name.endsWith(".mp4", true) && f.lastModified() < limit) {
+                    bytes += f.length()
+                    if (f.delete()) { ++n }
+                }
+            }
+            if (n > 0) { Log.i("TLP-VID", "swept $n old work files (${bytes / (1024 * 1024)}MB)") }
+        }
     }
 
     // ── 区切り ──────────────────────────────────────────────
@@ -455,6 +494,7 @@ object BuiltinVideo {
                 }
                 cr.update(uri, done, null, null)
                 publishedUri = uri
+                publishedOk = true
             } else {
                 val dir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
                                "TwyLapse").apply { mkdirs() }
@@ -463,6 +503,7 @@ object BuiltinVideo {
                 full.inputStream().use { i -> tmp.outputStream().use { o -> i.copyTo(o) } }
                 tmp.renameTo(dst)
                 MediaScannerConnection.scanFile(ctx, arrayOf(dst.absolutePath), arrayOf("video/mp4"), null)
+                publishedOk = true
             }
         } catch (e: Exception) {
             android.util.Log.w("HGC", "video: publish failed: " + e)

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 【自動バックアップから外すもの(2026-10-01 ユーザー指示)】Android 11 以前が見る規則。
+     Android 12 以降は data_extraction_rules.xml を見る。**両方に同じことを書くこと**。
+
+     【なぜ外すか】自動バックアップは **1 アプリ 25MB まで**で、超えるとそのアプリの
+     バックアップが丸ごと失敗する。しかも getExternalFilesDir 配下も枠に含まれる。
+     動画の作業領域(shot)は実測で 1.2GB まで育っていたので、このままでは
+     **撮影計画も設定もまとめて保存されない**。
+
+     ・shot = 動画の作業領域。完成品は Movies/TwyLapse へ出してあるので移す必要が無い
+     ・log  = 撮影ログ。端末ごとの記録で、機種を変えたら意味が無い
+
+     外さないもの: plan(撮影計画) / master(機材) / asset(phoneId など)。これらは
+     機種変更で引き継がれないと困る。合わせても 300KB 程度。 -->
+<full-backup-content>
+    <exclude domain="external" path="shot" />
+    <exclude domain="external" path="log" />
+</full-backup-content>

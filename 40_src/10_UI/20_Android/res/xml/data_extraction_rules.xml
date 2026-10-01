@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 【自動バックアップから外すもの(2026-10-01 ユーザー指示)】Android 12 以降が見る規則。
+     Android 11 以前は backup_rules.xml を見る。**両方に同じことを書くこと**。
+     理由は backup_rules.xml のコメントを参照。
+
+     cloud-backup   = Google ドライブ経由(25MB の上限がある)
+     device-transfer = 端末から端末への直接転送(上限は無いが、移して意味のある物だけ運ぶ) -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="external" path="shot" />
+        <exclude domain="external" path="log" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="external" path="shot" />
+        <exclude domain="external" path="log" />
+    </device-transfer>
+</data-extraction-rules>
