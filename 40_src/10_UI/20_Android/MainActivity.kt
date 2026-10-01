@@ -1082,6 +1082,44 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.addView(thinDivider())
     }
 
+    // 【選びを横に並べてタップで切り替える(2026-10-01 ユーザー指示)】
+    //  選択肢が少ないものは、ドロップダウンを開くより**全部見えていて押すだけ**の方が速い。
+    //  選ばれているものは塗りつぶし、それ以外は枠だけにして「押せるが選ばれていない」と見せる。
+    //  【横に入らないときは折り返す】言語によって長さが違うので、横幅を超えたら
+    //  次の行へ回る(切れて読めなくならないように)。
+    private fun gearChoiceItem(box: LinearLayout, title: String, entries: List<String>,
+                               selected: Int, onSelect: (Int) -> Unit) {
+        val outer = LinearLayout(this)
+        outer.orientation = LinearLayout.VERTICAL
+        outer.setPadding(dp(28), dp(6), dp(12), dp(8))
+        val tv = TextView(this)
+        tv.text = title; tv.textSize = 16f; tv.setTextColor(getColor(R.color.tc_text))
+        outer.addView(tv)
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.setPadding(0, dp(6), 0, 0)
+        entries.forEachIndexed { i, label ->
+            val t = TextView(this)
+            t.text = label
+            t.textSize = 15f
+            t.gravity = android.view.Gravity.CENTER
+            t.setPadding(dp(8), dp(7), dp(8), dp(7))
+            val on = (i == selected)
+            t.setBackgroundResource(if (on) R.drawable.seg_on else R.drawable.seg_off)
+            t.setTextColor(if (on) Color.WHITE else getColor(R.color.tc_text_sub))
+            // 均等割り。言語で文字数が違っても幅は変わらず、
+            //  入りきらなければ TextView が折り返す(切れて読めなくならない)。
+            val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            lp.setMargins(if (i == 0) 0 else dp(6), 0, 0, 0)
+            t.layoutParams = lp
+            if (!on) { t.setOnClickListener { onSelect(i) } }
+            row.addView(t)
+        }
+        outer.addView(row)
+        box.addView(outer)
+        box.addView(thinDivider())
+    }
+
     // --- スマホ⇄エッジの通信路(BLE か Wi-Fi か)。スマホだけが決める ---
     // 【既定は BLE(2026-09-26 ユーザー判断)】APモードの外部端末を Wi-Fi で相手にすると、
     //  スマホがその端末のAPへ入る必要があり、SSIDの切り替えが要るうえ**1台ずつ**しか扱えず、
@@ -1172,7 +1210,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  覚えるのは AppCompat に任せるので、ここは選んで渡すだけ。
         //  選ぶと Activity が作り直されるので、後始末は要らない。
         // 【明暗(2026-10-01 依頼)】夜に白い画面はまぶしい。既定は端末に合わせる。
-        gearSpinnerItem(box, s(R.string.menu_theme),
+        gearChoiceItem(box, s(R.string.menu_theme),
             listOf(s(R.string.theme_system), s(R.string.theme_light), s(R.string.theme_dark)),
             when (Loc.themeMode(this)) { "light" -> 1; "dark" -> 2; else -> 0 }) { i ->
             val v = when (i) { 1 -> "light"; 2 -> "dark"; else -> Loc.THEME_SYSTEM }

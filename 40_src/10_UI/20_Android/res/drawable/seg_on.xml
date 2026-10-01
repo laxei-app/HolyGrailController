@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 選択肢を横に並べてタップで選ぶ「帯」(2026-10-01 ユーザー指示)。選ばれている方。
+     色は明暗で入れ替わるリソースを使う(値を直に書かない)。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/tc_link" />
+    <corners android:radius="100dp" />
+</shape>
