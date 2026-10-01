@@ -94,6 +94,38 @@ namespace {
 		return true;
 	}
 
+	// 【逆投影(2026-10-01 依頼)】画面の点 nx,ny∈[-1,1] → その向き(東,北,上)。
+	//  背景の全天画像を貼るために使う。project() と**同じ式を逆に解いている** —
+	//  片方だけ直すと星と背景がずれるので、必ず対で直すこと。
+	//   平面レンズ: X = nx·tan(fovW/2), Y = ny·tan(fovH/2) 、 向き = X·r + Y·u + b を正規化
+	//   魚眼(等距離): θ = |(nx·fovW/2, ny·fovH/2)| 、 向き = sinθ·(その単位方向) + cosθ·b
+	Vec3 unproject(double nx, double ny, double camAz, double camEl,
+	               double fovW, double fovH, bool fisheye) {
+		Vec3 b = dirFromAzAlt(camAz, camEl);
+		Vec3 r = { std::cos(camAz * RAD), -std::sin(camAz * RAD), 0.0 };
+		Vec3 u = cross(r, b);
+		double xc, yc, zc;
+		if (!fisheye) {
+			xc = nx * std::tan(fovW / 2.0);
+			yc = ny * std::tan(fovH / 2.0);
+			zc = 1.0;
+		} else {
+			double A = nx * (fovW / 2.0), B = ny * (fovH / 2.0);
+			double th = std::sqrt(A * A + B * B);
+			if (th < 1e-12) { xc = 0.0; yc = 0.0; zc = 1.0; }
+			else {
+				double sn = std::sin(th) / th;
+				xc = A * sn; yc = B * sn; zc = std::cos(th);
+			}
+		}
+		Vec3 d = { xc * r.x + yc * u.x + zc * b.x,
+		           xc * r.y + yc * u.y + zc * b.y,
+		           xc * r.z + yc * u.z + zc * b.z };
+		double n = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+		if (n < 1e-12) { return b; }
+		return { d.x / n, d.y / n, d.z / n };
+	}
+
 	// ローカル日時 → Astronomy Engine の時刻(真のUTC瞬時)
 	astro_time_t makeUtc(int y, int mo, int d, int h, int mi, int s, int offMin) {
 		astro_time_t t = Astronomy_MakeTime(y, mo, d, h, mi, static_cast<double>(s));
@@ -289,7 +321,42 @@ int32_t hge_simulateSky(const char* paramsJson, char* buf, int32_t* inoutLen) {
 			}
 		}
 
+		// 【背景の全天画像用の格子(2026-10-01 依頼)】
+		//  画面を粗く区切った各点が**銀河座標でどこを向いているか**を返す。
+		//  描画側はこれを画像のUVに直して、格子ごとに歪ませて貼る。
+		//
+		//  【なぜ絵そのものをここで作らないか】共通部は外部端末(ESP32)でもビルドされる。
+		//  JPEG の読み込みや画素の扱いをここに入れると、使わない端末に積むことになる。
+		//  描画はそれぞれの環境の得意な仕事(Android=drawBitmapMesh / iOS=Core Graphics)に任せる。
+		//  ここが返すのは**環境に依らない数字だけ**。iPhone を作るときもこのまま使える。
+		json bg = json::array();
+		int bgN = 0;
+		{
+			astro_rotation_t horEqj = Astronomy_Rotation_HOR_EQJ(&t, obs);
+			astro_rotation_t eqjGal = Astronomy_Rotation_EQJ_GAL();
+			astro_rotation_t horGal = Astronomy_CombineRotation(horEqj, eqjGal);
+			// 魚眼は端ほど曲がるので細かく。平面レンズは粗くてよい。
+			bgN = fisheye ? 33 : 17;
+			for (int iy = 0; iy < bgN; ++iy) {
+				double ny = -1.0 + 2.0 * iy / (bgN - 1);
+				for (int ix = 0; ix < bgN; ++ix) {
+					double nx = -1.0 + 2.0 * ix / (bgN - 1);
+					Vec3 d = unproject(nx, ny, camAz, camEl, fovW, fovH, fisheye);
+					// (東,北,上) → Astronomy の水平座標(x=北, y=西, z=天頂)
+					astro_vector_t v;
+					v.status = ASTRO_SUCCESS; v.t = t;
+					v.x = d.y; v.y = -d.x; v.z = d.z;
+					astro_vector_t g = Astronomy_RotateVector(horGal, v);
+					double lon = std::atan2(g.y, g.x) / RAD;		// 銀河経[°] (-180..180)
+					double latg = std::asin(g.z > 1.0 ? 1.0 : (g.z < -1.0 ? -1.0 : g.z)) / RAD;
+					bg.push_back({ {"l", lon}, {"b", latg} });
+				}
+			}
+		}
+
 		json out;
+		out["bgGrid"]    = bg;		// 背景画像を貼るための格子(銀河座標)
+		out["bgN"]       = bgN;		// 一辺の点数(bgN × bgN)
 		out["horizon"]   = horizon;
 		out["objects"]   = objs;
 		out["aspect"]    = fw / (fh > 0.0 ? fh : 1.0);

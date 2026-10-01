@@ -48,6 +48,14 @@ class SkyRenderView(context: Context) : View(context) {
     //  平面レンズなら直線に、魚眼なら弧になる(2026-08-30 UI依頼)。空なら従来の直線で描く。
     private var horizon: List<Pair<Float, Float>> = emptyList()
     private val magLimit = 6.5f
+    // 背景(全天写真)を貼るための格子。ネイティブが返す銀河座標[°]。
+    //  bgN × bgN の点を、画面左下から右上へ並べたもの。
+    private var bgL = FloatArray(0)
+    private var bgB = FloatArray(0)
+    private var bgN = 0
+    private val bgPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    private var bgVerts = FloatArray(0)
+    private var bgTexs = FloatArray(0)
 
     private val sky = Paint()
     private val ground = Paint()
@@ -64,9 +72,11 @@ class SkyRenderView(context: Context) : View(context) {
     private fun sp(v: Float) = v * resources.displayMetrics.scaledDensity
 
     internal fun setData(list: List<SkyObj>, asp: Float, sunAltDeg: Float, elDeg: Float, fovVDeg: Float,
-                         hz: List<Pair<Float, Float>> = emptyList()) {
+                         hz: List<Pair<Float, Float>> = emptyList(),
+                         gl: FloatArray = FloatArray(0), gb: FloatArray = FloatArray(0), gn: Int = 0) {
         objs = list
         horizon = hz
+        bgL = gl; bgB = gb; bgN = gn
         var flipped = false
         if (asp > 0f) {
             val wasLandscape = aspect >= 1f
@@ -140,6 +150,8 @@ class SkyRenderView(context: Context) : View(context) {
                     else          lerp(0xFF6E7FA8.toInt(), 0xFF6FB3E8.toInt(), (d - 0.5f) / 0.5f)  // → 青空
         c.drawRect(r, sky)
 
+        drawSkyBackground(c, r, d)   // 全天写真を地に敷く(空のあと、地面の前)
+
         // 地面(草原): 夜=黒 → 明るくなると緑。
         ground.color = lerp(0xFF000000.toInt(), 0xFF3E7B3A.toInt(), d)   // 黒 → 草原の緑
         if (horizon.size >= 2) {
@@ -203,6 +215,78 @@ class SkyRenderView(context: Context) : View(context) {
         if (objs.isEmpty()) {
             c.drawText(context.getString(R.string.sim_empty), r.centerX(), r.centerY(), empty)
         }
+    }
+
+    // 格子ごとに三角形2枚で全天写真を貼る。
+    //  drawBitmapMesh では**逆向き**で使えない(あれは「画像の格子→画面」)ので、
+    //  「画面の格子→画像」をそのまま渡せる drawVertices を使う。**1回の描画**で済む。
+    //
+    // 【継ぎ目(銀河経 180°)の扱い】セルの4隅で u が 0.9 と 0.1 のように分かれると、
+    //  そのセルだけ画像を横断して帯が流れる。セルごとに基準を決めて ±1.0 ずらし、
+    //  横を REPEAT にしてつなげる。そのため頂点は**セルごとに独立**させている。
+    private fun drawSkyBackground(c: Canvas, r: RectF, d: Float) {
+        val n = bgN
+        if (n < 2 || bgL.size < n * n) return
+        val sh = SkyBackground.shader(context) ?: return
+        val sw = SkyBackground.width().toFloat()
+        val shh = SkyBackground.height().toFloat()
+        if (sw <= 0f || shh <= 0f) return
+
+        val cells = (n - 1) * (n - 1)
+        val need = cells * 6 * 2
+        if (bgVerts.size != need) { bgVerts = FloatArray(need); bgTexs = FloatArray(need) }
+
+        fun sx(i: Int) = r.left + (i.toFloat() / (n - 1)) * r.width()
+        fun sy(j: Int) = r.top + (1f - j.toFloat() / (n - 1)) * r.height()   // y上+ → 画面は下向き
+        fun uOf(k: Int) = 0.5f - bgL[k] / 360f
+        fun vOf(k: Int) = 0.5f - bgB[k] / 180f
+
+        var p = 0
+        for (j in 0 until n - 1) {
+            for (i in 0 until n - 1) {
+                val k00 = j * n + i; val k10 = j * n + i + 1
+                val k01 = (j + 1) * n + i; val k11 = (j + 1) * n + i + 1
+                val u0 = uOf(k00)
+                // セル内で u をつなげる(基準から ±0.5 を超えたら一周ずらす)
+                fun uw(k: Int): Float {
+                    var u = uOf(k)
+                    while (u - u0 > 0.5f) u -= 1f
+                    while (u - u0 < -0.5f) u += 1f
+                    return u
+                }
+                val xs = floatArrayOf(sx(i), sx(i + 1), sx(i), sx(i + 1))
+                val ys = floatArrayOf(sy(j), sy(j), sy(j + 1), sy(j + 1))
+                val us = floatArrayOf(u0, uw(k10), uw(k01), uw(k11))
+                val vs = floatArrayOf(vOf(k00), vOf(k10), vOf(k01), vOf(k11))
+                //  三角形 (0,1,2) と (1,3,2)
+                val order = intArrayOf(0, 1, 2, 1, 3, 2)
+                for (q in order) {
+                    bgVerts[p] = xs[q]; bgTexs[p] = us[q] * sw; p++
+                    bgVerts[p] = ys[q]; bgTexs[p] = vs[q] * shh; p++
+                }
+            }
+        }
+
+        //  星の点と同じ見え方にする: 明るいときはほぼ消す。
+        val a = ((1f - d * 0.9f) * 255f).toInt().coerceIn(0, 255)
+        if (a <= 0) return
+        bgPaint.shader = sh
+        bgPaint.alpha = a
+        c.save()
+        c.clipRect(r)
+        try {
+            c.drawVertices(Canvas.VertexMode.TRIANGLES, bgVerts.size, bgVerts, 0,
+                           bgTexs, 0, null, 0, null, 0, 0, bgPaint)
+        } catch (_: Exception) {
+            // 描けなくても星は出る。背景が無いだけ。
+        }
+        c.restore()
+        bgPaint.shader = null
+    }
+
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        SkyBackground.release()     // 16MB ほど持つので、画面を離れたら放す
     }
 
     private fun magToR(mag: Float): Float {
@@ -558,12 +642,25 @@ class SimPage(
             val hz = ArrayList<Pair<Float, Float>>()
             var asp = 1.5f
             var sunAlt = -90f; var elDeg = elNow.toFloat(); var fovVDeg = 50f
+            var bgl = FloatArray(0); var bgb = FloatArray(0); var bgn = 0
             try {
                 val o = JSONObject(res)
                 asp = o.optDouble("aspect", 1.5).toFloat()
                 sunAlt = o.optDouble("sunAlt", -90.0).toFloat()      // 空/地面の色に使う
                 elDeg = o.optDouble("camEl", elNow).toFloat()
                 fovVDeg = o.optDouble("fovV", 50.0).toFloat()
+                val gn = o.optInt("bgN", 0)
+                o.optJSONArray("bgGrid")?.let { ga ->
+                    if (gn >= 2 && ga.length() >= gn * gn) {
+                        val al = FloatArray(gn * gn); val ab = FloatArray(gn * gn)
+                        for (i in 0 until gn * gn) {
+                            val e = ga.optJSONObject(i) ?: continue
+                            al[i] = e.optDouble("l", 0.0).toFloat()
+                            ab[i] = e.optDouble("b", 0.0).toFloat()
+                        }
+                        bgl = al; bgb = ab; bgn = gn
+                    }
+                }
                 o.optJSONArray("horizon")?.let { ha ->
                     for (i in 0 until ha.length()) {
                         val e = ha.optJSONObject(i) ?: continue
@@ -579,10 +676,60 @@ class SimPage(
                 }
             } catch (_: Exception) {}
             post {
-                render.setData(list, asp, sunAlt, elDeg, fovVDeg, hz)
+                render.setData(list, asp, sunAlt, elDeg, fovVDeg, hz, bgl, bgb, bgn)
                 simBusy = false
                 if (simDirty) kickSim()   // 実行中に変更あり → 最新パラメータだけを1回再計算
             }
         }
     }
+}
+
+// 【撮影シミュレーションの背景(2026-10-01 依頼)】全天の実写を地に敷く。
+//
+// 素材: ESO "The Milky Way panorama" (eso0932a) / 撮影 Serge Brunier / **CC BY 4.0**
+//        表記は "ESO/S. Brunier"。詳細は 40_src/50_asset/README.md
+//        正距円筒(plate carrée) / 銀河座標 / 4096×2048
+//        並びは **u = 0.5 - l/360, v = 0.5 - b/180**(銀河経は左へ増える)。
+//        大マゼラン雲(l=280.5,b=-32.9)で検算済み — この式でのみ明暗差が出る。
+//
+// 【点をやめない理由】月と惑星は動くので固定画像に写っていない。
+//  望遠では画像がぼやける(4096px 全天 = 1px 0.088°。200mm なら横117px)。
+//  名前もカタログから来ている。だから**画像の上に点を重ねる**。
+internal object SkyBackground {
+    private const val ASSET = "milkyway_gal_4096.jpg"
+    private var bmp: android.graphics.Bitmap? = null
+    private var shader: android.graphics.BitmapShader? = null
+    private var tried = false
+
+    @Synchronized
+    fun shader(ctx: Context): android.graphics.BitmapShader? {
+        if (tried) return shader
+        tried = true
+        for (sample in intArrayOf(1, 2, 4)) {       // 挿さらなければ半分の大きさでやり直す
+            try {
+                val op = android.graphics.BitmapFactory.Options()
+                op.inSampleSize = sample
+                //  RGB_565 で半分の重さにする。地に敷くだけなので透過度は要らない。
+                op.inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
+                val b = ctx.assets.open(ASSET).use { android.graphics.BitmapFactory.decodeStream(it, null, op) }
+                    ?: continue
+                bmp = b
+                shader = android.graphics.BitmapShader(b,
+                    android.graphics.Shader.TileMode.REPEAT,    // 銀河経は一周するので横は繰り返し
+                    android.graphics.Shader.TileMode.CLAMP)     // 縦(銀河緯)は端で止める
+                return shader
+            } catch (_: OutOfMemoryError) {
+            } catch (_: Exception) { return null }
+        }
+        return null
+    }
+
+    @Synchronized
+    fun release() {
+        try { bmp?.recycle() } catch (_: Exception) {}
+        bmp = null; shader = null; tried = false
+    }
+
+    fun width(): Int = bmp?.width ?: 0
+    fun height(): Int = bmp?.height ?: 0
 }

@@ -1768,6 +1768,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
             "the map tiles under CC BY-SA 2.0. See:\n" +
             "https://www.openstreetmap.org/copyright\n" +
             "https://opendatacommons.org/licenses/odbl/1-0/"),
+        // 【表記が義務(CC BY 4.0)】撮影シミュレーションの背景に使う全天写真。
+        //  文言は ESO の指定どおり "ESO/S. Brunier" をそのまま載せる。
+        //  縮小しているので**手を入れたことを書く**のもこのライセンスの求め。
+        Notice("milkyway", "The Milky Way panorama", "CC BY 4.0",
+            "The all-sky photograph used as the background of the shooting simulation.\n\n" +
+            "ESO/S. Brunier\n\n" +
+            "Photographed by Serge Brunier and published by the European Southern\n" +
+            "Observatory as eso0932a. Licensed under the Creative Commons\n" +
+            "Attribution 4.0 International License. The image was resized for this\n" +
+            "application; it was not otherwise modified.\n\n" +
+            "https://www.eso.org/public/images/eso0932a/\n" +
+            "https://creativecommons.org/licenses/by/4.0/"),
         Notice("astronomy", "Astronomy Engine", "MIT License",
             "https://github.com/cosinekitty/astronomy", R.raw.lic_astronomy),
         Notice("nlohmann", "JSON for Modern C++", "MIT License", "", R.raw.lic_mit_nlohmann),

@@ -80,6 +80,15 @@ android {
     // ビルド対象(90_Target)には AndroidManifest.xml と cpp(CMake) のみを残す。
     sourceSets["main"].java.srcDirs("../../../10_UI/20_Android")
     sourceSets["main"].res.setSrcDirs(listOf("../../../10_UI/20_Android/res"))
+    // 画像などの素材は 40_src/50_asset へ。**iPhone でも同じ物を使う**ため、
+    // Android の res/ ではなくプラットフォーム中立の場所に置いている。
+    sourceSets["main"].assets.srcDirs("../../../50_asset")
+    //  そこの README は開発者向けの覚え書き。アプリには入れない。
+    //  既定の除外指定を**上書きする**ので、本家の並びを残したまま足すこと。
+    androidResources {
+        ignoreAssetsPattern =
+            "!.svn:!.git:!.ds_store:!*.scc:.*:<dir>_*:!CVS:!thumbs.db:!picasa.ini:!*~:!README.md"
+    }
 
     buildTypes {
         release {
