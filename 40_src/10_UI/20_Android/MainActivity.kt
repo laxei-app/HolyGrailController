@@ -296,7 +296,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun ensureCcmTabs() {
         val tl = findViewById<com.google.android.material.tabs.TabLayout>(R.id.edit_tabs)
         if (tl.tabCount != ccmTabKeys.size) {
-            fillTabs(tl, listOf("夜間撮影", "朝日撮影", "夕日撮影", "日中撮影")) { i -> switchCcmTab(ccmTabKeys[i]) }
+            fillTabs(tl, listOf(s(R.string.ccm_night_btn), s(R.string.ccm_sunrise_btn), s(R.string.ccm_sunset_btn), s(R.string.ccm_day_btn))) { i -> switchCcmTab(ccmTabKeys[i]) }
         }
         selectTabQuiet(tl, ccmTabKeys.indexOf(editingKey))
     }
@@ -1234,7 +1234,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     setLogUnlocked(true)
                     buildGearMenu()                              // 項目を出すために組み直す
                 } else if (verTapCount >= 4) {
-                    text = "バージョン " + appVersionName() + "  あと " + (7 - verTapCount) + " 回"
+                    text = s(R.string.version_taps_left, appVersionName(), 7 - verTapCount)
                 }
             }
         })
@@ -1262,7 +1262,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle(s(R.string.factory_reset_title))
             .setMessage(
-                "このスマホのデータをすべて消して、インストール直後の状態に戻します。\n\n" +
+                s(R.string.reset_intro) +
                 s(R.string.reset_item_plans) +
                 s(R.string.reset_item_places) +
                 s(R.string.reset_item_gear) +
@@ -1657,7 +1657,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             box.addView(thinDivider())
         }
         val sum = TextView(this)
-        sum.text = if (okCount == needCount) s(R.string.all_set) else "${needCount - okCount} 件が未設定です(赤い項目)"
+        sum.text = if (okCount == needCount) s(R.string.all_set) else s(R.string.perm_missing_count, needCount - okCount)
         sum.textSize = 13f; sum.setTextColor(Color.parseColor("#616161")); sum.setPadding(dp(12), dp(12), dp(12), dp(12))
         box.addView(sum, 0)
     }
@@ -2199,27 +2199,27 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         try { saveToDownloads("tlplog", f.name, f.readBytes()); copied++ }
                         catch (e: Exception) { errors.append("phone/${f.name} ") }
                     }
-                    say("スマートフォン: ${phoneLogs.size} 件")
+                    say(s(R.string.log_phone_count, phoneLogs.size))
                 }
                 for (nm in wantEdges) {
                     if (dlogAbort) break
                     val ed = edges.firstOrNull { it.name == nm } ?: continue
                     val target = ed.addr()
-                    if (target.isEmpty()) { say("$nm: 宛先が分かりません"); continue }
-                    say("$nm: 一覧を取得中…")
+                    if (target.isEmpty()) { say(s(R.string.log_no_addr, nm)); continue }
+                    say(s(R.string.log_listing, nm))
                     val listJson = try { JSONArray(HgeNative.nativeEdgeLogList(target, ed.port)) } catch (e: Exception) { JSONArray() }
                     var n = 0
                     for (k in 0 until listJson.length()) {
                         if (dlogAbort) break
                         val logName = listJson.optString(k); if (logName.isEmpty()) continue
-                        say("$nm: $logName")
+                        say(s(R.string.log_one, nm, logName))
                         val bytes = fetchEdgeLog(target, ed.port, logName)
                         if (bytes.isNotEmpty()) {
                             try { saveToDownloads("tlplog-" + sanitizeFolder(nm), logName, bytes); copied++; n++ }
                             catch (e: Exception) { errors.append("$nm/$logName ") }
                         }
                     }
-                    say("$nm: $n 件")
+                    say(s(R.string.log_count, nm, n))
                 }
             } catch (e: Exception) { errors.append("(${e.message}) ") }
             val n = copied
@@ -2228,8 +2228,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 dlogBusy = false; dlogAbort = false
                 setDlogEnabled(true)
                 val head = if (stopped) s(R.string.aborted) else s(R.string.done_period)
-                val tail = if (errors.isEmpty()) "" else "\n取れなかったもの: $errors"
-                say(head + "$n 件を Download/tlplog(スマホ)・tlplog-<端末名>(外部端末) へ保存しました。" + tail)
+                val tail = if (errors.isEmpty()) "" else s(R.string.log_errors_tail, errors)
+                say(s(R.string.log_saved, head, n, tail))
             }
         }.start()
     }
@@ -2283,14 +2283,15 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // ---------- 602 色の設定(文字色/背景色。jaredrummler ColorPicker) ----------
     private fun colorTypeName(k: String) = when (k) {
-        "night" -> "夜間撮影"; "sunrise" -> "朝日撮影"; "sunset" -> "夕日撮影"; "day" -> "日中撮影"
+        "night" -> s(R.string.ccm_night_btn); "sunrise" -> s(R.string.ccm_sunrise_btn)
+        "sunset" -> s(R.string.ccm_sunset_btn); "day" -> s(R.string.ccm_day_btn)
         "preNight" -> s(R.string.pre_night); "postNight" -> s(R.string.post_night); else -> k
     }
     private fun openColorSetting(typeKey: String) { colorType = typeKey; buildColorScreen(); flipper.displayedChild = 9 }
 
     private fun buildColorScreen() {
         val t = keyType(colorType)
-        findViewById<TextView>(R.id.color_title).text = colorTypeName(colorType) + "の色"
+        findViewById<TextView>(R.id.color_title).text = s(R.string.color_of, colorTypeName(colorType))
         applyHeaderColor(R.id.color_header, R.id.color_title, t)
         ensureColorTabs()
         val box = findViewById<LinearLayout>(R.id.color_container); box.removeAllViews()
@@ -2447,7 +2448,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             onSelect = { selectPreset(it) },
             onRename = { orig, nm -> commitRename(orig, nm) },
             // 名前は「今の1件をコピーした」と分かるものにする(addPresetNamed が空きを探す)。
-            addLabel = "＋ 新規追加", onAdd = { addPresetNamed(selPresetName ?: "Preset") }))
+            addLabel = s(R.string.add_new), onAdd = { addPresetNamed(selPresetName ?: "Preset") }))
     }
 
     private fun rebuildPresetList() { buildPresetList(presetListId()) }
@@ -2577,7 +2578,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // 「変更の取り消し」ボタン共通スタイル: 赤の丸ボタン + 白の内側リング(2重)。文字は白。
     private fun styleCancelButton(btn: Button) {
-        btn.text = "変更の取り消し"
+        btn.text = s(R.string.undo_changes)
         btn.isAllCaps = false
         btn.textSize = 12f
         btn.setTextColor(Color.WHITE)
@@ -2840,7 +2841,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 一覧の1行(タップで選択。選択中は太字。右にコンテキストメニュー「⋮」)。
     // item5: 名称が既に使われているときのポップアップ(全リスト+分割バー画面で共通)。
     private fun showNameInUse(name: String) {
-        AlertDialog.Builder(this).setMessage("「$name」は使用されています")
+        AlertDialog.Builder(this).setMessage(s(R.string.name_in_use, name))
             .setPositiveButton("OK", null).show()
     }
     // item5: 重複チェック用の現在の名称一覧。
@@ -2945,13 +2946,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 val name = cam.optString("name")
                 // 項目D: 愛称/シリアルは未取得なら「未定義」と出す(SSDPでオンライン取得後に実値が入る)。
                 ListItem(name, name,
-                    "愛称:" + cam.optString("assignedName").ifEmpty { s(R.string.undefined) } +
+                    s(R.string.assigned_name_prefix, cam.optString("assignedName").ifEmpty { s(R.string.undefined) }) +
                         "  S/N:" + cam.optString("serial").ifEmpty { s(R.string.undefined) },
                     listOf(
                         s(R.string.delete_word) to {
                             // エッジが計画を持っているカメラは消せない(消すと台帳から資格情報が落ち、
                             //  その計画が単独復帰したときに認証できなくなる)。
-                            if (!blockedByEdge(name, s(R.string.delete_word))) {
+                            if (!blockedByEdge(name, R.string.edge_block_delete_title)) {
                                 dataExec.execute { HgeNative.nativeRemoveOwnedCamera(name)
                                     runOnUiThread { if (selCamera == name) selCamera = null; buildCameraList(); buildCameraDetail()
                                                     pushCameraBookToEdges() } }
@@ -2966,7 +2967,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         onRename = { orig, nm ->
             // 編集不可のカメラは名前も変えない。ひな形も撮影計画も名前で結び付いている。
             if (ownedCamera(orig)?.optBoolean("readOnly") == true) { Toast.makeText(this, s(R.string.camera_readonly), Toast.LENGTH_SHORT).show(); buildCameraList() }
-            else if (!blockedByEdge(orig, "変更")) commitCameraRename(orig, nm) },
+            else if (!blockedByEdge(orig, R.string.edge_block_change_title)) commitCameraRename(orig, nm) },
         addLabel = s(R.string.add_camera), onAdd = { openCameraAdd() }))
 
 
@@ -3034,7 +3035,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             runOnUiThread {
                 selCamera = nm
                 openCameraList()
-                Toast.makeText(this, "「$nm」を追加しました。センサーとISO/SSを確認してください", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, s(R.string.camera_added, nm), Toast.LENGTH_LONG).show()
             }
         }.start()
     }
@@ -3070,7 +3071,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val heldBy = edgesHoldingCamera(sel)
         if (heldBy.isNotEmpty()) {
             val note = TextView(this)
-            note.text = "このカメラを使う撮影計画が外部端末「" + heldBy.joinToString("」「") + "」に送られているため変更できません。" +
+            note.text = s(R.string.edge_holds_camera, heldBy.joinToString(", ")) +
                         s(R.string.edge_lock_note)
             note.textSize = 13f; note.setTextColor(0xFFB71C1C.toInt()); note.setPadding(dp(4), dp(4), dp(4), dp(8))
             box.addView(note)
@@ -3266,7 +3267,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (camFields.isEmpty()) return
         // エッジが計画を持っているカメラは変更できない。ただし**中身が変わっていなければ素通し**
         //  にする(この関数はレンズ変更や画面離脱でも走るため、無条件に止めると画面から出られない)。
-        if (camEditSig() != camEditBaseline && blockedByEdge(orig, "変更")) {
+        if (camEditSig() != camEditBaseline && blockedByEdge(orig, R.string.edge_block_change_title)) {
             buildCameraDetail()          // 画面を保存済みの値へ戻す
             return
         }
@@ -3343,14 +3344,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     // 変更/削除を止めて理由を告げる。止めたときだけ true。
-    private fun blockedByEdge(camName: String, what: String): Boolean {
+    // 【動詞を差し込まない(2026-10-01)】英語は語形が変わるので「変更/削除」を
+    //  文の途中へ挿し込めない。題だけを差し替え、本文は両方を兼ねた言い方にする。
+    private fun blockedByEdge(camName: String, titleRes: Int): Boolean {
         val edges = edgesHoldingCamera(camName)
         if (edges.isEmpty()) return false
         AlertDialog.Builder(this)
-            .setTitle("${what}できません")
-            .setMessage("このカメラを使用する撮影計画が、すでに外部端末「" +
-                        edges.joinToString("」「") + "」に送られています。\n\n" +
-                        "外部端末は受け取った計画をそのまま使うため、ここで${what}すると" +
+            .setTitle(s(titleRes))
+            .setMessage(s(R.string.edge_block_msg, edges.joinToString(", ")) +
                         s(R.string.edge_mismatch_note) +
                         s(R.string.remove_from_edge_first) +
                         s(R.string.lock_auto_release))
@@ -3365,7 +3366,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         runOnUiThread {
             AlertDialog.Builder(this)
                 .setTitle(s(R.string.auth_changed))
-                .setMessage("このカメラを使う撮影計画が外部端末「" + edges.joinToString("」「") + "」に置かれています。\n\n" +
+                .setMessage(s(R.string.edge_holds_camera2, edges.joinToString(", ")) +
                             s(R.string.edge_plan_stale))
                 .setPositiveButton("OK", null)
                 .show()
@@ -3404,9 +3405,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
             runOnUiThread {
                 if (ok > 0) pushCameraBookToEdges()
                 val msg = when {
-                    failed.isEmpty() -> "${ok}台を追加しました"
+                    failed.isEmpty() -> s(R.string.cams_added, ok)
                     ok == 0 -> s(R.string.cannot_add_ambiguous)
-                    else -> "${ok}台追加。${failed.size}台は追加不可(同機種の未識別カメラが既にあるため)"
+                    else -> s(R.string.cams_added_partial, ok, failed.size)
                 }
                 Toast.makeText(this, msg, Toast.LENGTH_LONG).show(); back()
             }
@@ -3551,7 +3552,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (sel.isEmpty()) { back(); return }
         Thread {
             sel.forEach { HgeNative.nativeAddOwnedLens(it) }
-            runOnUiThread { Toast.makeText(this, "${sel.size}本を追加しました", Toast.LENGTH_SHORT).show(); back() }
+            runOnUiThread { Toast.makeText(this, s(R.string.lenses_added, sel.size), Toast.LENGTH_SHORT).show(); back() }
         }.start()
     }
 
@@ -3846,7 +3847,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 移動平均フレーム数: Slider 0..10(1刻み)。0=全体設定に従う(ccm個別では未設定扱い)。
     // なめらかさ(分)。全体設定は 1〜10、撮影制御方法の個別設定は 0=全体設定に従う。
     private fun smoothLabel(p: Int, global: Boolean) =
-        if (global) "${p.coerceIn(1, 10)}分" else (if (p == 0) s(R.string.global_setting) else "${p}分")
+        if (global) s(R.string.n_minutes, p.coerceIn(1, 10)) else (if (p == 0) s(R.string.global_setting) else s(R.string.n_minutes, p))
 
     private fun altLabel(v: Double) = String.format("%.0f°", v)
 
@@ -3978,7 +3979,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (wantMode != expoListsMode) { loadExpoValues(wantMode); buildExposureEditors() }
         // 計画固有の編集で、その計画がロックされていれば読取専用(初期値の編集は常に可)。
         ccmReadOnly = editingPlanCcm && planReadOnly
-        val title = mapOf("night" to "夜間撮影", "sunrise" to "朝日撮影", "sunset" to "夕日撮影", "day" to "日中撮影")[key]
+        val title = mapOf("night" to s(R.string.ccm_night_btn), "sunrise" to s(R.string.ccm_sunrise_btn),
+                          "sunset" to s(R.string.ccm_sunset_btn), "day" to s(R.string.ccm_day_btn))[key]
         // 【どの計画のものかを名前で出す(2026-09-20 ユーザー指示)】計画・ひな形の撮影制御方法は
         //  「（この計画）」ではなくその名前を出す。名前は選択中の計画/ひな形のスケジュールから採る
         //  (ひな形を選んでいるときはひな形の名前が入っている)。取れなければ従来の「この計画」。
@@ -3986,7 +3988,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val ccmOwner = (try { JSONObject(latestSchedule).optString("planName") } catch (_: Exception) { "" })
             .ifEmpty { s(R.string.this_plan) }
         findViewById<TextView>(R.id.edit_title).text = title +
-            (if (!editingPlanCcm) s(R.string.ccm_from_defaults) else if (ccmReadOnly) "（$ccmOwner・変更不可）" else "（$ccmOwner）")
+            (if (!editingPlanCcm) s(R.string.ccm_from_defaults) else if (ccmReadOnly) s(R.string.ccm_owner_locked, ccmOwner) else s(R.string.ccm_owner, ccmOwner))
         applyHeaderColor(R.id.edit_header, R.id.edit_title, keyType(key))   // タイトルバーにシステム共通色
         ensureCcmTabs()
         val showPreset = !editingPlanCcm   // 初期値編集時のみプリセット一覧を出す
@@ -4121,7 +4123,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             if (initIsDark) o.put("initial", JSONObject(nb.toString()))
         }
         HgeNative.nativeSetPlanCcm(all.toString())
-        Toast.makeText(this, "朝日・夕日・日中の暗所限界を ISO${e.optString("iso")} / ${e.optString("ss")}秒 / F${e.optString("fn")} にしました",
+        Toast.makeText(this, s(R.string.dark_limit_set, e.optString("iso"), e.optString("ss"), e.optString("fn")),
                        Toast.LENGTH_SHORT).show()
     }
 
@@ -4496,7 +4498,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
             cards.clear(); dividers.clear(); darkTvs.clear(); brightTvs.clear(); initTvs.clear()
             if (dayMode) {   // 日中: 明所限界→中間点→暗所限界 をタップで巡回
                 val tv = TextView(this@MainActivity)
-                fun lbl() = "基準(タップで切替): " + when (initMode) { 0 -> s(R.string.limit_bright); 1 -> s(R.string.midpoint); else -> s(R.string.limit_dark) }
+                fun lbl() = s(R.string.ref_tap_to_switch,
+                    when (initMode) { 0 -> s(R.string.limit_bright); 1 -> s(R.string.midpoint); else -> s(R.string.limit_dark) })
                 tv.text = lbl(); tv.textSize = 14f; tv.setPadding(dp(8), dp(8), dp(8), dp(8))
                 tv.setBackgroundColor(0xFFD1C4E9.toInt()); tv.setTextColor(0xFF222222.toInt())
                 tv.setOnClickListener { initMode = (initMode + 1) % 3; tv.text = lbl(); refreshInit() }
@@ -5092,7 +5095,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val r = HgeNative.nativeNewPlanFromTemplate(tplId)
             val cur = HgeNative.nativeCurrentPlanId()
             runOnUiThread {
-                if (r != 0) { Toast.makeText(this, "作成に失敗しました (code=$r)", Toast.LENGTH_LONG).show(); return@runOnUiThread }
+                if (r != 0) { Toast.makeText(this, s(R.string.create_failed, r), Toast.LENGTH_LONG).show(); return@runOnUiThread }
                 tplMode = false                    // ひな形画面 → 撮影計画画面(同じページ)
                 planIdBeforeTpl = ""
                 currentPlanId = cur
@@ -5110,14 +5113,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle(s(R.string.tpl_save_as))
             .setView(wrap)
-            .setPositiveButton("保存") { _, _ ->
+            .setPositiveButton(s(R.string.save)) { _, _ ->
                 val nm = et.text.toString().trim()
                 planExec.execute {
                     // 保存するのは「今の計画」なので、対象がいま開いている計画でなければ開いてから。
                     if (HgeNative.nativeCurrentPlanId() != planId) { HgeNative.nativeSelectPlan(planId) }
                     val r = HgeNative.nativeSaveTemplateFromPlan(nm)
                     runOnUiThread {
-                        Toast.makeText(this, if (r == 0) s(R.string.tpl_saved) else "保存に失敗しました (code=$r)",
+                        Toast.makeText(this, if (r == 0) s(R.string.tpl_saved) else s(R.string.save_failed, r),
                                        Toast.LENGTH_SHORT).show()
                     }
                 }
@@ -5147,7 +5150,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                             val r = HgeNative.nativeUpdatePlanFromTemplate(planId, ids[w])
                             runOnUiThread {
                                 if (r == 0) { refreshPlanList(); reloadExpoEditors() }
-                                Toast.makeText(this, if (r == 0) "「" + labels[w] + "」で更新しました" else "更新に失敗しました (code=$r)",
+                                Toast.makeText(this, if (r == 0) s(R.string.tpl_updated_from, labels[w]) else s(R.string.update_failed, r),
                                                Toast.LENGTH_SHORT).show()
                             }
                         }
@@ -5161,7 +5164,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun confirmDeleteTemplate(id: String, name: String) {
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle(s(R.string.tpl_delete_title))
-            .setMessage("「" + name + "」を削除しますか？")
+            .setMessage(s(R.string.delete_confirm, name))
             .setPositiveButton(s(R.string.do_delete)) { _, _ ->
                 planExec.execute {
                     HgeNative.nativeDeleteTemplate(id)
@@ -5231,7 +5234,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             } catch (_: Exception) { s(R.string.camera_word) }
             AlertDialog.Builder(this)
                 .setTitle(s(R.string.cannot_start))
-                .setMessage("$cam は他の計画で使用中なので開始できません。\n(このスマホのカメラは同時に 1 つの計画でしか使えません)")
+                .setMessage(s(R.string.cam_busy_other_plan, cam))
                 .setPositiveButton("OK", null)
                 .show()
             return
@@ -5293,7 +5296,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     waitingPlans.remove(id); startingPlans.remove(id); refreshPlanList(); updateReadOnly()   // タップ時の即時反映を取り消す
                     AlertDialog.Builder(this)
                         .setTitle(s(R.string.edge_not_found))
-                        .setMessage("外部端末「${name}」が見つからないため撮影を開始できません。\n端末の電源・ネットワーク接続を確認してください。")
+                        .setMessage(s(R.string.edge_missing_start, name))
                         .setPositiveButton("OK", null)
                         .show()
                     return@runOnUiThread
@@ -5334,7 +5337,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             if (!label.isNullOrEmpty()) return label
             // カメラ側に名前が1つも無いとき(機種名すら空)は、せめてどの計画かを言う。
             val pn = o.optString("planName")
-            if (pn.isNotEmpty()) return "計画「$pn」のカメラ"
+            if (pn.isNotEmpty()) return s(R.string.camera_of_plan, pn)
         } catch (_: Exception) {}
         return s(R.string.camera_word)
     }
@@ -5412,13 +5415,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         when {
             id.isEmpty() -> captureStatus.text = ""
-            disconnectedPlans.contains(id) -> show("● カメラが見つかりません$sfx", 0xFFD32F2F.toInt())
+            disconnectedPlans.contains(id) -> show(s(R.string.st_cam_not_found, sfx), 0xFFD32F2F.toInt())
             capturingPlans.contains(id)    -> {
                 val head = if (onEdge) s(R.string.st_edge_shooting) else s(R.string.st_shooting)
                 val p = planProgress[id]
-                show(if (p != null) "$head  ${p.frame}/${p.total}枚  残り${p.remainSec}秒" else head, 0xFF2E7D32.toInt())
+                show(if (p != null) s(R.string.st_progress, head, p.frame, p.total, p.remainSec) else head, 0xFF2E7D32.toInt())
             }
-            waitingPlans.contains(id) || startingPlans.contains(id) -> show("● 撮影開始待ち$sfx", 0xFF1565C0.toInt())
+            waitingPlans.contains(id) || startingPlans.contains(id) -> show(s(R.string.st_waiting, sfx), 0xFF1565C0.toInt())
             else -> captureStatus.text = ""
         }
     }
@@ -5478,7 +5481,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val noPerm = (an == 66)
         val title = when { noPerm -> s(R.string.cam_unusable); an != 0 -> s(R.string.cam_cannot_connect); else -> s(R.string.cam_not_found) }
         val body  = if (an != 0) "${cam}: " + noticeText(an, 0)
-                    else "${cam}が見つかりません。オンラインにしてください。"
+                    else s(R.string.cam_offline_hint, cam)
         val b = androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle(title)
             .setMessage(body)
@@ -5523,14 +5526,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
         beginStop(id) {
             val e = discoverEdgeByName(name)
             if (e == null) {
-                runOnUiThread { onEdgeStopFailed(id, "外部端末「${name}」が見つかりません。") }
+                runOnUiThread { onEdgeStopFailed(id, s(R.string.edge_not_found_named, name)) }
                 return@beginStop
             }
             runOnUiThread { updateEdgeIp(name, e.ip, e.port) }
             // #4: 停止は撮影を止めるだけ。エッジからは削除せず、計画のエッジ選択も勝手に変えない。
             //  → エッジは計画を保有し続ける=ロック維持。編集したいときは「エッジ端末から削除」(#2)で明示的に外す。
             val r = HgeNative.nativeEdgeStop(e.addr(), e.port, id)
-            if (r != 0) { runOnUiThread { onEdgeStopFailed(id, "停止を外部端末へ送れませんでした (code=${r})。") } }
+            if (r != 0) { runOnUiThread { onEdgeStopFailed(id, s(R.string.edge_stop_send_failed, r)) } }
         }
     }
 
@@ -5543,7 +5546,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (activeEdgePlans().isNotEmpty()) ensureEdgePoll()
         AlertDialog.Builder(this)
             .setTitle(s(R.string.stop_failed))
-            .setMessage("${why}\n外部端末では撮影が続いている可能性があります。端末の電源とネットワークを確認して、もう一度お試しください。")
+            .setMessage(s(R.string.edge_stop_failed_msg, why))
             .setPositiveButton("OK", null)
             .show()
     }
@@ -5561,7 +5564,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 runOnUiThread {
                     AlertDialog.Builder(this)
                         .setTitle(s(R.string.delete_failed))
-                        .setMessage("外部端末「${name}」が見つかりません。\n端末の電源とネットワークを確認して、もう一度お試しください。")
+                        .setMessage(s(R.string.edge_not_found_retry, name))
                         .setPositiveButton("OK", null).show()
                     refreshPlanList(); updateReadOnly()   // 楽観的に外したロックを実状態へ戻す
                 }
@@ -5584,7 +5587,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun confirmRemoveFromEdge(id: String, name: String) {
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle(s(R.string.remove_from_edge))
-            .setMessage("「$name」を外部端末から削除しますか？\n(待機中なら停止し、編集できるようになります。計画自体は残ります)")
+            .setMessage(s(R.string.remove_from_edge_confirm, name))
             .setPositiveButton(s(R.string.delete_word)) { _, _ -> removeFromEdge(id) }
             .setNegativeButton(s(R.string.cancel_word), null)
             .show()
@@ -5633,7 +5636,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (past.isEmpty()) { Toast.makeText(this, s(R.string.no_past_plans), Toast.LENGTH_SHORT).show(); return }
         AlertDialog.Builder(this)
             .setTitle(s(R.string.delete_past_plans))
-            .setMessage("終了日が過去の撮影計画 ${past.size} 件をすべて削除しますか？")
+            .setMessage(s(R.string.delete_past_confirm, past.size))
             .setPositiveButton(s(R.string.do_delete)) { _, _ ->
                 planExec.execute {
                     for ((id, _) in past) { HgeNative.nativeDeletePlan(id) }
@@ -5649,7 +5652,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (capturingPlans.contains(id) || waitingPlans.contains(id) || disconnectedPlans.contains(id)) { Toast.makeText(this, s(R.string.no_delete_while_starting), Toast.LENGTH_SHORT).show(); return }
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle(s(R.string.delete_word))
-            .setMessage("「$name」を削除しますか？")
+            .setMessage(s(R.string.delete_confirm, name))
             .setPositiveButton(s(R.string.delete_word)) { _, _ ->
                 planExec.execute {
                     HgeNative.nativeDeletePlan(id)
@@ -5826,10 +5829,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         for ((model, serial, assignedName) in list) {
             if (!promptingCamSerials.add(serial)) continue               // 既に表示中のserialは二重に出さない
             val label = if (assignedName.isNotEmpty()) assignedName else if (model.isNotEmpty()) model else serial
-            val where = if (via.isEmpty()) "" else "「$via」が見つけた"
+            val where = if (via.isEmpty()) "" else s(R.string.found_by_prefix, via)
             androidx.appcompat.app.AlertDialog.Builder(this)
                 .setTitle(s(R.string.cam_register_title))
-                .setMessage("${where}未登録のカメラ「$label」が見つかりました。所持カメラに登録しますか？")
+                .setMessage(s(R.string.unregistered_found, where, label))
                 .setCancelable(false)
                 .setPositiveButton(s(R.string.register_word)) { _, _ ->
                     promptingCamSerials.remove(serial)
@@ -5973,7 +5976,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         10 -> s(R.string.cam_card_write_fail)
         11 -> s(R.string.cam_no_card)
         12 -> s(R.string.cam_card_locked)
-        13 -> "カメラのカード残量が少なくなっています(あと約${n1}枚)"
+        13 -> s(R.string.cam_card_low, n1)
         20 -> s(R.string.cam_battery_low)
         21 -> s(R.string.cam_hot)
         22 -> s(R.string.cam_too_hot)
@@ -5983,19 +5986,19 @@ class MainActivity : AppCompatActivity(), HgeListener {
         51 -> s(R.string.cam_no_record)
         52 -> s(R.string.cam_lost_shooting)
         53 -> s(R.string.reconnected_idle)
-        54 -> "1枚目の露出をカメラへ設定できませんでした(${n1}回試行)。撮影は続けます"
+        54 -> s(R.string.first_exp_failed, n1)
         55 -> s(R.string.converge_failed)
         60 -> s(R.string.camera_in_use)
         67 -> s(R.string.edge_owned_by_other)
         // 台数の上限は端末(エッジ/スマホ)が決めて n1 で送ってくる。ここでは埋めるだけで、
         // 数字をアプリに持たない(端末の仕様が変わってもアプリを直さずに済む)。
-        61 -> "同期撮影のカメラが多すぎます。この端末で撮れるのは${n1}台までです"
+        61 -> s(R.string.too_many_sync_cams, n1)
         62 -> s(R.string.sync_alone)
         63 -> s(R.string.cam_refused)
         64 -> s(R.string.cam_auth_missing)
         65 -> s(R.string.cam_auth_wrong)
         66 -> s(R.string.no_camera_perm)
-        else -> "カメラからのお知らせ($code)"
+        else -> s(R.string.cam_notice_code, code)
     }
 
     // スケジュールJSON(静的フィールド+events+windows)から両画面の表示を更新する。
@@ -6059,17 +6062,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         labels.add(if (an.isNotEmpty()) "$nm ($an)" else nm)
                     }
                 }
-                subCamText.text = if (labels.isEmpty()) "未選択" else labels.joinToString(", ")
+                subCamText.text = if (labels.isEmpty()) s(R.string.not_selected) else labels.joinToString(", ")
             }
             // npf が負 = センサー寸法/画素数が未登録で算出できない(Entityが -1 を返す)。
             val npf = o.optDouble("npf", -1.0)
-            npfText.text = if (npf >= 0.0) "NPF %.1f秒   最小周期 %d秒".format(npf, o.optInt("minInterval"))
-                           else "NPF ---   最小周期 %d秒".format(o.optInt("minInterval"))
+            npfText.text = if (npf >= 0.0) s(R.string.npf_min).format(npf, o.optInt("minInterval"))
+                           else s(R.string.npf_unknown).format(o.optInt("minInterval"))
             // 項目11: 計画1ページ目の方向/仰角ウィジェットは廃止。撮影中画面の表示だけ残す。
             val az = o.optDouble("azimuth", 90.0)
             val el = o.optDouble("elevation", 10.0)
             capGear.text = o.optString("camera") + " / " + o.optString("lens")
-            capDir.text = "撮影方向 %.1f°   仰角 %.1f°".format(az, el)
+            capDir.text = s(R.string.direction_elev).format(az, el)
             renderOverview(o)                      // 先頭ページ: 概要スケジュール(表示専用)
             rebuildTwilightPages(o)                // 薄明ページ(横スライド)を再構築し、ページ番号を更新
             renderSchedule(capSchedule, o, true)   // 撮影画面は従来のイベント時系列
@@ -6113,8 +6116,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     runOnUiThread {
                         // 詳細の表示は EV_SCHEDULE が更新する(ここで二重に出さない)。場所が変わると
                         //  タイムゾーンも変わりうるので一覧だけ作り直す(選択は動かない)。
-                        if (r == 0) { refreshPlanList(); Toast.makeText(this, "撮影場所: $nm", Toast.LENGTH_SHORT).show() }
-                        else Toast.makeText(this, "撮影場所の設定に失敗 (code=$r)", Toast.LENGTH_LONG).show()
+                        if (r == 0) { refreshPlanList(); Toast.makeText(this, s(R.string.place_set, nm), Toast.LENGTH_SHORT).show() }
+                        else Toast.makeText(this, s(R.string.place_set_failed, r), Toast.LENGTH_LONG).show()
                     }
                 }
             }
@@ -6173,7 +6176,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val r = HgeNative.nativeSetPlanLocation(lat, lng, name)
             runOnUiThread {
                 if (r == 0) Toast.makeText(this, s(R.string.place_updated).format(lat, lng), Toast.LENGTH_SHORT).show()
-                else Toast.makeText(this, "撮影場所の設定に失敗 (code=$r)", Toast.LENGTH_LONG).show()
+                else Toast.makeText(this, s(R.string.place_set_failed, r), Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -6707,7 +6710,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         8 -> s(R.string.busy_never_measured)
         9 -> s(R.string.note_conv_none)
         10 -> s(R.string.note_conv_partial)
-        else -> "(不明な所見 $code)"
+        else -> s(R.string.note_unknown, code)
     }
 
     private fun buildReportList() {
@@ -6734,7 +6737,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 o.optString("plan"), o.optString("camera"), o.optInt("frames"),
                 if (er == "interrupted") s(R.string.rep_interrupted_mark) else "",
                 if (edge.isNotEmpty()) "   $edge" else "",
-                if (notes > 0) "   所見 ${notes}件" else "")
+                if (notes > 0) s(R.string.notes_count, notes) else "")
             val title = o.optString("shotAt").ifEmpty { name }
             // 一覧は新しい順なので「これより古い」= この行より下に並んでいるものすべて。
             // 読めなかったレポートは shotAt を持たず末尾へ落ちているので、ここにも入る(消せるようにしておく)。
@@ -6745,12 +6748,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
             if (older.isNotEmpty()) {
                 menu.add(s(R.string.rep_del_older) to {
                     confirmDeleteReports(s(R.string.rep_del_older_title),
-                        "「$title」より古いレポート ${older.size}件を削除しますか？", older)
+                        s(R.string.rep_del_older_confirm, title, older.size), older)
                 })
             }
             menu.add(s(R.string.rep_del_all) to {
                 confirmDeleteReports(s(R.string.rep_del_all_title),
-                    "撮影レポート ${names.size}件をすべて削除しますか？", names)
+                    s(R.string.rep_del_all_confirm, names.size), names)
             })
             box.addView(listRow(title, sub, name == selectedReport,
                 { selectedReport = name; buildReportList(); buildReportDetail() }, menu))
@@ -6925,7 +6928,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             got++
         }
         if (got > 0) runOnUiThread {
-            Toast.makeText(this, "外部端末「${edge.name}」の撮影レポート ${got}件を取得しました", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, s(R.string.rep_fetched, edge.name, got), Toast.LENGTH_SHORT).show()
             if (flipper.displayedChild == 15) { buildReportList(); buildReportDetail() }   // 開いていれば即反映
         }
     }
@@ -6933,7 +6936,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun confirmDeleteReport(name: String) {
         AlertDialog.Builder(this)
             .setTitle(s(R.string.rep_delete_title))
-            .setMessage("このレポートを削除しますか？\n$name")
+            .setMessage(s(R.string.rep_del_one_confirm, name))
             .setPositiveButton(s(R.string.do_delete)) { _, _ ->
                 HgeNative.nativeRemoveReport(name)
                 if (selectedReport == name) { selectedReport = null }
@@ -6957,8 +6960,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 buildReportList(); buildReportDetail()
                 val ng = names.size - ok
                 Toast.makeText(this,
-                    if (ng == 0) "撮影レポート ${ok}件を削除しました"
-                    else "撮影レポート ${ok}件を削除しました(${ng}件は削除できませんでした)",
+                    if (ng == 0) s(R.string.rep_deleted, ok)
+                    else s(R.string.rep_deleted_partial, ok, ng),
                     Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton(s(R.string.cancel_plain), null)
@@ -7021,13 +7024,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  そのまま機種の取得回数予算の消費になるので、ここを見て間引きを調整する。
         val nLv = exp.optInt("lvFrames"); val nTh = exp.optInt("thumbFrames"); val nHd = exp.optInt("heldFrames")
         if (nLv + nTh + nHd > 0) {
-            repRow(box, s(R.string.meter_lv), "$nLv コマ")
-            repRow(box, s(R.string.meter_thumb), "$nTh コマ",
+            repRow(box, s(R.string.meter_lv), s(R.string.n_frames, nLv))
+            repRow(box, s(R.string.meter_thumb), s(R.string.n_frames, nTh),
                    if (nLv > 0) s(R.string.lv_fallback_frames) else s(R.string.thumb_only_all))
-            if (nHd > 0) repRow(box, s(R.string.meter_skipped), "$nHd コマ", s(R.string.meter_thinned))
+            if (nHd > 0) repRow(box, s(R.string.meter_skipped), s(R.string.n_frames, nHd), s(R.string.meter_thinned))
         }
-        repRow(box, s(R.string.meter_retry), "${exp.optInt("meterRetryFrames")} コマ")
-        repRow(box, s(R.string.exp_apply_retry), "${exp.optInt("applyRetryFrames")} コマ")
+        repRow(box, s(R.string.meter_retry), s(R.string.n_frames, exp.optInt("meterRetryFrames")))
+        repRow(box, s(R.string.exp_apply_retry), s(R.string.n_frames, exp.optInt("applyRetryFrames")))
 
         repBand(box, s(R.string.interval_word))
         repRow(box, s(R.string.set_vs_actual), s(R.string.fmt_set_actual_sec).format(itv.optDouble("setSec"), itv.optDouble("actualSec")))
@@ -7041,7 +7044,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                s(R.string.late_note).format(tim.optDouble("lateOverAvgMs")))
         repRow(box, s(R.string.prep_avg_max), "%.0f / %d ms".format(tim.optDouble("prepAvgMs"), tim.optInt("prepMaxMs")),
                s(R.string.prep_steps))
-        repRow(box, s(R.string.prep_missed), "${tim.optInt("prepOver")} コマ",
+        repRow(box, s(R.string.prep_missed), s(R.string.n_frames, tim.optInt("prepOver")),
                s(R.string.prep_deadline).format(tim.optInt("leadMs") / 1000.0))
 
         // ここが「撮影周期をどこまでシャッター速度へ近づけられるか」の答えになる部分。
@@ -7049,7 +7052,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val busyCnt = bsy.optInt("cnt")
         if (busyCnt > 0) {
             repRow(box, s(R.string.busy_meaning), s(R.string.avg_max_sec).format(bsy.optDouble("avgMs") / 1000.0, bsy.optInt("maxMs") / 1000.0),
-                   "${busyCnt}コマで実測。カメラが記録で塞がっている時間")
+                   s(R.string.busy_measured, busyCnt))
         } else {
             repRow(box, s(R.string.busy_meaning), s(R.string.not_measured), s(R.string.no_metered_frames))
         }
@@ -7079,17 +7082,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
             2 -> s(R.string.conv_never_metered)
             else -> s(R.string.conv_not_needed_note)
         })
-        if (cvOutcome != 3) { repRow(box, s(R.string.measured_times), "${cvw.optInt("steps")} 回") }
+        if (cvOutcome != 3) { repRow(box, s(R.string.measured_times), s(R.string.n_times, cvw.optInt("steps"))) }
         // ライブビューでは測れない暗さだったときだけ、実写を撮って合わせ直す。
         //  そのコマは frames に入らないので、カードの枚数との差をここで説明する。
         val cvShots = cvw.optInt("shots")
         if (cvShots > 0) {
-            repRow(box, s(R.string.conv_shots), "$cvShots 枚",
+            repRow(box, s(R.string.conv_shots), s(R.string.n_shots, cvShots),
                    s(R.string.conv_shots_why) +
                    s(R.string.conv_shots_note))
         }
         if (cvw.optInt("applyNg") > 0 || cvw.optInt("meterNg") > 0) {
-            repRow(box, s(R.string.retry_count), "露出設定 ${cvw.optInt("applyNg")} / 測光 ${cvw.optInt("meterNg")}",
+            repRow(box, s(R.string.retry_count), s(R.string.retry_breakdown, cvw.optInt("applyNg"), cvw.optInt("meterNg")),
                    s(R.string.retry_note))
         }
 
@@ -7410,8 +7413,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  経度からの近似は国境付近で外れる)。手で選ぶのが確実。
     private fun showPlaceTzDialog(onPick: (Int) -> Unit) {
         val cands = listOf(
-            "このスマホ (" + tzLabel(nowOffMin()) + ")" to nowOffMin(),
-            s(R.string.tz_japan) to 540, "モンゴル +08:00" to 480, s(R.string.tz_china) to 480,
+            s(R.string.tz_this_phone, tzLabel(nowOffMin())) to nowOffMin(),
+            s(R.string.tz_japan) to 540, s(R.string.tz_mongolia) to 480, s(R.string.tz_china) to 480,
             s(R.string.tz_taiwan) to 480, s(R.string.tz_korea) to 540, "UTC +00:00" to 0)
         val labels = cands.map { it.first } + listOf(s(R.string.other_manual))
         androidx.appcompat.app.AlertDialog.Builder(this)
@@ -7939,7 +7942,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 1イベント行の TextView を作る(現在行ハイライト対応)。
         fun makeRowView(r: Row, active: Boolean, topMargin: Int): TextView {
             val tv = TextView(this)
-            tv.text = if (active) "▶ ${r.time}   ${r.label}  (現在)" else "${r.time}   ${r.label}"
+            tv.text = if (active) s(R.string.sched_now, r.time, r.label) else s(R.string.sched_row, r.time, r.label)
             if (active) tv.setTypeface(null, Typeface.BOLD)
             tv.setBackgroundColor(ccmColor(0))
             tv.setPadding(16, 8, 16, 8)
@@ -8475,7 +8478,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.addView(hint)
         refreshVideoHint(hint)
         val note = TextView(this)
-        note.text = "動画は " + cam + " で撮ったコマから作ります。保存先は Movies/TwyLapse。"
+        note.text = s(R.string.video_from, cam)
         note.textSize = 12f; note.setTextColor(Color.parseColor("#616161")); note.setPadding(dp(4), dp(10), dp(4), dp(4))
         box.addView(note)
         // ── 静止画 ─────────────────────────────────────────
@@ -8836,7 +8839,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     runOnUiThread {
                         // 拒否されたときに何が起きたか分かるよう、入力値と最小周期を出す(黙って元へ戻ると原因が分からない)。
                         if (r != 0) Toast.makeText(this,
-                            "撮影周期 ${fmtInterval(sec)}秒 は設定できません(最小周期未満)。先にシャッター速度を短くしてください",
+                            s(R.string.interval_too_short, fmtInterval(sec)),
                             Toast.LENGTH_LONG).show()
                     }
                 }
@@ -9272,12 +9275,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 1件ぶんの行。"計画名  120/602枚  残り 1時間40分" / "計画名  撮影開始待ち"。
     private fun captureNoteLine(id: String, name: String): String {
         val nm = if (name.isEmpty()) s(R.string.no_name) else name
-        if (disconnectedPlans.contains(id)) return "$nm  カメラが見つかりません"
-        if (waitingPlans.contains(id) || startingPlans.contains(id)) return "$nm  撮影開始待ち"
-        val p = planProgress[id] ?: return "$nm  撮影中"
+        if (disconnectedPlans.contains(id)) return s(R.string.edge_st_not_found, nm)
+        if (waitingPlans.contains(id) || startingPlans.contains(id)) return s(R.string.edge_st_waiting, nm)
+        val p = planProgress[id] ?: return s(R.string.edge_st_shooting, nm)
         val m = p.remainSec / 60
-        val rest = if (m >= 60) "残り ${m / 60}時間${m % 60}分" else "残り ${m}分"
-        return "$nm  ${p.frame}/${p.total}枚  $rest"
+        val rest = if (m >= 60) s(R.string.rest_hm, m / 60, m % 60) else s(R.string.rest_m, m)
+        return s(R.string.edge_st_progress, nm, p.frame, p.total, rest)
     }
 
     // 閉じても畳まないか(=サービスが動いているか)。onDestroy の判断に使う。
@@ -9370,7 +9373,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         kCauseCrash   -> s(R.string.exit_crash)
         kCauseReboot  -> s(R.string.exit_reboot)
         kCauseBattery -> s(R.string.exit_battery)
-        kCauseKilled  -> "外部から停止されたようです(端末の省電力設定をご確認ください)"
+        kCauseKilled  -> s(R.string.exit_killed)
         else          -> ""
     }
 
@@ -9624,7 +9627,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         buildEdgeList(); buildEdgeForm()
         AlertDialog.Builder(this)
             .setTitle(s(R.string.register_this_edge))
-            .setMessage("「" + name + "」の画面にQRを出します。読み取ったあと「設定を送信」を押すと、" +
+            .setMessage(s(R.string.edge_qr_intro, name) +
                         s(R.string.edge_owner_note))
             .setPositiveButton(s(R.string.show_qr)) { _, _ -> requestEdgeQr() }
             .setNegativeButton(s(R.string.cancel_plain), null)
@@ -9636,7 +9639,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .setTitle(s(R.string.edge_delete_title))
             // 【削除＝手放す(2026-09-26)】一覧から消すだけだと端末側に持ち主が残り、
             //  「削除したのに他のスマホで登録できない」ことになる。持ち主も一緒に外す。
-            .setMessage("「" + e.name + "」を登録から削除しますか？ 端末側の持ち主の登録も外すので、他のスマホで登録できるようになります。(端末本体のネットワーク設定は変わりません)")
+            .setMessage(s(R.string.edge_delete_confirm, e.name))
             .setPositiveButton(s(R.string.do_delete)) { _, _ ->
                 // 届くうちに持ち主を外す。届かないときは一覧から消すだけ(次に使うスマホが
                 //  QRで登録し直せば上書きできるので詰まらない)。
@@ -9661,7 +9664,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (edges.isEmpty()) return
         AlertDialog.Builder(this)
             .setTitle(s(R.string.delete_all))
-            .setMessage("登録している" + edges.size + "台をすべて削除しますか？(端末本体の設定は変わりません)")
+            .setMessage(s(R.string.edge_delete_all_confirm, edges.size))
             .setPositiveButton(s(R.string.delete_all)) { _, _ ->
                 val names = edges.map { it.name }
                 // 持ち主だった端末は手放しておく。そうしないと端末側に持ち主が残り、
@@ -9722,7 +9725,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
 
         box.addView(TextView(ctx).apply {
-            text = if (selectedEdgeName.isEmpty()) s(R.string.device_settings_word) else "「" + selectedEdgeName + "」の設定"
+            text = if (selectedEdgeName.isEmpty()) s(R.string.device_settings_word) else s(R.string.edge_settings_named, selectedEdgeName)
             setTypeface(null, Typeface.BOLD)
             textSize = 16f
         })
@@ -9869,7 +9872,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 // 送信先は編集中の登録名。新規(未選択)なら入力欄の名前=まだ撮影していない。
                 val target = selectedEdgeName.ifEmpty { (edgeNameEt?.text?.toString() ?: "").trim() }
                 if (isEdgeCaptureBusy(target)) {
-                    Toast.makeText(ctx, "「" + target + "」は撮影中です。ネットワーク設定を変えるとカメラとの回線が切れます。撮影を止めてから行ってください",
+                    Toast.makeText(ctx, s(R.string.edge_busy_network, target),
                                    Toast.LENGTH_LONG).show()
                 } else {
                     stashEdgeForm()   // 送った内容をその端末の設定として残す
@@ -9922,7 +9925,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (isEdgeCaptureBusy(selectedEdgeName)) {
             setViewTreeEnabled(box, false)
             box.addView(TextView(ctx).apply {
-                text = "「" + selectedEdgeName + "」は撮影中です。撮影が終わってから設定してください。"
+                text = s(R.string.edge_busy_settings, selectedEdgeName)
                 textSize = 12f; setTextColor(Color.parseColor("#C62828")); setPadding(0, dp(10), 0, 0)
             })
         }
@@ -9998,16 +10001,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
                         edgeSsidEt?.setText(apSsid); edgePassEt?.setText(apPass)
                     }
                     edgePopView?.text = if (curMode == "ap")
-                        "PoP取得済。AP SSID: " + apSsid + "   password: " + apPass + " — 変更したい場合だけ書き換えて「設定を送信」"
+                        s(R.string.pop_got_ap, apSsid, apPass)
                     else
-                        "PoP: " + scannedPop + "(取得済)。内容を入力し「設定を送信」"
-                    Toast.makeText(ctx, "QR読取 OK: " + scannedName + " / PoP=" + scannedPop, Toast.LENGTH_LONG).show()
+                        s(R.string.pop_got, scannedPop)
+                    Toast.makeText(ctx, s(R.string.qr_read_ok, scannedName, scannedPop), Toast.LENGTH_LONG).show()
                 } catch (_: Exception) {
-                    Toast.makeText(ctx, "QR内容が不正: " + contents, Toast.LENGTH_LONG).show()
+                    Toast.makeText(ctx, s(R.string.qr_bad, contents), Toast.LENGTH_LONG).show()
                 }
             }
             .addOnCanceledListener { Toast.makeText(ctx, s(R.string.qr_cancelled), Toast.LENGTH_SHORT).show() }
-            .addOnFailureListener { e -> Toast.makeText(ctx, "スキャン失敗: " + e.message, Toast.LENGTH_LONG).show() }
+            .addOnFailureListener { e -> Toast.makeText(ctx, s(R.string.scan_failed, e.message ?: ""), Toast.LENGTH_LONG).show() }
     }
 
     // 入力内容をエッジへ送る(PoP由来鍵で暗号化してBLE書き込み)。
@@ -10483,10 +10486,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val tzNg = (edgeTzOff != nowOffMin())
         if (skew <= kClockSkewSec && !tzNg) { edgeClockWarned.remove(name); return }   // 直った
         if (!edgeClockWarned.add(name)) { return }                                     // 既に知らせた
-        val sb = StringBuilder("外部端末「").append(name).append("」の時計がずれています")
-        if (skew > kClockSkewSec) { sb.append("(").append(skew / 60).append(s(R.string.minute_unit)).append(skew % 60).append("秒)") }
+        val sb = StringBuilder(s(R.string.clock_skew, name))
+        if (skew > kClockSkewSec) { sb.append(s(R.string.clock_skew_amount, skew / 60, skew % 60)) }
         if (tzNg) { sb.append(s(R.string.tz_differs)) }
-        sb.append("。撮影中・待機中は直せません。計画を止めると次の同期で直ります")
+        sb.append(s(R.string.clock_skew_tail))
         Toast.makeText(this, sb.toString(), Toast.LENGTH_LONG).show()
     }
 
@@ -10911,7 +10914,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                     //  (実際にSDカードの挿し忘れで気づけなかった。2026-08-20)。
                     val nt = try { HgeNative.nativeLastEdgeNotice() } catch (_: Exception) { 0 }
                     val n1 = try { HgeNative.nativeLastEdgeNoticeN1() } catch (_: Exception) { 0 }
-                    val why = if (nt != 0) noticeText(nt, n1.toLong()) else "外部端末 開始できませんでした (code=$r)"
+                    val why = if (nt != 0) noticeText(nt, n1.toLong()) else s(R.string.edge_start_failed, r)
                     Toast.makeText(this, why, Toast.LENGTH_LONG).show()
                 }
             }

@@ -217,7 +217,8 @@ class EspFlasherTest {
             f.sync(retries = 1)
             throw AssertionError("失敗すべき場面で通ってしまった")
         } catch (e: EspFlashError) {
-            assertTrue(e.message!!.contains("応答"))
+            // 下まわりの診断文は英語(2026-10-01)。
+            assertTrue(e.message!!.contains("answer"))
         }
     }
 

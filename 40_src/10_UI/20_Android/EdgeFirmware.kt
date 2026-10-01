@@ -97,7 +97,7 @@ object FlashMap {
 /** ファームの素性。決まった番地から読み出したもの。 */
 class FwIdentity(val name: String, val version: String, val valid: Boolean) {
     override fun toString(): String =
-        if (valid) "$name $version" else "読めません"
+        if (valid) "$name $version" else "unreadable"
 }
 
 object EdgeFirmware {
@@ -108,7 +108,7 @@ object EdgeFirmware {
 
     fun parseManifest(json: String): List<EdgeFirmwareEntry> {
         val root = JSONObject(json)
-        val arr = root.optJSONArray("edge") ?: throw EdgeFirmwareError("目録に edge がありません")
+        val arr = root.optJSONArray("edge") ?: throw EdgeFirmwareError("the catalogue has no \"edge\" entry")
         val out = ArrayList<EdgeFirmwareEntry>(arr.length())
         for (i in 0 until arr.length()) {
             val o = arr.getJSONObject(i)
@@ -270,7 +270,7 @@ object EdgeFirmware {
     fun download(entry: EdgeFirmwareEntry, progress: ((Int, Int) -> Unit)? = null): ByteArray {
         val data = httpGet(BASE + entry.file, entry.size, progress)
         if (!verify(data, entry)) {
-            throw EdgeFirmwareError("落としたファームが目録と一致しません(壊れている可能性があります)")
+            throw EdgeFirmwareError("the downloaded firmware does not match the catalogue (it may be corrupt)")
         }
         return data
     }
@@ -289,7 +289,7 @@ object EdgeFirmware {
         c.readTimeout = 60000
         c.instanceFollowRedirects = true
         try {
-            if (c.responseCode != 200) throw EdgeFirmwareError("取得に失敗しました (HTTP ${c.responseCode})")
+            if (c.responseCode != 200) throw EdgeFirmwareError("download failed (HTTP ${c.responseCode})")
             val total = if (expect > 0) expect else c.contentLength
             val out = ByteArrayOutputStream(if (total > 0) total else 64 * 1024)
             val buf = ByteArray(64 * 1024)

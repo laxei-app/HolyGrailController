@@ -63,11 +63,11 @@ class ScheduleView(context: Context) : View(context) {
 
     private data class Zone(val top: Double, val bottom: Double, val label: String, val color: Int)
     private val zones = listOf(
-        Zone(6.0, 0.0, "昼", 0xFFCFE8FF.toInt()),
-        Zone(0.0, -6.0, "市民薄明", 0xFFAEC6E0.toInt()),
-        Zone(-6.0, -12.0, "航海薄明", 0xFF6E7FA0.toInt()),
-        Zone(-12.0, -18.0, "天文薄明", 0xFF3C4A66.toInt()),
-        Zone(-18.0, -24.0, "夜", 0xFF1A1F33.toInt()))
+        Zone(6.0, 0.0, context.getString(R.string.sched_day), 0xFFCFE8FF.toInt()),
+        Zone(0.0, -6.0, context.getString(R.string.civil_twilight), 0xFFAEC6E0.toInt()),
+        Zone(-6.0, -12.0, context.getString(R.string.nautical_twilight), 0xFF6E7FA0.toInt()),
+        Zone(-12.0, -18.0, context.getString(R.string.astro_twilight), 0xFF3C4A66.toInt()),
+        Zone(-18.0, -24.0, context.getString(R.string.sched_night), 0xFF1A1F33.toInt()))
 
     fun setData(blocks: List<Block>) { this.blocks = blocks; invalidate() }
 
@@ -156,8 +156,8 @@ class ScheduleView(context: Context) : View(context) {
             c.drawRoundRect(r, dp(9f), dp(9f), badgeFill)
             c.drawText(blk.date, cx, hTop + dp(16f), badgeTxt)
         }
-        c.drawText("使用する", (ccmX0() + usedX1()) / 2f, hTop + sp(13f), colHdr)
-        c.drawText("使用しない", (usedX1() + width) / 2f, hTop + sp(13f), colHdr)
+        c.drawText(context.getString(R.string.sched_used), (ccmX0() + usedX1()) / 2f, hTop + sp(13f), colHdr)
+        c.drawText(context.getString(R.string.sched_unused), (usedX1() + width) / 2f, hTop + sp(13f), colHdr)
 
         val bandX0 = axisLabelW
         for (z in zones) {
@@ -221,8 +221,8 @@ class ScheduleView(context: Context) : View(context) {
 
         // 左の見出し(行の意味)。縦向きでは上の列見出しだったもの。
         colHdr.textAlign = Paint.Align.LEFT
-        c.drawText("使用する", dp(2f), (usedTopL(bi) + usedBotL(bi)) / 2f + sp(4f), colHdr)
-        c.drawText("使用しない", dp(2f), (usedBotL(bi) + unusedBotL(bi)) / 2f + sp(4f), colHdr)
+        c.drawText(context.getString(R.string.sched_used), dp(2f), (usedTopL(bi) + usedBotL(bi)) / 2f + sp(4f), colHdr)
+        c.drawText(context.getString(R.string.sched_unused), dp(2f), (usedBotL(bi) + unusedBotL(bi)) / 2f + sp(4f), colHdr)
         colHdr.textAlign = Paint.Align.CENTER
 
         // 度目盛り(帯の上)。

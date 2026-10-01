@@ -32,10 +32,11 @@ class BleScanBudgetTest {
     }
 
     @Test
-    fun 待ち時間の文言は秒に丸める() {
-        assertEquals("あと 1 秒ほど", BleScanBudget.waitText(1))
-        assertEquals("あと 1 秒ほど", BleScanBudget.waitText(1000))
-        assertEquals("あと 2 秒ほど", BleScanBudget.waitText(1001))
-        assertEquals("あと 30 秒ほど", BleScanBudget.waitText(30_000))
+    // 文言はリソースへ移した(2026-10-01)ので、ここで見るのは**秒への丸め**だけ。
+    fun 待ち時間は秒に丸める() {
+        assertEquals(1L, BleScanBudget.waitSec(1))
+        assertEquals(1L, BleScanBudget.waitSec(1000))
+        assertEquals(2L, BleScanBudget.waitSec(1001))
+        assertEquals(30L, BleScanBudget.waitSec(30_000))
     }
 }

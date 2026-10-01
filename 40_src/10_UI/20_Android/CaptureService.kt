@@ -155,12 +155,11 @@ class CaptureService : Service() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
             val n = androidx.core.app.NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_note_capture)
-                .setContentTitle("撮影を終えました")
-                .setContentText("端末の制限（連続して動ける時間の上限）に達したため終了しました")
+                .setContentTitle(getString(R.string.fgs_done_title))
+                .setContentText(getString(R.string.fgs_done_text))
                 .setStyle(androidx.core.app.NotificationCompat.BigTextStyle()
-                    .bigText("端末の制限（連続して動ける時間の上限）に達したため、" +
-                             (if (min > 0) "約${min / 60}時間${min % 60}分で" else "") +
-                             "撮影を終了しました。アプリを開いたままにしておくと、この制限は働きません。"))
+                    .bigText(if (min > 0) getString(R.string.fgs_done_big_time, min / 60, min % 60)
+                             else getString(R.string.fgs_done_big)))
                 .setContentIntent(open)
                 .setAutoCancel(true)
                 .build()
@@ -223,8 +222,8 @@ class CaptureService : Service() {
         val nm = getSystemService(NotificationManager::class.java) ?: return
         if (nm.getNotificationChannel(CHANNEL_ID) != null) return
         // 音も振動も出さない。一晩中出しっぱなしになる通知なので、鳴らすと寝られない。
-        val ch = NotificationChannel(CHANNEL_ID, "撮影中", NotificationManager.IMPORTANCE_LOW)
-        ch.description = "撮影を続けている間だけ出ます"
+        val ch = NotificationChannel(CHANNEL_ID, getString(R.string.fgs_shooting), NotificationManager.IMPORTANCE_LOW)
+        ch.description = getString(R.string.fgs_channel_desc)
         ch.setShowBadge(false)
         ch.enableVibration(false)
         ch.setSound(null, null)
@@ -240,7 +239,8 @@ class CaptureService : Service() {
             Intent(this, CaptureService::class.java).setAction(ACTION_STOP_ALL),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
 
-        val title = if (lines.size == 1) "撮影中" else "${lines.size}件 撮影中"
+        val title = if (lines.size == 1) getString(R.string.fgs_shooting)
+                    else getString(R.string.fgs_shooting_n, lines.size)
         val body = lines.joinToString("\n")
         val b = androidx.core.app.NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_note_capture)   // 小アイコンは白一色の形でないと既定の絵に化ける
@@ -252,7 +252,7 @@ class CaptureService : Service() {
             .setOnlyAlertOnce(true)          // 枚数の更新のたびに鳴らさない
             .setShowWhen(false)
             .setPriority(androidx.core.app.NotificationCompat.PRIORITY_LOW)
-            .addAction(0, if (lines.size == 1) "中止" else "すべて中止", stop)
+            .addAction(0, if (lines.size == 1) getString(R.string.fgs_stop_one) else getString(R.string.fgs_stop_all), stop)
         return b.build()
     }
 }

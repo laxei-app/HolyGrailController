@@ -57,7 +57,7 @@ class EdgeFlashActivity : AppCompatActivity() {
             val ok = i.getBooleanExtra(android.hardware.usb.UsbManager.EXTRA_PERMISSION_GRANTED, false)
             val go = pendingAfterPermission
             pendingAfterPermission = null
-            if (ok && go != null) go() else if (!ok) log("USB の使用が許可されませんでした。")
+            if (ok && go != null) go() else if (!ok) log(getString(R.string.fl_usb_denied))
         }
     }
 
@@ -171,7 +171,7 @@ class EdgeFlashActivity : AppCompatActivity() {
     //  ホームのときだけ、MainActivity に「撮影計画を出す」と伝えてから閉じる。
     private fun leaveTo(home: Boolean) {
         if (busy) {
-            android.widget.Toast.makeText(this, "書き込み中です。終わるまでお待ちください",
+            android.widget.Toast.makeText(this, getString(R.string.fl_busy),
                                           android.widget.Toast.LENGTH_SHORT).show()
             return
         }
@@ -182,7 +182,7 @@ class EdgeFlashActivity : AppCompatActivity() {
     @Deprecated("端末の戻るキー。書き込み中だけ止める")
     override fun onBackPressed() {
         if (busy) {
-            android.widget.Toast.makeText(this, "書き込み中です。終わるまでお待ちください",
+            android.widget.Toast.makeText(this, getString(R.string.fl_busy),
                                           android.widget.Toast.LENGTH_SHORT).show()
             return
         }
@@ -201,11 +201,9 @@ class EdgeFlashActivity : AppCompatActivity() {
     private fun refreshState() {
         val dev = EspUsb.findDevice(this)
         stateView.text = if (dev == null) {
-            "USB ケーブルで外部端末をつないでください。\n" +
-            "外部端末側は USB-C です。スマートフォンの端子が違うときは変換ケーブル\n" +
-            "(または OTG アダプタ)を使ってください。充電専用のケーブルでは通信できません。"
+            getString(R.string.fl_connect_help)
         } else {
-            "つながっています: %s\n%s".format(dev.deviceName, EspUsb.describe(dev))
+            getString(R.string.fl_connected, dev.deviceName, EspUsb.describe(dev))
         }
         probeBtn.isEnabled = dev != null && !busy
         writeBtn.isEnabled = dev != null && !busy
@@ -224,9 +222,9 @@ class EdgeFlashActivity : AppCompatActivity() {
     /** 端末が居て、使ってよいと言われていれば block を呼ぶ。まだなら許可を聞く。 */
     private fun withDevice(block: (UsbDevice) -> Unit) {
         val dev = EspUsb.findDevice(this)
-        if (dev == null) { log("USB につながっている端末が見つかりません。"); return }
+        if (dev == null) { log(getString(R.string.fl_no_device)); return }
         if (EspUsb.hasPermission(this, dev)) { block(dev); return }
-        log("USB の使用許可を求めています…")
+        log(getString(R.string.fl_asking_usb))
         pendingAfterPermission = { block(dev) }
         EspUsb.requestPermission(this, dev)
     }
@@ -244,8 +242,8 @@ class EdgeFlashActivity : AppCompatActivity() {
                     .setTitle(title)
                     .setMessage(msg)
                     .setCancelable(false)
-                    .setPositiveButton("書き込む") { _, _ -> answer.offer(true) }
-                    .setNegativeButton("やめる") { _, _ -> answer.offer(false) }
+                    .setPositiveButton(getString(R.string.fl_write)) { _, _ -> answer.offer(true) }
+                    .setNegativeButton(getString(R.string.fl_cancel)) { _, _ -> answer.offer(false) }
                     .show()
             }.onFailure { answer.offer(false) }
         }
@@ -258,7 +256,7 @@ class EdgeFlashActivity : AppCompatActivity() {
         ui.post { refreshState() }
         Thread {
             try { body() }
-            catch (e: Exception) { log("失敗: ${e.message}") }
+            catch (e: Exception) { log(getString(R.string.fl_failed, e.message ?: "")) }
             finally { busy = false; ui.post { refreshState() } }
         }.start()
     }
@@ -274,19 +272,18 @@ class EdgeFlashActivity : AppCompatActivity() {
         val f = EspFlasher(port)
         try {
             runCatching { f.sync(retries = 3) }.onSuccess {
-                log("ダウンロードモードの端末と話せました。")
+                log(getString(R.string.fl_dl_talking))
                 return port to f
             }
             // 私たちのファームなら DTR/RTS で入れられる。工場出荷のままだと効かない。
-            log("自動でダウンロードモードへ入れてみます…")
+            log(getString(R.string.fl_dl_trying))
             port.usbJtagResetToDownload()
             runCatching { f.sync(retries = 5) }.onSuccess {
-                log("ダウンロードモードに入りました。")
+                log(getString(R.string.fl_dl_entered))
                 return port to f
             }
             throw EspFlashError(
-                "ダウンロードモードに入れません。\n" +
-                "端末の電源ボタンを2秒ほど長押しして、LED が点滅したら、もう一度押してください。"
+                getString(R.string.fl_dl_help)
             )
         } catch (e: Exception) {
             port.close()
@@ -296,10 +293,10 @@ class EdgeFlashActivity : AppCompatActivity() {
 
     /** スタブを載せる。載らなくても ROM だけで焼けるので、失敗しても止めない。 */
     private fun tryStub(f: EspFlasher) {
-        if (f.isStubRunning()) { log("スタブは既に載っています。"); return }
+        if (f.isStubRunning()) { log(getString(R.string.fl_stub_already)); return }
         runCatching { f.runStub(EdgeFirmware.loadStub(this)) }
-            .onSuccess { log("高速化のためのスタブを載せました。") }
-            .onFailure { log("スタブを載せられませんでした。ROM だけで進めます(遅くなります)。") }
+            .onSuccess { log(getString(R.string.fl_stub_loaded)) }
+            .onFailure { log(getString(R.string.fl_stub_failed)) }
     }
 
     /** 1バイトも書かずに素性を読む。ここが通れば USB まわりは全部通っている。 */
@@ -310,50 +307,52 @@ class EdgeFlashActivity : AppCompatActivity() {
             val info = f.probe()
             val mb = info.flashSizeBytes / 1024 / 1024
             log("MAC        : ${info.mac}")
-            log("フラッシュ : ${if (mb > 0) "${mb}MB" else "不明"} (RDID 0x%06X)".format(info.flashId))
+            log(getString(R.string.fl_flash_line,
+                if (mb > 0) "${mb}MB" else getString(R.string.fl_unknown), info.flashId))
             val model = when (info.flashSizeBytes) {
                 8 * 1024 * 1024 -> "M5StickS3"
                 16 * 1024 * 1024 -> "M5Stack CoreS3"
-                else -> "判別できません"
+                else -> getString(R.string.fl_unknown_model)
             }
-            log("機種       : $model")
-            log("--- 何も書き込んでいません ---")
+            log(getString(R.string.fl_model_line, model))
+            log(getString(R.string.fl_nothing_written))
             // 【ここで再起動させない(2026-08-26 実機で判明)】調べ終わりに元のファームへ戻すと、
             //  ダウンロードモードから抜けてしまう。工場出荷の端末はこちらから入れ直せないので、
             //  「調べる」の直後に「書き込む」を押しても、また手で長押しする羽目になる。
             //  調べた後はそのまま焼ける状態で置いておくのが素直。
-            log("ダウンロードモードのままにしてあります。続けて「書き込む」を押せます。")
+            log(getString(R.string.fl_stay_dl))
         }
     }
 
     /** 目録を見て、機種に合うものを落として、確かめて、焼く。 */
     private fun doWrite(dev: UsbDevice) {
-        log("目録を取得しています…")
+        log(getString(R.string.fl_catalogue_fetch))
         val list = try {
             EdgeFirmware.fetchManifest()
         } catch (e: Exception) {
-            log("目録を取れません。外部端末の Wi-Fi につながっていると外に出られません。")
+            log(getString(R.string.fl_catalogue_failed))
             throw e
         }
-        log("目録: ${list.size} 機種")
+        log(getString(R.string.fl_catalogue_n, list.size))
 
         val (port, f) = connect(dev)
         port.use {
             tryStub(f)
             val info = f.probe()
             val mb = info.flashSizeBytes / 1024 / 1024
-            log("端末: MAC ${info.mac} / フラッシュ ${if (mb > 0) "${mb}MB" else "不明"}")
+            log(getString(R.string.fl_device_line, info.mac,
+                if (mb > 0) "${mb}MB" else getString(R.string.fl_unknown)))
 
             val entry = EdgeFirmware.pickFor(info.flashSizeBytes, list)
                 ?: throw EdgeFirmwareError(
-                    "この端末(フラッシュ ${if (mb > 0) "${mb}MB" else "不明"})に合うファームが目録にありません。" +
-                    "別機種のものを焼くと起動しなくなるので、ここで止めます。"
+                    getString(R.string.fl_no_match,
+                        if (mb > 0) "${mb}MB" else getString(R.string.fl_unknown))
                 )
-            log("選んだファーム: ${entry.name} 版 ${entry.version} (${entry.build})")
+            log(getString(R.string.fl_chosen, entry.name, entry.version, entry.build))
 
-            log("ファームを落としています…")
+            log(getString(R.string.fl_downloading))
             val image = EdgeFirmware.download(entry) { done, total -> progress(done, total) }
-            log("照合しました (${image.size} バイト)")
+            log(getString(R.string.fl_checked, image.size))
 
             // 【端末に今入っているものを見てから決める】
             //  ・アプリの素性(名前・版数)は決まった番地にある。読み取って版数を比べる
@@ -365,8 +364,8 @@ class EdgeFlashActivity : AppCompatActivity() {
             val devId = runCatching {
                 EdgeFirmware.parseIdentity(f.readFlash(FlashMap.APP_DESC, FlashMap.APP_DESC_LEN))
             }.getOrElse { FwIdentity("", "", false) }
-            log("端末のファーム: $devId")
-            log("焼くファーム  : $imgId")
+            log(getString(R.string.fl_dev_fw, devId.toString()))
+            log(getString(R.string.fl_img_fw, imgId.toString()))
 
             val sameBase = runCatching {
                 f.regionMatches(FlashMap.BOOTLOADER,
@@ -382,15 +381,15 @@ class EdgeFlashActivity : AppCompatActivity() {
             val ask = EdgeFirmware.askBefore(devId, imgId)
             if (ask != FlashAsk.NONE) {
                 val body = if (ask == FlashAsk.SAME_VERSION)
-                    "端末には同じ版数 ${devId.version} が入っています。\n書き込みますか?"
+                    getString(R.string.fl_ask_same, devId.version)
                 else
-                    "端末の版数 ${devId.version} より古い ${imgId.version} を書きます。\n古い版へ戻しますか?"
-                val extra = if (sameBase) "\n\n設定は残ります。"
-                            else "\n\n土台が違うのでまるごと書きます。設定は消えます。"
-                if (!confirm(if (ask == FlashAsk.SAME_VERSION) "同じ版数です" else "古い版へ戻します",
+                    getString(R.string.fl_ask_older, devId.version, imgId.version)
+                val extra = if (sameBase) getString(R.string.fl_ask_keep)
+                            else getString(R.string.fl_ask_erase)
+                if (!confirm(if (ask == FlashAsk.SAME_VERSION) getString(R.string.fl_ask_same_title) else getString(R.string.fl_ask_older_title),
                              body + extra)) {
-                    log("取りやめました。")
-                    log("--- 何もせずに終わります ---")
+                    log(getString(R.string.fl_cancelled))
+                    log(getString(R.string.fl_nothing_done))
                     f.watchdogReset()
                     return@use
                 }
@@ -400,17 +399,17 @@ class EdgeFlashActivity : AppCompatActivity() {
                                              approvedSame = (ask == FlashAsk.SAME_VERSION))
             val plan = EdgeFirmware.planWrite(image, action)
             if (plan == null) {
-                log("同じ版数が入っています。書き込む必要はありません。")
-                log("--- 何もせずに終わります ---")
+                log(getString(R.string.fl_same_skip))
+                log(getString(R.string.fl_nothing_done))
                 f.watchdogReset()
                 return@use
             }
             if (plan.keepsSettings) {
-                log("同じ土台です。**設定を残して**本体だけ書き換えます。")
+                log(getString(R.string.fl_app_only))
             } else if (!devId.valid) {
-                log("端末の素性が読めません。土台ごと全部書きます。**設定は消えます**。")
+                log(getString(R.string.fl_full_unknown))
             } else {
-                log("土台が違います(区切りの変更など)。まるごと書きます。**設定は消えます**。")
+                log(getString(R.string.fl_full_diff))
             }
 
             // 設定が本当に残ったかを、書き込みの前後で見比べられるようにしておく。
@@ -420,52 +419,52 @@ class EdgeFlashActivity : AppCompatActivity() {
                     .getOrElse { "" }
             } else ""
 
-            log("書き込みます。**抜かないでください**")
+            log(getString(R.string.fl_writing))
             f.writeFlash(plan.offset, plan.data) { phase, done, total ->
                 if (phase == "write") progress(done, total)
             }
             progress(100, 100)
 
-            log("端末側で照合しています…")
+            log(getString(R.string.fl_verifying))
             val want = EspFlasher.md5hex(plan.data)
             val got = runCatching { f.flashMd5(plan.offset, plan.data.size) }
-                .getOrElse { log("照合できません: ${it.message}"); "" }
+                .getOrElse { log(getString(R.string.fl_verify_failed, it.message ?: "")); "" }
             when {
                 got.isEmpty() ->
                     // 端末が MD5 を計算できない場合。書き込み自体はブロックごとに検査値を
                     //  付けて送っており、落としたファームも SHA256 で確かめてある。
                     //  照合できないことだけを残して先へ進む(黙って成功にはしない)。
-                    log("※ 端末側の照合はできませんでした。書き込みは完了しています。")
+                    log(getString(R.string.fl_verify_skipped))
                 got != want -> {
                     val raw = runCatching { f.flashMd5Raw(plan.offset, plan.data.size) }
                         .getOrElse { ByteArray(0) }
-                    log("期待 $want")
-                    log("端末 $got")
-                    log("応答 %d バイト: %s".format(raw.size,
+                    log(getString(R.string.fl_expect, want))
+                    log(getString(R.string.fl_actual, got))
+                    log(getString(R.string.fl_raw, raw.size,
                         raw.take(40).joinToString("") { "%02x".format(it) }))
-                    throw EspFlashError("書き込んだ中身が一致しません。")
+                    throw EspFlashError(getString(R.string.fl_verify_bad))
                 }
-                else -> log("一致しました。")
+                else -> log(getString(R.string.fl_verify_ok))
             }
 
             if (plan.keepsSettings && nvsBefore.isNotEmpty()) {
                 val nvsAfter = runCatching { f.flashMd5(FlashMap.NVS, FlashMap.NVS_END - FlashMap.NVS) }
                     .getOrElse { "" }
-                if (nvsAfter == nvsBefore) log("設定の領域は手つかずです(照合値 ${nvsBefore.take(8)}…)")
-                else log("※ 設定の領域が変わっています。BLE で入れ直してください。")
+                if (nvsAfter == nvsBefore) log(getString(R.string.fl_nvs_intact, nvsBefore.take(8)))
+                else log(getString(R.string.fl_nvs_changed))
             }
 
             // DTR/RTS のリセットではダウンロードモードから抜けられない(実測)。
             f.watchdogReset()
-            log("--- 完了。端末が起動します ---")
+            log(getString(R.string.fl_done))
             if (plan.keepsSettings) {
-                log("設定は残してあります。そのまま使えます。")
+                log(getString(R.string.fl_settings_kept))
             } else {
                 // 【入れ直し方まで書くこと(2026-08-27 実機で詰まった)】名前が消えると、
                 //  エッジ設定の一覧で以前の名前を選んだままでは BLE で見つからない。
                 //  「＋ 新規エッジ端末」を選べば名前を問わず拾う。
-                log("設定は消えています。端末設定の「＋ 新規端末」を選んでから")
-                log("QR表示を要求し、端末名と Wi-Fi を入れ直してください。")
+                log(getString(R.string.fl_settings_lost1))
+                log(getString(R.string.fl_settings_lost2))
             }
         }
     }

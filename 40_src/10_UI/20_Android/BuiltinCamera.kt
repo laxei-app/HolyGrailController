@@ -263,9 +263,9 @@ object BuiltinCamera {
             if (diag > 0.0) {
                 val eq = f * (43.27 / diag)
                 kind = when {
-                    eq < 20.0 -> "超広角"
-                    eq < 45.0 -> "広角"
-                    else      -> "望遠"
+                    eq < 20.0 -> appCtx!!.getString(R.string.lens_ultrawide)
+                    eq < 45.0 -> appCtx!!.getString(R.string.lens_wide)
+                    else      -> appCtx!!.getString(R.string.lens_tele)
                 }
                 mm = " " + Math.round(eq).toString() + "mm"
             }

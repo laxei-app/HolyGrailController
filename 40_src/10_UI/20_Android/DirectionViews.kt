@@ -1,4 +1,4 @@
-package app.laxei.twylapse
+﻿package app.laxei.twylapse
 
 // 撮影計画の「開始時の撮影方向(方位磁石+矢印)」「開始時の仰角(カメラの絵を回転)」の入力ウィジェット。
 // 仕様書10 §7.3.1 画面330。ドラッグで角度を変え、指を離したとき onCommit を呼ぶ。
@@ -109,10 +109,10 @@ class CompassView @JvmOverloads constructor(context: Context, attrs: AttributeSe
     private fun drawMarkers(c: Canvas) {
         val all = ArrayList<Mark>()
         fun add(az: Float, label: String, p: Paint) { if (!az.isNaN()) all.add(Mark(norm(az), label, p)) }
-        add(sunriseAz, "日の出", sunP)
-        add(sunsetAz, "日の入", sunP)
-        add(moonriseAz, "月の出", moonP)
-        add(moonsetAz, "月の入", moonP)
+        add(sunriseAz, context.getString(R.string.sunrise_word), sunP)
+        add(sunsetAz, context.getString(R.string.sunset_short), sunP)
+        add(moonriseAz, context.getString(R.string.moonrise_word), moonP)
+        add(moonsetAz, context.getString(R.string.moonset_short), moonP)
         if (all.isEmpty()) return
         for (m in all) c.drawCircle(px(m.az, rad), py(m.az, rad), dp(5f), m.dot)
 

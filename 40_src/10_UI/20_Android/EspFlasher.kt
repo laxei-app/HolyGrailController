@@ -101,7 +101,7 @@ class EspFlasher(private val io: EspTransport) {
                 last = e
             }
         }
-        throw EspFlashError("ダウンロードモードの端末が応答しません: ${last?.message}")
+        throw EspFlashError("no answer from the device in download mode: ${last?.message}")
     }
 
     /** 相手がもうスタブなら true([sync] が判定する)。 */
@@ -124,7 +124,7 @@ class EspFlasher(private val io: EspTransport) {
         checkCommand(MEM_END, le32(0, stub.entry), 0, 3000)
         val hello = readPacket(3000)
         if (!hello.contentEquals("OHAI".toByteArray())) {
-            throw EspFlashError("スタブが起動しませんでした")
+            throw EspFlashError("the stub did not start")
         }
         stubRunning = true
     }
@@ -184,7 +184,7 @@ class EspFlasher(private val io: EspTransport) {
      * 受け取った中身と突き合わせて取りこぼしが無いことを確かめる。
      */
     fun readFlash(offset: Int, length: Int): ByteArray {
-        if (!stubRunning) throw EspFlashError("読み出しにはスタブが要ります")
+        if (!stubRunning) throw EspFlashError("reading back needs the stub")
         val sector = 0x1000
         checkCommand(READ_FLASH, le32(offset, length, sector, 64), 0, 10000)
         val out = ByteArrayOutputStream(length)
@@ -192,15 +192,15 @@ class EspFlasher(private val io: EspTransport) {
             val p = readPacket(10000)
             out.write(p)
             if (out.size() < length && p.size < sector) {
-                throw EspFlashError("読み出しが途切れました(%d/%d)".format(out.size(), length))
+                throw EspFlashError("read back stopped short (%d/%d)".format(out.size(), length))
             }
             io.write(slipEncode(le32(out.size())))      // ここまで受け取った、と返す
         }
         val digest = readPacket(10000)
-        if (digest.size != 16) throw EspFlashError("読み出しの照合値が来ません")
+        if (digest.size != 16) throw EspFlashError("no checksum came back")
         val data = out.toByteArray()
         val want = digest.joinToString("") { "%02x".format(it) }
-        if (md5hex(data) != want) throw EspFlashError("読み出した中身が壊れています")
+        if (md5hex(data) != want) throw EspFlashError("what was read back is corrupt")
         return data
     }
 
@@ -257,7 +257,7 @@ class EspFlasher(private val io: EspTransport) {
     fun readReg(addr: Int): Int {
         val (value, data) = command(READ_REG, le32(addr), 0, 3000)
         if (data.isNotEmpty() && data[0].toInt() != 0) {
-            throw EspFlashError("番地 0x%08x が読めません".format(addr))
+            throw EspFlashError("cannot read address 0x%08x".format(addr))
         }
         return value
     }
@@ -303,7 +303,7 @@ class EspFlasher(private val io: EspTransport) {
         for (i in 0 until 10) {
             if (readReg(cmdReg) and (1 shl 18) == 0) { done = true; break }
         }
-        if (!done) throw EspFlashError("SPI の命令が終わりません")
+        if (!done) throw EspFlashError("the SPI command never finished")
 
         val status = readReg(w0Reg)
         writeReg(usrReg, oldUsr)
@@ -315,12 +315,12 @@ class EspFlasher(private val io: EspTransport) {
     private fun checkCommand(op: Int, data: ByteArray, chk: Int, timeoutMs: Int): ByteArray {
         val (_, body) = command(op, data, chk, timeoutMs)
         if (body.size < STATUS_BYTES) {
-            throw EspFlashError("命令 0x%02x の応答が短すぎます(%d バイト)".format(op, body.size))
+            throw EspFlashError("the answer to command 0x%02x is too short (%d bytes)".format(op, body.size))
         }
         val status = body[body.size - STATUS_BYTES].toInt() and 0xFF
         if (status != 0) {
             val reason = body[body.size - STATUS_BYTES + 1].toInt() and 0xFF
-            throw EspFlashError("命令 0x%02x が失敗(status=%d reason=0x%02x)".format(op, status, reason))
+            throw EspFlashError("command 0x%02x failed (status=%d reason=0x%02x)".format(op, status, reason))
         }
         return body.copyOfRange(0, body.size - STATUS_BYTES)
     }
@@ -334,14 +334,14 @@ class EspFlasher(private val io: EspTransport) {
             val r = parseResponse(pkt) ?: continue
             if (r.op == op) return r.value to r.body
         }
-        throw EspFlashError("命令 0x%02x の応答がありません".format(op))
+        throw EspFlashError("no answer to command 0x%02x".format(op))
     }
 
     private fun readPacket(timeoutMs: Int): ByteArray {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (true) {
             rx.take()?.let { return it }
-            if (System.currentTimeMillis() >= deadline) throw EspFlashError("応答待ちが時間切れ")
+            if (System.currentTimeMillis() >= deadline) throw EspFlashError("timed out waiting for an answer")
             val got = io.read(4096, (deadline - System.currentTimeMillis()).toInt().coerceAtLeast(1))
             if (got.isNotEmpty()) rx.feed(got)
         }

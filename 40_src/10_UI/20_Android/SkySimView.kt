@@ -201,7 +201,7 @@ class SkyRenderView(context: Context) : View(context) {
         c.restore()
 
         if (objs.isEmpty()) {
-            c.drawText("この方向・時刻では画角内に天体がありません", r.centerX(), r.centerY(), empty)
+            c.drawText(context.getString(R.string.sim_empty), r.centerX(), r.centerY(), empty)
         }
     }
 
@@ -277,7 +277,7 @@ class SimPage(
         // ⓪ タイトル(2026-08-08 UI依頼で2行構成へ)
         //   1行目: 撮影計画名を左詰め。薄明ページの見出しと同じ見え方(15sp 太字・淡い青地)に揃える。
         //   2行目: 「撮影シミュレーション」。薄明ページの帯見出し(12sp 太字)と同じ大きさ。
-        planNameView.text = "撮影計画"
+        planNameView.text = context.getString(R.string.title_plan)
         planNameView.textSize = 15f
         planNameView.gravity = Gravity.START
         planNameView.setTypeface(planNameView.typeface, android.graphics.Typeface.BOLD)
@@ -291,7 +291,7 @@ class SimPage(
             leftMargin = -dp(12f); rightMargin = -dp(12f)
         })
 
-        titleView.text = "撮影シミュレーション"
+        titleView.text = context.getString(R.string.sim_title)
         titleView.textSize = 12f
         titleView.gravity = Gravity.START
         titleView.setTypeface(titleView.typeface, android.graphics.Typeface.BOLD)
@@ -303,7 +303,7 @@ class SimPage(
         //    並べる場所は relayout() が決める(縦向き=縦一列 / 横向き=左半分)。
 
         // ①' センサー寸法が未登録のときの代替表示(絵と入れ替える)。
-        noSensorView.text = "センサーサイズが登録されていないので表示できません"
+        noSensorView.text = context.getString(R.string.sim_no_sensor)
         noSensorView.textSize = 13f
         noSensorView.gravity = Gravity.CENTER
         noSensorView.setTextColor(0xFF888888.toInt())
@@ -338,11 +338,11 @@ class SimPage(
         // ⑤ 撮影方向 / 仰角(タイトル文字つき)。ドラッグ中もイメージがリアルタイムに追従する。
         titlesRow.orientation = HORIZONTAL
         titlesRow.addView(TextView(context).apply {
-            text = "撮影方向"; textSize = 13f; gravity = Gravity.CENTER
+            text = context.getString(R.string.sim_direction); textSize = 13f; gravity = Gravity.CENTER
             setTypeface(typeface, android.graphics.Typeface.BOLD)
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         titlesRow.addView(TextView(context).apply {
-            text = "仰角"; textSize = 13f; gravity = Gravity.CENTER
+            text = context.getString(R.string.sim_elevation); textSize = 13f; gravity = Gravity.CENTER
             setTypeface(typeface, android.graphics.Typeface.BOLD)
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
@@ -359,7 +359,7 @@ class SimPage(
         elevationView.onCommit = { e -> el = e.toDouble(); renderSky(); onDirection(az.toFloat(), el.toFloat()) }
 
         // ⑥ 横向きで撮る(下部固定)
-        landscapeCheck.text = "横向きで撮る(ランドスケープ)"
+        landscapeCheck.text = context.getString(R.string.plan_landscape)
         landscapeCheck.textSize = 13f
         landscapeCheck.setOnCheckedChangeListener { _, checked ->
             if (suppress) return@setOnCheckedChangeListener

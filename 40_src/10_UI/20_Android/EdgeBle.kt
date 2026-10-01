@@ -66,7 +66,8 @@ object BleScanBudget {
     @Synchronized fun reset() { starts.clear() }
 
     /** 「あと◯秒」の文言。 */
-    fun waitText(ms: Long): String = "あと %d 秒ほど".format((ms + 999) / 1000)
+    // 文言は呼んだ側で組む(ここは Context を持たない)。
+    fun waitSec(ms: Long): Long = (ms + 999) / 1000
 }
 
 @SuppressLint("MissingPermission")  // 呼び出し側(MainActivity)で BLUETOOTH_SCAN/CONNECT を確認してから使う
@@ -161,11 +162,11 @@ class EdgeBle(
     private fun beginScanConnect() {
         val mgr = ctx.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
         val adapter = mgr?.adapter
-        if (adapter == null || !adapter.isEnabled) { finish(false, "Bluetoothが無効です"); return }
+        if (adapter == null || !adapter.isEnabled) { finish(false, ctx.getString(R.string.ble_off)); return }
         // 送信(provision)は、直前に QR を表示させたのと同じエッジへ直接接続する(複数エッジでも取り違えない)。
         if (!startOnly && lastAddress != null) {
             try {
-                log("端末へ直接接続中...")
+                log("connecting directly…")
                 connect(adapter.getRemoteDevice(lastAddress))
                 return
             } catch (_: Exception) { /* だめならスキャンにフォールバック */ }
@@ -173,8 +174,8 @@ class EdgeBle(
         // 続けて押されると Android が検索を止めてしまう。始める前に見て、待つよう伝える。
         val wait = BleScanBudget.waitMs()
         if (wait > 0) {
-            finish(false, "BLEの検索を続けて行ったため、Android が検索を受け付けません。" +
-                          "${BleScanBudget.waitText(wait)}あけてから、もう一度お試しください")
+            finish(false, ctx.getString(R.string.ble_budget,
+                          ctx.getString(R.string.ble_wait_sec, BleScanBudget.waitSec(wait))))
             return
         }
         unnamedCandidate = null
@@ -182,7 +183,7 @@ class EdgeBle(
         scanner = adapter.bluetoothLeScanner
         val filter = ScanFilter.Builder().setServiceUuid(ParcelUuid(SVC)).build()
         val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
-        log(if (wantName.isEmpty()) "BLEスキャン中 (未設定の端末)..." else "BLEスキャン中 (TLP-$wantName)...")
+        log(if (wantName.isEmpty()) "BLE scan (device with no name)…" else "BLE scan (TLP-$wantName)…")
         scanCb = object : ScanCallback() {
             override fun onScanResult(callbackType: Int, r: ScanResult) {
                 // 名前が一致するものだけ拾う(2026-08-08 UI依頼)。一致しなければスキャンを続ける。
@@ -193,17 +194,16 @@ class EdgeBle(
                     return
                 }
                 stopScan()
-                log("発見 ${advName(r) ?: r.device.address}。接続中...")
+                log("found ${advName(r) ?: r.device.address}; connecting…")
                 connect(r.device)
             }
             override fun onScanFailed(errorCode: Int) {
                 finish(false, when (errorCode) {
                     SCAN_TOO_FREQUENT ->
-                        "BLEの検索が続きすぎたため、Android が検索を止めました。" +
-                        "30秒ほどあけてから、もう一度お試しください"
-                    1 -> "すでに検索中です。少し待ってからお試しください"
-                    2 -> "BLEの検索を始められません。Bluetooth を入れ直してみてください"
-                    else -> "スキャン失敗 code=$errorCode"
+                        ctx.getString(R.string.ble_scan_stopped)
+                    1 -> ctx.getString(R.string.ble_already_scanning)
+                    2 -> ctx.getString(R.string.ble_cannot_scan)
+                    else -> ctx.getString(R.string.ble_scan_failed, errorCode)
                 })
             }
         }
@@ -217,21 +217,20 @@ class EdgeBle(
                 when {
                     fallback != null -> {
                         // 名前を広告しないエッジしか居ない = 旧ファーム。従来動作で接続する。
-                        log("名前を広告しない端末へ接続します(端末のファームが古い可能性)")
+                        log("connecting to a device that does not advertise a name (its firmware may be old)")
                         connect(fallback)
                     }
                     // 焼き直した直後は名前が消えている。1台だけならそれが目当ての機体。
                     wantName.isNotEmpty() && unset.size == 1 -> {
-                        log("「$wantName」は見つかりませんが、名前が未設定の端末が1台あります。" +
-                            "ファームを書き直した直後はこうなります。そちらへ接続します")
+                        log("“$wantName” not found, but one device has no name set " +
+                            "(normal just after re-flashing); connecting to it")
                         connect(unset[0])
                     }
                     wantName.isNotEmpty() && unset.size > 1 ->
-                        finish(false, "「$wantName」が見つかりません。名前が未設定の端末が${unset.size}台あるため、" +
-                                      "取り違えを避けて中止しました。1台だけ電源を入れてやり直してください")
+                        finish(false, ctx.getString(R.string.ble_ambiguous, wantName, unset.size))
                     else ->
-                        finish(false, if (wantName.isEmpty()) "端末が見つかりません(広告なし)"
-                                      else "外部端末「$wantName」が見つかりません(電源とBluetoothを確認してください)")
+                        finish(false, if (wantName.isEmpty()) ctx.getString(R.string.ble_no_device)
+                                      else ctx.getString(R.string.ble_named_not_found, wantName))
                 }
             }
         }, 12000)
@@ -252,14 +251,14 @@ class EdgeBle(
         // 【必ず終わらせる(2026-09-26)】以前は「書いたら5秒で閉じる」保険しか無く、その手前
         //  (サービス探索・通知の購読)で止まると**何も起きないまま画面が固まった**(実機で発生)。
         //  途中どこで詰まっても、ここで打ち切って理由を出す。
-        handler.postDelayed({ if (!done) finish(false, "外部端末が応答しません(接続はできたが手順が進みませんでした)") }, 15000)
+        handler.postDelayed({ if (!done) finish(false, ctx.getString(R.string.ble_no_reply)) }, 15000)
         gatt = dev.connectGatt(ctx, false, object : BluetoothGattCallback() {
             override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
-                if (newState == BluetoothProfile.STATE_CONNECTED) { log("接続。MTU要求..."); g.requestMtu(247) }
-                else if (newState == BluetoothProfile.STATE_DISCONNECTED) { if (!done) finish(false, "切断されました") }
+                if (newState == BluetoothProfile.STATE_CONNECTED) { log("connected; asking for a larger MTU…"); g.requestMtu(247) }
+                else if (newState == BluetoothProfile.STATE_DISCONNECTED) { if (!done) finish(false, ctx.getString(R.string.ble_disconnected)) }
             }
             override fun onMtuChanged(g: BluetoothGatt, mtu: Int, status: Int) {
-                log("MTU=$mtu。サービス探索...")
+                log("MTU=$mtu; discovering services…")
                 if (svcRequested) { rec("mtu again (ignored)"); return }
                 svcRequested = true
                 g.discoverServices()
@@ -267,9 +266,9 @@ class EdgeBle(
             override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
                 // 【どこまで進んだか見えるようにする(2026-09-26)】ここが無く、「サービス探索...」で
                 //  止まったときに探索が終わったのかどうかも分からなかった。
-                log("サービス発見(status=$status)。通知を購読...")
+                log("services found (status=$status); subscribing…")
                 rec("services discovered status=" + status + " svc=" + (g.getService(SVC) != null))
-                val svc = g.getService(SVC) ?: run { finish(false, "サービスが見つかりません"); return }
+                val svc = g.getService(SVC) ?: run { finish(false, ctx.getString(R.string.ble_no_service)); return }
                 // 【QR要求では購読しない(2026-09-26 実機で確定)】Android は GATT の操作を
                 //  **1つずつしか受け付けない**。購読(CCCD書込)が終わらないうちに次の書き込みを
                 //  出すと、黙って捨てられてコールバックも来ない。SH-M08 では購読の応答が
@@ -286,7 +285,7 @@ class EdgeBle(
                 } else nextAfterSubscribe(g)
             }
             override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) {
-                log("購読できました(status=$status)")
+                log("subscribed (status=$status)")
                 nextAfterSubscribe(g)
             }
             override fun onCharacteristicWrite(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
@@ -297,7 +296,7 @@ class EdgeBle(
                     if (status == BluetoothGatt.GATT_SUCCESS) {
                         ctrlAcked = true
                         rec("ctrl write ok")
-                        log("QR表示を要求。端末の応答待ち...")
+                        log("asked for the QR code; waiting for the device…")
                         // 【通知に頼らない(2026-09-26 実機 SH-M08)】Android 10 の機種で通知の
                         //  購読(CCCD書込)の応答が返らず、端末が返す理由("deny")を受け取れなかった。
                         //  STAT は読み出しもできるので、少し待って**読みに行く**。何度か試すのは、
@@ -305,10 +304,10 @@ class EdgeBle(
                         readStatSoon(g, 400); readStatSoon(g, 1200); readStatSoon(g, 2500)
                         return
                     }
-                    else finish(false, "start書込失敗 status=$status")
+                    else finish(false, ctx.getString(R.string.ble_write_start_failed, status))
                 } else if (c.uuid == CRED) {
-                    if (status == BluetoothGatt.GATT_SUCCESS) log("認証情報を送信。応答待ち...")
-                    else finish(false, "書込失敗 status=$status")
+                    if (status == BluetoothGatt.GATT_SUCCESS) log("credentials sent; waiting for the answer…")
+                    else finish(false, ctx.getString(R.string.ble_write_failed, status))
                 }
             }
             override fun onCharacteristicRead(g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
@@ -331,7 +330,7 @@ class EdgeBle(
     }
 
     private fun handleStat(s: String) {
-        log("端末の応答: $s")
+        log("device says: $s")
         rec("stat=" + s)
         // 【読み出しでは古い値を掴むことがある(2026-09-26)】STAT は前回の結果を保持している。
         //  QR要求のときは、その用事の答え("qr"/"deny"/"busy")だけを受け取る。前回の "ok" を
@@ -339,13 +338,12 @@ class EdgeBle(
         if (startOnly && !(s.startsWith("qr") || s.startsWith("deny") || s.startsWith("busy"))) { return }
         when {
             // QR要求の答え。出たなら成功として閉じ、読み取りへ進んでもらう。
-            s.startsWith("qr")   -> if (startOnly) finish(true, "端末にQRを表示しました。読み取ってください")
-            s.startsWith("ok")   -> finish(true, "設定を保存しました(端末がWiFi再接続)")
+            s.startsWith("qr")   -> if (startOnly) finish(true, ctx.getString(R.string.ble_qr_shown))
+            s.startsWith("ok")   -> finish(true, ctx.getString(R.string.ble_saved))
             // 別のスマホに登録されている。QRも設定も通らないので、理由を出して終わる。
-            s.startsWith("deny") -> finish(false, "この外部端末は別のスマホに登録されています。" +
-                                                 "使うには、今の持ち主のスマホで削除するか、端末の電源を入れ直して1分以内に登録してください")
-            s.startsWith("busy") -> finish(false, "外部端末が撮影中のため設定できません")
-            s.startsWith("fail") -> finish(false, "端末側で復号失敗(PoP不一致、または合言葉の期限切れ)。QRを出し直してください")
+            s.startsWith("deny") -> finish(false, ctx.getString(R.string.ble_deny))
+            s.startsWith("busy") -> finish(false, ctx.getString(R.string.ble_busy))
+            s.startsWith("fail") -> finish(false, ctx.getString(R.string.ble_decrypt_failed))
         }
     }
 
@@ -360,7 +358,7 @@ class EdgeBle(
 
     private var ctrlTries = 0
     private fun writeCtrlStart(g: BluetoothGatt) {
-        val ctrl = g.getService(SVC)?.getCharacteristic(CTRL) ?: run { finish(false, "CTRL特性無し"); return }
+        val ctrl = g.getService(SVC)?.getCharacteristic(CTRL) ?: run { finish(false, ctx.getString(R.string.ble_no_ctrl)); return }
         ctrlTries += 1
         // 【誰が頼んでいるかを名乗る(2026-09-26)】端末は持ち主以外にはQRを出さない。
         //  名乗らないと、別のスマホに登録済みの端末では断られる(古い端末は中身を見ない)。
@@ -384,12 +382,12 @@ class EdgeBle(
             readStatSoon(g, 2600); readStatSoon(g, 4000)
             // 端末の答え("qr" / "deny")が来なければ、従来どおり「要求した」で閉じる
             //  (答えを返さない古い端末のため)。
-            handler.postDelayed({ if (!done) finish(true, "QR表示を要求しました(端末からの応答なし)") }, 6000)
+            handler.postDelayed({ if (!done) finish(true, ctx.getString(R.string.ble_qr_requested)) }, 6000)
         }
     }
 
     private fun writeCred(g: BluetoothGatt) {
-        val cred = g.getService(SVC)?.getCharacteristic(CRED) ?: run { finish(false, "CRED特性無し"); return }
+        val cred = g.getService(SVC)?.getCharacteristic(CRED) ?: run { finish(false, ctx.getString(R.string.ble_no_cred)); return }
         if (Build.VERSION.SDK_INT >= 33) {
             g.writeCharacteristic(cred, payload, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT)
         } else {
@@ -398,7 +396,7 @@ class EdgeBle(
             @Suppress("DEPRECATION") g.writeCharacteristic(cred)
         }
         // 応答(STAT通知)が来ない実装でも完了扱いにする保険。
-        handler.postDelayed({ if (!done) finish(true, "送信完了(端末の応答待ちタイムアウト)") }, 7000)
+        handler.postDelayed({ if (!done) finish(true, ctx.getString(R.string.ble_sent_timeout)) }, 7000)
     }
 
     // 少し待ってから STAT を読む。通知が来ない機種でも端末の答えを拾える。

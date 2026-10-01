@@ -63,9 +63,9 @@ object EspUsb {
 
     /** その機器が今どういう顔をしているか(案内の文言を変えるのに使う)。 */
     fun describe(dev: UsbDevice): String = when (dev.productId) {
-        PID_USB_JTAG -> "ダウンロードモード または 本体ファーム"
-        PID_M5_FACTORY -> "工場出荷のファーム"
-        else -> "不明 (PID 0x%04X)".format(dev.productId)
+        PID_USB_JTAG -> "download mode or the main firmware"
+        PID_M5_FACTORY -> "factory firmware"
+        else -> "unknown (PID 0x%04X)".format(dev.productId)
     }
 }
 
@@ -95,7 +95,7 @@ class EspUsbSerial private constructor(
          */
         fun open(ctx: Context, dev: UsbDevice): EspUsbSerial {
             val um = ctx.getSystemService(Context.USB_SERVICE) as UsbManager
-            if (!um.hasPermission(dev)) throw EspFlashError("USB の使用が許可されていません")
+            if (!um.hasPermission(dev)) throw EspFlashError("USB access has not been allowed")
 
             var data: UsbInterface? = null
             var ctrlId = 0
@@ -115,7 +115,7 @@ class EspUsbSerial private constructor(
                     if (bulk.size >= 2) { data = itf; break }
                 }
             }
-            val di = data ?: throw EspFlashError("CDC のデータ用インタフェースが見つかりません")
+            val di = data ?: throw EspFlashError("no CDC data interface found")
 
             var epIn: UsbEndpoint? = null
             var epOut: UsbEndpoint? = null
@@ -124,12 +124,12 @@ class EspUsbSerial private constructor(
                 if (ep.type != UsbConstants.USB_ENDPOINT_XFER_BULK) continue
                 if (ep.direction == UsbConstants.USB_DIR_IN) epIn = epIn ?: ep else epOut = epOut ?: ep
             }
-            if (epIn == null || epOut == null) throw EspFlashError("USB の送受信の口が見つかりません")
+            if (epIn == null || epOut == null) throw EspFlashError("no USB endpoints found")
 
-            val conn = um.openDevice(dev) ?: throw EspFlashError("USB を開けません")
+            val conn = um.openDevice(dev) ?: throw EspFlashError("cannot open the USB device")
             if (!conn.claimInterface(di, true)) {
                 conn.close()
-                throw EspFlashError("USB のインタフェースを掴めません")
+                throw EspFlashError("cannot claim the USB interface")
             }
             val port = EspUsbSerial(conn, di, ctrlId, epIn, epOut)
             // USB-Serial/JTAG では速度に意味は無いが、CDC の作法として一度入れておく。
@@ -151,8 +151,8 @@ class EspUsbSerial private constructor(
         while (off < data.size) {
             val chunk = if (off == 0) data else data.copyOfRange(off, data.size)
             val sent = conn.bulkTransfer(epOut, chunk, chunk.size, 3000)
-            if (sent < 0) throw EspFlashError("USB へ送れません")
-            if (sent == 0) throw EspFlashError("USB へ送れません(0バイト)")
+            if (sent < 0) throw EspFlashError("cannot write to USB")
+            if (sent == 0) throw EspFlashError("cannot write to USB (0 bytes)")
             off += sent
         }
     }

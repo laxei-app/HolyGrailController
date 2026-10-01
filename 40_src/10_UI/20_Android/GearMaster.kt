@@ -129,10 +129,10 @@ object GearMaster {
         return try {
             val remote = parseManifest(httpGet(BASE + MANIFEST).toString(Charsets.UTF_8))
             val have = installedRevision(baseDir)
-            log?.invoke("機材マスタ: 手元=版 $have / 公開=版 ${remote.revision} (schema ${remote.schema})")
+            log?.invoke("gear master: local=rev $have / published=rev ${remote.revision} (schema ${remote.schema})")
             if (!shouldAdopt(remote, have)) {
                 if (remote.schema > SCHEMA_MAX) {
-                    log?.invoke("機材マスタの構造が新しすぎます(schema ${remote.schema})。アプリを更新してください")
+                    log?.invoke("gear master schema is too new (schema ${remote.schema}); please update the app")
                 }
                 return null
             }
@@ -140,7 +140,7 @@ object GearMaster {
             val got = LinkedHashMap<String, ByteArray>()
             for (f in remote.files) {
                 val d = httpGet(BASE + f.name)
-                if (!verify(d, f)) { log?.invoke("機材マスタ ${f.name} が壊れています"); return null }
+                if (!verify(d, f)) { log?.invoke("gear master ${f.name} is corrupt"); return null }
                 got[f.name] = d
             }
             val dir = File(baseDir, "master")
@@ -148,10 +148,10 @@ object GearMaster {
             for ((n, d) in got) File(dir, n).writeBytes(d)
             File(dir, MANIFEST).writeText(
                 """{"schema":${remote.schema},"revision":${remote.revision}}""")
-            log?.invoke("機材マスタを版 ${remote.revision} に更新しました")
+            log?.invoke("gear master updated to rev ${remote.revision}")
             remote.revision
         } catch (e: Exception) {
-            log?.invoke("機材マスタの確認に失敗: ${e.message}")
+            log?.invoke("gear master check failed: ${e.message}")
             null
         }
     }
