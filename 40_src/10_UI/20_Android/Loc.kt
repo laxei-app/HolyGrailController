@@ -80,9 +80,25 @@ object Loc {
 
     fun is24h(ctx: Context): Boolean = user24h(ctx) ?: isJa(ctx)
 
-    private fun datePat(ctx: Context) = if (isJa(ctx)) "yyyy-MM-dd" else "MMM d, yyyy"
+    // 【日付はその言語の標準の形に合わせる(2026-10-01 ユーザー決定)】
+    //  決め打ちをやめ、ロケールの MEDIUM を使う。
+    //   日本語 2026/09/30 / 米国 Sep 30, 2026 / 英国 30 Sep 2026
+    //  **月が名前になるのが要点**。短い形式(9/30/26)は地域で月と日が
+    //  ひっくり返るので、撮影開始日を読み違えるおそれがある。
+    //
+    //  【言語を変えると日付も変わる】Android の「アプリごとの言語」は
+    //  **ロケールそのものを差し替える**仕組みで、書式も追従するのが標準。
+    //  ここもそれに合わせている(端末のロケールではなく、選んだ言語で決まる)。
+    //  ただし**時刻の 12/24 時間制だけは別**で、端末の設定が優先(上の is24h)。
+    private fun datePat(ctx: Context): String {
+        val df = DateFormat.getDateInstance(DateFormat.MEDIUM, locale(ctx))
+        return (df as? SimpleDateFormat)?.toPattern()
+               ?: (if (isJa(ctx)) "yyyy/MM/dd" else "MMM d, yyyy")
+    }
     private fun timePat(ctx: Context) = if (is24h(ctx)) "HH:mm" else "h:mm a"
-    private fun dowPat(ctx: Context)  = if (isJa(ctx)) "yyyy.MM.dd (E)" else "E, MMM d, yyyy"
+    //  曜日付き。曜日を前に置くか後ろに置くかは言語で違うので、そこだけ分ける。
+    private fun dowPat(ctx: Context) =
+        if (isJa(ctx)) datePat(ctx) + " (E)" else "E, " + datePat(ctx)
 
     fun dateFmt(ctx: Context): DateFormat = SimpleDateFormat(datePat(ctx), locale(ctx))
     fun timeFmt(ctx: Context): DateFormat = SimpleDateFormat(timePat(ctx), locale(ctx))
@@ -94,9 +110,13 @@ object Loc {
     fun time(ctx: Context, d: Date): String = timeFmt(ctx).format(d)
     fun dateTime(ctx: Context, d: Date): String = dateTimeFmt(ctx).format(d)
 
-    /** 「9/30」のような短い日付(概要スケジュールの日付チップ)。 */
-    fun monthDay(ctx: Context, d: Date): String =
-        SimpleDateFormat(if (isJa(ctx)) "M/d" else "MMM d", locale(ctx)).format(d)
+    /** 「9/30」のような短い日付(概要スケジュールの日付チップ)。
+     *  ここもロケールに合わせる(英国なら 30/9)。幅が狭いので月は数字のまま。 */
+    fun monthDay(ctx: Context, d: Date): String {
+        val pat = try { android.text.format.DateFormat.getBestDateTimePattern(locale(ctx), "Md") }
+                  catch (_: Exception) { "M/d" }
+        return SimpleDateFormat(pat, locale(ctx)).format(d)
+    }
 
     /** Entity が返す "yyyy-MM-dd HH:mm[:ss]" を、その言語の見せ方へ直す。 */
     private val isoDT = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
