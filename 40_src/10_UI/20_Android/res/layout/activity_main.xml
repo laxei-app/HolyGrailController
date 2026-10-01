@@ -36,9 +36,15 @@
     <include layout="@layout/screen_ext" />
 </ViewFlipper>
 
+    <!-- 【広告の帯の地色(2026-10-01 依頼)】枠は幅いっぱいに要求しているが、
+         出てくる広告の絵が決まった大きさ(320x50 など)だと中央に置かれ、
+         両脇が地の色になる。濃いグレーで塗りつぶして**帯として見せる**。 -->
     <FrameLayout android:id="@+id/ad_slot"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:background="#424242"
+        android:paddingTop="5dp"
+        android:paddingBottom="5dp"
         android:visibility="gone" />
 
 </LinearLayout>

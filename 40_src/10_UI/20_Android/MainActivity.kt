@@ -9400,6 +9400,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 v.setAdSize(sz)
                 HgeNative.nativeLogEvent("AD", "banner " + sz.width + "x" + sz.height + " dp", false)
                 v.adUnitId = kAdUnitBanner
+                //  地色は**広告ビュー側にも**置く。枠(ad_slot)だけだと、広告の絵が小さいときに
+                //  こちらが上から黒で塗ってしまう(実機で確認)。
+                v.setBackgroundColor(0xFF424242.toInt())
                 v.adListener = object : com.google.android.gms.ads.AdListener() {
                     // 読み込めてから初めて出す。取れなければ枠ごと畳む。
                     // 【必ず出す前に見直す】読み込みは非同期なので、**待っている間に撮影が
