@@ -1,4 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.TwyLapse" parent="Theme.Material3.DayNight.NoActionBar" />
+    <style name="Theme.TwyLapse" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- 【開いた箱を見分けられるように(2026-10-02 ユーザー指示)】暗いテーマでは
+             ポップアップの地が画面とほぼ同じ色になり、影も沈んで境目が分からなかった。
+             地と枠を自前の色にして、どちらのテーマでも箱の形が見えるようにする。
+             ドロップダウンにも ⋮ のメニューにも同じものが効く。 -->
+        <item name="android:popupMenuStyle">@style/TwyLapse.PopupMenu</item>
+        <item name="popupMenuStyle">@style/TwyLapse.PopupMenu</item>
+        <item name="android:dropDownListViewStyle">@style/TwyLapse.DropDownList</item>
+    </style>
+
+    <style name="TwyLapse.PopupMenu" parent="Widget.Material3.PopupMenu">
+        <item name="android:popupBackground">@drawable/popup_bg</item>
+        <item name="android:popupElevation">12dp</item>
+    </style>
+
+    <style name="TwyLapse.DropDownList" parent="Widget.AppCompat.ListView.DropDown">
+        <item name="android:divider">@color/tc_popup_border</item>
+        <item name="android:dividerHeight">1dp</item>
+    </style>
 </resources>

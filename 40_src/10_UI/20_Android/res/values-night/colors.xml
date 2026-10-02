@@ -44,4 +44,6 @@
     <!-- 押せないボタンの色。暗いテーマの colorOnSurface = #E6E1E5 (M3 の既定パレット) -->
     <color name="btn_disabled_bg">#1FE6E1E5</color>
     <color name="btn_disabled_text">#61E6E1E5</color>
+    <color name="tc_popup_bg">#2B2B30</color>
+    <color name="tc_popup_border">#5A5A62</color>
 </resources>

@@ -55,4 +55,6 @@
          明るいテーマの colorOnSurface = #1C1B1F (M3 の既定パレット) -->
     <color name="btn_disabled_bg">#1F1C1B1F</color>
     <color name="btn_disabled_text">#611C1B1F</color>
+    <color name="tc_popup_bg">#FFFFFF</color>
+    <color name="tc_popup_border">#D8D8D8</color>
 </resources>
