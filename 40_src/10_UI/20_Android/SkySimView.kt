@@ -320,6 +320,14 @@ class SimPage(
     private val compass = CompassView(context)
     private val elevationView = ElevationView(context)
     private val landscapeCheck = CheckBox(context)
+    // 【画面ごとスクロールさせる(2026-10-02 ユーザー指示)】
+    //  横向きで広告が出ていると高さが足りず、一番下の「横向きで撮る」に手が届かない。
+    //  【fillViewport が要】これが無いと、中身が画面より小さいときに引き伸ばされず、
+    //  余白(spacer の weight)が効かなくなって**縦向きの並びが上に詰まる**。
+    private val scroller = android.widget.ScrollView(context).apply {
+        isFillViewport = true
+        isScrollbarFadingEnabled = false
+    }
     // 時刻スライダー。他画面と同じ Material Slider(大きなつまみ=●)を使う。
     private val seek = com.google.android.material.slider.Slider(context)
     private val render = SkyRenderView(context)
@@ -466,8 +474,10 @@ class SimPage(
             (v.parent as? ViewGroup)?.removeView(v)
         }
         leftBox.removeAllViews(); rightBox.removeAllViews(); bodyBox.removeAllViews()
-        if (bodyBox.parent == null) {
-            addView(bodyBox, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        if (scroller.parent == null) {
+            scroller.addView(bodyBox, android.widget.FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(scroller, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         }
         val mp = ViewGroup.LayoutParams.MATCH_PARENT
         val wc = ViewGroup.LayoutParams.WRAP_CONTENT
@@ -484,8 +494,11 @@ class SimPage(
             rightBox.addView(titlesRow, LinearLayout.LayoutParams(mp, wc))
             rightBox.addView(dirRow, LinearLayout.LayoutParams(mp, wc))
             rightBox.addView(landscapeCheck, LinearLayout.LayoutParams(wc, wc))
-            bodyBox.addView(leftBox, LinearLayout.LayoutParams(0, mp, 1f))
-            bodyBox.addView(rightBox, LinearLayout.LayoutParams(0, mp, 1f))
+            // 【高さは中身に合わせる(2026-10-02)】画面の高さに固定すると、
+            //  中身がそれより高いときに**切れてスクロールもできない**。
+            bodyBox.gravity = Gravity.CENTER_VERTICAL
+            bodyBox.addView(leftBox, LinearLayout.LayoutParams(0, wc, 1f))
+            bodyBox.addView(rightBox, LinearLayout.LayoutParams(0, wc, 1f))
         } else {
             bodyBox.orientation = VERTICAL
             bodyBox.addView(render, LinearLayout.LayoutParams(mp, wc))
