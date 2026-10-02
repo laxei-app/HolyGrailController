@@ -1083,6 +1083,42 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  選ばれているものは塗りつぶし、それ以外は枠だけにして「押せるが選ばれていない」と見せる。
     //  【横に入らないときは折り返す】言語によって長さが違うので、横幅を超えたら
     //  次の行へ回る(切れて読めなくならないように)。
+    // 【選びが増えていくものは縦に開く(2026-10-02 依頼)】言語のように**後から増える**
+    //  ものを横に並べると、増やしたときに入らなくなる。開いて選ぶ形のままにする。
+    //
+    //  【素の Spinner を使わない理由】Spinner は自分の余白を持っており、
+    //  この行だけ**他より背が高くなる**。選んでいるものを文字で出し、
+    //  押されたら PopupMenu を開く。見た目はドロップダウンのままで、高さは他の行と揃う。
+    private fun gearDropItem(box: LinearLayout, title: String, entries: List<String>,
+                             selected: Int, onSelect: (Int) -> Unit) {
+        val row = LinearLayout(this)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.setPadding(dp(28), dp(6), dp(12), dp(6))
+        val tv = TextView(this)
+        tv.text = title; tv.textSize = 16f; tv.setTextColor(getColor(R.color.tc_text))
+        tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        tv.gravity = android.view.Gravity.CENTER_VERTICAL
+        row.addView(tv)
+        val cur = TextView(this)
+        cur.text = (entries.getOrNull(selected) ?: "") + "  \u25bc"
+        cur.textSize = 15f
+        cur.gravity = android.view.Gravity.CENTER_VERTICAL
+        cur.setTextColor(getColor(R.color.tc_link))
+        cur.setPadding(dp(10), dp(6), dp(4), dp(6))
+        cur.setOnClickListener { anchor ->
+            val pm = PopupMenu(this, anchor)
+            entries.forEachIndexed { i, e -> pm.menu.add(0, i, i, e) }
+            pm.setOnMenuItemClickListener { mi ->
+                if (mi.itemId != selected) { onSelect(mi.itemId) }
+                true
+            }
+            pm.show()
+        }
+        row.addView(cur)
+        box.addView(row)
+        box.addView(thinDivider())
+    }
+
     private fun gearPickItem(box: LinearLayout, title: String, entries: List<String>,
                              selected: Int, onSelect: (Int) -> Unit) {
         val row = LinearLayout(this)
@@ -1260,7 +1296,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 buildGearMenu()
             }
         }
-        gearPickItem(box, s(R.string.menu_language),
+        gearDropItem(box, s(R.string.menu_language),
             listOf(s(R.string.lang_system), s(R.string.lang_ja), s(R.string.lang_en)),
             when (Loc.selected(this)) { "ja" -> 1; "en" -> 2; else -> 0 }) { i ->
             val tag = when (i) { 1 -> "ja"; 2 -> "en"; else -> Loc.SYSTEM }
