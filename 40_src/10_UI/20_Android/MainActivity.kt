@@ -1278,6 +1278,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 //  利用者には**このメニューのまま色だけが変わった**ように見える。
                 Loc.saveTheme(this, v)
                 Loc.applyTheme(this)
+                // 【見た目が変わらないときも印は動かす(2026-10-02 実機)】
+                //  「明るい」→「端末に合わせる」で端末も明るいときは、実際の明暗が変わらないので
+                //  Activity は作り直されない。そのままだと**太字が前のまま**で、
+                //  押しても何も起きていないように見える。選んだ印だけでも更新する。
+                buildGearMenu()
             }
         }
         gearSpinnerItem(box, s(R.string.menu_language),
