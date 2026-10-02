@@ -432,10 +432,17 @@ namespace
 		bool filled = false;
 		for (auto& oc : g_ownedCameras)
 		{
-			if (oc.cam.sensorPixelV != 0) { continue; }
+			// 【マウントも後から足した項目(2026-10-03 依頼)】それ以前に登録した
+			//  カメラは空のままで、**レンズの絞り込みが効かない**。センサー縦[pixel]と同じく埋める。
+			//  レンズ固定の機種と内蔵カメラはマスタも空なので、空のままで正しい。
+			const bool needPixelV = (oc.cam.sensorPixelV == 0);
+			const bool needMount  = (oc.cam.mount.empty() && !oc.cam.lensFixed);
+			if (!needPixelV && !needMount) { continue; }
 			const hgc::camera* m = findMasterCamera(oc.cam.model.empty() ? oc.cam.name : oc.cam.model);
 			if (m == nullptr) { m = findMasterCamera(oc.cam.name); }
-			if (m != nullptr && m->sensorPixelV != 0) { oc.cam.sensorPixelV = m->sensorPixelV; filled = true; }
+			if (m == nullptr) { continue; }
+			if (needPixelV && m->sensorPixelV != 0) { oc.cam.sensorPixelV = m->sensorPixelV; filled = true; }
+			if (needMount && !m->mount.empty()) { oc.cam.mount = m->mount; filled = true; }
 		}
 		if (filled) { saveOwnedCameras(); }
 	}

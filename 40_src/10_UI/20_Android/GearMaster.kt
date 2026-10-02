@@ -27,6 +27,20 @@ import java.security.MessageDigest
 //  一覧を取ってきても**次の起動で古いものに戻る**ので、版を見て決めるようにした。
 object GearMaster {
 
+    // 【そのレンズはそのカメラに付くか(2026-10-03 依頼)】
+    //  同じマウントは当然付く。加えて **RF ボディには EF レンズがアダプタで付く**
+    //  (純正アダプタがあり、マスタにも EF レンズが 23 本入っている)。
+    //  逆(EF ボディへ RF)は付かないし、EF-M はどちらとも繋がらない。
+    //
+    //  【空は通す】マウントが分からないレンズやカメラ(手で追加したもの、
+    //   古いマスタで登録したもの)を消すと、利用者からは**登録したはずのレンズが
+    //   消えた**ように見える。分からないものは出す。
+    fun lensFitsMount(camMount: String, lensMount: String): Boolean {
+        if (camMount.isEmpty() || lensMount.isEmpty()) return true
+        if (camMount.equals(lensMount, true)) return true
+        return camMount.equals("RF", true) && lensMount.equals("EF", true)
+    }
+
     const val BASE = "https://raw.githubusercontent.com/laxei-app/tlp-master/main/master/"
     const val MANIFEST = "manifest.json"
 

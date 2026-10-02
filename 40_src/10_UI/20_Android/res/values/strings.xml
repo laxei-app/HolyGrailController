@@ -942,4 +942,5 @@ After erasing, set it up again from the QR code.</string>
     <string name="fl_wipe_cancelled">Cancelled. Nothing was erased.</string>
     <string name="fl_wipe_done">The settings have been erased.</string>
     <string name="fl_wipe_after">The device will start up unconfigured. Set it up again from the QR code.</string>
+    <string name="no_lenses_for_mount">None of your lenses fit the %1$s mount</string>
 </resources>

@@ -126,7 +126,7 @@ namespace csjson
 			             {"sensorPixel", c.sensorPixel}, {"sensorPixelV", c.sensorPixelV},
 			             {"isoList", c.isoList}, {"ssList", c.ssList},
 			             {"intervalFactor", c.intervalFactor}, {"intervalMargin", c.intervalMargin},
-			             {"lensFixed", c.lensFixed}, {"localOnly", c.localOnly},
+			             {"lensFixed", c.lensFixed}, {"mount", c.mount}, {"localOnly", c.localOnly},
 			             {"noSyncShot", c.noSyncShot}, {"readOnly", c.readOnly},
 			             {"meterLv", c.meterLv}, {"videoOut", c.videoOut},
 			             {"authUser", c.authUser},
@@ -151,6 +151,7 @@ namespace csjson
 			c.intervalFactor = j.value("intervalFactor", 0.0);
 			c.intervalMargin = j.value("intervalMargin", 0.0);
 			c.lensFixed  = j.value("lensFixed",  false);
+			c.mount      = j.value("mount",      std::string());
 			c.localOnly  = j.value("localOnly",  false);
 			c.noSyncShot = j.value("noSyncShot", false);
 			c.videoOut   = j.value("videoOut",   false);
@@ -595,6 +596,7 @@ namespace csjson
 			c.sensorPixelV = m.value("pixel_h", 0u);	// 縦[pixel]
 			c.meterLv     = m.value("meter_lv", false);	// 測光方式(無い=サムネイルだけ)
 			c.lensFixed   = m.value("lens_fixed", false);	// レンズ固定の機種(コンデジ等。無い=交換式)
+			c.mount       = m.value("mount", std::string());	// マウント(無い=不明。絞り込まない)
 			if (m.contains("iso") && m["iso"].is_array())
 			{
 				for (const auto& v : m["iso"])

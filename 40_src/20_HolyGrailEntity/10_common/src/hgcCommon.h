@@ -89,6 +89,10 @@ namespace hgc
 		//  出所は2つ: 機材として決まっている性質はマスタ(lens_fixed)、接続・実装の性質は
 		//  api 実装(apiBase::fillCameraProfile)。どちらも所持カメラの登録時に入る。
 		bool lensFixed  = false;	// レンズ交換不可(計画・所持カメラでレンズを変えない)
+		// 【マウント(2026-10-03 依頼)】"RF"/"EF-M" など。マスタ cameras.json の "mount"。
+		//  レンズを選ぶときに**付かないものを出さない**ために使う。
+		//  レンズ固定の機種と内蔵カメラは空(選ぶ場面が無い)。
+		std::string mount;
 		bool localOnly  = false;	// この端末でしか撮れない(外部端末へ送れない)
 		bool noSyncShot = false;	// 同期撮影に参加できない
 		bool readOnly   = false;	// 利用者が所持カメラの欄を編集できない(端末が答える値だから)

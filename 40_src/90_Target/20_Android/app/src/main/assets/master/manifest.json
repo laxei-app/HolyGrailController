@@ -1,12 +1,12 @@
 {
   "schema": 1,
-  "revision": 4,
-  "updated": "2026-09-06",
+  "revision": 5,
+  "updated": "2026-10-03",
   "files": [
     {
       "name": "cameras.json",
-      "size": 14435,
-      "sha256": "32389cbb0b7a8af5c3e447840c905e00d48cc1f99446425c62227e43a36d1247",
+      "size": 18525,
+      "sha256": "5b7fac32bed148bd425808eceee64bbd87330e755b48c3a7f4524c5dd9eeab5b",
       "count": 18
     },
     {

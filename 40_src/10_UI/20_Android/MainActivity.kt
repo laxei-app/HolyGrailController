@@ -3346,10 +3346,33 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
     }
 
+
+    // いま開いている所持カメラのマウント。分からなければ空。
+    private fun selectedCameraMount(): String {
+        val sel = selCamera ?: return ""
+        val arr = camArray(HgeNative.nativeGetOwnedCameras())
+        for (i in 0 until arr.length()) {
+            val cam = arr.optJSONObject(i)?.optJSONObject("camera") ?: continue
+            if (cam.optString("name") == sel) return cam.optString("mount")
+        }
+        return ""
+    }
+
     private fun addLensToCamera() {
         val arr = camArray(HgeNative.nativeGetOwnedLenses())
-        val names = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("name") }
-        if (names.isEmpty()) { Toast.makeText(this, s(R.string.no_lenses_yet), Toast.LENGTH_SHORT).show(); return }
+        val camMount = selectedCameraMount()
+        // 付かないレンズは出さない(2026-10-03 依頼)。ただし**既に組んであるものは残す** —
+        //  消すとチェックを外せなくなり、外せないまま残る。
+        val names = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
+            .filter { GearMaster.lensFitsMount(camMount, it.optString("mount")) || it.optString("name") in camLensNames }
+            .map { it.optString("name") }
+            .filter { it.isNotEmpty() }
+        if (names.isEmpty()) {
+            //  1本も無い理由が2つあるので分けて伝える。
+            val msg = if (arr.length() == 0) s(R.string.no_lenses_yet)
+                      else s(R.string.no_lenses_for_mount, camMount)
+            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show(); return
+        }
         val checks = BooleanArray(names.size) { names[it] in camLensNames }
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle(s(R.string.pick_lenses_for_camera))
