@@ -3749,10 +3749,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         return row
     }
 
-    // 【選べるマウントはマスタから集める(2026-10-03 依頼)】
-    //  固定の一覧をここに書くと、マスタへ別メーカーのマウントを足したときに
-    //  **こちらを直すまで選べない**。カメラとレンズの両方から拾う —
-    //  EF のように**レンズにしか無いマウント**があるため(一眼レフの本体はマスタに無い)。
+    // 【選べるマウントは**カメラの**マスタから集める(2026-10-03 依頼)】
+    //  レンズ側からも拾っていたが、それだと EF のような**レンズ専用のマウント**まで選べてしまう。
+    //  RF のカメラに EF を選んでしまうと、**RF のレンズが選べなくなる**(EF ボディに
+    //  RF レンズは付かないため)。カメラに存在するマウントだけを出す。
+    //  将来 EF ボディや他メーカーをマスタへ足せば、ここを触らずに候補へ入る。
     private fun knownMounts(): List<String> {
         val set = LinkedHashSet<String>()
         runCatching {
@@ -3760,12 +3761,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
             for (i in 0 until cams.length()) {
                 val c = cams.optJSONObject(i)?.optJSONObject("camera") ?: cams.optJSONObject(i)
                 c?.optString("mount")?.takeIf { it.isNotEmpty() }?.let { set.add(it) }
-            }
-        }
-        runCatching {
-            val lens = JSONArray(HgeNative.nativeGetMasterLenses())
-            for (i in 0 until lens.length()) {
-                lens.optJSONObject(i)?.optString("mount")?.takeIf { it.isNotEmpty() }?.let { set.add(it) }
             }
         }
         return set.sorted()
