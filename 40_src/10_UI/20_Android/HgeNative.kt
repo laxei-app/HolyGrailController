@@ -92,6 +92,8 @@ object HgeNative {
 
     // --- 機材マスタ・所持機材(データ構造仕様書43 §5.5〜5.9 / §7.6) ---
     external fun nativeGetMasterCameras(): String   // [{"camera":{...}},...]
+    // マウントの対応表。[{"mount","maker","accepts":[..]},..]
+    external fun nativeGetMasterMounts(): String
     external fun nativeGetMasterLenses(): String     // [{...},...]
     external fun nativeGetOwnedCameras(): String
     external fun nativeGetOwnedLenses(): String

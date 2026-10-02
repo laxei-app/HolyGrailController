@@ -40,6 +40,8 @@ namespace csjson
 	// --- 機材マスタ(§5.8/5.9)。30_refer 由来の読取専用形式 → 内部 camera/lens へマップ ---
 	bool        camerasFromMasterJson(const std::string& s, std::vector<hgc::camera>& out);
 	bool        lensesFromMasterJson(const std::string& s, std::vector<hgc::lens>& out);
+	// マウントの対応表(master/mounts.json)を読む。
+	bool        mountsFromMasterJson(const std::string& s, std::vector<hgc::mountRule>& out);
 }
 
 #endif // _CS_JSON_H_

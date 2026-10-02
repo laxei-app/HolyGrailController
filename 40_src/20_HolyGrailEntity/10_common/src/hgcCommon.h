@@ -130,6 +130,23 @@ namespace hgc
 		bool   readOnly = false;	// 利用者が欄を編集できない(端末が答えた値。削除は可)。登録時に api 実装が立てる
 	};
 
+	// 【マウントの対応表(2026-10-03 依頼)】マスタ master/mounts.json の 1 行。
+	//
+	// 【なぜマスタか】以前は「RF なら EF も付く」をコードに書いていたが、
+	//  それは**共通部にメーカーの判断を書く**ことで、この製品の決まりに反する。
+	//  ソニーやニコンを入れるたびにアプリを直すことにもなる。表を外へ出す。
+	//
+	//  mount   : **カメラ側**のマウント
+	//  accepts : そこへ付けられる**レンズ側**のマウント(アダプタ込み)。
+	//            同じ名前は書かない — 自分自身は当然付くので暗黙。
+	//  maker   : 表示用。**判定には使わない**。
+	struct mountRule
+	{
+		std::string mount;
+		std::string maker;
+		std::vector<std::string> accepts;
+	};
+
 	// 5.5 所持カメラ(camera + 組み合わせるレンズ + 自動挿入)
 	struct ownedCamera
 	{

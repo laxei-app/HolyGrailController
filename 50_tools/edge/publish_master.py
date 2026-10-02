@@ -39,7 +39,10 @@ SRC = os.path.join(REPO, "40_src", "90_Target", "20_Android", "app", "src", "mai
 DST = os.path.abspath(os.path.join(REPO, "..", "tlp-master", "master"))
 
 SCHEMA = 1
-FILES = ["cameras.json", "lenses.json"]
+# 【mounts.json を足した(2026-10-03 依頼)】どのマウントのカメラにどのマウントの
+#  レンズが付くかの表。メーカーを増やすたびにアプリを直さないよう、コードではなくここへ置く。
+#  読めないアプリ(古い版)は無視して「同じマウントだけ付く」になるだけなので、schema は上げない。
+FILES = ["cameras.json", "lenses.json", "mounts.json"]
 
 
 def count_of(path):

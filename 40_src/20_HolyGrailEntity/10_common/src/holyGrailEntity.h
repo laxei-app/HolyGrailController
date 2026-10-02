@@ -240,6 +240,9 @@ int32_t hge_sunAltitudeTimes(int32_t altitudeDeg, char* buf, int32_t* inoutLen);
 // 機材マスタ(読取専用。インストール同梱)を JSON 配列で取得(バッファ規約)。
 //  cameras: [{"camera":{...}},...]  lenses: [{...},...]。UI の「追加リスト」表示用。
 int32_t hge_getMasterCamerasJson(char* buf, int32_t* inoutLen);
+// マウントの対応表(master/mounts.json)。[{"mount","maker","accepts":[..]},..]
+//  「どのマウントのカメラにどのレンズが付くか」はここから来る。UI に書かない。
+int32_t hge_getMasterMountsJson(char* buf, int32_t* inoutLen);
 int32_t hge_getMasterLensesJson(char* buf, int32_t* inoutLen);
 // 所持機材(ユーザー資産)を JSON 配列で取得(バッファ規約)。
 int32_t hge_getOwnedCamerasJson(char* buf, int32_t* inoutLen);

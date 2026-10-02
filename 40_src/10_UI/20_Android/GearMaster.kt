@@ -1,6 +1,7 @@
 ﻿package app.laxei.twylapse
 
 import android.content.Context
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -28,17 +29,27 @@ import java.security.MessageDigest
 object GearMaster {
 
     // 【そのレンズはそのカメラに付くか(2026-10-03 依頼)】
-    //  同じマウントは当然付く。加えて **RF ボディには EF レンズがアダプタで付く**
-    //  (純正アダプタがあり、マスタにも EF レンズが 23 本入っている)。
-    //  逆(EF ボディへ RF)は付かないし、EF-M はどちらとも繋がらない。
+    //  判断の根拠は**マスタ master/mounts.json だけ**。以前は「RF なら EF も付く」と
+    //  ここに書いていたが、それではソニーやニコンを入れるたびにここを直すことになる。
     //
-    //  【空は通す】マウントが分からないレンズやカメラ(手で追加したもの、
-    //   古いマスタで登録したもの)を消すと、利用者からは**登録したはずのレンズが
-    //   消えた**ように見える。分からないものは出す。
-    fun lensFitsMount(camMount: String, lensMount: String): Boolean {
+    //  rules は [{"mount","accepts":[..]},..]。mount = カメラ側、accepts = そこへ付くレンズ側。
+    //  ・同じマウントは当然付く(表に書かなくても良い)
+    //  ・どちらかが空なら**絞らない**。分からないものを消すと、利用者からは
+    //    登録したはずのレンズが消えたように見える
+    fun lensFitsMount(rules: JSONArray?, camMount: String, lensMount: String): Boolean {
         if (camMount.isEmpty() || lensMount.isEmpty()) return true
         if (camMount.equals(lensMount, true)) return true
-        return camMount.equals("RF", true) && lensMount.equals("EF", true)
+        if (rules == null) return false
+        for (i in 0 until rules.length()) {
+            val r = rules.optJSONObject(i) ?: continue
+            if (!r.optString("mount").equals(camMount, true)) continue
+            val acc = r.optJSONArray("accepts") ?: return false
+            for (k in 0 until acc.length()) {
+                if (acc.optString(k).equals(lensMount, true)) return true
+            }
+            return false        // 行はあったが accepts に無い = 付かない
+        }
+        return false            // 表に無いカメラのマウント = 同じ名前以外は付かない
     }
 
     const val BASE = "https://raw.githubusercontent.com/laxei-app/tlp-master/main/master/"

@@ -3452,6 +3452,11 @@ int32_t hge_getMasterLensesJson(char* buf, int32_t* inoutLen)
 	return copyOut(dataManager::masterLensesJson(), buf, inoutLen);
 }
 
+int32_t hge_getMasterMountsJson(char* buf, int32_t* inoutLen)
+{
+	return copyOut(dataManager::masterMountsJson(), buf, inoutLen);
+}
+
 int32_t hge_getOwnedCamerasJson(char* buf, int32_t* inoutLen)
 {
 	return copyOut(dataManager::ownedCamerasJson(), buf, inoutLen);

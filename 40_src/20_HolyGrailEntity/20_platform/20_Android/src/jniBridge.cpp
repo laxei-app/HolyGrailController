@@ -515,6 +515,10 @@ Java_app_laxei_twylapse_HgeNative_nativeGetMasterCameras(JNIEnv* env, jobject /*
 { return callBufGetter(env, hge_getMasterCamerasJson); }
 
 JNIEXPORT jstring JNICALL
+Java_app_laxei_twylapse_HgeNative_nativeGetMasterMounts(JNIEnv* env, jobject /*thiz*/)
+{ return callBufGetter(env, hge_getMasterMountsJson); }
+
+JNIEXPORT jstring JNICALL
 Java_app_laxei_twylapse_HgeNative_nativeGetMasterLenses(JNIEnv* env, jobject /*thiz*/)
 { return callBufGetter(env, hge_getMasterLensesJson); }
 

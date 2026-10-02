@@ -3371,8 +3371,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val camMount = selectedCameraMount()
         // 付かないレンズは出さない(2026-10-03 依頼)。ただし**既に組んであるものは残す** —
         //  消すとチェックを外せなくなり、外せないまま残る。
+        val rules = try { JSONArray(HgeNative.nativeGetMasterMounts()) } catch (_: Exception) { null }
         val names = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
-            .filter { GearMaster.lensFitsMount(camMount, it.optString("mount")) || it.optString("name") in camLensNames }
+            // 【内蔵カメラのレンズは出さない(2026-10-03 依頼)】スマホに埋め込まれていて、
+            //  **外して他のカメラへ付けられない**。マウントが空なので絞り込みをすり抜けていた。
+            .filter { !it.optBoolean("readOnly", false) }
+            .filter { GearMaster.lensFitsMount(rules, camMount, it.optString("mount")) ||
+                      it.optString("name") in camLensNames }
             .map { it.optString("name") }
             .filter { it.isNotEmpty() }
         if (names.isEmpty()) {

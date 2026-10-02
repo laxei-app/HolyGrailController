@@ -1,0 +1,17 @@
+[
+ {
+  "mount": "RF",
+  "maker": "Canon",
+  "accepts": ["EF"]
+ },
+ {
+  "mount": "EF-M",
+  "maker": "Canon",
+  "accepts": ["EF"]
+ },
+ {
+  "mount": "E",
+  "maker": "Sony",
+  "accepts": ["EF"]
+ }
+]

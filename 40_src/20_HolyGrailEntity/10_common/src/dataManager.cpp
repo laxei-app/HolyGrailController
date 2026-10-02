@@ -363,6 +363,8 @@ namespace
 	// --- 機材マスタ(読取専用。/master/cameras.json・lenses.json) ---
 	std::vector<hgc::camera> g_masterCameras;
 	std::vector<hgc::lens>   g_masterLenses;
+	// 【マウントの対応表(2026-10-03 依頼)】無くても困らない(同じマウントだけ付く扱いになる)。
+	std::vector<hgc::mountRule> g_masterMounts;
 	bool                     g_masterLoaded = false;
 
 	std::string masterPath(const char* file)
@@ -393,6 +395,13 @@ namespace
 		bool okL = (!pl.empty() && osfile::readAll(pl, body) &&
 		            csjson::lensesFromMasterJson(body, g_masterLenses) && !g_masterLenses.empty());
 		if (!okC || !okL) { masterFallback(); }	// どちらか欠けたら最低限を用意
+		// 【マウントの対応表は無くても良い】無ければ「同じマウントだけ付く」になる。
+		//  古いマスタを持っていても選べなくなるだけで、壊れはしない。
+		{
+			std::string pm = masterPath("mounts.json");
+			body.clear();
+			if (!pm.empty() && osfile::readAll(pm, body)) { csjson::mountsFromMasterJson(body, g_masterMounts); }
+		}
 	}
 
 	// --- 所持機材(/asset/ownedCameras.json・ownedLenses.json) ---
@@ -608,6 +617,43 @@ void dataManager::reloadMaster(void)
 	g_masterLoaded = false;
 	g_masterCameras.clear();
 	g_masterLenses.clear();
+	g_masterMounts.clear();
+}
+
+// 【そのレンズはそのカメラに付くか(2026-10-03 依頼)】
+//  判断の根拠は**マスタ master/mounts.json だけ**。ここにメーカー名やマウント名を
+//  書かない — ソニーやニコンを入れるたびにここを直すことになるため。
+//
+//  ・同じマウントは当然付く(表に書かなくても良い)
+//  ・表に行があれば、accepts にあるマウントも付く(アダプタ込み)
+//  ・どちらかが空なら**絞らない** — 分からないものを消すと、利用者からは
+//    登録したはずのレンズが消えたように見える
+bool dataManager::lensFitsMount(const std::string& camMount, const std::string& lensMount)
+{
+	if (camMount.empty() || lensMount.empty()) { return true; }
+	if (camMount == lensMount) { return true; }
+	ensureMaster();
+	for (const auto& r : g_masterMounts)
+	{
+		if (r.mount != camMount) { continue; }
+		for (const auto& a : r.accepts) { if (a == lensMount) { return true; } }
+		return false;	// 行はあったが accepts に無い = 付かない
+	}
+	return false;	// 表に無いカメラのマウント = 同じ名前以外は付かない
+}
+
+// マウントの対応表をそのまま返す(UI が候補を作るのに使う)。
+std::string dataManager::masterMountsJson(void)
+{
+	ensureMaster();
+	json arr = json::array();
+	for (const auto& r : g_masterMounts)
+	{
+		json a = json::array();
+		for (const auto& x : r.accepts) { a.push_back(x); }
+		arr.push_back({ {"mount", r.mount}, {"maker", r.maker}, {"accepts", a} });
+	}
+	return arr.dump();
 }
 
 std::string dataManager::masterCamerasJson(void)

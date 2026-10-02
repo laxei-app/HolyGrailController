@@ -625,6 +625,32 @@ namespace csjson
 		return true;
 	}
 
+	// マウントの対応表。[{"mount","maker","accepts":[...]},...]
+	//  読めない行は飛ばす。mount が空の行は意味が無いので捨てる。
+	bool mountsFromMasterJson(const std::string& s, std::vector<hgc::mountRule>& out)
+	{
+		out.clear();
+		json j = json::parse(s, nullptr, false);
+		if (j.is_discarded() || !j.is_array()) { return false; }
+		for (const auto& m : j)
+		{
+			if (!m.is_object()) { continue; }
+			hgc::mountRule r;
+			r.mount = m.value("mount", std::string());
+			if (r.mount.empty()) { continue; }
+			r.maker = m.value("maker", std::string());
+			if (m.contains("accepts") && m["accepts"].is_array())
+			{
+				for (const auto& a : m["accepts"])
+				{
+					if (a.is_string() && !a.get<std::string>().empty()) { r.accepts.push_back(a.get<std::string>()); }
+				}
+			}
+			out.push_back(std::move(r));
+		}
+		return true;
+	}
+
 	bool lensesFromMasterJson(const std::string& s, std::vector<hgc::lens>& out)
 	{
 		out.clear();

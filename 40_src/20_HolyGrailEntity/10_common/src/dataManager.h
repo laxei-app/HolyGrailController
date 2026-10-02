@@ -51,6 +51,10 @@ public:
 	// --- 機材マスタ(読取専用。/master/cameras.json・lenses.json。インストール同梱) ---
 	// UI の「追加リスト」表示用 JSON(配列)。読込失敗時は出荷時フォールバック。
 	static std::string masterCamerasJson(void);
+	// 【マウント(2026-10-03 依頼)】対応表そのものと、それを使った判定。
+	//  「どのマウントにどのレンズが付くか」はマスタにある。コードには書かない。
+	static std::string masterMountsJson(void);
+	static bool        lensFitsMount(const std::string& camMount, const std::string& lensMount);
 	static std::string masterLensesJson(void);
 	// 一覧を読み直す(公開リポジトリから新しいものを取り込んだ後に呼ぶ)。
 	//  次に一覧を求められたときに /master から読み直す。
