@@ -2776,6 +2776,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private var camAuthBaseline = ""              // 詳細を開いた時点の認証欄(変更検知用)
     private var camEditBaseline = ""              // 詳細を開いた時点の編集欄すべて(ロック判定用)
     private var camMount = ""                            // 編集中のカメラのマウント(空=指定しない)
+    private var lensMount = ""                           // 編集中のレンズのマウント(同上)
     private val camLensNames = ArrayList<String>()       // 組み合わせるレンズ(順序=先頭が初期値)
     private var camLensContainer: LinearLayout? = null   // 組み合わせレンズの並べ替えコンテナ
     private val lensRowViews = mutableListOf<View>()
@@ -3205,8 +3206,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 【マウント(2026-10-03 依頼)】手で足したカメラはマスタから入らないので、ここで入れる。
         //  これが空だとレンズの絞り込みが効かない(全部出る)。
         //  レンズ固定の機種には要らないので出さない。
+        camMount = cam.optString("mount")
         if (!cam.optBoolean("lensFixed", false)) {
-            box.addView(mountRow(cam.optString("mount")))
+            box.addView(mountRow(camMount, knownMounts()) { camMount = it })
         }
         // 名称はリストの行でインライン編集する(分割バー画面共通の動作)。詳細からは除外。
         // 項目D: 愛称(assignedName=カメラ本体で付けたニックネーム)は、カメラがオンラインになりSSDPで
@@ -3615,6 +3617,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (l == null) { val tv = TextView(this); tv.text = s(R.string.no_data); box.addView(tv); return }
         val lensCancel = addCancelButton(box, atTop = true) { buildLensDetail() }   // 分割バー直下に右寄せ(取消=保存内容から作り直し)
         box.addView(editRow(s(R.string.maker), "maker", l.optString("maker")))
+        // 【マウント(2026-10-03 依頼)】手で足したレンズはマスタから入らないのでここで入れる。
+        //  空のままだとどのカメラにも候補として並ぶ(分からないものは絞らないため)。
+        //  内蔵カメラのレンズ(readOnly)には要らないので出さない — 外して付け替えられない。
+        lensMount = l.optString("mount")
+        if (!l.optBoolean("readOnly", false)) {
+            box.addView(mountRow(lensMount, knownLensMounts()) { lensMount = it })
+        }
         // 名称(モデル)はリストの行でインライン編集する(分割バー画面共通の動作)。詳細からは除外。
         val cb = CheckBox(this); cb.text = s(R.string.has_contacts); cb.isChecked = l.optBoolean("hasContact", true); lensContact = cb; box.addView(cb)
         box.addView(editRow2(s(R.string.exp_fn), "fn", l.optDouble("fn", 0.0).toString(), "fnMax", l.optDouble("fnMax", 0.0).toString(), "〜", "", true))
@@ -3634,6 +3643,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val sb = StringBuilder()
         lensFields.toSortedMap().forEach { (k, v) -> sb.append(k).append('=').append(v.text).append(';') }
         sb.append("contact=").append(lensContact?.isChecked == true)
+        sb.append(";mount=").append(lensMount)
         return sb.toString()
     }
 
@@ -3666,6 +3676,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         o.put("name", selLens ?: orig)        // 名称(モデル)はリストのインライン編集分(selLens)
         o.put("hasContact", lensContact?.isChecked ?: true)
+        o.put("mount", lensMount)   // マウント(空=指定しない。カメラへ組むときの絞り込みに使う)
         val js = o.toString()
         if (rebuild) {
             dataExec.execute { HgeNative.nativeSetOwnedLensDetail(orig, js); runOnUiThread { buildLensList(); buildLensDetail() } }
@@ -3768,11 +3779,43 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 c?.optString("mount")?.takeIf { it.isNotEmpty() }?.let { set.add(it) }
             }
         }
+        //  対応表の mount は**カメラ側のマウント**なのでこちらへ。これが無いと、
+        //  まだマスタに機種の無いメーカーのカメラを手で足すときにマウントを選べない。
+        for (r in mountRules()) { r.optString("mount").takeIf { it.isNotEmpty() }?.let { set.add(it) } }
         return set.sorted()
     }
 
+    // 【レンズ側の候補(2026-10-03 依頼)】レンズのマスタに出てくるものと、
+    //  対応表に出てくるもの(mount だけでなく accepts も)。
+    //  accepts にしか書かれないマウント(カメラが現行に無いもの)もレンズ側には存在する。
+    private fun knownLensMounts(): List<String> {
+        val set = LinkedHashSet<String>()
+        runCatching {
+            val lens = camArray(HgeNative.nativeGetMasterLenses())
+            for (i in 0 until lens.length()) {
+                lens.optJSONObject(i)?.optString("mount")?.takeIf { it.isNotEmpty() }?.let { set.add(it) }
+            }
+        }
+        for (r in mountRules()) {
+            r.optString("mount").takeIf { it.isNotEmpty() }?.let { set.add(it) }
+            val acc = r.optJSONArray("accepts") ?: continue
+            for (k in 0 until acc.length()) { acc.optString(k).takeIf { it.isNotEmpty() }?.let { set.add(it) } }
+        }
+        return set.sorted()
+    }
+
+    // マウントの対応表(読めなければ空)。
+    private fun mountRules(): List<JSONObject> {
+        val out = ArrayList<JSONObject>()
+        runCatching {
+            val a = JSONArray(HgeNative.nativeGetMasterMounts())
+            for (i in 0 until a.length()) { a.optJSONObject(i)?.let { out.add(it) } }
+        }
+        return out
+    }
+
     // マウントを選ぶ行。他の欄と同じ高さに揃え、押すと縦に開く。
-    private fun mountRow(current: String): View {
+    private fun mountRow(current: String, choices: List<String>, onPick: (String) -> Unit): View {
         val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL
         row.gravity = Gravity.CENTER_VERTICAL
         row.setPadding(0, dp(3), 0, dp(3))
@@ -3781,18 +3824,18 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val cur = TextView(this); cur.textSize = 14f
         cur.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         cur.setTextColor(getColor(R.color.tc_link))
-        camMount = current
-        fun show() { cur.text = (camMount.ifEmpty { s(R.string.mount_unset) }) + "  \u25bc" }
+        var now = current
+        fun show() { cur.text = (now.ifEmpty { s(R.string.mount_unset) }) + "  \u25bc" }
         show()
         cur.setOnClickListener { anchor ->
             val items = ArrayList<String>()
             items.add(s(R.string.mount_unset))        // 指定しない(= 絞り込まない)
-            items.addAll(knownMounts())
+            items.addAll(choices)
             val pm = PopupMenu(this, anchor)
             items.forEachIndexed { i, e -> pm.menu.add(0, i, i, e) }
             pm.setOnMenuItemClickListener { mi ->
-                camMount = if (mi.itemId == 0) "" else items[mi.itemId]
-                show()
+                now = if (mi.itemId == 0) "" else items[mi.itemId]
+                show(); onPick(now)
                 true
             }
             pm.show()

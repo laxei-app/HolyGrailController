@@ -969,6 +969,8 @@ bool dataManager::setOwnedCameraDetailJson(const std::string& origName, const st
 	cam.maker       = j.value("maker", cam.maker);
 	cam.model       = j.value("model", cam.model);
 	cam.name        = j.value("name", cam.name);
+	//  【マウント(2026-10-03)】空文字は「指定しない」という意味の値なのでそのまま入れる。
+	cam.mount       = j.value("mount", cam.mount);
 	cam.assignedName    = j.value("assignedName", cam.assignedName);
 	cam.serial      = j.value("serial", cam.serial);
 	cam.sensorSize  = j.value("sensorSize", cam.sensorSize);
@@ -1364,6 +1366,7 @@ bool dataManager::setOwnedLensDetailJson(const std::string& origName, const std:
 	lp->fn          = j.value("fn", lp->fn);
 	lp->fnMax       = j.value("fnMax", lp->fnMax);
 	lp->hasContact  = j.value("hasContact", lp->hasContact);
+	lp->mount       = j.value("mount", lp->mount);	// カメラへ組むときの絞り込みに使う
 	return saveOwnedLenses();
 }
 
