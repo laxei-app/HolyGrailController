@@ -2775,6 +2775,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private var camMeterLv: CheckBox? = null       // ライブビューで測光する(機体ごと)
     private var camAuthBaseline = ""              // 詳細を開いた時点の認証欄(変更検知用)
     private var camEditBaseline = ""              // 詳細を開いた時点の編集欄すべて(ロック判定用)
+    private var camMount = ""                            // 編集中のカメラのマウント(空=指定しない)
     private val camLensNames = ArrayList<String>()       // 組み合わせるレンズ(順序=先頭が初期値)
     private var camLensContainer: LinearLayout? = null   // 組み合わせレンズの並べ替えコンテナ
     private val lensRowViews = mutableListOf<View>()
@@ -3201,6 +3202,12 @@ class MainActivity : AppCompatActivity(), HgeListener {
         }
         box.addView(editRow(s(R.string.maker), "maker", cam.optString("maker")))
         box.addView(editRow(s(R.string.model), "model", cam.optString("model")))
+        // 【マウント(2026-10-03 依頼)】手で足したカメラはマスタから入らないので、ここで入れる。
+        //  これが空だとレンズの絞り込みが効かない(全部出る)。
+        //  レンズ固定の機種には要らないので出さない。
+        if (!cam.optBoolean("lensFixed", false)) {
+            box.addView(mountRow(cam.optString("mount")))
+        }
         // 名称はリストの行でインライン編集する(分割バー画面共通の動作)。詳細からは除外。
         // 項目D: 愛称(assignedName=カメラ本体で付けたニックネーム)は、カメラがオンラインになりSSDPで
         //  取得できてから自動で入る。手入力はしない。未取得のうちは「未定義」と表示する。
@@ -3276,6 +3283,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 所持カメラ詳細の編集内容シグネチャ(dirty 比較用)。編集欄・初期値チェック・レンズ順序を連結。
     private fun camDetailSig(): String {
         val sb = StringBuilder()
+        sb.append("mount=").append(camMount).append(';')
         camFields.toSortedMap().forEach { (k, v) -> sb.append(k).append('=').append(v.text).append(';') }
         sb.append("auto=").append(camAutoInsert?.isChecked == true)
           .append(";lv=").append(camMeterLv?.isChecked == true)
@@ -3428,6 +3436,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         o.put("name", selCamera ?: orig)      // 名称はリストのインライン編集分(selCamera)
         o.put("autoInsert", camAutoInsert?.isChecked ?: false)
         o.put("meterLv", camMeterLv?.isChecked ?: false)
+        o.put("mount", camMount)   // マウント(空=指定しない。レンズの絞り込みに使う)
         val ln = JSONArray(); camLensNames.forEach { ln.put(it) }; o.put("lensNames", ln)
         val js = o.toString()
         // 認証情報を変えた場合だけ、エッジ端末が持っている計画は古いままだと知らせる。
@@ -3737,6 +3746,58 @@ class MainActivity : AppCompatActivity(), HgeListener {
         v.setTextColor(if (value == s(R.string.undefined)) getColor(R.color.tc_text_sub) else getColor(R.color.tc_text_weak))
         v.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         row.addView(lab); row.addView(v)
+        return row
+    }
+
+    // 【選べるマウントはマスタから集める(2026-10-03 依頼)】
+    //  固定の一覧をここに書くと、マスタへ別メーカーのマウントを足したときに
+    //  **こちらを直すまで選べない**。カメラとレンズの両方から拾う —
+    //  EF のように**レンズにしか無いマウント**があるため(一眼レフの本体はマスタに無い)。
+    private fun knownMounts(): List<String> {
+        val set = LinkedHashSet<String>()
+        runCatching {
+            val cams = camArray(HgeNative.nativeGetMasterCameras())
+            for (i in 0 until cams.length()) {
+                val c = cams.optJSONObject(i)?.optJSONObject("camera") ?: cams.optJSONObject(i)
+                c?.optString("mount")?.takeIf { it.isNotEmpty() }?.let { set.add(it) }
+            }
+        }
+        runCatching {
+            val lens = JSONArray(HgeNative.nativeGetMasterLenses())
+            for (i in 0 until lens.length()) {
+                lens.optJSONObject(i)?.optString("mount")?.takeIf { it.isNotEmpty() }?.let { set.add(it) }
+            }
+        }
+        return set.sorted()
+    }
+
+    // マウントを選ぶ行。他の欄と同じ高さに揃え、押すと縦に開く。
+    private fun mountRow(current: String): View {
+        val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER_VERTICAL
+        row.setPadding(0, dp(3), 0, dp(3))
+        val lab = TextView(this); lab.text = s(R.string.mount); lab.textSize = 14f; lab.width = dp(118)
+        lab.setTextColor(getColor(R.color.tc_text))
+        val cur = TextView(this); cur.textSize = 14f
+        cur.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        cur.setTextColor(getColor(R.color.tc_link))
+        camMount = current
+        fun show() { cur.text = (camMount.ifEmpty { s(R.string.mount_unset) }) + "  \u25bc" }
+        show()
+        cur.setOnClickListener { anchor ->
+            val items = ArrayList<String>()
+            items.add(s(R.string.mount_unset))        // 指定しない(= 絞り込まない)
+            items.addAll(knownMounts())
+            val pm = PopupMenu(this, anchor)
+            items.forEachIndexed { i, e -> pm.menu.add(0, i, i, e) }
+            pm.setOnMenuItemClickListener { mi ->
+                camMount = if (mi.itemId == 0) "" else items[mi.itemId]
+                show()
+                true
+            }
+            pm.show()
+        }
+        row.addView(lab); row.addView(cur)
         return row
     }
 

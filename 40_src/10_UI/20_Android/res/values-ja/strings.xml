@@ -923,4 +923,6 @@
     <string name="fl_wipe_done">設定を消しました。</string>
     <string name="fl_wipe_after">端末は未設定の状態で立ち上がります。QR から設定し直してください。</string>
     <string name="no_lenses_for_mount">%1$s マウントに付くレンズが所持レンズにありません</string>
+    <string name="mount">マウント</string>
+    <string name="mount_unset">指定しない</string>
 </resources>
