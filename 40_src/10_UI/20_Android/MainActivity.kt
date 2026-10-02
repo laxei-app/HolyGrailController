@@ -548,6 +548,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 冷たい起動(プロセスが作られた)なら、記録から撮影を再開する(非同期)。
         if (!warmStart) resumePhoneCapture()
         Thread { try { HgeNative.nativePresenceStart() } catch (_: Exception) {} }.start()  // P4: 常駐プレゼンスマップ開始
+
+        // 【見ていた画面へ戻る(2026-10-02 依頼)】明暗を切り替えると Activity が
+        //  作り直される。そのままだと計画一覧へ飛ばされ、色を変えただけなのに
+        //  「どこかへ連れて行かれた」ように見える。**画面を組み終えてから**戻す。
+        //  一覧の構築は別スレッドなので、post で後ろへ回す。
+        savedInstanceState?.getInt(kStScreen, -1)?.let { sc ->
+            if (sc > 0 && sc < flipper.childCount) {
+                flipper.post { runCatching { gotoScreen(sc) } }
+            }
+        }
     }
 
     // 回転(縦⇄横)。AndroidManifest で configChanges を宣言してあるので、ここへ来るだけで
@@ -731,6 +741,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  leaveXxx(dest) に行き先だけ渡す形にした。dest は 0=撮影計画 / 4=メニュー。
     private val kScreenHome = 0
     private val kScreenMenu = 4
+    private val kStScreen = "screen"	// 作り直しをまたいで「見ていた画面」を運ぶ鍵
 
     // ヘッダのホーム/メニューを1か所で配線する。押されたら行き先(0/4)を渡して呼ぶ。
     // エッジ端末書き込み画面(別の画面部品)から「ホーム」で戻ってきたときの引き継ぎ。
@@ -1097,36 +1108,31 @@ class MainActivity : AppCompatActivity(), HgeListener {
     //  選ばれているものは塗りつぶし、それ以外は枠だけにして「押せるが選ばれていない」と見せる。
     //  【横に入らないときは折り返す】言語によって長さが違うので、横幅を超えたら
     //  次の行へ回る(切れて読めなくならないように)。
-    private fun gearChoiceItem(box: LinearLayout, title: String, entries: List<String>,
-                               selected: Int, onSelect: (Int) -> Unit) {
-        val outer = LinearLayout(this)
-        outer.orientation = LinearLayout.VERTICAL
-        outer.setPadding(dp(28), dp(6), dp(12), dp(8))
-        val tv = TextView(this)
-        tv.text = title; tv.textSize = 16f; tv.setTextColor(getColor(R.color.tc_text))
-        outer.addView(tv)
+    private fun gearPickItem(box: LinearLayout, title: String, entries: List<String>,
+                             selected: Int, onSelect: (Int) -> Unit) {
         val row = LinearLayout(this)
         row.orientation = LinearLayout.HORIZONTAL
-        row.setPadding(0, dp(6), 0, 0)
+        row.setPadding(dp(28), dp(6), dp(12), dp(6))
+        val tv = TextView(this)
+        tv.text = title; tv.textSize = 16f; tv.setTextColor(getColor(R.color.tc_text))
+        tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        tv.gravity = android.view.Gravity.CENTER_VERTICAL
+        row.addView(tv)
         entries.forEachIndexed { i, label ->
             val t = TextView(this)
             t.text = label
             t.textSize = 15f
-            t.gravity = android.view.Gravity.CENTER
-            t.setPadding(dp(8), dp(7), dp(8), dp(7))
+            t.gravity = android.view.Gravity.CENTER_VERTICAL
+            t.setPadding(dp(10), dp(4), dp(10), dp(4))
             val on = (i == selected)
-            t.setBackgroundResource(if (on) R.drawable.seg_on else R.drawable.seg_off)
-            t.setTextColor(if (on) Color.WHITE else getColor(R.color.tc_text_sub))
-            // 均等割り。言語で文字数が違っても幅は変わらず、
-            //  入りきらなければ TextView が折り返す(切れて読めなくならない)。
-            val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            lp.setMargins(if (i == 0) 0 else dp(6), 0, 0, 0)
-            t.layoutParams = lp
+            //  選ばれているものを**太字と文字色だけ**で示す。帯や枠を付けると
+            //  この行だけが大げさに見え、他の行と釣り合わない(2026-10-02 依頼)。
+            t.setTypeface(null, if (on) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
+            t.setTextColor(getColor(if (on) R.color.tc_text else R.color.tc_link))
             if (!on) { t.setOnClickListener { onSelect(i) } }
             row.addView(t)
         }
-        outer.addView(row)
-        box.addView(outer)
+        box.addView(row)
         box.addView(thinDivider())
     }
 
@@ -1215,29 +1221,8 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  ・エッジ側にモードを持たせないので、戻せなくなって現地へ行く経路は無い
         gearSwitchItem(box, s(R.string.menu_edge_ble), edgeUseBle()) { on -> setEdgeUseBle(on) }
         }   // if (canEdge())
-        gearBand(box, s(R.string.band_other))
-        // 【言語(2026-10-01 依頼)】端末に合わせる / 日本語 / English。
-        //  覚えるのは AppCompat に任せるので、ここは選んで渡すだけ。
-        //  選ぶと Activity が作り直されるので、後始末は要らない。
-        // 【明暗(2026-10-01 依頼)】夜に白い画面はまぶしい。既定は端末に合わせる。
-        gearChoiceItem(box, s(R.string.menu_theme),
-            listOf(s(R.string.theme_system), s(R.string.theme_light), s(R.string.theme_dark)),
-            when (Loc.themeMode(this)) { "light" -> 1; "dark" -> 2; else -> 0 }) { i ->
-            val v = when (i) { 1 -> "light"; 2 -> "dark"; else -> Loc.THEME_SYSTEM }
-            if (v != Loc.themeMode(this)) { Loc.saveTheme(this, v); RestartActivity.restart(this) }
-        }
-        gearSpinnerItem(box, s(R.string.menu_language),
-            listOf(s(R.string.lang_system), s(R.string.lang_ja), s(R.string.lang_en)),
-            when (Loc.selected(this)) { "ja" -> 1; "en" -> 2; else -> 0 }) { i ->
-            val tag = when (i) { 1 -> "ja"; 2 -> "en"; else -> Loc.SYSTEM }
-            if (tag != Loc.selected(this)) changeLanguage(tag)
-        }
-        // 【機能拡張(2026-10-01 UI依頼)】買い切りのアドインの試用と購入。
-        //  「スマホ権限、設定」の上に置く。
-        gearItem(box, s(R.string.menu_ext)) { openExtScreen() }
-        gearItem(box, s(R.string.menu_permcheck)) { openPermCheck() }
-        // 使っているソフトウェアの権利表示(2026-09-27 UI依頼)。中身は原文のまま出すので翻訳しない。
-        gearItem(box, s(R.string.menu_notices)) { openNotices() }
+        // 【並び(2026-10-02 依頼)】「ログ」を先に、「その他」を後ろへ。
+        //  「出荷時設定に戻す」は帯を立てず「その他」の末尾へ入れる。
         gearBand(box, s(R.string.band_log))
         // 撮影中/開始要求中はグレー表示で不可(コピー処理が撮影と競合しないように)。
         // 【撮影中でも開ける(2026-08-29 実機で気づいた)】この画面には性質の違う2つが同居する。
@@ -1277,7 +1262,36 @@ class MainActivity : AppCompatActivity(), HgeListener {
         gearItem(box, s(R.string.menu_history)) { openHistory() }            // 項目9
         gearItem(box, s(R.string.menu_reports)) { openReportList() }     // 670: 撮影1回ぶんの結果と所見
 
-        gearBand(box, s(R.string.band_reset))
+        gearBand(box, s(R.string.band_other))
+        // 【言語(2026-10-01 依頼)】端末に合わせる / 日本語 / English。
+        //  覚えるのは AppCompat に任せるので、ここは選んで渡すだけ。
+        //  選ぶと Activity が作り直されるので、後始末は要らない。
+        // 【明暗(2026-10-01 依頼)】夜に白い画面はまぶしい。既定は端末に合わせる。
+        gearPickItem(box, s(R.string.menu_theme),
+            listOf(s(R.string.theme_system), s(R.string.theme_light), s(R.string.theme_dark)),
+            when (Loc.themeMode(this)) { "light" -> 1; "dark" -> 2; else -> 0 }) { i ->
+            val v = when (i) { 1 -> "light"; 2 -> "dark"; else -> Loc.THEME_SYSTEM }
+            if (v != Loc.themeMode(this)) {
+                // 【プロセスを落とさない(2026-10-02 依頼)】明暗は Activity を作り直すだけで変わる。
+                //  言語と違って Entity を畳む必要が無いので、撮影も止まらない。
+                //  作り直しの後は onSaveInstanceState に残した画面へ戻るので、
+                //  利用者には**このメニューのまま色だけが変わった**ように見える。
+                Loc.saveTheme(this, v)
+                Loc.applyTheme(this)
+            }
+        }
+        gearSpinnerItem(box, s(R.string.menu_language),
+            listOf(s(R.string.lang_system), s(R.string.lang_ja), s(R.string.lang_en)),
+            when (Loc.selected(this)) { "ja" -> 1; "en" -> 2; else -> 0 }) { i ->
+            val tag = when (i) { 1 -> "ja"; 2 -> "en"; else -> Loc.SYSTEM }
+            if (tag != Loc.selected(this)) changeLanguage(tag)
+        }
+        // 【機能拡張(2026-10-01 UI依頼)】買い切りのアドインの試用と購入。
+        //  「スマホ権限、設定」の上に置く。
+        gearItem(box, s(R.string.menu_ext)) { openExtScreen() }
+        gearItem(box, s(R.string.menu_permcheck)) { openPermCheck() }
+        // 使っているソフトウェアの権利表示(2026-09-27 UI依頼)。中身は原文のまま出すので翻訳しない。
+        gearItem(box, s(R.string.menu_notices)) { openNotices() }
         gearItem(box, s(R.string.menu_factory_reset)) { confirmFactoryReset() }
 
         // 版数を一番下に出す(2026-08-08 UI依頼)。どのビルドを使っているかを画面だけで確認できる。
@@ -5855,10 +5869,21 @@ class MainActivity : AppCompatActivity(), HgeListener {
         super.attachBaseContext(Loc.wrap(newBase))
     }
 
+    // 【作り直しの前に「どの画面を見ていたか」を残す(2026-10-02 依頼)】
+    //  明暗を切り替えると Activity が作り直される。残さないと最初の画面へ戻ってしまい、
+    //  「色を変えたら計画一覧に飛ばされた」という見え方になる。
+    override fun onSaveInstanceState(outState: android.os.Bundle) {
+        super.onSaveInstanceState(outState)
+        runCatching { outState.putInt(kStScreen, flipper.displayedChild) }
+    }
+
     override fun onDestroy() {
         try { adView?.destroy() } catch (_: Exception) {}
         adView = null
-        if (keepRunningOnClose()) {
+        // 【作り直しでは畳まない(2026-10-02 依頼)】明暗の切替や画面回転では
+        //  onDestroy → onCreate と通るが、**同じプロセスのまま**。ここで nativeTerm すると
+        //  撮影が止まり、次の Activity が畳んだ Entity を使うことになる。
+        if (keepRunningOnClose() || isChangingConfigurations) {
             // 画面だけ消える。ネイティブの撮影スレッドと受け口(listener)はそのまま。
             //  **この Activity は破棄済みなので、以後ダイアログを出してはいけない**(uiAlive)。
             uiAlive = false
