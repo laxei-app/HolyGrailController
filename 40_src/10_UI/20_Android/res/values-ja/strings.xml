@@ -908,4 +908,5 @@
     <string name="storage_stopped">端末の空き容量がなくなったため撮影を終了しました。そこまでの動画は保存されています。</string>
     <string name="storage_note_stop">保存先の空きが足りません</string>
     <string name="storage_note_low">保存先の空きが減っています</string>
+    <string name="reset_keep_ext">購入した機能拡張はそのまま使えます(試用の残り回数も変わりません)。\n</string>
 </resources>

@@ -1373,6 +1373,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 s(R.string.reset_item_edges) +
                 s(R.string.reset_item_logs) +
                 s(R.string.reset_keep_master) +
+                // 【消えないものを先に言う(2026-10-02 依頼)】購入の記録は利用者が
+                //  作ったデータではなく**領収書**なので初期化でも残る(doFactoryReset で控えている)。
+                //  それを書いておかないと、「払ったものが消えるかも」と思って押せなくなる。
+                s(R.string.reset_keep_ext) +
                 s(R.string.reset_keep_edge) +
                 s(R.string.reset_warning))
             .setPositiveButton(s(R.string.erase_and_restart)) { _, _ -> doFactoryReset() }

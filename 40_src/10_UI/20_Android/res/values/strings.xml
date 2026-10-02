@@ -928,4 +928,5 @@ The plans you made and the cameras you added are still there.</string>
     <string name="storage_stopped">The shoot ended because the phone ran out of free space. The video recorded up to that point has been saved.</string>
     <string name="storage_note_stop">Not enough free space</string>
     <string name="storage_note_low">Running low on free space</string>
+    <string name="reset_keep_ext">Add-ons you have purchased stay available (the number of trial shoots left is unchanged, too).\n</string>
 </resources>
