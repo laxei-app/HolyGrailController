@@ -780,7 +780,11 @@ static void renderApInfo(void)
 	g_cv.setTextColor(TFT_BLACK);
 	g_cv.setFont(&fonts::Font2);	// ASCII専用フォント(エッジ表示は英語のみ)
 	g_cv.setTextDatum(textdatum_t::middle_center);
-	g_cv.drawString("AP mode: connect to this AP", 160, 22);
+	// 【端末名を出す(2026-10-03 依頼)】この画面に名前が無く、
+	//  名前が変わっても気づけなかった(実際に "Edg" へ化けていたのを見逃した)。
+	//  行は増やさず、見出しを「名前 + AP mode」にする。
+	g_cv.drawString((g_devName.empty() ? std::string("NoName") : g_devName).c_str(), 160, 14);
+	g_cv.drawString("AP mode: connect to this AP", 160, 34);
 	// SSID/パスワードはカメラへ手入力する値なので、画面で最大の文字で出す。
 	g_cv.setFont(&fonts::Font4);
 	g_cv.drawString("SSID", 160, 62);

@@ -82,6 +82,49 @@ object FlashMap {
     const val BOOTLOADER = 0x0
     const val BOOTLOADER_END = 0x8000
     const val PART_TABLE = 0x8000
+
+    // 【設定だけを消す(2026-10-03 依頼)】区切り表から NVS の場所を読む。
+    //  【なぜ決め打ちにしないか】いまは両機種とも 0x9000/0x5000 だが、区切り方を
+    //  変えたときに**別の領域を消してしまう**。端末が持っている表を見るのが安全。
+    //  表は 1 件 32 バイト。先頭 2 バイトが 0xAA 0x50 なら有効な行。
+    //    +0  magic(2)  +2 type(1)  +3 subtype(1)  +4 offset(4)  +8 size(4)  +12 label(16)
+    //  type=1(data) subtype=2(nvs) が目当て。
+    private const val PART_MAGIC0 = 0xAA
+    private const val PART_MAGIC1 = 0x50
+
+    data class Partition(val label: String, val type: Int, val subType: Int,
+                         val offset: Int, val size: Int)
+
+    /** 区切り表の生データ → 行の一覧。読めない行が来たらそこで打ち切る。 */
+    fun parsePartitions(raw: ByteArray): List<Partition> {
+        val out = ArrayList<Partition>()
+        var i = 0
+        while (i + 32 <= raw.size) {
+            val m0 = raw[i].toInt() and 0xFF
+            val m1 = raw[i + 1].toInt() and 0xFF
+            if (m0 != PART_MAGIC0 || m1 != PART_MAGIC1) break   // ここで表は終わり
+            val type = raw[i + 2].toInt() and 0xFF
+            val sub = raw[i + 3].toInt() and 0xFF
+            fun le32(at: Int): Int =
+                (raw[at].toInt() and 0xFF) or ((raw[at + 1].toInt() and 0xFF) shl 8) or
+                ((raw[at + 2].toInt() and 0xFF) shl 16) or ((raw[at + 3].toInt() and 0xFF) shl 24)
+            val off = le32(i + 4)
+            val size = le32(i + 8)
+            val sb = StringBuilder()
+            for (k in 0 until 16) {
+                val c = raw[i + 12 + k].toInt() and 0xFF
+                if (c == 0) break
+                sb.append(c.toChar())
+            }
+            out.add(Partition(sb.toString(), type, sub, off, size))
+            i += 32
+        }
+        return out
+    }
+
+    /** 設定(NVS)の区切り。見つからなければ null。 */
+    fun findNvs(parts: List<Partition>): Partition? =
+        parts.firstOrNull { it.type == 1 && it.subType == 2 }
     const val PART_TABLE_LEN = 0xC00
     const val NVS = 0x9000
     const val NVS_END = 0xE000

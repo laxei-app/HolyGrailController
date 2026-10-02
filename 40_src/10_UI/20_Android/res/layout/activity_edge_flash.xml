@@ -44,6 +44,12 @@
         <Button android:id="@+id/fl_write"
             android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
             android:text="@string/flash_write" />
+        <!-- 【最後の逃げ道(2026-10-03 依頼)】端末名が化けるなどして
+             BLE に出てこなくなると、スマホの端末設定からは何もできない。
+             USB なら必ず届くので、設定を消す口はここに置く。 -->
+        <Button android:id="@+id/fl_wipe"
+            android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+            android:text="@string/flash_wipe" />
     </LinearLayout>
 
     <!-- 「調べる」は1バイトも書かないので、いつ押しても端末を壊さない -->

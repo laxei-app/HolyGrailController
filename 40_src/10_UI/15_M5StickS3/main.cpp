@@ -909,7 +909,10 @@ static void renderApInfo(void)
 	g_cv.setTextColor(TFT_BLACK);
 	g_cv.setTextDatum(textdatum_t::middle_center);
 	g_cv.setFont(&fonts::Font2);
-	g_cv.drawString("AP mode: connect to this AP", g_scrW / 2, 12);
+	// 【端末名を出す(2026-10-03 依頼)】理由は CoreS3 側の同じ箰所のコメントを参照。
+	//  狭いので 1 行にまとめる。
+	g_cv.drawString(((g_devName.empty() ? std::string("NoName") : g_devName) + "  (AP mode)").c_str(),
+	                g_scrW / 2, 12);
 	g_cv.setFont(&fonts::Font4);
 	g_cv.drawString(g_apSsid.c_str(), g_scrW / 2, 48);
 	g_cv.drawString(g_apPass.c_str(), g_scrW / 2, 90);

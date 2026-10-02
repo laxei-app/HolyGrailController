@@ -909,4 +909,17 @@
     <string name="storage_note_stop">保存先の空きが足りません</string>
     <string name="storage_note_low">保存先の空きが減っています</string>
     <string name="reset_keep_ext">購入した機能拡張はそのまま使えます(試用の残り回数も変わりません)。\n</string>
+    <string name="flash_wipe">設定を消す</string>
+    <string name="fl_wipe_title">端末の設定を消しますか</string>
+    <string name="fl_wipe_msg">端末名・ネットワーク設定(STA/AP の SSID とパスワード)・持ち主の登録・タイムゾーンが消え、出荷時の未設定の状態に戻ります。
+
+撮影計画とログ(SD カード側)は消えません。ファームウェアも消えないので、焼き直す必要はありません。
+
+消した後は QR から設定し直してください。</string>
+    <string name="fl_wipe_need_stub">設定を消すには端末の助け舟(スタブ)が要ります。読み込めませんでした。何も消していません。</string>
+    <string name="fl_wipe_no_nvs">区切り表に設定の領域が見つかりません。何も消していません。</string>
+    <string name="fl_wipe_found">設定の領域: %1$s  0x%2$X から %3$d バイト</string>
+    <string name="fl_wipe_cancelled">やめました。何も消していません。</string>
+    <string name="fl_wipe_done">設定を消しました。</string>
+    <string name="fl_wipe_after">端末は未設定の状態で立ち上がります。QR から設定し直してください。</string>
 </resources>

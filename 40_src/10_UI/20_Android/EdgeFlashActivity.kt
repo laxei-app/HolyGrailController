@@ -46,6 +46,7 @@ class EdgeFlashActivity : AppCompatActivity() {
     private lateinit var bar: ProgressBar
     private lateinit var probeBtn: Button
     private lateinit var writeBtn: Button
+    private lateinit var wipeBtn: Button
 
     @Volatile private var busy = false
     private var pendingAfterPermission: (() -> Unit)? = null
@@ -84,6 +85,7 @@ class EdgeFlashActivity : AppCompatActivity() {
         bar = findViewById(R.id.fl_bar)
         probeBtn = findViewById(R.id.fl_probe)
         writeBtn = findViewById(R.id.fl_write)
+        wipeBtn = findViewById(R.id.fl_wipe)
 
         // 【書き込み中は閉じさせない(2026-09-05 UI依頼)】書き込みは別スレッドで走っており、
         //  画面を閉じても止まらない。閉じると経過が見えないまま裏で続き、失敗しても気づけない。
@@ -95,6 +97,7 @@ class EdgeFlashActivity : AppCompatActivity() {
         findViewById<ImageView>(R.id.fl_back).setOnClickListener { onBackPressed() }
         probeBtn.setOnClickListener { withDevice { dev -> runOffUi { doProbe(dev) } } }
         writeBtn.setOnClickListener { withDevice { dev -> runOffUi { doWrite(dev) } } }
+        wipeBtn.setOnClickListener { withDevice { dev -> runOffUi { doWipe(dev) } } }
 
         val f = IntentFilter(EspUsb.permissionAction())
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(permReceiver, f, Context.RECEIVER_NOT_EXPORTED)
@@ -208,6 +211,7 @@ class EdgeFlashActivity : AppCompatActivity() {
         }
         probeBtn.isEnabled = dev != null && !busy
         writeBtn.isEnabled = dev != null && !busy
+        wipeBtn.isEnabled = dev != null && !busy
     }
 
     private fun log(msg: String) = ui.post {
@@ -322,6 +326,47 @@ class EdgeFlashActivity : AppCompatActivity() {
             //  「調べる」の直後に「書き込む」を押しても、また手で長押しする羽目になる。
             //  調べた後はそのまま焼ける状態で置いておくのが素直。
             log(getString(R.string.fl_stay_dl))
+        }
+    }
+
+    /**
+     * 端末の設定(NVS)だけを消す。本体(ファーム)は触らない。
+     *
+     * 【なぜ USB からか(2026-10-03 依頼)】設定を消したくなるのは、端末名が化けるなどして
+     *  **普段の手段で届かなくなったとき**。実際、名前が "Edg" へ化けて BLE に出てこなくなり、
+     *  スマホの端末設定からは何もできなくなった。BLE 経由の口を置いても、胝心なときに使えない。
+     *
+     * 【区切り表を読む理由】いまは両機種とも 0x9000/0x5000 だが、決め打ちにすると
+     *  区切り方を変えたときに**別の領域を消してしまう**。端末が持っている表を見る。
+     */
+    private fun doWipe(dev: UsbDevice) {
+        val (port, f) = connect(dev)
+        port.use {
+            tryStub(f)
+            //  表を読むにはスタブが要る。読めなければ**消さずにやめる**(勘で消さない)。
+            if (!f.isStubRunning()) {
+                log(getString(R.string.fl_wipe_need_stub))
+                return
+            }
+            val raw = f.readFlash(FlashMap.PART_TABLE, FlashMap.PART_TABLE_LEN)
+            val parts = FlashMap.parsePartitions(raw)
+            val nvs = FlashMap.findNvs(parts)
+            if (nvs == null) {
+                log(getString(R.string.fl_wipe_no_nvs))
+                return
+            }
+            log(getString(R.string.fl_wipe_found, nvs.label, nvs.offset, nvs.size))
+            if (!confirm(getString(R.string.fl_wipe_title), getString(R.string.fl_wipe_msg))) {
+                log(getString(R.string.fl_wipe_cancelled))
+                return
+            }
+            //  NVS は「消えている」= 0xFF で埋まっている状態。その形へ戻す。
+            val blank = ByteArray(nvs.size) { 0xFF.toByte() }
+            f.writeFlash(nvs.offset, blank) { phase, done, total -> progress(done, total) }
+            log(getString(R.string.fl_wipe_done))
+            log(getString(R.string.fl_wipe_after))
+            //  消したら起動し直す。出荷時と同じ「未設定」で立ち上がる。
+            runCatching { f.watchdogReset() }
         }
     }
 

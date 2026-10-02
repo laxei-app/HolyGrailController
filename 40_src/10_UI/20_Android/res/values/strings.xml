@@ -929,4 +929,17 @@ The plans you made and the cameras you added are still there.</string>
     <string name="storage_note_stop">Not enough free space</string>
     <string name="storage_note_low">Running low on free space</string>
     <string name="reset_keep_ext">Add-ons you have purchased stay available (the number of trial shoots left is unchanged, too).\n</string>
+    <string name="flash_wipe">Erase settings</string>
+    <string name="fl_wipe_title">Erase the settings on this device?</string>
+    <string name="fl_wipe_msg">The device name, network settings (STA/AP SSID and password), owner registration and time zone are erased, returning the device to its unconfigured factory state.
+
+Shooting plans and logs (on the SD card) are kept. The firmware is kept too, so you do not need to flash it again.
+
+After erasing, set it up again from the QR code.</string>
+    <string name="fl_wipe_need_stub">Erasing the settings needs the on-device helper (stub), which could not be loaded. Nothing was erased.</string>
+    <string name="fl_wipe_no_nvs">No settings partition was found in the partition table. Nothing was erased.</string>
+    <string name="fl_wipe_found">Settings partition: %1$s  %3$d bytes at 0x%2$X</string>
+    <string name="fl_wipe_cancelled">Cancelled. Nothing was erased.</string>
+    <string name="fl_wipe_done">The settings have been erased.</string>
+    <string name="fl_wipe_after">The device will start up unconfigured. Set it up again from the QR code.</string>
 </resources>
