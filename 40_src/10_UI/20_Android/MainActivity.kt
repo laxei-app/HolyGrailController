@@ -1077,31 +1077,6 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.addView(thinDivider())
     }
 
-    // 選択式の項目(右にドロップダウン)。言語のように「いくつかから選ぶ」もの用。
-    private fun gearSpinnerItem(box: LinearLayout, title: String, entries: List<String>,
-                                selected: Int, onSelect: (Int) -> Unit) {
-        val row = LinearLayout(this)
-        row.orientation = LinearLayout.HORIZONTAL
-        row.setPadding(dp(28), dp(6), dp(12), dp(6))
-        val tv = TextView(this)
-        tv.text = title; tv.textSize = 16f; tv.setTextColor(getColor(R.color.tc_text))
-        tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        tv.gravity = android.view.Gravity.CENTER_VERTICAL
-        val sp = android.widget.Spinner(this)
-        sp.adapter = android.widget.ArrayAdapter(this,
-            android.R.layout.simple_spinner_dropdown_item, entries)
-        sp.setSelection(selected, false)
-        // 組み上げた直後に一度呼ばれるので、同じ値なら何もしない。
-        sp.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(p: android.widget.AdapterView<*>?, v: View?, pos: Int, id: Long) {
-                if (pos != selected) onSelect(pos)
-            }
-            override fun onNothingSelected(p: android.widget.AdapterView<*>?) {}
-        }
-        row.addView(tv); row.addView(sp)
-        box.addView(row)
-        box.addView(thinDivider())
-    }
 
     // 【選びを横に並べてタップで切り替える(2026-10-01 ユーザー指示)】
     //  選択肢が少ないものは、ドロップダウンを開くより**全部見えていて押すだけ**の方が速い。
@@ -1285,7 +1260,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 buildGearMenu()
             }
         }
-        gearSpinnerItem(box, s(R.string.menu_language),
+        gearPickItem(box, s(R.string.menu_language),
             listOf(s(R.string.lang_system), s(R.string.lang_ja), s(R.string.lang_en)),
             when (Loc.selected(this)) { "ja" -> 1; "en" -> 2; else -> 0 }) { i ->
             val tag = when (i) { 1 -> "ja"; 2 -> "en"; else -> Loc.SYSTEM }
