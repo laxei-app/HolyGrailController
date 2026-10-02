@@ -4008,10 +4008,26 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
 
     private fun choosePlanLens() {
-        if (planCamera()?.optBoolean("lensFixed") == true) { return }   // レンズ固定のカメラ
+        val cam = planCamera()
+        if (cam?.optBoolean("lensFixed") == true) { return }   // レンズ固定のカメラ
         val arr = camArray(HgeNative.nativeGetOwnedLenses())
         if (arr.length() == 0) { openLensList(); return }
-        val names = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("name") }
+        // 【付かないレンズは出さない(2026-10-03 依頼)】所持カメラの画面と同じ見方。
+        //  内蔵カメラのレンズ(readOnly)は外して付けられないので外す。
+        //  ただし**いま選んでいるレンズは残す** — 消すと、カメラを変えた後に
+        //  元のレンズへ戻せなくなる。
+        val camMount = cam?.optString("mount") ?: ""
+        val cur = lensText.text?.toString() ?: ""
+        val rules = try { JSONArray(HgeNative.nativeGetMasterMounts()) } catch (_: Exception) { null }
+        val names = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
+            .filter { !it.optBoolean("readOnly", false) }
+            .filter { GearMaster.lensFitsMount(rules, camMount, it.optString("mount")) ||
+                      it.optString("name") == cur }
+            .map { it.optString("name") }
+            .filter { it.isNotEmpty() }
+        if (names.isEmpty()) {
+            Toast.makeText(this, s(R.string.no_lenses_for_mount, camMount), Toast.LENGTH_SHORT).show(); return
+        }
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle(s(R.string.pick_lens))
             .setItems(names.toTypedArray()) { _, which ->
