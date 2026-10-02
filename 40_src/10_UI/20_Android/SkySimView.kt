@@ -422,6 +422,25 @@ class SimPage(
         // 項目G: 他画面と同じ ● つまみにする(Material3 既定の縦棒つまみでなく thumb_dot)。
         try { seek.setCustomThumbDrawable(R.drawable.thumb_dot) } catch (_: Exception) {}
         seek.setPadding(dp(16f), dp(6f), dp(16f), dp(2f))
+        // 【横ドラッグをページ送りに奢われない(2026-10-02 実機)】
+        //  時刻のスライダーを引くと、画面が横に流れて隣のページへ行ってしまうことがあった
+        //  (SH-M08 は常に、Pixel 8 Pro は縦向きのとき。Pixel 6 では起きない)。
+        //
+        //  【なぜ端末で違うか】スライダー自身も「奢わないで」と言うが、
+        //  **スクロールする入れ物の中にいると、指がある程度動くまで待ってから**言う。
+        //  その待ちの間にページ送りが先に取ってしまう。閾値は端末の密度で変わるので、
+        //  端末や向きによって出たり出なかったりする。**触った瞬間に**自分で言う。
+        //  方位磁石と仰角(DirectionViews)は元から同じことをしている。
+        seek.setOnTouchListener { v, ev ->
+            when (ev.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN ->
+                    v.parent?.requestDisallowInterceptTouchEvent(true)
+                android.view.MotionEvent.ACTION_UP,
+                android.view.MotionEvent.ACTION_CANCEL ->
+                    v.parent?.requestDisallowInterceptTouchEvent(false)
+            }
+            false   // スライダー自身の処理はそのまま続ける
+        }
         seek.addOnChangeListener { _, v, _ ->
             fraction = v / 1000f
             renderSky()
