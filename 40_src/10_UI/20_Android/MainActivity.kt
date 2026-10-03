@@ -3326,11 +3326,36 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun lensDragTouch(index: Int) = View.OnTouchListener { v, ev ->
         when (ev.actionMasked) {
-            MotionEvent.ACTION_DOWN -> { v.parent?.requestDisallowInterceptTouchEvent(true); lensDragFrom = index; lensHighlight(ev.rawY); true }
-            MotionEvent.ACTION_MOVE -> { lensHighlight(ev.rawY); true }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { lensDrop(ev.rawY); true }
+            MotionEvent.ACTION_DOWN -> {
+                v.parent?.requestDisallowInterceptTouchEvent(true); lensDragFrom = index
+                lensHighlight(ev.rawY); showLensMoveLine(ev.rawY); true
+            }
+            MotionEvent.ACTION_MOVE -> { lensHighlight(ev.rawY); showLensMoveLine(ev.rawY); true }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { hideLensMoveLine(); lensDrop(ev.rawY); true }
             else -> false
         }
+    }
+
+    // 【移動中の線(2026-10-03 依頼)】撃影制御方法の並べ替えと同じ見せ方にする。
+    //  ここは区切り(移動先)の線しか無く、指がどこにあるのかが分からなかった。
+    //  **指のいる場所**に橙の線を常に出し、入る場所(青)とは別に見せる。
+    //  行の間に挿むと並びが動いてしまうので、レイアウトに関わらない overlay へ置く。
+    private val lensMoveLine = android.graphics.drawable.ColorDrawable(0xFFEF6C00.toInt())
+    private var lensMoveLineShown = false
+
+    private fun showLensMoveLine(rawY: Float) {
+        val box = camLensContainer ?: return
+        val loc = IntArray(2); box.getLocationOnScreen(loc)
+        val y = (rawY - loc[1]).toInt().coerceIn(0, box.height)
+        val h = dp(3)
+        lensMoveLine.setBounds(0, y - h / 2, box.width, y + h / 2)
+        if (!lensMoveLineShown) { box.overlay.add(lensMoveLine); lensMoveLineShown = true }
+        box.invalidate()
+    }
+    private fun hideLensMoveLine() {
+        val box = camLensContainer ?: return
+        if (lensMoveLineShown) { box.overlay.remove(lensMoveLine); lensMoveLineShown = false }
+        box.invalidate()
     }
     private fun lensGapFor(rawY: Float): Int {
         val box = camLensContainer ?: return 0
