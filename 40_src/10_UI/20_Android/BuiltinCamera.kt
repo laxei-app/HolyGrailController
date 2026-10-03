@@ -180,15 +180,65 @@ object BuiltinCamera {
                                         .put("name", displayName(id, c)).put("facing", "back"))
                     continue
                 }
+                val cand = ArrayList<Pair<String, CameraCharacteristics>>()
                 for (sub in subs) {
                     val pc = runCatching { m.getCameraCharacteristics(sub) }.getOrNull() ?: continue
                     if (facingName(pc) != "back") { continue }
+                    cand.add(sub to pc)
+                }
+                for ((sub, pc) in dropCropDuplicates(cand)) {
                     arr.put(JSONObject().put("id", sub).put("logical", id)
                                         .put("name", displayName(sub, pc)).put("facing", "back"))
                 }
             }
         }
         return arr.toString()
+    }
+
+    // 【同じ素子・同じレンズの「切り出し」は出さない(2026-10-04 ユーザー指示)】
+    //  Pixel 8 Pro は背面の物理カメラを 5 個名乗るが、実体は 3 個しか無い。広角(24mm)と
+    //  望遠(110mm)が、それぞれ中央を 2 倍に切り出した姿(49mm / 221mm)でも現れる。
+    //  切り出しは画角が狭くなるだけで集められる光は増えない —— 星を撮るのに使う意味が
+    //  無いので、素のまま(センサーが大きいほう)だけを残す。
+    //
+    //  【どうやって見分けるか】端末は「これは切り出しだ」とは名乗らない。activeArraySize も
+    //   5 個とも全面のままで、ここからは分からない(実機で確認)。そこで**同じ素子である
+    //   証拠**を揃えて判断する:
+    //    ・実焦点距離と開放F値が一致する(同じレンズ)
+    //    ・色の較正値(calibrationTransform1 / colorTransform1)が一致する。DNG のために
+    //      メーカーが素子ごとに測った値なので、別の素子なら一致しない
+    //    ・センサー寸法だけが小さい(= 切り出した側)
+    //   機種名もメーカー名も見ないので、他の端末にもそのまま効く。
+    private fun dropCropDuplicates(list: List<Pair<String, CameraCharacteristics>>)
+            : List<Pair<String, CameraCharacteristics>> {
+        val best = LinkedHashMap<String, Pair<String, CameraCharacteristics>>()
+        for (e in list) {
+            val k = opticsKey(e.second)
+            val cur = best[k]
+            if (cur == null || sensorArea(e.second) > sensorArea(cur.second)) { best[k] = e }
+        }
+        return best.values.toList()
+    }
+
+    private fun opticsKey(c: CameraCharacteristics): String {
+        val f = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull() ?: 0f
+        val a = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)?.minOrNull() ?: 0f
+        return "%.3f/%.3f/%s/%s".format(f, a,
+            xformKey(c.get(CameraCharacteristics.SENSOR_CALIBRATION_TRANSFORM1)),
+            xformKey(c.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1)))
+    }
+
+    private fun sensorArea(c: CameraCharacteristics): Float {
+        val sz = c.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE) ?: return 0f
+        return sz.width * sz.height
+    }
+
+    // 色の較正値を比べられる文字列へ。読めない端末では空になり、
+    //  実焦点距離と開放F値だけで見ることになる。
+    private fun xformKey(t: android.hardware.camera2.params.ColorSpaceTransform?): String {
+        if (t == null) { return "" }
+        val e = IntArray(18)
+        return runCatching { t.copyElements(e, 0); e.joinToString(",") }.getOrElse { t.toString() }
     }
 
     // 【束ねられているカメラを調べる(2026-09-05)】getCameraIdList に出てくるのは、
