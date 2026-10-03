@@ -6473,9 +6473,16 @@ class MainActivity : AppCompatActivity(), HgeListener {
         box.removeAllViews(); placeCoordTv = null; placeAltEt = null; placeMemoEt = null
         placeAutoCb = null; planPlaceNameEt = null
         val o = planPlaceJson()
-        val cancel = addCancelButton(box, atTop = true) { planPlaceObj = null; buildPlanPlaceDetail() }
-        // よく使う場所を再入力しないための取り込み。取り込んだ後も全部直せる。
-        box.addView(linkText(s(R.string.import_saved_place)) { importSavedPlaceIntoPlan() })
+        // 【取り込みと取り消しを同じ行へ(2026-10-04 UI依頼)】左に取り込み、右に取り消し。
+        //  よく使う場所を再入力しないための取り込み。取り込んだ後も全部直せる。
+        val topRow = LinearLayout(this)
+        topRow.orientation = LinearLayout.HORIZONTAL
+        topRow.gravity = Gravity.CENTER_VERTICAL
+        topRow.addView(linkText(s(R.string.import_saved_place)) { importSavedPlaceIntoPlan() })
+        topRow.addView(View(this).apply {   // 間を伸ばして取り消しを右端へ
+            layoutParams = LinearLayout.LayoutParams(0, 1, 1f) })
+        val cancel = addCancelButton(topRow) { planPlaceObj = null; buildPlanPlaceDetail() }
+        box.addView(topRow)
         // 名前(撮影場所リストでは一覧の行で直すが、ここには一覧が無いので欄を置く)
         box.addView(TextView(this).apply { text = s(R.string.place_name); textSize = 13f
             setTextColor(getColor(R.color.tc_text_sub)); setPadding(0, dp(8), 0, dp(2)) })
