@@ -39,6 +39,9 @@
     <color name="tc_section_bg">#455A64</color>
     <color name="tc_section_fg">#FFFFFF</color>
 
+    <!-- 上下へ動かせる行・カードの地色(撮影制御方法の優先順・組み合わせるレンズ) -->
+    <color name="tc_card_bg">#F2EEFA</color>
+
     <!-- つまみ(左右分割・ページの印) -->
     <color name="tc_handle_bg">#D1C4E9</color>
     <color name="tc_handle_fg">#222222</color>

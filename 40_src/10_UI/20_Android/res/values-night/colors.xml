@@ -34,6 +34,9 @@
     <color name="tc_section_bg">#2C3A42</color>
     <color name="tc_section_fg">#E3E3E3</color>
 
+    <!-- 上下へ動かせる行・カードの地色。つまみより沈めて、つまみが浮き上がるように -->
+    <color name="tc_card_bg">#232034</color>
+
     <!-- つまみ(左右分割・ページの印) -->
     <color name="tc_handle_bg">#342E4A</color>
     <color name="tc_handle_fg">#DCD5F0</color>

@@ -3304,7 +3304,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             if (i < camLensNames.size) {
                 val idx = i; val nm = camLensNames[i]
                 val row = LinearLayout(this); row.orientation = LinearLayout.HORIZONTAL; row.gravity = Gravity.CENTER_VERTICAL
-                row.setBackgroundColor(0xFFF2EEFA.toInt()); row.setPadding(dp(2), dp(2), dp(2), dp(2))
+                row.setBackgroundColor(getColor(R.color.tc_card_bg)); row.setPadding(dp(2), dp(2), dp(2), dp(2))
                 val handle = TextView(this); handle.text = "▲\n▼"; handle.textSize = 12f; handle.gravity = Gravity.CENTER
                 handle.setBackgroundColor(getColor(R.color.tc_handle_bg))
                 handle.layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
@@ -4804,7 +4804,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             val card = LinearLayout(this@MainActivity); card.orientation = LinearLayout.VERTICAL
             card.layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            card.setBackgroundColor(0xFFF2EEFA.toInt())
+            card.setBackgroundColor(getColor(R.color.tc_card_bg))
             card.setPadding(dp(4), dp(2), dp(4), dp(4))
 
             // 行1: 名称(左) + 数値。通常は 暗所/基準/明所 の3値、月モードは明所限界のみ(仕様4g/6e)。
