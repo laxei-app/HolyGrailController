@@ -468,6 +468,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
         HgeNative.nativeSetLogDir(baseDir.absolutePath)
         val warmStart = nativeReady          // true = 撮影中に閉じられて、戻ってきたところ
         if (!warmStart) { HgeNative.nativeInit(); nativeReady = true }
+        // 【計画を作らせない印は nativeInit の直後に(2026-10-04 依頼)】
+        //  以前は startFirstLaunchSeed の中で立てていたが、そこへ到る前に judgeLastExit などが
+        //  計画へ触り、その拍子に**出荷時の固定計画(EOS R10 / Tokyo)ができていた**。
+        //  位置情報を許可しても、その計画の撮影場所は Tokyo のままだった(Pixel 8 Pro で確認)。
+        if (!warmStart && seedNeeded()) { setSeedGate(true) }
         applyTelemetryConsent()   // 統計とクラッシュ記録の可否(既定: リリース版だけ送る)
         if (!warmStart) judgeLastExit()   // 前回の終わり方を推定(冷たい起動のときだけ意味がある)
         migratePaidOwned()                // 旧 paidOwned を2つの購入へ移す(一度だけ)
@@ -7971,11 +7976,17 @@ class MainActivity : AppCompatActivity(), HgeListener {
                !p.getBoolean("stdTplDone", false)
     }
 
+    // 種まきが終わるまで「出荷時の固定計画を作らない」印。**必ず外すこと**——
+    //  立てたままにすると計画が 1 件も無い画面になる。
+    private fun setSeedGate(on: Boolean) {
+        try { HgeNative.nativeSetSeedPending(if (on) 1 else 0) } catch (_: Exception) {}
+    }
+
     private fun startFirstLaunchSeed() {
-        if (!seedNeeded()) return
+        if (!seedNeeded()) { setSeedGate(false); return }
         if (!locationGranted()) {
             seedWaitingPerm = true
-            try { HgeNative.nativeSetSeedPending(1) } catch (_: Exception) {}
+            setSeedGate(true)
             ActivityCompat.requestPermissions(this,
                 arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION), LOC_PERM_REQ)
             handler.postDelayed(seedPermTimeout, kSeedPermWaitMs)
@@ -7987,9 +7998,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (loc != null) {
             val seed = dataExec.submit { runFirstLaunchSeed(loc) }
             try { seed.get(20, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}
+            setSeedGate(false)
             return
         }
-        try { HgeNative.nativeSetSeedPending(1) } catch (_: Exception) {}
+        setSeedGate(true)
         fetchFreshLocationThenSeed()
     }
 
@@ -8051,7 +8063,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun seedNow(loc: android.location.Location?) {
         dataExec.execute {
             runFirstLaunchSeed(loc)
-            try { HgeNative.nativeSetSeedPending(0) } catch (_: Exception) {}
+            setSeedGate(false)
             runOnUiThread {
                 restorePlan()            // ここで初めて出荷時の固定計画が作られる(内蔵カメラ・現在地で)
                 refreshPlanList()
@@ -8213,7 +8225,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  出荷時の1件を「撮影計画に自動的に挿入する」に(改名にもついていく)。
         //  位置が分からず Tokyo のまま残るときも同じ。これが無いと、ひな形も計画も場所が空欄になる。
         HgeNative.nativeSetPlaceAutoInsert("Tokyo", 1)
-        if (loc == null) { return }   // 位置が分からない(断られた/測れなかった)→ Tokyo のまま
+        if (loc == null) { seedPlaceFromTimeZone(); return }   // 位置が分からない → タイムゾーンから
         val elev = fetchElevationOrNull(loc.latitude, loc.longitude) ?: (if (loc.hasAltitude()) loc.altitude else 0.0)
         val cur = findPlaceJson("Tokyo") ?: return
         val o = JSONObject(cur.toString()).apply {
@@ -8221,6 +8233,46 @@ class MainActivity : AppCompatActivity(), HgeListener {
             put("latitude", loc.latitude); put("longitude", loc.longitude); put("altitude", elev)
         }.toString()
         HgeNative.nativeSetPlaceDetail("Tokyo", o)
+    }
+
+    // 【位置を許可しなかったときの既定の場所(2026-10-04 依頼)】
+    //  以前は無条件に Tokyo だった。端末のタイムゾーンからその土地へ寄せる。
+    //
+    //  【なぜタイムゾーンか】権限も通信も要らず、**必ず入っている**。しかも Android が持つのは
+    //   時差の数字ではなく IANA のゾーンID(Asia/Tokyo の形)なので、同じ +9 時間でも
+    //   Asia/Tokyo と Asia/Yakutsk を取り違えない。国より細かいので、東西に広い国でも外さない。
+    //
+    //  座標の表は tz データベースの zone1970.tab / zone.tab から作ったものを同梱する
+    //  (assets/tzplaces.json、418 ゾーン)。**国名や都市名をコードに書かない**ための外出し。
+    //  標高は分からないので 0 にする(初回起動を通信で待たせない。
+    //  要る人は撮影場所の「緯度経度から取得」を押せば良い)。
+    //  表に無いゾーンなら何もしない —— 出荷時の Tokyo がそのまま残る。
+    private fun seedPlaceFromTimeZone() {
+        val id = runCatching { java.util.TimeZone.getDefault().id }.getOrNull() ?: return
+        if (id.isEmpty()) { return }
+        val tbl = runCatching { JSONObject(assets.open("tzplaces.json").bufferedReader().use { it.readText() }) }
+                    .getOrNull() ?: return
+        // 古い別名(Asia/Calcutta など)で届くことがあるので、見つからなければ末尾の都市名で照合する。
+        var o = tbl.optJSONObject(id)
+        if (o == null) {
+            val city = id.substringAfterLast('/')
+            val it2 = tbl.keys()
+            while (it2.hasNext()) {
+                val k = it2.next()
+                if (k.substringAfterLast('/').equals(city, true)) { o = tbl.optJSONObject(k); break }
+            }
+        }
+        val p = o ?: return
+        val cur = findPlaceJson("Tokyo") ?: return
+        val name = id.substringAfterLast('/').replace('_', ' ')
+        val js = JSONObject(cur.toString()).apply {
+            put("name", name)
+            put("latitude", p.optDouble("lat", 0.0))
+            put("longitude", p.optDouble("lon", 0.0))
+            put("altitude", 0.0)
+        }.toString()
+        HgeNative.nativeSetPlaceDetail("Tokyo", js)
+        HgeNative.nativeLogEvent("PLACE", "default place from time zone " + id + " -> " + name, false)
     }
 
     private fun seedFirstPlaceFromLocation() {
