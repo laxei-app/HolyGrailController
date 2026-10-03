@@ -34,6 +34,7 @@
     <include layout="@layout/screen_permcheck" />
     <include layout="@layout/screen_notices" />
     <include layout="@layout/screen_ext" />
+    <include layout="@layout/screen_plan_place" />
 </ViewFlipper>
 
     <!-- 【広告の帯の地色(2026-10-01 依頼)】枠は幅いっぱいに要求しているが、

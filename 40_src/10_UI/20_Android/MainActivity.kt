@@ -791,7 +791,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
                              R.id.cameralist_back, R.id.cameraadd_back, R.id.lenslist_back, R.id.lensadd_back,
                              R.id.color_back, R.id.smooth_back, R.id.places_back, R.id.reserve_back,
                              R.id.history_back, R.id.report_back, R.id.edge_back, R.id.dlog_back, R.id.pc_back,
-                             R.id.nt_back, R.id.ex_back)
+                             R.id.nt_back, R.id.ex_back, R.id.pplace_back)
         for (id in ids) { findViewById<ImageView>(id)?.setOnClickListener { goBackOneScreen() } }
     }
 
@@ -826,6 +826,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
             12 -> { flipper.displayedChild = 4; buildGearMenu() }        // カメラ予約表 → メニュー
             13 -> { flipper.displayedChild = 4; buildGearMenu() }        // 操作履歴 → メニュー
             15 -> { flipper.displayedChild = 4; buildGearMenu() }        // エッジ端末設定 → メニュー
+            20 -> leavePlanPlace(kScreenHome)                            // この計画の撮影場所 → 撮影計画
             // デバッグログ。取得中は戻らせない(途中で画面を捨てると、どこまで取れたか
             //  分からなくなる)。中断してから戻ってもらう。
             16 -> { if (dlogBusy) Toast.makeText(this, s(R.string.busy_fetch_back), Toast.LENGTH_SHORT).show()
@@ -968,6 +969,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         findViewById<Button>(R.id.lensadd_cancel).setOnClickListener { checkedLensAdd.clear(); buildLensAdd() }
         // 640 撮影場所リスト(§7.9)。戻る/メニューで離脱時に自動保存。
         wireHeader(R.id.places_home, R.id.places_menu) { leavePlacesList(it) }
+        wireHeader(R.id.pplace_home, R.id.pplace_menu) { leavePlanPlace(it) }
         // 撮影計画(330)のカメラ/レンズをタップで所持から選択する。
         cameraText.setOnClickListener { choosePlanCamera() }
         lensText.setOnClickListener { choosePlanLens() }
@@ -1966,6 +1968,9 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 【返金の文面】「応じられません」とは書けない。**48時間以内は利用者が Play から自分で
     //  申請でき、こちらでは止められない**。そこを正確に書く。
     private val kScreenExt = 19
+    // 【この計画の撮影場所(2026-10-04 依頼)】登録した場所を変えずに、
+    //  その計画が抱えている場所だけを直す画面。
+    private val kScreenPlanPlace = 20
 
     private fun extCameraDesc() = s(R.string.ext_camera_desc, kTrialMaxExternal)
     private fun extEdgeDesc()   = s(R.string.ext_edge_desc)
@@ -6419,19 +6424,133 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private fun commitPlanNameEdit() = commitListNameEdit(R.id.plan_listContainer)
 
     // --- 撮影場所の入力(緯度経度)。登録済みから選択 / テキスト貼り付け / 地図から選択(osmdroid) ---
+    // 【計画の「撮影場所」を押したとき(2026-10-04 依頼)】
+    //  以前は「登録した場所から選ぶ / 貼り付け / 地図」の 3 択だったが、
+    //  貼り付けと地図では**名前もタイムゾーンも入らない**。特にタイムゾーンが
+    //  残ったままだと、座標だけ遠い国へ移したときに時刻がずれる。
+    //  入り口を 1 つにして、撮影場所リストと**同じエディタ**を開く。
+    //  その中に「登録した場所から取り込む」を置くので、よく使う場所は一発で入るし、
+    //  取り込んだ後でこの計画だけ直すこともできる。
     private fun showPlaceEditChooser() {
         commitPlanNameEdit()   // 名前を打った直後でも改名を取りこぼさない
-        val cur = try { JSONObject(latestSchedule).optString("latlng") } catch (_: Exception) { "" }
+        openPlanPlace()
+    }
+
+    // ============================================================
+    //  645 この計画の撮影場所(2026-10-04 依頼)
+    // ============================================================
+    // 計画は場所を**写しで**持っている(hge_setPlanPlace が g_plan.place へ丸写しする)。
+    //  だから登録した場所を後から直しても、既に取り込んだ計画は変わらない
+    //  (2026-10-04 ユーザー確認済み。計画は作った時点の場所で固まる)。
+    private var planPlaceObj: JSONObject? = null     // 編集中の元データ(取り込んだら差し替わる)
+    private var planPlaceNameEt: EditText? = null
+
+    private fun openPlanPlace() {
+        planPlaceObj = null
+        buildPlanPlaceDetail()
+        flipper.displayedChild = kScreenPlanPlace
+    }
+
+    private fun leavePlanPlace(dest: Int = kScreenHome) {
+        stopDirtyWatch(); persistPlanPlace(); gotoScreen(dest)
+    }
+
+    // いまの計画が抱えている場所。読めなければ空の場所を返す。
+    private fun planPlaceJson(): JSONObject {
+        planPlaceObj?.let { return it }
+        val o = try { JSONObject(HgeNative.nativeGetPlanJson()).optJSONObject("place") } catch (_: Exception) { null }
+        return o ?: JSONObject().put("name", "").put("latitude", 0.0).put("longitude", 0.0)
+                                .put("altitude", 0.0).put("tzOffMin", nowOffMin()).put("memo", "")
+    }
+
+    private fun buildPlanPlaceDetail() {
+        val box = findViewById<LinearLayout>(R.id.pplace_detail)
+        box.removeAllViews(); placeCoordTv = null; placeAltEt = null; placeMemoEt = null
+        placeAutoCb = null; planPlaceNameEt = null
+        val o = planPlaceJson()
+        val cancel = addCancelButton(box, atTop = true) { planPlaceObj = null; buildPlanPlaceDetail() }
+        // よく使う場所を再入力しないための取り込み。取り込んだ後も全部直せる。
+        box.addView(linkText(s(R.string.import_saved_place)) { importSavedPlaceIntoPlan() })
+        // 名前(撮影場所リストでは一覧の行で直すが、ここには一覧が無いので欄を置く)
+        box.addView(TextView(this).apply { text = s(R.string.place_name); textSize = 13f
+            setTextColor(getColor(R.color.tc_text_sub)); setPadding(0, dp(8), 0, dp(2)) })
+        val nameEt = EditText(this).apply { setSingleLine(); setText(o.optString("name")) }
+        planPlaceNameEt = nameEt; box.addView(nameEt)
+        addPlaceCommonFields(box, o, forPlan = true)
+        // 気に入ったときだけ登録する(下見のたびに場所が溢れないように、既定は登録しない)。
+        box.addView(linkText(s(R.string.register_to_places)) { registerPlanPlaceToList() })
+        startDirtyWatch(cancel) { planPlaceSig() }
+    }
+
+    private fun planPlaceSig(): String = "name=${planPlaceNameEt?.text}," + placeDetailSig()
+
+    // 登録した場所をこの画面へ取り込む(計画へ書くのは画面を抜けるとき)。
+    private fun importSavedPlaceIntoPlan() {
+        val arr = placeArray(HgeNative.nativeGetPlaces())
+        val names = (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.optString("name") }.filter { it.isNotEmpty() }
+        if (names.isEmpty()) { Toast.makeText(this, s(R.string.no_saved_places), Toast.LENGTH_LONG).show(); return }
         androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle(s(R.string.set_location))
-            .setItems(arrayOf(s(R.string.pick_saved_place), s(R.string.paste_text), s(R.string.pick_on_map))) { _, which ->
-                when (which) {
-                    0 -> choosePlanFromRegistered()
-                    1 -> showPlacePasteDialog(cur) { lat, lng -> applyPlace(lat, lng, "") }
-                    2 -> { val s = parseLatLng(cur); openMapPicker(s?.first ?: 35.681, s?.second ?: 139.767) { lat, lng -> applyPlace(lat, lng, "") } }
-                }
+            .setTitle(s(R.string.saved_places))
+            .setItems(names.toTypedArray()) { _, which ->
+                val src = findPlaceJson(names[which]) ?: return@setItems
+                planPlaceObj = JSONObject(src.toString())
+                buildPlanPlaceDetail()
             }
+            .setNegativeButton(s(R.string.cancel_word), null)
             .show()
+    }
+
+    // いまの入力を撮影場所リストへ登録する。
+    //  同じ名前があるときは聞く(2026-10-04 ユーザー決定: 上書き / 別名で追加)。
+    private fun registerPlanPlaceToList() {
+        val name = planPlaceNameEt?.text?.toString()?.trim() ?: ""
+        if (name.isEmpty()) { Toast.makeText(this, s(R.string.place_name), Toast.LENGTH_SHORT).show(); return }
+        if (findPlaceJson(name) == null) { savePlanPlaceAs(name); return }
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle(s(R.string.place_name_dup_title))
+            .setMessage(s(R.string.place_name_dup_msg, name))
+            .setPositiveButton(s(R.string.act_overwrite)) { _, _ -> savePlanPlaceAs(name) }
+            .setNeutralButton(s(R.string.act_add_as_new)) { _, _ -> savePlanPlaceAs(uniquePlaceName(name)) }
+            .setNegativeButton(s(R.string.cancel_word), null)
+            .show()
+    }
+
+    private fun uniquePlaceName(base: String): String {
+        var n = 2
+        while (findPlaceJson("$base $n") != null) { n++ }
+        return "$base $n"
+    }
+
+    private fun savePlanPlaceAs(name: String) {
+        val js = planPlaceJsonFromFields(name)
+        dataExec.execute {
+            if (findPlaceJson(name) == null) { HgeNative.nativeAddPlace(name) }
+            HgeNative.nativeSetPlaceDetail(name, js)
+            runOnUiThread {
+                planPlaceNameEt?.setText(name)
+                Toast.makeText(this, s(R.string.place_registered, name), Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // 画面の入力を 1 件の場所 JSON へ。単位の戻し方は persistPlaceDetail と揃える。
+    private fun planPlaceJsonFromFields(name: String): String {
+        val alt = Loc.altToMeters(this,
+            (placeAltEt?.text?.toString()?.trim()?.toDoubleOrNull() ?: 0.0).toInt()).toDouble()
+        return JSONObject().apply {
+            put("name", name); put("memo", placeMemoEt?.text?.toString() ?: "")
+            put("latitude", placeLat); put("longitude", placeLng)
+            put("altitude", alt); put("autoInsert", false); put("tzOffMin", placeTzOffMin)
+        }.toString()
+    }
+
+    private fun persistPlanPlace() {
+        if (planPlaceNameEt == null) { return }
+        val js = planPlaceJsonFromFields(planPlaceNameEt?.text?.toString()?.trim() ?: "")
+        planExec.execute {
+            val r = HgeNative.nativeSetPlanPlaceJson(js)
+            runOnUiThread { if (r == 0) { refreshPlanList() } }
+        }
     }
 
     // 登録済み撮影場所(§7.9)から選んで撮影計画へ反映する。
@@ -7613,20 +7732,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         persistPlaceDetail(rebuild = true, origName = orig, newName = nm)
     }
 
-    private fun buildPlaceDetail() {
-        val box = findViewById<LinearLayout>(R.id.places_detail)
-        box.removeAllViews(); placeCoordTv = null; placeAltEt = null; placeMemoEt = null; placeAutoCb = null
-        val sel = selPlace
-        if (sel == null) {
-            box.addView(TextView(this).apply { text = s(R.string.places_empty); setPadding(dp(4), dp(16), dp(4), dp(16)) })
-            return
-        }
-        val arr = placeArray(HgeNative.nativeGetPlaces())
-        var o: JSONObject? = null
-        for (i in 0 until arr.length()) { val x = arr.optJSONObject(i) ?: continue; if (x.optString("name") == sel) { o = x; break } }
-        if (o == null) { box.addView(TextView(this).apply { text = s(R.string.no_data) }); return }
-        // 項目2: 撮影場所にも「変更の取り消し」ボタンを新設(dirty 連動。取消=保存内容から作り直し)。
-        val placeCancel = addCancelButton(box, atTop = true) { buildPlaceDetail() }
+    // 【場所の入力欄は1つだけ(2026-10-04 依頼)】緯度経度・標高・タイムゾーン・メモ。
+    //  登録した場所(撮影場所リスト)と、この計画だけの場所の両方から呼ぶ。
+    //  違うのは書き込む先だけなので、同じ入力欄を 2 つ作らない。
+    private fun addPlaceCommonFields(box: LinearLayout, o: JSONObject, forPlan: Boolean) {
         placeLat = o.optDouble("latitude", 0.0); placeLng = o.optDouble("longitude", 0.0)
         // 緯度・経度(DMS表示) + 取得手段(地図/貼り付け/現在地)
         box.addView(TextView(this).apply { text = s(R.string.lat_lng); textSize = 13f; setTextColor(getColor(R.color.tc_text_sub)); setPadding(0, dp(4), 0, dp(2)) })
@@ -7634,13 +7743,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
         btnRow.addView(linkText(s(R.string.pick_from_map)) {
             // 名前にカーソルが残ったままでも、ここで改名を確定させてから開く。
             //  確定しないまま座標を書くと、後から来る改名との順序で宛先が食い違う。
-            commitListNameEdit(R.id.places_container)
+            if (!forPlan) { commitListNameEdit(R.id.places_container) }
             val la0 = if (placeLat != 0.0 || placeLng != 0.0) placeLat else 35.681
             val lo0 = if (placeLat != 0.0 || placeLng != 0.0) placeLng else 139.767
             openMapPicker(la0, lo0) { la, lo -> onPlaceCoord(la, lo) }
         })
-        btnRow.addView(linkText(s(R.string.act_paste)) { commitListNameEdit(R.id.places_container); showPlacePasteDialog("%.6f, %.6f".format(placeLat, placeLng)) { la, lo -> onPlaceCoord(la, lo) } })
-        btnRow.addView(linkText(s(R.string.use_my_location)) { commitListNameEdit(R.id.places_container); fetchCurrentLocation { la, lo, alt -> if (alt != 0.0) placeAltEt?.setText(Loc.altValue(this, alt.toInt()).toString()); onPlaceCoord(la, lo) } })
+        btnRow.addView(linkText(s(R.string.act_paste)) { if (!forPlan) { commitListNameEdit(R.id.places_container) }; showPlacePasteDialog("%.6f, %.6f".format(placeLat, placeLng)) { la, lo -> onPlaceCoord(la, lo) } })
+        btnRow.addView(linkText(s(R.string.use_my_location)) { if (!forPlan) { commitListNameEdit(R.id.places_container) }; fetchCurrentLocation { la, lo, alt -> if (alt != 0.0) placeAltEt?.setText(Loc.altValue(this, alt.toInt()).toString()); onPlaceCoord(la, lo) } })
         box.addView(btnRow)
         val coordTv = TextView(this).apply { textSize = 18f; setTextColor(getColor(R.color.tc_text)); setPadding(0, dp(2), 0, dp(8)) }
         placeCoordTv = coordTv; box.addView(coordTv); refreshPlaceCoordText()
@@ -7685,6 +7794,23 @@ class MainActivity : AppCompatActivity(), HgeListener {
             minLines = 2; gravity = Gravity.TOP or Gravity.START; setText(o.optString("memo"))
         }
         placeMemoEt = memoEt; box.addView(memoEt)
+    }
+
+    private fun buildPlaceDetail() {
+        val box = findViewById<LinearLayout>(R.id.places_detail)
+        box.removeAllViews(); placeCoordTv = null; placeAltEt = null; placeMemoEt = null; placeAutoCb = null
+        val sel = selPlace
+        if (sel == null) {
+            box.addView(TextView(this).apply { text = s(R.string.places_empty); setPadding(dp(4), dp(16), dp(4), dp(16)) })
+            return
+        }
+        val arr = placeArray(HgeNative.nativeGetPlaces())
+        var o: JSONObject? = null
+        for (i in 0 until arr.length()) { val x = arr.optJSONObject(i) ?: continue; if (x.optString("name") == sel) { o = x; break } }
+        if (o == null) { box.addView(TextView(this).apply { text = s(R.string.no_data) }); return }
+        // 項目2: 撮影場所にも「変更の取り消し」ボタンを新設(dirty 連動。取消=保存内容から作り直し)。
+        val placeCancel = addCancelButton(box, atTop = true) { buildPlaceDetail() }
+        addPlaceCommonFields(box, o, forPlan = false)
         // 自動挿入(項目10: 全体で1つだけ。ONにすると他の場所の指定は自動的に外れる)
         val cb = CheckBox(this).apply { text = s(R.string.auto_insert_place); isChecked = o.optBoolean("autoInsert", false) }
         placeAutoCb = cb; box.addView(cb)

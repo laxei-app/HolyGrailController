@@ -312,6 +312,9 @@ int32_t hge_setPlaceAutoInsert(const char* name, int32_t autoInsert);
 int32_t hge_setPlaceDetail(const char* origName, const char* json);
 // 登録済みの撮影場所を名称で撮影計画へ反映し、スケジュールを再生成して通知する。
 int32_t hge_setPlanPlace(const char* name);
+// 計画が抱えている場所を JSON で丸ごと差し替える(2026-10-04 依頼)。
+//  登録済みの場所を引き写さない —— この計画だけの場所。
+int32_t hge_setPlanPlaceJson(const char* json);
 
 // システム共通の色(全体設定)。型ごとの文字色/背景色を JSON で取得/設定する。
 //  {"night":{"text":int,"bg":int},...}  型: night/sunrise/sunset/day/moon/preNight/postNight

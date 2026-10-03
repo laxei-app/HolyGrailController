@@ -150,6 +150,8 @@ object HgeNative {
     external fun nativeSetPlaceAutoInsert(name: String, autoInsert: Int): Int
     external fun nativeSetPlaceDetail(origName: String, json: String): Int  // name/memo/latitude/longitude/altitude/autoInsert
     external fun nativeSetPlanPlace(name: String): Int  // 登録済みの場所を撮影計画へ反映し再生成
+    // 計画が抱えている場所を JSON で丸ごと差し替える(登録した場所は変わらない)
+    external fun nativeSetPlanPlaceJson(json: String): Int
     external fun nativeSetOwnedCameraDetail(origName: String, json: String): Int  // 620 詳細編集
     external fun nativeSetOwnedLensDetail(origName: String, json: String): Int    // 630 詳細編集
     external fun nativeSearchDevicesList(): String         // 接続カメラ検索: [{"model","assignedName","serial"},...]

@@ -1,0 +1,35 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!-- 645.この計画の撮影場所(2026-10-04 依頼)。
+     撮影計画が抱えている場所だけを直す画面。登録済みの撮影場所リストは変えない。
+     上の一覧が無いので分割バーも無く、詳細だけを置く。中身(名前・緯度経度・標高・
+     タイムゾーン・メモ)は撮影場所リストの詳細と同じものを使い回す。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="@color/tc_header_bg"
+        android:gravity="center_vertical"
+        android:padding="8dp">
+        <ImageView android:id="@+id/pplace_home" android:layout_width="32dp" android:layout_height="32dp"
+            android:clickable="true" android:focusable="true" android:src="@drawable/ic_home_r" />
+        <ImageView android:id="@+id/pplace_back" android:layout_width="32dp" android:layout_height="32dp"
+            android:layout_marginStart="8dp" android:clickable="true" android:focusable="true" android:src="@drawable/ic_back_r" />
+        <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+            android:gravity="center" android:text="@string/title_plan_place" android:textColor="@color/tc_header_fg"
+            android:textSize="20sp" android:textStyle="bold" />
+        <View android:layout_width="40dp" android:layout_height="32dp" />
+        <ImageView android:id="@+id/pplace_menu" android:layout_width="32dp" android:layout_height="32dp"
+            android:clickable="true" android:focusable="true" android:src="@drawable/ic_menu_r" />
+    </LinearLayout>
+
+    <ScrollView android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+        <LinearLayout android:id="@+id/pplace_detail"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:padding="12dp" />
+    </ScrollView>
+</LinearLayout>

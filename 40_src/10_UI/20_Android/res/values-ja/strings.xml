@@ -131,6 +131,15 @@
     <string name="change">変更</string>
     <string name="title_plan">撮影計画</string>
     <string name="title_places">撮影場所リスト</string>
+    <string name="title_plan_place">この計画の撮影場所</string>
+    <string name="import_saved_place">登録した場所から取り込む</string>
+    <string name="register_to_places">撮影場所リストへ登録</string>
+    <string name="place_name">名前</string>
+    <string name="place_name_dup_title">同じ名前がすでにあります</string>
+    <string name="place_name_dup_msg">「%1$s」という場所が登録済みです。</string>
+    <string name="act_overwrite">上書き</string>
+    <string name="act_add_as_new">別名で追加</string>
+    <string name="place_registered">撮影場所リストへ登録しました: %1$s</string>
     <string name="title_permcheck">権限、端末設定</string>
     <string name="title_camera_add">カメラ追加</string>
     <string name="title_lens_add">レンズ追加</string>

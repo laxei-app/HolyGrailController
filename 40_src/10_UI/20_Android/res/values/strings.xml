@@ -151,6 +151,15 @@ The plans you made and the cameras you added are still there.</string>
     <string name="change">Change</string>
     <string name="title_plan">Shoot plan</string>
     <string name="title_places">Locations</string>
+    <string name="title_plan_place">Location of this plan</string>
+    <string name="import_saved_place">Import a saved location</string>
+    <string name="register_to_places">Add to the location list</string>
+    <string name="place_name">Name</string>
+    <string name="place_name_dup_title">That name is already in the list</string>
+    <string name="place_name_dup_msg">A saved location named \"%1$s\" already exists.</string>
+    <string name="act_overwrite">Overwrite</string>
+    <string name="act_add_as_new">Add under another name</string>
+    <string name="place_registered">Added to the location list: %1$s</string>
     <string name="title_permcheck">Permissions and settings</string>
     <string name="title_camera_add">Add camera</string>
     <string name="title_lens_add">Add lens</string>

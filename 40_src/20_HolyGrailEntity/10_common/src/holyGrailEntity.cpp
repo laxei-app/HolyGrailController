@@ -3666,6 +3666,25 @@ int32_t hge_setPlanPlace(const char* name)
 	return saveCurrentPlan();
 }
 
+// 【この計画だけの場所(2026-10-04 依頼)】登録した場所から取り込んだ後でも、
+//  その計画の分だけ直せるようにする。hge_setPlanPlace と違うのは、登録済みの
+//  一覧を見ないことだけ。書き込む先は計画が抱えている写し(g_plan.place)。
+int32_t hge_setPlanPlaceJson(const char* json)
+{
+	if (json == nullptr) { return ERR_HGC_INVALID_ARG; }
+	if (!g_planReady) { errCode e = loadFixedPlanImpl(); if (e != ERR_HGC_OK) { return e; } }
+	std::vector<hgc::place> parsed;	// 1件を配列にくるんで既存のパーサで復元
+	if (!csjson::placesFromJson(std::string("[") + json + "]", parsed) || parsed.empty())
+	{ return ERR_HGC_JSON_PARSE; }
+	g_plan.place = parsed.front();
+	g_plan.place.autoInsert = false;	// 「計画へ自動挿入」は登録した場所の話。計画の写しには意味が無い
+	errCode e = astro::buildSchedule(g_plan);	// 位置が変われば太陽/月の時刻も変わる
+	if (e != ERR_HGC_OK) { return e; }
+	buildScheduleJson();
+	notify(HGE_EV_SCHEDULE, g_schedJson);
+	return saveCurrentPlan();
+}
+
 int32_t hge_setOwnedLensDetail(const char* origName, const char* json)
 {
 	if (origName == nullptr || json == nullptr) { return ERR_HGC_INVALID_ARG; }
