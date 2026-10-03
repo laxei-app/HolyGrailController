@@ -3312,11 +3312,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
                 val tv = TextView(this); tv.text = nm; tv.textSize = 14f
                 tv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                 tv.setPadding(dp(8), 0, 0, 0)
-                val menu = Button(this); menu.text = "⋮"; menu.textSize = 18f; menu.minWidth = dp(44)
-                menu.setOnClickListener { anchor ->
-                    val pm = PopupMenu(this, anchor); pm.menu.add(s(R.string.delete_word))
-                    pm.setOnMenuItemClickListener { camLensNames.removeAt(idx); persistCameraDetail(true); true }; pm.show()
-                }
+                // 【他の一覧と同じ形に(2026-10-03 依頼)】ここだけ素の Button で、
+                //  緑のピルではなかった。共通の ctxMenuButton を使う。
+                val menu = ctxMenuButton(listOf(
+                    s(R.string.delete_word) to { camLensNames.removeAt(idx); persistCameraDetail(true) }))
                 row.addView(handle); row.addView(tv); row.addView(menu)
                 lensRowViews.add(row); box.addView(row)
             }
