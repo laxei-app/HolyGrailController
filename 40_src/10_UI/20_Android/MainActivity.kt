@@ -4853,6 +4853,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
             handle.setBackgroundColor(getColor(R.color.tc_handle_bg)); handle.setPadding(dp(4), dp(2), dp(4), dp(2))
             handle.layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
             handle.setOnTouchListener(dragTouch(i))
+            // 【動かせないときはそう見せる(2026-10-03 依頼)】読取専用(撮影中・外部端末が
+            //  持っている計画)でもつまみは普段と同じ見た目のままだったため、押しても
+            //  何も起きず「壊れた」ように見えていた。他の入力欄と同じく薄くする。
+            handle.alpha = if (ccmReadOnly) 0.3f else 1.0f
             slRow.addView(handle)
             val frame = FrameLayout(this@MainActivity)
             val frameLp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f); frameLp.setMargins(dp(6), 0, dp(4), 0)
