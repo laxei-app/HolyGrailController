@@ -34,7 +34,7 @@
         android:background="@color/tc_selected_bg" android:gravity="center_vertical"
         android:paddingStart="16dp" android:paddingEnd="16dp"
         android:singleLine="true" android:ellipsize="end"
-        android:textColor="@color/tc_link" android:textSize="14sp" android:textStyle="bold" />
+        android:textColor="@color/tc_tab_fg_sel" android:textSize="14sp" android:textStyle="bold" />
 
     <ScrollView android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
         <LinearLayout android:id="@+id/pplace_detail"

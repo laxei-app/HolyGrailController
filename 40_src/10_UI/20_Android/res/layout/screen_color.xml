@@ -36,9 +36,9 @@
         app:tabMode="scrollable"
         app:tabGravity="start"
         app:tabMinWidth="72dp"
-        app:tabTextColor="#455A64"
-        app:tabSelectedTextColor="#0D47A1"
-        app:tabIndicatorColor="#1565C0"
+        app:tabTextColor="@color/tc_tab_fg"
+        app:tabSelectedTextColor="@color/tc_tab_fg_sel"
+        app:tabIndicatorColor="@color/tc_tab_indicator"
         app:tabIndicatorHeight="3dp" />
 
     <ScrollView android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">

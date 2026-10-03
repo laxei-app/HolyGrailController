@@ -37,6 +37,13 @@
     <!-- 上下へ動かせる行・カードの地色。つまみより沈めて、つまみが浮き上がるように -->
     <color name="tc_card_bg">#232034</color>
 
+    <!-- タブの文字(撮影計画・撮影制御方法・色の設定、それと同じ書式の帯)。
+         ここだけは**明暗で同じ値**。地色(tc_selected_bg)が変わるので文字は変えない。
+         値を変えるときは values と values-night の両方をそろえること。 -->
+    <color name="tc_tab_fg">#455A64</color>
+    <color name="tc_tab_fg_sel">#0D47A1</color>
+    <color name="tc_tab_indicator">#1565C0</color>
+
     <!-- つまみ(左右分割・ページの印) -->
     <color name="tc_handle_bg">#342E4A</color>
     <color name="tc_handle_fg">#DCD5F0</color>
