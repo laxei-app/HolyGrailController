@@ -11356,7 +11356,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val fm = paint.fontMetrics
         val h = Math.ceil((fm.bottom - fm.top).toDouble()).toInt().coerceIn(1, 100)
         val bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
-        val cv = android.graphics.Canvas(bmp); cv.drawColor(getColor(R.color.tc_text))
+        // 【地は黒固定(2026-10-03)】これは画面ではなく**外部端末へ送るデータ**。
+        //  明るい/暗いに合わせてはいけない。暗いテーマだと地が白になり、
+        //  2値化で全画素が 1 になって、端末には**白い四角い箱**が出ていた。
+        val cv = android.graphics.Canvas(bmp); cv.drawColor(Color.BLACK)
         cv.drawText(name, 0f, -fm.top, paint)
         val bpr = (w + 7) / 8
         val out = java.io.ByteArrayOutputStream()
