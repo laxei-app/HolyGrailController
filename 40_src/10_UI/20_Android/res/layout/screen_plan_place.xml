@@ -20,12 +20,21 @@
         <ImageView android:id="@+id/pplace_back" android:layout_width="32dp" android:layout_height="32dp"
             android:layout_marginStart="8dp" android:clickable="true" android:focusable="true" android:src="@drawable/ic_back_r" />
         <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
-            android:gravity="center" android:text="@string/title_plan_place" android:textColor="@color/tc_header_fg"
+            android:gravity="center" android:text="@string/plan_place" android:textColor="@color/tc_header_fg"
             android:textSize="20sp" android:textStyle="bold" />
         <View android:layout_width="40dp" android:layout_height="32dp" />
         <ImageView android:id="@+id/pplace_menu" android:layout_width="32dp" android:layout_height="32dp"
             android:clickable="true" android:focusable="true" android:src="@drawable/ic_menu_r" />
     </LinearLayout>
+
+    <!-- どの計画の場所を直しているのかを、撮影計画のタブと同じ書式で題の下へ
+         (2026-10-04 UI依頼)。ここは 1 つだけなので TabLayout ではなく文字だけ。 -->
+    <TextView android:id="@+id/pplace_planname"
+        android:layout_width="match_parent" android:layout_height="40dp"
+        android:background="@color/tc_selected_bg" android:gravity="center_vertical"
+        android:paddingStart="16dp" android:paddingEnd="16dp"
+        android:singleLine="true" android:ellipsize="end"
+        android:textColor="@color/tc_link" android:textSize="14sp" android:textStyle="bold" />
 
     <ScrollView android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
         <LinearLayout android:id="@+id/pplace_detail"

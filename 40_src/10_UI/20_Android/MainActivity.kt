@@ -6447,6 +6447,11 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     private fun openPlanPlace() {
         planPlaceObj = null
+        // 題は「撮影場所」だけにし、どの計画のものかはその下の帯へ(2026-10-04 UI依頼)。
+        //  計画名は表示中のスケジュールから採る(ひな形のときはひな形の名前が入っている)。
+        val pn = (try { JSONObject(latestSchedule).optString("planName") } catch (_: Exception) { "" })
+            .ifEmpty { try { JSONObject(HgeNative.nativeGetPlanJson()).optString("planName") } catch (_: Exception) { "" } }
+        findViewById<TextView>(R.id.pplace_planname).text = pn
         buildPlanPlaceDetail()
         flipper.displayedChild = kScreenPlanPlace
     }
