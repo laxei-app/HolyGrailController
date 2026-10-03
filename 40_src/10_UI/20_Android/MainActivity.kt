@@ -6021,7 +6021,10 @@ class MainActivity : AppCompatActivity(), HgeListener {
         if (!dimArmed || dimView != null) return
         val root = findViewById<ViewGroup>(android.R.id.content) ?: return
         val v = View(this).apply {
-            setBackgroundColor(getColor(R.color.tc_text))
+            // 【覚いは黒固定(2026-10-04 依頼)】画面の地ではなく**消灯の代わり**なので、
+            //  明暗に合わせてはいけない。暗いテーマの tc_text は #E3E3E3 なので、
+            //  覚いが真っ白になっていた。有機 EL で黒い画素を光らせないのがねらい。
+            setBackgroundColor(Color.BLACK)
             isClickable = true; isFocusable = true
             elevation = 10_000f   // どの画面・ダイアログ枠より手前
             setOnTouchListener { _, ev ->
