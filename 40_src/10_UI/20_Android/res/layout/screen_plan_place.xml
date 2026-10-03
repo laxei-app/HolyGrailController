@@ -27,14 +27,19 @@
             android:clickable="true" android:focusable="true" android:src="@drawable/ic_menu_r" />
     </LinearLayout>
 
-    <!-- どの計画の場所を直しているのかを、撮影計画のタブと同じ書式で題の下へ
-         (2026-10-04 UI依頼)。ここは 1 つだけなので TabLayout ではなく文字だけ。 -->
+    <!-- どの計画の場所を直しているのかを題の下へ(2026-10-04 UI依頼)。
+         書式は**撮影計画のタブの下の行(選択中の計画)**に合わせる。
+         地色 tc_selected_bg / 15sp / 太字 —— buildPlanRow と同じ。
+         文字色は colorOnSurface —— 計画行は EditText で、その既定がこれ。
+         TextView の既定(textColorPrimary)だと #C9C4CF 、tc_text だと #E3E3E3 で
+         どちらも計画行(#E5E0E8)とずれる(2026-10-04 実測)。
+         タブの青い文字ではない(2026-10-04 実測で違いが分かった)。 -->
     <TextView android:id="@+id/pplace_planname"
         android:layout_width="match_parent" android:layout_height="40dp"
         android:background="@color/tc_selected_bg" android:gravity="center_vertical"
         android:paddingStart="16dp" android:paddingEnd="16dp"
         android:singleLine="true" android:ellipsize="end"
-        android:textColor="@color/tc_tab_fg_sel" android:textSize="14sp" android:textStyle="bold" />
+        android:textColor="?attr/colorOnSurface" android:textSize="15sp" android:textStyle="bold" />
 
     <ScrollView android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
         <LinearLayout android:id="@+id/pplace_detail"
