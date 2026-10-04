@@ -89,6 +89,9 @@
     <string name="ext_needed_title">外部カメラ機能が必要です</string>
     <string name="ext_needed_msg">お手持ちのカメラ(ミラーレス機など)で撮るには、機能拡張の\n「外部カメラで撮影する」が必要です。\n試用では%1$d回の撮影をお試しいただけます。</string>
     <string name="ext_needed_go">機能拡張へ</string>
+    <!-- カメラを追加しようとしたとき(2026-10-04 依頼) -->
+    <string name="ext_needed_add_msg">「外部カメラで撮影する」機能拡張を購入しないと、カメラの追加はできません。
+試用を始めた場合も追加できます(%1$d回の撮影をお試しいただけます)。</string>
     <string name="ext_buy_not_ready">購入の準備中です</string>
 
     <string name="ext_trial_used_up">試用の回数を使い切りました</string>

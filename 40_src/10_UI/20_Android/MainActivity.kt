@@ -1987,6 +1987,21 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .show()
     }
 
+    // 【外部カメラを使えないなら追加もさせない(2026-10-04 依頼)】
+    //  一覧に出さないだけだと、登録はできるのに選べないという食い違いになる。
+    //  ここで理由を言って機能拡張へ案内する。内蔵カメラは自動登録なのでこの道を通らない。
+    //  戻り値: true = 進んでよい / false = 止めた(案内を出した)
+    private fun allowAddCamera(): Boolean {
+        if (canExternalCamera()) { return true }
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle(s(R.string.ext_needed_title))
+            .setMessage(s(R.string.ext_needed_add_msg, kTrialMaxExternal))
+            .setPositiveButton(s(R.string.ext_needed_go)) { _, _ -> openExtScreen() }
+            .setNegativeButton(s(R.string.close), null)
+            .show()
+        return false
+    }
+
     private fun openExtScreen() {
         countTrialFromReports()   // 開く前に最新にする(取りこぼしの受け皿)
         buildExtScreen()
@@ -2805,7 +2820,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
         setInitialSplit(R.id.cameralist_container)
         flipper.displayedChild = 5
     }
-    private fun openCameraAdd()  { checkedCamAdd.clear(); buildCameraAdd(); flipper.displayedChild = 6 }
+    private fun openCameraAdd()  { if (!allowAddCamera()) { return }; checkedCamAdd.clear(); buildCameraAdd(); flipper.displayedChild = 6 }
     private fun openLensList()   { buildLensList(); buildLensDetail(); setInitialSplit(R.id.lenslist_container); flipper.displayedChild = 7 }
     private fun openLensAdd()    { checkedLensAdd.clear(); expandedMakers.clear(); buildLensAdd(); flipper.displayedChild = 8 }
 
@@ -3123,6 +3138,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
 
     // マスタに無いカメラを手入力で追加する(レンタル機など)。型番だけ聞き、残りは詳細画面で埋めてもらう。
     private fun promptAddCustomCamera() {
+        if (!allowAddCamera()) { return }
         val et = EditText(this)
         et.hint = s(R.string.model_example)
         et.setSingleLine()

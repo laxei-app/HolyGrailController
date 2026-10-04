@@ -97,6 +97,9 @@
     <string name="ext_needed_title">You need external camera support</string>
     <string name="ext_needed_msg">To shoot with your own camera (a mirrorless body, for example) you need the "Shoot with an external camera" add-on.\nThe trial lets you shoot %1$d times.</string>
     <string name="ext_needed_go">Go to Add-ons</string>
+    <!-- When trying to add a camera (2026-10-04) -->
+    <string name="ext_needed_add_msg">Without the \"Shoot with an external camera\" add-on you cannot add a camera.
+Starting the trial lets you add one too (%1$d shots).</string>
     <string name="ext_buy_not_ready">Purchases are not available yet</string>
 
     <string name="ext_trial_used_up">You have used up the trial</string>
