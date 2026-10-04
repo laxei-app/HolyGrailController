@@ -799,6 +799,7 @@ object BuiltinCamera {
     @Volatile private var capResults = 0        // 届いた撮影結果
     @Volatile private var capFail = -1          // onCaptureFailed の reason(-1=無し)
     @Volatile private var capBufLost = 0        // onCaptureBufferLost の回数(結果は来たのに画像が来ない)
+    @Volatile private var capEarly = 0          // 露光を待たずに帰ってきたコマ(捨てて撮り直す)
     @Volatile private var capAddFail = 0        // 加算に失敗した枚数
     @Volatile private var capDevMs = -1         // 現像時間(-1=未到達)
     private val capMarks = StringBuilder()      // "+1.2s/15.40" 撮影結果ごとの到着時刻と実露光
@@ -812,9 +813,9 @@ object BuiltinCamera {
         val m = synchronized(capMarks) { capMarks.toString() }
         // focus は端末が申告したピント位置[ディオプタ]。0.00=無限遠。固定焦点の機種と取れない機種は -1。
         return String.format(java.util.Locale.US,
-            "req=%dx%.2fs imgs=%d res=%d fail=%d bufLost=%d addFail=%d dev=%dms focus=%.2f marks:%s",
-            capFrames, capExpNs / 1e9, capImages, capResults, capFail, capBufLost, capAddFail, capDevMs,
-            capFocusDpt, m)
+            "req=%dx%.2fs imgs=%d res=%d fail=%d bufLost=%d early=%d addFail=%d dev=%dms focus=%.2f marks:%s",
+            capFrames, capExpNs / 1e9, capImages, capResults, capFail, capBufLost, capEarly, capAddFail,
+            capDevMs, capFocusDpt, m)
     }
 
     // 露出を指定して1枚撮り始める。成功=要求を出せた。画像は takeImage で受け取る。
@@ -835,6 +836,7 @@ object BuiltinCamera {
         val n = if (useRaw) frames.coerceAtLeast(1) else 1
         capT0 = SystemClock.elapsedRealtime(); capFrames = n; capExpNs = expNs
         capImages = 0; capResults = 0; capFail = -1; capAddFail = 0; capDevMs = -1; capBufLost = 0
+        capEarly = 0
         synchronized(capMarks) { capMarks.setLength(0) }
         var images = 0; var results = 0
         var lastRes: TotalCaptureResult? = null
@@ -857,12 +859,39 @@ object BuiltinCamera {
         // 【撮り直しの口(2026-09-23)】画像を受け取る側からも同じ要求をもう1枚出せるようにする。
         //  要求とコールバックは下で作るので、入れ物だけ先に置く。
         var reshoot: (() -> Boolean)? = null
+        // 【露光より早く帰ってきたコマは信じない(2026-10-04 依頼)】
+        //  10-04 の通しで、ss 1.05 秒を頑んだのに 0.2 秒で画像が届いたコマが 1 つあり、
+        //  その 1 コマだけ真っ黒で動画に入っていた(554 コマ中 1 回、明るさ Y=0.003)。
+        //  露光し終わっていないコマが渡されたとしか考えられない。
+        //  これは端末側(Camera2 のバッファ)の話なので、判定もここで行う。
+        //
+        //  判定: 前のコマを受け取ってから**露光時間の 9 割**が経っていなければ偽物。
+        //  物理的に、露光 t 秒のコマを t 秒未満で 2 枚作ることはできない。
+        //  1 割の余裕は時計の丸めと読み出しのばらつきを吸収するため。
+        //  短い露光(1/4000 秒等)ではしきい値がほぼ 0 になるので、何も起きない。
+        val minGapMs = if (expNs > 0L) expNs / 1_000_000L * 9 / 10 else 0L
+        var lastImgMs = 0L          // 直近に受け取った画像の時刻(capT0 からの経過)
+        fun arrivedTooEarly(): Boolean {
+            if (minGapMs <= 0L) { return false }
+            val t = SystemClock.elapsedRealtime() - capT0
+            if (t - lastImgMs >= minGapMs) { lastImgMs = t; return false }
+            return true
+        }
+        // 偽物を捨てたあとの始末。予算が残っていれば撮り直し、無ければこのコマを諦める
+        //  (諦めたコマは上位が LOST として記録し、保存も動画への追加も行わない)。
+        fun dropEarly() {
+            capEarly++; capMark("early")
+            if (replaced < MAX_RETRY_PER_BURST && reshoot?.invoke() == true) { replaced++; capMark("retryEarly") }
+            else { pendingJpeg = null; got.countDown() }
+        }
         if (useRaw) {
             HgeNative.nativeRawStackBegin(rawW, rawH, cfa, wantDng)
             rd.setOnImageAvailableListener({ r ->
                 // 通知 1 回に画像が複数あることがある。全部取る(取り残すと上の「枠が埋まる」になる)。
                 while (true) {
                     val img = runCatching { r.acquireNextImage() }.getOrNull() ?: break
+                    // 足す前に見る。偽物を足すと加算の結果ごと汚れる。
+                    if (arrivedTooEarly()) { runCatching { img.close() }; dropEarly(); continue }
                     var added = false
                     runCatching {
                         img.use { im ->
@@ -890,15 +919,19 @@ object BuiltinCamera {
             }, h)
         } else {
             rd.setOnImageAvailableListener({ r ->
+                var early = false
                 runCatching {
                     r.acquireLatestImage()?.use { img ->
-                        val buf = img.planes[0].buffer
-                        val b = ByteArray(buf.remaining())
-                        buf.get(b)
-                        pendingJpeg = b
+                        if (arrivedTooEarly()) { early = true }
+                        else {
+                            val buf = img.planes[0].buffer
+                            val b = ByteArray(buf.remaining())
+                            buf.get(b)
+                            pendingJpeg = b
+                        }
                     }
                 }
-                got.countDown()
+                if (early) { dropEarly() } else { got.countDown() }
             }, h)
         }
 
