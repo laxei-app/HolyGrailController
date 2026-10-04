@@ -23,6 +23,7 @@
 #include "stdTemplates.h"
 #include <json/nlohmann/json.hpp>
 #include <string>
+#include <cmath>
 #include <vector>
 #include <cmath>
 #include <cstdio>
@@ -203,11 +204,16 @@ namespace builtinCam
 			hgc::lens ln{};
 			ln.maker       = "builtin";
 			ln.name        = d.model;	// カメラと1対1なので同じ名前でよい
-			ln.focalLength = api->focalMm();
+			// 【小数点以下 1 桁に丸めて持つ(2026-10-04 ユーザー指示)】端末は float で答えるので
+			//  6.900000095367432 / 1.6799999475479126 のような桁になり、所持レンズの画面へ
+			//  そのまま並ぶ。NPF と画角への影響は無視できる
+			//  (センサー寸法を 0.01mm に丸めているのと同じ考え方)。
+			auto r1 = [](double v) { return std::floor(v * 10.0 + 0.5) / 10.0; };
+			ln.focalLength = r1(api->focalMm());
 			// 【絞りは固定とは限らない(2026-09-19)】iPhone 13 は可変で、Android にも出てくる。
-			//  端末が答える並びの最小(最も明るい)と最大をそのまま入れる。1 点なら同じ値になる。
-			ln.fn          = api->apertureMin();
-			ln.fnMax       = api->apertureMax();
+			//  端末が答える並びの最小(最も明るい)と最大を入れる。1 点なら同じ値になる。
+			ln.fn          = r1(api->apertureMin());
+			ln.fnMax       = r1(api->apertureMax());
 			ln.fnList      = api->fnList();	// 選べる絞りそのもの(1 点なら 1 つだけ)
 			ln.hasContact  = false;
 			ln.readOnly    = true;				// 端末が答えた値。直す余地が無い(削除は可。2026-09-06 ユーザー指示)
