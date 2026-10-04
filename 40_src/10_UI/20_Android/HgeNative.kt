@@ -123,6 +123,8 @@ object HgeNative {
                                        gains: FloatArray, ccm: FloatArray, shading: FloatArray?,
                                        shadingCols: Int, shadingRows: Int): Boolean
     external fun nativeAddOwnedLens(name: String): Int
+    // マスタに無いレンズを手入力で足す(名前だけでも良い。残りは詳細画面で)
+    external fun nativeAddOwnedLensJson(json: String): Int
     external fun nativeRemoveOwnedCamera(name: String): Int
     external fun nativeRemoveOwnedLens(name: String): Int
     external fun nativeSetOwnedCameraAutoInsert(name: String, autoInsert: Int): Int

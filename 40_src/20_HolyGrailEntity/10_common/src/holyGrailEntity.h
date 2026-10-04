@@ -268,6 +268,9 @@ int32_t hge_setPlanLocation(double latitude, double longitude, const char* name)
 //  origName 一致を置換、無ければ新規追加。json キーは dataManager の同名関数を参照。
 int32_t hge_setOwnedCameraDetail(const char* origName, const char* json);
 int32_t hge_setOwnedLensDetail(const char* origName, const char* json);
+// マスタに無いレンズを手入力で所持レンズへ足す(2026-10-04 依頼)。
+//  カメラは setOwnedCameraDetail が無ければ作るが、レンズの方は作らないので別に要る。
+int32_t hge_addOwnedLensJson(const char* json);
 
 // --- 撮影場所(§7.9)。登録した場所を撮影計画で選択する。 ---
 int32_t hge_getPlacesJson(char* buf, int32_t* inoutLen);   // 登録済み場所の配列 JSON

@@ -722,6 +722,14 @@ The plans you made and the cameras you added are still there.</string>
     <string name="add_unlisted_camera2">+ Add a camera that is not listed</string>
     <string name="add_place">+ Add a location</string>
     <string name="add_camera">+ Add a camera</string>
+    <!-- 所持レンズに無いレンズを選ぶ(2026-10-04 依頼) -->
+    <string name="pick_from_master">+ Pick from the full list</string>
+    <string name="add_unlisted_lens">+ Add a lens that is not listed</string>
+    <string name="lens_add_hint">Enter the model name. Focal length and f-number can be filled in afterwards on the Lenses screen.</string>
+    <string name="need_lens_name">Enter a lens name</string>
+    <string name="lens_model_example">e.g. RF50mm F1.8 STM</string>
+    <string name="lens_search_hint">Filter by name or maker</string>
+    <string name="no_lens_match">No lens matches</string>
     <string name="add_lens">+ Add a lens</string>
     <string name="add_plan">+ New shoot plan</string>
     <string name="add_edge">+ New device</string>

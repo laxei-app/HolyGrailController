@@ -3685,6 +3685,17 @@ int32_t hge_setPlanPlaceJson(const char* json)
 	return saveCurrentPlan();
 }
 
+// 【手入力のレンズ(2026-10-04 依頼)】マスタに無いレンズ(オールドレンズ等)を
+//  所持レンズへ直接足す。同じ名前があれば何もしない(利用者が値を直していることがある)。
+int32_t hge_addOwnedLensJson(const char* json)
+{
+	if (json == nullptr) { return ERR_HGC_INVALID_ARG; }
+	std::vector<hgc::lens> parsed;
+	if (!csjson::ownedLensesFromJson(std::string("[") + json + "]", parsed) || parsed.empty())
+	{ return ERR_HGC_JSON_PARSE; }
+	return dataManager::addOwnedLens(parsed.front()) ? ERR_HGC_OK : ERR_HGC_NAME_DUP;
+}
+
 int32_t hge_setOwnedLensDetail(const char* origName, const char* json)
 {
 	if (origName == nullptr || json == nullptr) { return ERR_HGC_INVALID_ARG; }

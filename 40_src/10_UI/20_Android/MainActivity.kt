@@ -967,6 +967,14 @@ class MainActivity : AppCompatActivity(), HgeListener {
         // 632 レンズ追加
         wireHeader(R.id.lensadd_home, R.id.lensadd_menu) { leaveLensAdd(it) }
         findViewById<Button>(R.id.lensadd_cancel).setOnClickListener { checkedLensAdd.clear(); buildLensAdd() }
+        // 絞り込み(2026-10-04 依頼)。打つたびに一覧を作り直す(150本なのでこれで間に合う)。
+        findViewById<EditText>(R.id.lensadd_search).addTextChangedListener(object : android.text.TextWatcher {
+            override fun afterTextChanged(e: android.text.Editable?) {
+                lensAddQuery = e?.toString() ?: ""; buildLensAdd()
+            }
+            override fun beforeTextChanged(c: CharSequence?, a: Int, b: Int, d: Int) {}
+            override fun onTextChanged(c: CharSequence?, a: Int, b: Int, d: Int) {}
+        })
         // 640 撮影場所リスト(§7.9)。戻る/メニューで離脱時に自動保存。
         wireHeader(R.id.places_home, R.id.places_menu) { leavePlacesList(it) }
         wireHeader(R.id.pplace_home, R.id.pplace_menu) { leavePlanPlace(it) }
@@ -1971,6 +1979,7 @@ class MainActivity : AppCompatActivity(), HgeListener {
     // 【この計画の撮影場所(2026-10-04 依頼)】登録した場所を変えずに、
     //  その計画が抱えている場所だけを直す画面。
     private val kScreenPlanPlace = 20
+    private val kScreenCameraList = 5
 
     private fun extCameraDesc() = s(R.string.ext_camera_desc, kTrialMaxExternal)
     private fun extEdgeDesc()   = s(R.string.ext_edge_desc)
@@ -2811,6 +2820,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
     private var lensContact: CheckBox? = null
     private val checkedCamAdd = LinkedHashSet<String>()  // 622 チェック中
     private val checkedLensAdd = LinkedHashSet<String>() // 632 チェック中
+    // 【所持に無いレンズも選べるように(2026-10-04 依頼)】選択の一覧から
+    //  この追加画面を開き、選んだら**所持レンズへ入れてそのまま選択済み**にして戻る。
+    //  よく使うレンズは今まで通り1タップ、そうでないものだけひ1段深くなる。
+    private var lensAddMount = ""                        // 絞り込むカメラ側のマウント(空=絞らない)
+    private var lensAddQuery = ""                        // 絞り込みの文字
+    private var lensAddBack  = -1                        // 戻り先の画面(-1=所持レンズ一覧)
+    private var lensAddThen: ((List<String>) -> Unit)? = null   // 追加して戻ったときにやること
     private val expandedMakers = HashSet<String>()       // 632 展開中メーカー
 
     private fun camArray(json: String): JSONArray = try { JSONArray(json) } catch (e: Exception) { JSONArray() }
@@ -2822,7 +2838,13 @@ class MainActivity : AppCompatActivity(), HgeListener {
     }
     private fun openCameraAdd()  { if (!allowAddCamera()) { return }; checkedCamAdd.clear(); buildCameraAdd(); flipper.displayedChild = 6 }
     private fun openLensList()   { buildLensList(); buildLensDetail(); setInitialSplit(R.id.lenslist_container); flipper.displayedChild = 7 }
-    private fun openLensAdd()    { checkedLensAdd.clear(); expandedMakers.clear(); buildLensAdd(); flipper.displayedChild = 8 }
+    private fun openLensAdd(mount: String = "", backTo: Int = -1,
+                            then: ((List<String>) -> Unit)? = null) {
+        checkedLensAdd.clear(); expandedMakers.clear()
+        lensAddMount = mount; lensAddQuery = ""; lensAddBack = backTo; lensAddThen = then
+        findViewById<EditText>(R.id.lensadd_search)?.setText("")
+        buildLensAdd(); flipper.displayedChild = 8
+    }
 
     // 分割バーの初期高さ(上=リスト)。リストが短ければ内容ぴったりまで上に詰め、
     // 多い場合(内容が画面の1/4超)は1/4で止める。ほとんどは1件なので上寄せになる。
@@ -3432,22 +3454,38 @@ class MainActivity : AppCompatActivity(), HgeListener {
                       it.optString("name") in camLensNames }
             .map { it.optString("name") }
             .filter { it.isNotEmpty() }
+        // 【所持に無いレンズへの道(2026-10-04 依頼)】マスタから選んだら所持へ入り、
+        //  そのままこのカメラの組み合わせへ追加される。
+        //  組み合わせは**名前で参照**しているので、所持に入れずに指すことはできない。
+        val toMaster = {
+            openLensAdd(mount = camMount, backTo = kScreenCameraList) { added ->
+                for (nm in added) { if (nm !in camLensNames) { camLensNames.add(nm) } }
+                persistCameraDetail(true)
+            }
+        }
         if (names.isEmpty()) {
-            //  1本も無い理由が2つあるので分けて伝える。
+            //  1本も無い理由が2つあるので分けて伝える。行き止まりにしない。
             val msg = if (arr.length() == 0) s(R.string.no_lenses_yet)
                       else s(R.string.no_lenses_for_mount, camMount)
-            Toast.makeText(this, msg, Toast.LENGTH_SHORT).show(); return
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle(s(R.string.pick_lenses_for_camera))
+                .setMessage(msg)
+                .setPositiveButton(s(R.string.pick_from_master)) { _, _ -> toMaster() }
+                .setNegativeButton(s(R.string.close), null).show()
+            return
         }
         val checks = BooleanArray(names.size) { names[it] in camLensNames }
+        val apply = {
+            for (i in names.indices) { if (checks[i] && names[i] !in camLensNames) camLensNames.add(names[i]) }
+            // チェックを外したものは除外
+            camLensNames.retainAll { nm -> val ix = names.indexOf(nm); ix < 0 || checks[ix] }
+        }
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle(s(R.string.pick_lenses_for_camera))
             .setMultiChoiceItems(names.toTypedArray(), checks) { _, which, isChecked -> checks[which] = isChecked }
-            .setPositiveButton("OK") { _, _ ->
-                for (i in names.indices) { if (checks[i] && names[i] !in camLensNames) camLensNames.add(names[i]) }
-                // チェックを外したものは除外
-                camLensNames.retainAll { nm -> val ix = names.indexOf(nm); ix < 0 || checks[ix] }
-                persistCameraDetail(true)
-            }
+            .setPositiveButton("OK") { _, _ -> apply(); persistCameraDetail(true) }
+            // マスタへ寄る前に、いまのチェックを反映しておく(選び直しにさせない)。
+            .setNeutralButton(s(R.string.pick_from_master)) { _, _ -> apply(); toMaster() }
             .setNegativeButton(s(R.string.cancel_word), null).show()
     }
 
@@ -3740,10 +3778,26 @@ class MainActivity : AppCompatActivity(), HgeListener {
         val box = findViewById<LinearLayout>(R.id.lensadd_container)
         box.removeAllViews()
         val arr = camArray(HgeNative.nativeGetMasterLenses())
+        // 【付かないレンズは出さない(2026-10-04 依頼)】選択の一覧から来たときは
+        //  そのカメラのマウントで絞る。所持レンズの画面から開いたときは空なので絞らない。
+        val rules = try { JSONArray(HgeNative.nativeGetMasterMounts()) } catch (_: Exception) { null }
+        val q = lensAddQuery.trim()
         val byMaker = LinkedHashMap<String, MutableList<JSONObject>>()
         for (i in 0 until arr.length()) {
             val l = arr.optJSONObject(i) ?: continue
-            byMaker.getOrPut(l.optString("maker", s(R.string.other))) { mutableListOf() }.add(l)
+            if (!GearMaster.lensFitsMount(rules, lensAddMount, l.optString("mount"))) { continue }
+            val mk = l.optString("maker", s(R.string.other))
+            // 絞り込みは名前とメーカーのどちらかに当たれば良い(大文字小文字は見ない)。
+            if (q.isNotEmpty() &&
+                !l.optString("name").contains(q, true) && !mk.contains(q, true)) { continue }
+            byMaker.getOrPut(mk) { mutableListOf() }.add(l)
+        }
+        // 絞り込んだときは開けて見せる(1件ずつ▼を押させない)。
+        if (q.isNotEmpty()) { expandedMakers.addAll(byMaker.keys) }
+        if (byMaker.isEmpty()) {
+            box.addView(TextView(this).apply {
+                text = s(R.string.no_lens_match); setTextColor(getColor(R.color.tc_text_sub))
+                setPadding(dp(4), dp(16), dp(4), dp(16)) })
         }
         for ((maker, lenses) in byMaker) {
             val open = maker in expandedMakers
@@ -3764,17 +3818,77 @@ class MainActivity : AppCompatActivity(), HgeListener {
             }
             box.addView(thinDivider())
         }
+        // 【マスタにも無いレンズ(2026-10-04 依頼)】オールドレンズ等。
+        //  カメラには「一覧に無いカメラを手入力で追加」があるが、レンズには無かった。
+        box.addView(linkText(s(R.string.add_unlisted_lens)) { promptAddCustomLens() })
     }
 
-    // dest: 0=撮影計画 / 4=メニュー / それ以外=元の所持レンズ一覧へ戻る(取消ボタン用)
+    // マスタに無いレンズを手入力で足す。名前だけ聞き、残りは所持レンズの詳細で埋めてもらう
+    //  (手入力のカメラと同じ流れ)。マウントは、絞り込んでいるならそれを入れておく。
+    private fun promptAddCustomLens() {
+        val et = EditText(this); et.setSingleLine()
+        et.hint = s(R.string.lens_model_example)
+        val wrap = LinearLayout(this)
+        wrap.orientation = LinearLayout.VERTICAL
+        wrap.setPadding(dp(20), dp(8), dp(20), 0)
+        wrap.addView(et)
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle(s(R.string.add_unlisted_lens))
+            .setMessage(s(R.string.lens_add_hint))
+            .setView(wrap)
+            .setPositiveButton(s(R.string.add_word)) { _, _ ->
+                val raw = et.text.toString().trim()
+                if (raw.isEmpty()) { Toast.makeText(this, s(R.string.need_lens_name), Toast.LENGTH_SHORT).show() }
+                else { addCustomLens(raw) }
+            }
+            .setNegativeButton(s(R.string.cancel_word), null)
+            .show()
+    }
+
+    private fun addCustomLens(rawName: String) {
+        val mount = lensAddMount
+        Thread {
+            // 名前は所持レンズ一覧のキーなので、衝突したら番号を付ける(カメラと同じ)。
+            val used = ownedLensNames().toSet()
+            var nm = rawName; var n = 2
+            while (nm in used) { nm = "$rawName ($n)"; n++ }
+            val js = JSONObject()
+                .put("name", nm).put("maker", "").put("mount", mount)
+                .put("focalLength", 0.0).put("fn", 0.0).put("fnMax", 0.0)
+                .put("hasContact", true).toString()
+            val r = try { HgeNative.nativeAddOwnedLensJson(js) } catch (_: Exception) { -1 }
+            runOnUiThread {
+                if (r != 0) { Toast.makeText(this, s(R.string.no_data), Toast.LENGTH_SHORT).show(); return@runOnUiThread }
+                Toast.makeText(this, s(R.string.lenses_added, 1), Toast.LENGTH_SHORT).show()
+                finishLensAdd(-1, listOf(nm))
+            }
+        }.start()
+    }
+
+    // dest: 0=撮影計画 / 4=メニュー / それ以外=元の画面へ戻る(取消ボタン・戻る用)
+    //  ホーム/メニューを押したときは**そちらを優先**する(利用者が明示的に離れている)。
     private fun leaveLensAdd(dest: Int) {
         val sel = ArrayList(checkedLensAdd); checkedLensAdd.clear()
-        val back = { if (dest == kScreenHome || dest == kScreenMenu) gotoScreen(dest) else openLensList() }
-        if (sel.isEmpty()) { back(); return }
+        if (sel.isEmpty()) { finishLensAdd(dest, emptyList()); return }
         Thread {
             sel.forEach { HgeNative.nativeAddOwnedLens(it) }
-            runOnUiThread { Toast.makeText(this, s(R.string.lenses_added, sel.size), Toast.LENGTH_SHORT).show(); back() }
+            runOnUiThread {
+                Toast.makeText(this, s(R.string.lenses_added, sel.size), Toast.LENGTH_SHORT).show()
+                finishLensAdd(dest, sel)
+            }
         }.start()
+    }
+
+    // 追加画面を終える。戻ってから呼び元の後始末(計画へ入れる / 組み合わせへ足す)をやる。
+    private fun finishLensAdd(dest: Int, added: List<String>) {
+        val then = lensAddThen; val back = lensAddBack
+        lensAddThen = null; lensAddBack = -1; lensAddMount = ""; lensAddQuery = ""
+        when {
+            dest == kScreenHome || dest == kScreenMenu -> gotoScreen(dest)
+            back >= 0 -> gotoScreen(back)
+            else -> openLensList()
+        }
+        if (added.isNotEmpty()) { then?.invoke(added) }
     }
 
     // 接続カメラ検索→検出一覧をチェックして所持へ追加。
@@ -4076,18 +4190,41 @@ class MainActivity : AppCompatActivity(), HgeListener {
             .map { it.optString("name") }
             .filter { it.isNotEmpty() }
         if (names.isEmpty()) {
-            Toast.makeText(this, s(R.string.no_lenses_for_mount, camMount), Toast.LENGTH_SHORT).show(); return
+            // 行き止まりにしない —— マスタから選べる道を添える。
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle(s(R.string.pick_lens))
+                .setMessage(s(R.string.no_lenses_for_mount, camMount))
+                .setPositiveButton(s(R.string.pick_from_master)) { _, _ ->
+                    openLensAdd(mount = camMount, backTo = kScreenHome) { added ->
+                        added.firstOrNull()?.let { setPlanLensByName(it) }
+                    }
+                }
+                .setNegativeButton(s(R.string.close), null).show()
+            return
         }
+        // 【一覧の末尾に「一覧に無いレンズから選ぶ」(2026-10-04 依頼)】
+        //  よく使うレンズはそのまま1タップ。それ以外はここからマスタへ入る。
+        val rows = names + listOf(s(R.string.pick_from_master))
         androidx.appcompat.app.AlertDialog.Builder(this)
             .setTitle(s(R.string.pick_lens))
-            .setItems(names.toTypedArray()) { _, which ->
-                val name = names[which]
-                planExec.execute {
-                    HgeNative.nativeSetPlanLens(name)
-                    val sched = HgeNative.nativeScheduleJson()
-                    runOnUiThread { latestSchedule = sched; updatePlanDisplay(sched); reloadExpoEditors() }  // item3: fn範囲をレンズに合わせ直す
+            .setItems(rows.toTypedArray()) { _, which ->
+                if (which >= names.size) {
+                    openLensAdd(mount = camMount, backTo = kScreenHome) { added ->
+                        added.firstOrNull()?.let { setPlanLensByName(it) }
+                    }
+                    return@setItems
                 }
+                setPlanLensByName(names[which])
             }.show()
+    }
+
+    // 計画のレンズを名前で入れる。一覧から選んだときと、マスタから足して戻ったときの両方から。
+    private fun setPlanLensByName(name: String) {
+        planExec.execute {
+            HgeNative.nativeSetPlanLens(name)
+            val sched = HgeNative.nativeScheduleJson()
+            runOnUiThread { latestSchedule = sched; updatePlanDisplay(sched); reloadExpoEditors() }  // item3: fn範囲をレンズに合わせ直す
+        }
     }
 
     // 撮影計画画面の色別リストから「この計画の」撮影制御方法を編集する(初期値とは別)。

@@ -729,6 +729,10 @@ JNIEXPORT jint JNICALL
 Java_app_laxei_twylapse_HgeNative_nativeSetPlanPlaceJson(JNIEnv* env, jobject /*thiz*/, jstring json)
 { return callNameCmd(env, json, hge_setPlanPlaceJson); }
 
+JNIEXPORT jint JNICALL
+Java_app_laxei_twylapse_HgeNative_nativeAddOwnedLensJson(JNIEnv* env, jobject /*thiz*/, jstring json)
+{ return callNameCmd(env, json, hge_addOwnedLensJson); }
+
 JNIEXPORT jstring JNICALL
 Java_app_laxei_twylapse_HgeNative_nativeSearchDevicesList(JNIEnv* env, jobject /*thiz*/)
 { return callBufGetter(env, hge_searchDevicesListJson); }

@@ -29,6 +29,18 @@
         android:padding="8dp" android:textSize="12sp" android:textColor="@color/tc_text_sub"
         android:text="@string/gear_add_note" />
 
+    <!-- 絞り込み(2026-10-04 依頼)。150本をメーカー別に開くのは、
+         目的の1本が分かっているときは遠回りになる。スクロールで消えないよう外に置く。
+         横向きだと IME が画面を覆い、打ちながら一覧が絞られていくのは見えない。
+         flagNoExtractUi で覆わせない手も試したが、こんどは欄そのものが鍵盤の裏へ
+         隠れて打っている字も見えなくなった(2026-10-04 実機で比較)。IME の全画面の欄で
+         打って「完了」で戻るのが一番読めるので、既定のままにしてある。 -->
+    <EditText android:id="@+id/lensadd_search"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginStart="12dp" android:layout_marginEnd="12dp"
+        android:singleLine="true" android:inputType="text"
+        android:hint="@string/lens_search_hint" />
+
     <ScrollView android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
         <LinearLayout android:id="@+id/lensadd_container"
             android:layout_width="match_parent" android:layout_height="wrap_content"

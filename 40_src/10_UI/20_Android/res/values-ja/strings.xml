@@ -702,6 +702,14 @@
     <string name="add_unlisted_camera2">＋ 一覧に無いカメラを追加</string>
     <string name="add_place">＋ 新しい場所の追加</string>
     <string name="add_camera">＋ 新規カメラ追加</string>
+    <!-- 所持レンズに無いレンズを選ぶ(2026-10-04 依頼) -->
+    <string name="pick_from_master">＋ 一覧に無いレンズから選ぶ</string>
+    <string name="add_unlisted_lens">＋ 一覧に無いレンズを手入力で追加</string>
+    <string name="lens_add_hint">型番だけ入れてください。焦点距離やF値は所持レンズの画面で埋められます。</string>
+    <string name="need_lens_name">レンズ名を入れてください</string>
+    <string name="lens_model_example">例: RF50mm F1.8 STM</string>
+    <string name="lens_search_hint">絞り込み(名前・メーカー)</string>
+    <string name="no_lens_match">合うレンズがありません</string>
     <string name="add_lens">＋ 新規レンズ追加</string>
     <string name="add_plan">＋ 新規撮影計画</string>
     <string name="add_edge">＋ 新規端末</string>
