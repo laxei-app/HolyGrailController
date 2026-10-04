@@ -376,7 +376,10 @@ class SimPage(
         planNameView.maxLines = 1
         planNameView.ellipsize = android.text.TextUtils.TruncateAt.END
         planNameView.setPadding(dp(12f), dp(6f), dp(12f), dp(6f))
-        planNameView.setBackgroundColor(0xFFE3F2FD.toInt())
+        // 【地色は色リソースから(2026-10-04 UI依頼)】直書きの #E3F2FD だったため、
+        //  暗いテーマでこの帯だけが白く残っていた。薄明ページと出力設定ページの
+        //  同じ帯は最初から tc_selected_bg を使っている。ここだけ取り残されていた。
+        planNameView.setBackgroundColor(context.getColor(R.color.tc_selected_bg))
         // 親の左右パディング(12dp)を打ち消して、薄明ページと同じく画面幅いっぱいの帯にする。
         addView(planNameView, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
