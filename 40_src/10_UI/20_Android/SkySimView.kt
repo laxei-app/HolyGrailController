@@ -390,7 +390,9 @@ class SimPage(
         titleView.textSize = 12f
         titleView.gravity = Gravity.START
         titleView.setTypeface(titleView.typeface, android.graphics.Typeface.BOLD)
-        titleView.setTextColor(0xFF37474F.toInt())
+        // 【文字色も色リソースから(2026-10-04 UI依頼)】直書きの #37474F は暗い地に
+        //  暗い文字で、暗いテーマだと読めなかった。見出しなので tc_text_mid。
+        titleView.setTextColor(context.getColor(R.color.tc_text_mid))
         titleView.setPadding(0, dp(4f), 0, dp(2f))
         addView(titleView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
