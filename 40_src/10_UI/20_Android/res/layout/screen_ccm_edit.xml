@@ -41,6 +41,16 @@
         app:tabIndicatorColor="@color/tc_tab_indicator"
         app:tabIndicatorHeight="3dp" />
 
+    <!-- どの計画の撮影制御方法かを題の下へ(2026-10-04 UI依頼)。
+         書式は「この計画の撮影場所」と同じ(撮影計画のタブの下の行に合わせてある)。
+         初期値の編集では計画が無いので出さない(下にプリセット一覧がある)。 -->
+    <TextView android:id="@+id/edit_planname"
+        android:layout_width="match_parent" android:layout_height="40dp"
+        android:background="@color/tc_selected_bg" android:gravity="center_vertical"
+        android:paddingStart="16dp" android:paddingEnd="16dp"
+        android:singleLine="true" android:ellipsize="end"
+        android:textColor="?attr/colorOnSurface" android:textSize="15sp" android:textStyle="bold" />
+
     <!-- 初期値プリセット一覧(初期値編集時のみ表示。計画固有編集時は非表示) -->
     <ScrollView android:id="@+id/edit_presetScroll"
         android:layout_width="match_parent" android:layout_height="110dp">

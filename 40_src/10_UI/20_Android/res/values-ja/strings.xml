@@ -728,6 +728,9 @@
     <string name="n_minutes">%1$d分</string>
     <string name="ccm_owner_locked">（%1$s・変更不可）</string>
     <string name="ccm_owner">（%1$s）</string>
+    <!-- 帯に出す版(括弧なし)。題から外したので囲う必要がない。 -->
+    <string name="ccm_owner_bar">%1$s</string>
+    <string name="ccm_owner_bar_locked">%1$s　・変更不可</string>
     <string name="dark_limit_set">朝日・夕日・日中の暗所限界を ISO%1$s / %2$s秒 / F%3$s にしました</string>
     <string name="ref_tap_to_switch">基準(タップで切替): %1$s</string>
     <string name="create_failed">作成に失敗しました (code=%1$d)</string>

@@ -748,6 +748,9 @@ The plans you made and the cameras you added are still there.</string>
     <string name="n_minutes">%1$d min</string>
     <string name="ccm_owner_locked">(%1$s — cannot be changed)</string>
     <string name="ccm_owner">(%1$s)</string>
+    <!-- 帯に出す版(括弧なし)。題から外したので囲う必要がない。 -->
+    <string name="ccm_owner_bar">%1$s</string>
+    <string name="ccm_owner_bar_locked">%1$s — cannot be changed</string>
     <string name="dark_limit_set">Set the dark limit for sunrise, sunset and daytime to ISO %1$s / %2$s s / f%3$s</string>
     <string name="ref_tap_to_switch">Reference (tap to change): %1$s</string>
     <string name="create_failed">Could not create it (code=%1$d)</string>

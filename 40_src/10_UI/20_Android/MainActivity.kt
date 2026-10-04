@@ -4287,8 +4287,20 @@ class MainActivity : AppCompatActivity(), HgeListener {
         //  初期値の編集はどの計画のものでもないので「（初期値）」のまま。
         val ccmOwner = (try { JSONObject(latestSchedule).optString("planName") } catch (_: Exception) { "" })
             .ifEmpty { s(R.string.this_plan) }
-        findViewById<TextView>(R.id.edit_title).text = title +
-            (if (!editingPlanCcm) s(R.string.ccm_from_defaults) else if (ccmReadOnly) s(R.string.ccm_owner_locked, ccmOwner) else s(R.string.ccm_owner, ccmOwner))
+        // 【題は型の名前だけ(2026-10-04 UI依頼)】どの計画のものかはタブの下の帯へ。
+        //  初期値の編集には計画が無いので帯を出さない(下にプリセット一覧が出る)。
+        //  初期値の「（初期値）」は題に残す —— 帯が無いので、題だけでは
+        //  計画の編集と区別が付かなくなる。
+        findViewById<TextView>(R.id.edit_title).text =
+            title + (if (!editingPlanCcm) s(R.string.ccm_from_defaults) else "")
+        findViewById<TextView>(R.id.edit_planname).let { bar ->
+            if (!editingPlanCcm) { bar.visibility = View.GONE }
+            else {
+                bar.visibility = View.VISIBLE
+                bar.text = if (ccmReadOnly) s(R.string.ccm_owner_bar_locked, ccmOwner)
+                           else s(R.string.ccm_owner_bar, ccmOwner)
+            }
+        }
         applyHeaderColor(R.id.edit_header, R.id.edit_title, keyType(key))   // タイトルバーにシステム共通色
         ensureCcmTabs()
         val showPreset = !editingPlanCcm   // 初期値編集時のみプリセット一覧を出す
